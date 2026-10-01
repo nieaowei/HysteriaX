@@ -39,6 +39,8 @@ struct ContentView: View {
                 ForEach(MainSection.allCases) { section in
                     Label(section.title, systemImage: section.symbol)
                         .tag(section.rawValue)
+                        .accessibilityLabel(section.title)
+                        .accessibilityIdentifier("sidebar.\(section.rawValue)")
                 }
             }
             .listStyle(.sidebar)

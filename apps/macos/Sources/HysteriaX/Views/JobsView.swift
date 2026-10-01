@@ -150,7 +150,10 @@ struct JobsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 4) {
-                Text("任务").font(.largeTitle.bold())
+                Text("任务")
+                    .font(.largeTitle.bold())
+                    .accessibilityLabel("任务")
+                    .accessibilityIdentifier("jobs.title")
                 Text("部署、同步和撤权任务的阶段与结果。").foregroundStyle(.secondary)
             }.padding(24)
             Table(visibleJobs, selection: $selectedJobID, sortOrder: $sortOrder) {

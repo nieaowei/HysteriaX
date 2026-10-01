@@ -18,8 +18,12 @@ struct SettingsView: View {
         Form {
             Section("管理服务") {
                 TextField("HTTPS 地址", text: $serviceAddress, prompt: Text("https://manage.example.com"))
+                    .accessibilityLabel("HTTPS 地址")
+                    .accessibilityIdentifier("settings.serviceAddress")
                     .textContentType(.URL)
                 SecureField("管理员 Bearer Token", text: $token)
+                    .accessibilityLabel("管理员 Bearer Token")
+                    .accessibilityIdentifier("settings.adminToken")
                     .textContentType(.password)
                 HStack {
                     Label(
@@ -27,16 +31,30 @@ struct SettingsView: View {
                         systemImage: store.isConnected && isConnectedToEnteredService ? "checkmark.circle.fill" : "circle"
                     )
                     .foregroundStyle(store.isConnected && isConnectedToEnteredService ? .green : .secondary)
+                    .accessibilityIdentifier("settings.connectionState")
                     Spacer()
                     if isConnecting { ProgressView().controlSize(.small) }
                     Button("验证并保存") { connect() }
                         .disabled(isConnecting || isCreatingAdminToken)
                 }
             }
-            if let message { Text(message).foregroundStyle(.secondary).font(.callout) }
+            if let message {
+                Text(message)
+                    .foregroundStyle(.secondary)
+                    .font(.callout)
+                    .accessibilityLabel(message)
+                    .accessibilityIdentifier("settings.connectionMessage")
+            }
             Section("安全") {
+                #if HYSTERIAX_UI_TESTING
+                Text("测试环境中的管理员令牌只保存在当前进程内存中。")
+                    .foregroundStyle(.secondary)
+                    .accessibilityLabel("测试环境中的管理员令牌只保存在当前进程内存中。")
+                    .accessibilityIdentifier("settings.keychainMode")
+                #else
                 Text("管理员令牌保存在 macOS Keychain 中。服务端负责保存节点、用户和订阅数据。")
                     .foregroundStyle(.secondary)
+                #endif
             }
             Section("管理员令牌轮换") {
                 Text("创建并切换新令牌后，本 Mac 会标记当前令牌。随后可以撤销旧令牌；当前令牌的撤销操作会被禁用。")
@@ -44,6 +62,8 @@ struct SettingsView: View {
                 if store.isConnected && isConnectedToEnteredService {
                     HStack {
                         TextField("令牌用途，例如 Nekil 的 Mac", text: $newAdminTokenLabel)
+                            .accessibilityLabel("令牌用途")
+                            .accessibilityIdentifier("settings.newAdminTokenLabel")
                         if isCreatingAdminToken { ProgressView().controlSize(.small) }
                         Button("创建并切换") { createAdminToken() }
                             .disabled(
@@ -67,6 +87,8 @@ struct SettingsView: View {
                         TextField("Bearer Token", text: .constant(createdAdminToken.token))
                             .textFieldStyle(.roundedBorder)
                             .font(.system(.body, design: .monospaced))
+                            .accessibilityLabel("新管理员令牌")
+                            .accessibilityIdentifier("settings.createdAdminToken")
                             .textSelection(.enabled)
                         HStack {
                             Text(createdAdminToken.label).foregroundStyle(.secondary)

@@ -26,7 +26,10 @@ struct NodesView: View {
         VStack(spacing: 0) {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("节点").font(.largeTitle.bold())
+                    Text("节点")
+                        .font(.largeTitle.bold())
+                        .accessibilityLabel("节点")
+                        .accessibilityIdentifier("nodes.title")
                     Text("管理 SSH 连接、Hysteria 配置和部署状态。")
                         .foregroundStyle(.secondary)
                 }
@@ -37,7 +40,11 @@ struct NodesView: View {
             }.padding(24)
 
             Table(visibleNodes, selection: $selection, sortOrder: $sortOrder) {
-                TableColumn("名称", value: \.name)
+                TableColumn("名称", value: \.name) { node in
+                    Text(node.name)
+                        .accessibilityLabel(node.name)
+                        .accessibilityIdentifier("nodes.row.\(node.id)")
+                }
                 TableColumn("状态", value: \.localizedState)
                 TableColumn("配置版本") { node in Text("\(node.revision)") }
                 TableColumn("已部署") { node in Text(node.deployedRevision.map(String.init) ?? "—") }
@@ -193,34 +200,62 @@ private struct NodeFormView: View {
                 Form {
                     Section("SSH 连接") {
                         TextField("节点名称", text: $name)
+                            .accessibilityLabel("节点名称")
+                            .accessibilityIdentifier("node.create.name")
                         TextField("SSH 地址", text: $sshHost)
+                            .accessibilityLabel("SSH 地址")
+                            .accessibilityIdentifier("node.create.sshHost")
                         TextField("SSH 端口", text: $sshPort)
+                            .accessibilityLabel("SSH 端口")
+                            .accessibilityIdentifier("node.create.sshPort")
                         TextField("SSH 用户", text: $sshUsername)
+                            .accessibilityLabel("SSH 用户")
+                            .accessibilityIdentifier("node.create.sshUsername")
                         Picker("认证方式", selection: $sshAuthType) {
                             Text("密码").tag("password")
                             Text("私钥").tag("private_key")
                         }
+                        .accessibilityLabel("认证方式")
+                        .accessibilityIdentifier("node.create.sshAuthType")
                         if sshAuthType == "password" {
                             SecureField("SSH 密码", text: $sshSecret)
+                                .accessibilityLabel("SSH 密码")
+                                .accessibilityIdentifier("node.create.sshPassword")
                         } else {
                             TextEditor(text: $sshSecret)
                                 .font(.system(.body, design: .monospaced))
                                 .frame(minHeight: 100)
+                                .accessibilityLabel("OpenSSH 私钥")
+                                .accessibilityIdentifier("node.create.sshPrivateKey")
                                 .overlay(alignment: .topLeading) {
                                     if sshSecret.isEmpty { Text("粘贴 OpenSSH 私钥").foregroundStyle(.tertiary).padding(.top, 8).padding(.leading, 5) }
                                 }
                             SecureField("私钥口令（可选）", text: $sshPassphrase)
+                                .accessibilityLabel("私钥口令（可选）")
+                                .accessibilityIdentifier("node.create.sshPassphrase")
                         }
                     }
                     Section("Hysteria 连接") {
                         TextField("公开地址", text: $publicHost)
+                            .accessibilityLabel("公开地址")
+                            .accessibilityIdentifier("node.create.publicHost")
                         TextField("公开端口", text: $publicPort)
+                            .accessibilityLabel("公开端口")
+                            .accessibilityIdentifier("node.create.publicPort")
                         TextField("监听地址", text: $listenAddress)
+                            .accessibilityLabel("监听地址")
+                            .accessibilityIdentifier("node.create.listenAddress")
                         TextField("TLS SNI（可选）", text: $tlsSNI)
+                            .accessibilityLabel("TLS SNI（可选）")
+                            .accessibilityIdentifier("node.create.tlsSNI")
                         Toggle("跳过证书验证", isOn: $skipCertVerify)
+                            .accessibilityLabel("跳过证书验证")
+                            .accessibilityIdentifier("node.create.skipCertVerify")
                     }
                     Section("部署连通性检查") {
                         TextField("HTTP 探测 URL（可选）", text: $proxyProbeURL, prompt: Text("http://status.example.test/health"))
+                            .accessibilityLabel("HTTP 探测 URL（可选）")
+                            .accessibilityIdentifier("node.create.proxyProbeURL")
                         Text("默认探测节点的本机统计接口。自定义 ACL 或 outbound 阻止该地址时，填写一个可通过当前路由访问并返回 HTTP 200 的无凭据 URL。")
                             .font(.callout).foregroundStyle(.secondary)
                     }
@@ -229,17 +264,27 @@ private struct NodeFormView: View {
                             Text("ACME 自动申请").tag("acme")
                             Text("服务器已有证书").tag("tls")
                         }
+                        .accessibilityLabel("证书来源")
+                        .accessibilityIdentifier("node.create.tlsMode")
                         if tlsMode == "acme" {
                             TextField("ACME 邮箱", text: $acmeEmail)
+                                .accessibilityLabel("ACME 邮箱")
+                                .accessibilityIdentifier("node.create.acmeEmail")
                             Picker("验证方式", selection: $acmeType) {
                                 Text("HTTP-01（TCP 80）").tag("http")
                                 Text("TLS-ALPN-01（TCP 443）").tag("tls")
                             }
+                            .accessibilityLabel("验证方式")
+                            .accessibilityIdentifier("node.create.acmeType")
                             Text("ACME 域名使用公开连接地址。请先开放对应 TCP 验证端口。")
                                 .font(.callout).foregroundStyle(.secondary)
                         } else {
                             TextField("远端证书路径", text: $certificatePath)
+                                .accessibilityLabel("远端证书路径")
+                                .accessibilityIdentifier("node.create.certificatePath")
                             TextField("远端私钥路径", text: $privateKeyPath)
+                                .accessibilityLabel("远端私钥路径")
+                                .accessibilityIdentifier("node.create.privateKeyPath")
                             Text("文件需已存在于节点上，并允许 hysteriax 服务账户读取。")
                                 .font(.callout).foregroundStyle(.secondary)
                         }

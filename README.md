@@ -49,8 +49,11 @@ scripts/backup-restore.py backup
 scripts/verify-auth-isolation.py
 scripts/verify-deployment-matrix.py --only debian12-arm64 --only debian13-arm64 --only ubuntu2204-arm64 --only ubuntu2404-arm64
 scripts/verify-mtls-live.py
+scripts/verify-live-macos-ui.py
 ruby scripts/generate-swift-api-models.rb
 ```
+
+`scripts/verify-live-macos-ui.py` requires XcodeGen and a local `.env` pointing to a ready service with two deployed nodes. It creates a temporary XCUITest harness, uses in-memory token storage for that test build, and removes its temporary user; it does not access Keychain.
 
 `openapi/openapi.yaml` is the API contract source. The macOS request/response DTOs and typed operation definitions, including request/response types, HTTP methods, paths, and required query parameters, are generated from its schemas and operations; the API client enforces those operation bindings at compile time. CI runs `ruby scripts/generate-swift-api-models.rb --check` to detect drift. The dynamic JSON value codec and generic HTTP transport are shared handwritten components. The app is available as both an Xcode project and a Swift package. Run `./script/build_and_run.sh --verify` for the local app build and launch check. Pushing a `vX.Y.Z` tag starts the Developer ID signing and notarization workflow for a DMG distributed directly through the GitHub release, which requires the Apple secrets documented in [the release guide](docs/release.md); it does not publish to the Mac App Store.
 

@@ -1,4 +1,20 @@
 import Foundation
+#if HYSTERIAX_UI_TESTING
+
+@MainActor
+enum KeychainStore {
+    private static var tokenInMemory: String?
+
+    static func readToken() -> String? {
+        tokenInMemory
+    }
+
+    static func saveToken(_ token: String) throws {
+        tokenInMemory = token
+    }
+}
+
+#else
 import Security
 
 enum KeychainStore {
@@ -34,3 +50,4 @@ enum KeychainStore {
         }
     }
 }
+#endif

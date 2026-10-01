@@ -32,7 +32,10 @@ struct UsersView: View {
         VStack(spacing: 0) {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("用户").font(.largeTitle.bold())
+                    Text("用户")
+                        .font(.largeTitle.bold())
+                        .accessibilityLabel("用户")
+                        .accessibilityIdentifier("users.title")
                     Text("管理启停、到期、流量额度和节点分配。")
                         .foregroundStyle(.secondary)
                 }
@@ -42,8 +45,16 @@ struct UsersView: View {
                     .disabled(!store.isConnected)
             }.padding(24)
             Table(visibleUsers, selection: $selectedUserID, sortOrder: $sortOrder) {
-                TableColumn("名称", value: \.name)
-                TableColumn("状态") { user in Text(user.enabled ? "启用" : "已停用") }
+                TableColumn("名称", value: \.name) { user in
+                    Text(user.name)
+                        .accessibilityLabel(user.name)
+                        .accessibilityIdentifier("users.row.\(user.id)")
+                }
+                TableColumn("状态") { user in
+                    Text(user.enabled ? "启用" : "已停用")
+                        .accessibilityLabel(user.enabled ? "启用" : "已停用")
+                        .accessibilityIdentifier("users.status.\(user.id)")
+                }
                 TableColumn("用量") { user in Text(ByteCountFormatter.string(fromByteCount: user.usageBytes, countStyle: .file)) }
                 TableColumn("额度") { user in Text(user.quotaBytes.map { ByteCountFormatter.string(fromByteCount: $0, countStyle: .file) } ?? "不限") }
                 TableColumn("节点") { user in Text("\(user.assignments.count)") }
@@ -62,14 +73,20 @@ struct UsersView: View {
                         HStack(spacing: 10) {
                             Text("\(user.name) · \(user.assignments.count) 个节点")
                                 .foregroundStyle(.secondary)
+                                .accessibilityLabel("\(user.name) · \(user.assignments.count) 个节点")
+                                .accessibilityIdentifier("user.selected.summary")
                             Spacer()
                             Menu("分配节点") {
                                 ForEach(store.nodes.filter { node in !user.assignments.contains(where: { $0.nodeID == node.id }) }) { node in
                                     Button(node.name) {
                                         assignmentTarget = AssignmentTarget(user: user, node: node, isUpdating: false)
                                     }
+                                    .accessibilityLabel(node.name)
+                                    .accessibilityIdentifier("users.assignNode.\(node.id)")
                                 }
                             }
+                            .accessibilityLabel("分配节点")
+                            .accessibilityIdentifier("users.assignNodeMenu")
                             .disabled(store.nodes.allSatisfy { node in user.assignments.contains(where: { $0.nodeID == node.id }) })
                             Menu("mTLS 证书") {
                                 ForEach(user.assignments, id: \.nodeID) { assignment in
@@ -77,23 +94,47 @@ struct UsersView: View {
                                         Button(node.name) {
                                             assignmentTarget = AssignmentTarget(user: user, node: node, isUpdating: true)
                                         }
+                                        .accessibilityLabel(node.name)
+                                        .accessibilityIdentifier("users.mtlsNode.\(node.id)")
                                     }
                                 }
                             }
+                            .accessibilityLabel("mTLS 证书")
+                            .accessibilityIdentifier("users.mtlsMenu")
                             .disabled(user.assignments.isEmpty)
                             Menu("订阅") {
                                 Button("复制当前订阅地址") { copyCurrentSubscription(user) }
+                                    .accessibilityLabel("复制当前订阅地址")
+                                    .accessibilityIdentifier("users.subscription.copy")
                                 Button("生成/轮换订阅地址") { rotateSubscription(user) }
+                                    .accessibilityLabel("生成/轮换订阅地址")
+                                    .accessibilityIdentifier("users.subscription.rotate")
                                 Button("导出 Mihomo YAML…") { exportSubscription(user) }
+                                    .accessibilityLabel("导出 Mihomo YAML")
+                                    .accessibilityIdentifier("users.subscription.export")
                             }
+                            .accessibilityLabel("订阅")
+                            .accessibilityIdentifier("users.subscriptionMenu")
                             Menu("用户") {
                                 Button("编辑用户…") { showingEditUser = true }
+                                    .accessibilityLabel("编辑用户")
+                                    .accessibilityIdentifier("users.actions.edit")
                                 Button("轮换连接密码") { rotateCredentials(user) }
+                                    .accessibilityLabel("轮换连接密码")
+                                    .accessibilityIdentifier("users.actions.rotateCredentials")
                                 Button("重置额度") { resetQuota(user) }
+                                    .accessibilityLabel("重置额度")
+                                    .accessibilityIdentifier("users.actions.resetQuota")
                                 Button(user.enabled ? "停用" : "启用") { setEnabled(!user.enabled, for: user) }
+                                    .accessibilityLabel(user.enabled ? "停用" : "启用")
+                                    .accessibilityIdentifier("users.actions.toggleEnabled")
                                 Divider()
                                 Button("删除用户…", role: .destructive) { showingDeleteConfirmation = true }
+                                    .accessibilityLabel("删除用户")
+                                    .accessibilityIdentifier("users.actions.delete")
                             }
+                            .accessibilityLabel("用户操作")
+                            .accessibilityIdentifier("users.actionsMenu")
                         }
                         .disabled(!store.isConnected)
                         usageStatus(for: user)
@@ -370,6 +411,8 @@ private struct UserAssignmentFormView: View {
                 .font(.title.bold())
             Text("\(user.name) → \(node.name)")
                 .foregroundStyle(.secondary)
+                .accessibilityLabel("\(user.name) → \(node.name)")
+                .accessibilityIdentifier("user.assignment.summary")
             Text("普通节点可留空。启用 mTLS 的节点需要匹配的客户端证书和私钥；订阅通过 HTTPS 返回这两份 PEM 内容，管理服务中会加密存储。")
                 .font(.callout)
                 .foregroundStyle(.secondary)
@@ -489,9 +532,19 @@ private struct UserFormView: View {
             Text("添加用户").font(.title.bold())
             Form {
                 TextField("用户名称", text: $name)
+                    .accessibilityLabel("用户名称")
+                    .accessibilityIdentifier("user.create.name")
                 TextField("总流量额度（GB，可留空）", text: $quotaGB)
+                    .accessibilityLabel("总流量额度（GB，可留空）")
+                    .accessibilityIdentifier("user.create.quotaGB")
                 Toggle("设置到期时间", isOn: $expiresAt)
-                if expiresAt { DatePicker("到期时间", selection: $expiration, in: Date.now...) }
+                    .accessibilityLabel("设置到期时间")
+                    .accessibilityIdentifier("user.create.hasExpiry")
+                if expiresAt {
+                    DatePicker("到期时间", selection: $expiration, in: Date.now...)
+                        .accessibilityLabel("到期时间")
+                        .accessibilityIdentifier("user.create.expiration")
+                }
             }
             if let errorMessage { Text(errorMessage).foregroundStyle(.red).font(.callout) }
             HStack {
@@ -553,14 +606,26 @@ private struct UserEditFormView: View {
             Text("编辑用户").font(.title.bold())
             Form {
                 TextField("用户名称", text: $name)
+                    .accessibilityLabel("用户名称")
+                    .accessibilityIdentifier("user.edit.name")
                 Toggle("启用用户", isOn: $enabled)
+                    .accessibilityLabel("启用用户")
+                    .accessibilityIdentifier("user.edit.enabled")
                 Toggle("设置到期时间", isOn: $hasExpiry)
+                    .accessibilityLabel("设置到期时间")
+                    .accessibilityIdentifier("user.edit.hasExpiry")
                 if hasExpiry {
                     DatePicker("到期时间", selection: $expiration, displayedComponents: [.date, .hourAndMinute])
+                        .accessibilityLabel("到期时间")
+                        .accessibilityIdentifier("user.edit.expiration")
                 }
                 Toggle("设置总流量额度", isOn: $hasQuota)
+                    .accessibilityLabel("设置总流量额度")
+                    .accessibilityIdentifier("user.edit.hasQuota")
                 if hasQuota {
                     TextField("总流量额度（字节）", text: $quotaBytesText)
+                        .accessibilityLabel("总流量额度（字节）")
+                        .accessibilityIdentifier("user.edit.quotaBytes")
                     Text("额度按所有节点累计的上下行流量计算。")
                         .font(.caption)
                         .foregroundStyle(.secondary)
