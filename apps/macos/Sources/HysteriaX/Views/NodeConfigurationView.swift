@@ -407,7 +407,7 @@ struct NodeConfigurationView: View {
                         Toggle("强制 HTTPS", isOn: $masqueradeForceHTTPS)
                     }
                     Section("兼容限制") {
-                        Text("Realm 暂不开放：固定版 Mihomo 的真实 rendezvous 连接超时。启用 Mimic 也仍受兼容限制；ECH 需要使用已上传的 ech_key 资源。端口跳跃已通过实时连接验收。")
+                        Text("Realm 可使用固定版 Mihomo；生成的订阅会为 STUN 打洞设置 30 秒握手期限，服务端使用监听端口作为本地 UDP 端口。Realm 不能与端口跳跃组合。启用 Mimic 仍受兼容限制；ECH 需要使用已上传的 ech_key 资源。")
                             .font(.callout).foregroundStyle(.secondary)
                     }
                     Section("YAML 预览") {

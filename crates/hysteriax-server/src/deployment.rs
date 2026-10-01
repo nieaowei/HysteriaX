@@ -617,7 +617,7 @@ async fn run_proxy_probe(
         resources: resource_files,
         target_url,
     } = probe;
-    let server_address = loopback_server_address(listen_addr)?;
+    let (server_address, realm_options) = deployment_probe_server_config(options, listen_addr)?;
     let custom_target = target_url.map(parse_http_probe_target).transpose()?;
     let remote_target = custom_target
         .as_ref()
@@ -666,6 +666,9 @@ async fn run_proxy_probe(
             "remote": remote_target
         }]
     });
+    if let Some(realm_options) = realm_options {
+        client_config["realm"] = realm_options;
+    }
     if let Some(obfs) = options.get("obfs") {
         client_config["obfs"] = obfs.clone();
     }
@@ -924,6 +927,24 @@ fn loopback_server_address(listen_addr: &str) -> Result<String> {
         host => host,
     };
     Ok(format!("{host}:{port}"))
+}
+
+fn deployment_probe_server_config(
+    options: &Value,
+    listen_addr: &str,
+) -> Result<(String, Option<Value>)> {
+    let Some(connection) = crate::config::realm_connection(options)? else {
+        return Ok((loopback_server_address(listen_addr)?, None));
+    };
+    let mut realm = options
+        .get("realm")
+        .cloned()
+        .context("Realm connection is missing its configuration")?;
+    realm
+        .as_object_mut()
+        .context("realm must be an object")?
+        .remove("connection");
+    Ok((crate::config::realm_client_uri(&connection)?, Some(realm)))
 }
 
 async fn free_remote_tcp_port(session: &SshSession, seed: &str) -> Result<u16> {
@@ -1341,13 +1362,47 @@ fn clients_offline_output(node_id: &str, user_id: &str) -> JobOutput {
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
     use sha2::{Digest, Sha256};
     use sqlx::{Row, SqlitePool, sqlite::SqlitePoolOptions};
 
     use super::{
-        JobInput, parse_http_probe_target, primary_listener_port, report_progress, systemd_unit,
-        verify_hysteria_asset,
+        JobInput, deployment_probe_server_config, parse_http_probe_target, primary_listener_port,
+        report_progress, systemd_unit, verify_hysteria_asset,
     };
+
+    #[test]
+    fn realm_deployment_probe_uses_realm_uri_and_client_tuning() {
+        let options = json!({
+            "realm": {
+                "connection": {
+                    "serverURL": "http://127.0.0.1:10820",
+                    "token": "realm-token",
+                    "realmID": "node-realm-1"
+                },
+                "stunServers": ["127.0.0.1:3478"],
+                "stunTimeout": "5s",
+                "ipMode": "v4"
+            }
+        });
+        let (server, realm) = deployment_probe_server_config(&options, ":443").unwrap();
+        assert_eq!(
+            server,
+            "realm+http://realm-token@127.0.0.1:10820/node-realm-1"
+        );
+        let realm = realm.unwrap();
+        assert!(realm.get("connection").is_none());
+        assert_eq!(realm["stunServers"][0], "127.0.0.1:3478");
+        assert_eq!(realm["stunTimeout"], "5s");
+        assert_eq!(realm["ipMode"], "v4");
+    }
+
+    #[test]
+    fn non_realm_deployment_probe_keeps_loopback_listener_address() {
+        let (server, realm) = deployment_probe_server_config(&json!({}), ":443").unwrap();
+        assert_eq!(server, "127.0.0.1:443");
+        assert!(realm.is_none());
+    }
 
     async fn test_pool() -> SqlitePool {
         let pool = SqlitePoolOptions::new()

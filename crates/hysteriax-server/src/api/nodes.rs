@@ -712,7 +712,12 @@ fn empty_config() -> Value {
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize_proxy_probe_url, validate_hop_public_port, validate_listen_addr};
+    use serde_json::json;
+
+    use super::{
+        normalize_proxy_probe_url, validate_hop_public_port, validate_listen_addr,
+        validate_listener_features,
+    };
 
     #[test]
     fn validates_optional_http_probe_targets_without_embedded_credentials() {
@@ -742,5 +747,19 @@ mod tests {
         assert!(validate_listen_addr(":443, 445").is_err());
         assert!(validate_hop_public_port(443, 443, true).is_ok());
         assert!(validate_hop_public_port(8443, 443, true).is_err());
+    }
+
+    #[test]
+    fn realm_requires_a_single_listener_port() {
+        let realm = json!({
+            "realm": {"connection": {
+                "serverURL": "https://rendezvous.example",
+                "token": "realm-token",
+                "realmID": "realm-test"
+            }}
+        });
+        assert!(validate_listener_features(&realm, ":443").is_ok());
+        assert!(validate_listener_features(&realm, ":443-445").is_err());
+        assert!(validate_listener_features(&realm, ":443,445-446").is_err());
     }
 }

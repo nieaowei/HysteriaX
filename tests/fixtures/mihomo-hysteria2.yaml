@@ -16,6 +16,14 @@ proxies:
     obfs-password: "obfuscation-validation-only"
     obfs-min-packet-size: 512
     obfs-max-packet-size: 1200
+    realm-opts:
+      enable: true
+      server-url: http://rendezvous.example.test:10820
+      token: "configuration-validation-only"
+      realm-id: "mihomo-parser-realm"
+      stun-servers:
+        - 127.0.0.1:3478
+    handshake-timeout: 30
 proxy-groups:
   - name: "节点选择"
     type: select

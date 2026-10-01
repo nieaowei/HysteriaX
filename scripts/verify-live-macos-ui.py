@@ -196,6 +196,8 @@ schemes:
         lines = log_path.read_text(errors="replace").splitlines()
         markers = (
             "LIVE_UI_WORKFLOW=",
+            "SYSTEM_SETTINGS_",
+            "FRONTMOST_",
             "Test Case",
             "Executed ",
             "TEST SUCCEEDED",

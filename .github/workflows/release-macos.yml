@@ -9,21 +9,15 @@ permissions:
   contents: write
 
 jobs:
-  notarize-and-publish:
+  build-and-publish:
     runs-on: xcode-27
     steps:
       - uses: actions/checkout@v4
 
-      - name: Sign, notarize, and package the universal app
+      - name: Package the unsigned universal app
         run: scripts/release-macos.sh
         env:
           HYSTERIAX_RELEASE_VERSION: ${{ github.ref_name }}
-          HYSTERIAX_DEVELOPER_ID_P12_BASE64: ${{ secrets.HYSTERIAX_DEVELOPER_ID_P12_BASE64 }}
-          HYSTERIAX_DEVELOPER_ID_P12_PASSWORD: ${{ secrets.HYSTERIAX_DEVELOPER_ID_P12_PASSWORD }}
-          HYSTERIAX_APPLE_TEAM_ID: ${{ secrets.HYSTERIAX_APPLE_TEAM_ID }}
-          HYSTERIAX_NOTARY_KEY_ID: ${{ secrets.HYSTERIAX_NOTARY_KEY_ID }}
-          HYSTERIAX_NOTARY_ISSUER_ID: ${{ secrets.HYSTERIAX_NOTARY_ISSUER_ID }}
-          HYSTERIAX_NOTARY_KEY_P8_BASE64: ${{ secrets.HYSTERIAX_NOTARY_KEY_P8_BASE64 }}
 
       - uses: actions/upload-artifact@v4
         with:

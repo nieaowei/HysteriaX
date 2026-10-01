@@ -18,6 +18,7 @@ jobs:
       - run: cargo test --workspace
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: scripts/verify-subscription.sh
+      - run: scripts/verify-realm-live.py
       - run: scripts/verify-migrations.py
       - run: scripts/verify-restart-recovery.py
       - run: scripts/verify-sampling-failure.py

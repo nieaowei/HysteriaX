@@ -10,7 +10,7 @@ From the repository directory, create a verified archive:
 scripts/backup-restore.py backup
 ```
 
-The command checks that the API is ready, stops it while archiving the complete `data/` directory (SQLite database, WAL sidecars, and encrypted resources), verifies SQLite integrity and file hashes, then restarts the API and waits for readiness. It writes a mode-600 archive under `backups/` by default; an alternate destination can be passed as an argument.
+The command checks that the API is ready, stops it while archiving the complete `data/` directory (SQLite database, WAL sidecars, and encrypted resources), verifies SQLite integrity and file hashes, then restarts the API and waits for readiness. The API handles SIGTERM and drains active HTTP requests so Compose can stop it within the configured timeout. It writes a mode-600 archive under `backups/` by default; an alternate destination can be passed as an argument.
 
 The archive contains a SHA-256 fingerprint of the encryption key, not the key itself. Protect the archive as a secret and keep a separate encrypted copy of `HYSTERIAX_MASTER_KEY`. Do not store both in the same unprotected location. Caddy's named certificate volumes are outside `data/` and need their own protected backup if preserving certificate state is required.
 

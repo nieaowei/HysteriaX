@@ -9,7 +9,7 @@
 5. Start the service with `docker compose up -d --build`.
 6. Confirm `https://manage.example.com/readyz` returns `{"status":"ready","database":"ok"}`.
 
-For a tagged release image, set `HYSTERIAX_IMAGE=ghcr.io/<owner>/hysteriax-server` and `HYSTERIAX_VERSION=vX.Y.Z` in `.env`, then run `docker compose pull` and `docker compose up -d`. The default `.env` selects the local `hysteriax-server:dev` image and the quick start builds it from source. Published image tags and the macOS notarized DMG for direct distribution are produced by the release workflows; see [release signing and packaging](release.md).
+For a tagged release image, set `HYSTERIAX_IMAGE=ghcr.io/<owner>/hysteriax-server` and `HYSTERIAX_VERSION=vX.Y.Z` in `.env`, then run `docker compose pull` and `docker compose up -d`. The default `.env` selects the local `hysteriax-server:dev` image and the quick start builds it from source. Published image tags and the unsigned macOS DMG for direct distribution are produced by the release workflows; see [the unsigned DMG release guide](release.md).
 
 Caddy obtains and renews the management HTTPS certificate. TCP 80 and 443 must reach the host. Node Hysteria traffic uses UDP ports configured for each node; this service does not alter cloud security groups or host firewalls.
 

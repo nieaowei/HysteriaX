@@ -3,7 +3,9 @@ import Foundation
 
 @MainActor
 enum KeychainStore {
-    private static var tokenInMemory: String?
+    private static var tokenInMemory: String? = ProcessInfo.processInfo.environment[
+        "HYSTERIAX_UI_TEST_ADMIN_TOKEN"
+    ]
 
     static func readToken() -> String? {
         tokenInMemory

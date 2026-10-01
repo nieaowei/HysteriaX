@@ -1,5 +1,6 @@
 import XCTest
 import Foundation
+import AppKit
 
 private struct UITestCredentials: Decodable {
     let serviceAddress: String
@@ -22,45 +23,76 @@ final class HysteriaXLiveUITests: XCTestCase {
         let credentialsData = try Data(contentsOf: URL(fileURLWithPath: UITestConfiguration.credentialsPath))
         let credentials = try JSONDecoder().decode(UITestCredentials.self, from: credentialsData)
         XCTAssertEqual(credentials.userName, UITestConfiguration.userName)
+        print("SYSTEM_SETTINGS_BEFORE_LAUNCH=" + systemSettingsProcessIDs())
+        print("FRONTMOST_BEFORE_LAUNCH=" + frontmostBundleIdentifier())
 
         let app = XCUIApplication()
+        app.launchEnvironment["HYSTERIAX_UI_TEST_SERVICE_ADDRESS"] = credentials.serviceAddress
+        app.launchEnvironment["HYSTERIAX_UI_TEST_ADMIN_TOKEN"] = credentials.adminToken
         app.launch()
+        print("FRONTMOST_AFTER_LAUNCH=" + frontmostBundleIdentifier())
 
         let settingsButton = button(app, "设置")
         XCTAssertTrue(settingsButton.waitForExistence(timeout: 20))
         settingsButton.click()
+        print("FRONTMOST_AFTER_HYSTERIAX_SETTINGS=" + frontmostBundleIdentifier())
+        print("SYSTEM_SETTINGS_AFTER_HYSTERIAX_SETTINGS=" + systemSettingsProcessIDs())
         XCTAssertTrue(app.descendants(matching: .any)["settings.keychainMode"].waitForExistence(timeout: 10))
         XCTAssertTrue(app.staticTexts["settings.keychainMode"].waitForExistence(timeout: 10))
 
         let serviceAddress = app.textFields["settings.serviceAddress"].firstMatch
         XCTAssertTrue(serviceAddress.waitForExistence(timeout: 15))
-        if (serviceAddress.value as? String) != credentials.serviceAddress {
-            serviceAddress.click()
-            serviceAddress.typeKey("a", modifierFlags: .command)
-            serviceAddress.typeText(credentials.serviceAddress)
-        }
+        XCTAssertEqual(serviceAddress.value as? String, credentials.serviceAddress)
 
         let adminToken = app.secureTextFields["settings.adminToken"].firstMatch
         XCTAssertTrue(adminToken.waitForExistence(timeout: 10))
-        adminToken.click()
-        adminToken.typeText(credentials.adminToken)
+        print("SYSTEM_SETTINGS_BEFORE_VERIFY=" + systemSettingsProcessIDs())
         button(app, "验证并保存").click()
+        print("FRONTMOST_IMMEDIATELY_AFTER_VERIFY=" + frontmostBundleIdentifier())
 
         XCTAssertTrue(
             app.descendants(matching: .any)["settings.connectionState"].waitForExistence(timeout: 60),
             "The Settings view should expose its connection state."
         )
+        try await Task.sleep(for: .seconds(2))
+        print("SYSTEM_SETTINGS_AFTER_VERIFY=" + systemSettingsProcessIDs())
+        print("FRONTMOST_AFTER_VERIFY=" + frontmostBundleIdentifier())
         XCTAssertTrue(button(app, "创建并切换").waitForExistence(timeout: 10), "The connected token-management controls should load.")
 
         openSection(app, "节点")
+        print("FRONTMOST_AFTER_NODES=" + frontmostBundleIdentifier())
         XCTAssertTrue(identified(app, "nodes.row.\(credentials.nodeOneID)").waitForExistence(timeout: 20))
         XCTAssertTrue(identified(app, "nodes.row.\(credentials.nodeTwoID)").waitForExistence(timeout: 20))
+        button(app, "添加节点").click()
+        for identifier in [
+            "node.create.name",
+            "node.create.sshHost",
+            "node.create.sshPort",
+            "node.create.sshUsername",
+            "node.create.publicHost",
+            "node.create.publicPort",
+            "node.create.listenAddress",
+            "node.create.tlsSNI",
+            "node.create.proxyProbeURL",
+            "node.create.tlsMode",
+        ] {
+            XCTAssertTrue(
+                identified(app, identifier).waitForExistence(timeout: 10),
+                "The add-node form should expose its field: \(identifier)"
+            )
+        }
+        XCTAssertTrue(app.secureTextFields["node.create.sshPassword"].waitForExistence(timeout: 10))
+        button(app, "取消").click()
+        XCTAssertFalse(identified(app, "node.create.name").waitForExistence(timeout: 2))
         openSection(app, "任务")
+        print("FRONTMOST_AFTER_JOBS=" + frontmostBundleIdentifier())
         XCTAssertTrue(identified(app, "jobs.title").waitForExistence(timeout: 10))
         openSection(app, "审计")
+        print("FRONTMOST_AFTER_AUDIT=" + frontmostBundleIdentifier())
         XCTAssertTrue(identified(app, "audit.title").waitForExistence(timeout: 10))
 
         openSection(app, "用户")
+        print("FRONTMOST_AFTER_USERS=" + frontmostBundleIdentifier())
         button(app, "添加用户").click()
         let userNameField = app.textFields["user.create.name"].firstMatch
         XCTAssertTrue(userNameField.waitForExistence(timeout: 10))
@@ -120,6 +152,17 @@ final class HysteriaXLiveUITests: XCTestCase {
 
         print("LIVE_UI_WORKFLOW=passed")
         app.terminate()
+        print("FRONTMOST_AFTER_TERMINATE=" + frontmostBundleIdentifier())
+    }
+
+    private func systemSettingsProcessIDs() -> String {
+        NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.systempreferences")
+            .map { String($0.processIdentifier) }
+            .joined(separator: ",")
+    }
+
+    private func frontmostBundleIdentifier() -> String {
+        NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "none"
     }
 
     private func openSection(_ app: XCUIApplication, _ title: String) {

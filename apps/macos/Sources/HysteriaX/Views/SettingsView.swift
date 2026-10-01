@@ -3,7 +3,13 @@ import SwiftUI
 
 struct SettingsView: View {
     @Bindable var store: ManagementStore
+#if HYSTERIAX_UI_TESTING
+    @State private var serviceAddress = ProcessInfo.processInfo.environment[
+        "HYSTERIAX_UI_TEST_SERVICE_ADDRESS"
+    ] ?? UserDefaults.standard.string(forKey: "serviceAddress") ?? ""
+#else
     @State private var serviceAddress = UserDefaults.standard.string(forKey: "serviceAddress") ?? ""
+#endif
     @State private var token = KeychainStore.readToken() ?? ""
     @State private var message: String?
     @State private var isConnecting = false

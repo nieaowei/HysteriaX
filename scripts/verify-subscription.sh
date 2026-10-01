@@ -199,8 +199,9 @@ def main():
                     },
                 },
             )
-            if status != 400 or b"Mihomo v1.19.31" not in body:
-                raise RuntimeError("unsupported Realm mode was not rejected after the live client timeout")
+            if status != 201:
+                raise RuntimeError("Realm node configuration was rejected")
+            realm_node_id = json.loads(body)["node"]["id"]
 
             status, body = request(
                 base, "/api/v1/users", admin, "POST", {"name": "Mihomo parser user"}
@@ -222,12 +223,21 @@ def main():
             )
             if status != 201:
                 raise RuntimeError("could not assign the parser fixture user")
+            status, _ = request(
+                base,
+                f"/api/v1/users/{user_id}/assignments",
+                admin,
+                "POST",
+                {"expected_revision": 2, "node_id": realm_node_id},
+            )
+            if status != 201:
+                raise RuntimeError("could not assign the Realm parser fixture node")
             status, body = request(
                 base,
                 f"/api/v1/users/{user_id}/subscription",
                 admin,
                 "POST",
-                {"expected_revision": 2},
+                {"expected_revision": 3},
             )
             if status != 200:
                 raise RuntimeError("could not create parser fixture subscription")
@@ -237,7 +247,7 @@ def main():
                 f"/api/v1/users/{user_id}/subscription",
                 admin,
                 "POST",
-                {"expected_revision": 3},
+                {"expected_revision": 4},
             )
             if status != 200:
                 raise RuntimeError("could not rotate parser fixture subscription")
@@ -276,8 +286,9 @@ def main():
             with sqlite3.connect(temp / "service.db") as database:
                 database.execute(
                     "UPDATE nodes SET deployed_revision = desired_revision, "
-                    "deployed_config_enc = desired_config_enc, state = 'deployed' WHERE id = ?",
-                    (node_id,),
+                    "deployed_config_enc = desired_config_enc, state = 'deployed' "
+                    "WHERE id IN (?, ?)",
+                    (node_id, realm_node_id),
                 )
                 database.commit()
 
@@ -294,6 +305,10 @@ def main():
                 raise RuntimeError("port hopping range is missing from the subscription")
             if b"hop-interval: 30" not in config:
                 raise RuntimeError("port hopping interval default is missing from the subscription")
+            if b"realm-opts:" not in config or b"realm-id: parser-realm-123" not in config:
+                raise RuntimeError("Realm options are missing from the subscription")
+            if b"handshake-timeout: 30" not in config:
+                raise RuntimeError("Realm handshake timeout override is missing from the subscription")
             config_path = temp / "clash.yaml"
             config_path.write_bytes(config)
             subprocess.run(
@@ -318,7 +333,7 @@ def main():
                 check=True,
                 stdout=subprocess.DEVNULL,
             )
-            print("Generated mTLS, ECH, and port hopping subscription parses with pinned Mihomo v1.19.31; Realm mode is gated after failed live acceptance.")
+            print("Generated mTLS, ECH, port-hopping, and Realm subscriptions parse with pinned Mihomo v1.19.31; the Realm subscription includes handshake-timeout: 30.")
         finally:
             server.terminate()
             try:

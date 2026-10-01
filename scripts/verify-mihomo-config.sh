@@ -24,8 +24,8 @@ case "$platform:$architecture" in
     expected=3546681ebef3415e5dcbe7210a61aa80748136e95e6552768fd883df345508ed
     ;;
   Linux:x86_64|Linux:amd64)
-    asset=mihomo-linux-amd64-v1.19.31.gz
-    expected=d5e74bbddbdfff49a1aef7775bf5911da59f0d7196ed509a0ac914b3653dd5f1
+    asset=mihomo-linux-amd64-compatible-v1.19.31.gz
+    expected=04cf9f09671704f839ddbee2e93069dc831a4123a75281e725d1d96ab9ac1afc
     ;;
   Linux:aarch64|Linux:arm64)
     asset=mihomo-linux-arm64-v1.19.31.gz

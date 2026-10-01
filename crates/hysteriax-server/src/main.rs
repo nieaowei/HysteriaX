@@ -59,8 +59,29 @@ async fn main() -> Result<()> {
         .await
         .with_context(|| format!("bind to {address}"))?;
     tracing::info!(%address, "HysteriaX management API listening");
-    axum::serve(listener, app).await.context("serve HTTP API")?;
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await
+        .context("serve HTTP API")?;
     Ok(())
+}
+
+#[cfg(unix)]
+async fn shutdown_signal() {
+    use tokio::signal::unix::{SignalKind, signal};
+
+    let mut terminate = signal(SignalKind::terminate()).expect("register SIGTERM handler");
+    tokio::select! {
+        _ = tokio::signal::ctrl_c() => {}
+        _ = terminate.recv() => {}
+    }
+    tracing::info!("shutdown signal received; draining HTTP requests");
+}
+
+#[cfg(not(unix))]
+async fn shutdown_signal() {
+    let _ = tokio::signal::ctrl_c().await;
+    tracing::info!("shutdown signal received; draining HTTP requests");
 }
 
 async fn initialize_admin_token(pool: &SqlitePool) -> Result<()> {

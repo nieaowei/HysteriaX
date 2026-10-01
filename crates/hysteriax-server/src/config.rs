@@ -61,13 +61,11 @@ pub fn validate_server_options(value: &Value) -> Result<()> {
     }
     if let Some(realm) = object.get("realm") {
         validate_realm(realm)?;
-        if realm_connection(value)?.is_some() {
-            if !object.contains_key("tls") && !object.contains_key("acme") {
-                bail!("Realm mode requires tls or acme certificate configuration");
-            }
-            bail!(
-                "Hysteria Realms remain disabled: Mihomo v1.19.31 did not complete the live rendezvous connection check"
-            );
+        if realm_connection(value)?.is_some()
+            && !object.contains_key("tls")
+            && !object.contains_key("acme")
+        {
+            bail!("Realm mode requires tls or acme certificate configuration");
         }
     }
     if let Some(ech) = object.get("ech") {
@@ -385,7 +383,7 @@ fn parse_realm_connection(value: &Value) -> Result<RealmConnection> {
     })
 }
 
-fn realm_listen_uri(connection: &RealmConnection) -> Result<String> {
+pub(crate) fn realm_client_uri(connection: &RealmConnection) -> Result<String> {
     let url = Url::parse(&connection.server_url)
         .context("validated Realm rendezvous URL became invalid")?;
     let (scheme, default_port) = if url.scheme() == "https" {
@@ -408,6 +406,18 @@ fn realm_listen_uri(connection: &RealmConnection) -> Result<String> {
         "{scheme}://{}@{authority}/{}",
         connection.token, connection.realm_id
     ))
+}
+
+fn realm_listen_uri(connection: &RealmConnection, listen_addr: &str) -> Result<String> {
+    let (_, ports) = listen_addr
+        .rsplit_once(':')
+        .context("Realm mode requires a single configured listener port")?;
+    let port = ports
+        .parse::<u16>()
+        .ok()
+        .filter(|port| *port != 0)
+        .context("Realm mode requires a single configured listener port")?;
+    Ok(format!("{}?lport={port}", realm_client_uri(connection)?))
 }
 
 fn validate_acme(value: &Value) -> Result<()> {
@@ -1082,7 +1092,7 @@ pub fn render_server_yaml(
     }
     let listen = realm
         .as_ref()
-        .map(realm_listen_uri)
+        .map(|connection| realm_listen_uri(connection, listen_addr))
         .transpose()?
         .unwrap_or_else(|| listen_addr.to_owned());
     root.insert("listen".into(), Value::String(listen));
@@ -1142,7 +1152,7 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        DEFAULT_REALM_STUN_SERVERS, realm_connection, render_server_yaml,
+        DEFAULT_REALM_STUN_SERVERS, realm_client_uri, realm_connection, render_server_yaml,
         render_server_yaml_preview, validate_server_options,
     };
 
@@ -1224,7 +1234,7 @@ mod tests {
     }
 
     #[test]
-    fn blocks_realm_mode_after_pinned_client_live_failure() {
+    fn validates_realm_connection_and_requires_tls() {
         let connection = json!({
             "serverURL": "http://127.0.0.1:10820",
             "token": "private-token_123",
@@ -1235,9 +1245,7 @@ mod tests {
                 "tls": {"cert": "/etc/server.pem", "key": "/etc/server-key.pem"},
                 "realm": {"connection": connection, "stunServers": ["stun.example:3478"]}
             }))
-            .unwrap_err()
-            .to_string()
-            .contains("Mihomo v1.19.31")
+            .is_ok()
         );
         assert!(
             validate_server_options(&json!({
@@ -1280,6 +1288,10 @@ mod tests {
         });
         let connection = realm_connection(&config).unwrap().unwrap();
         assert_eq!(
+            realm_client_uri(&connection).unwrap(),
+            "realm://realm-token@rendezvous.example/realm-test-1"
+        );
+        assert_eq!(
             connection.stun_servers,
             DEFAULT_REALM_STUN_SERVERS
                 .iter()
@@ -1289,7 +1301,7 @@ mod tests {
     }
 
     #[test]
-    fn realm_connection_config_is_not_rendered_when_live_client_is_blocked() {
+    fn realm_connection_config_renders_as_a_realm_listener() {
         let options = json!({
             "tls": {"cert": "/etc/server.pem", "key": "/etc/server-key.pem"},
             "realm": {
@@ -1302,28 +1314,38 @@ mod tests {
                 "punchTimeout": "10s"
             }
         });
-        assert!(
-            render_server_yaml(
-                &options,
-                ":443",
-                "node-id",
-                "node-secret",
-                "stats-secret",
-                "https://management.example",
-            )
-            .is_err()
+        let yaml = render_server_yaml(
+            &options,
+            ":443",
+            "node-id",
+            "node-secret",
+            "stats-secret",
+            "https://management.example",
+        )
+        .unwrap();
+        let value: serde_yaml::Value = serde_yaml::from_str(&yaml).unwrap();
+        assert_eq!(
+            value["listen"].as_str(),
+            Some("realm+http://private-token_123@127.0.0.1:10820/local-test-1?lport=443")
         );
-        assert!(
-            render_server_yaml_preview(
-                &options,
-                ":443",
-                "node-id",
-                "node-secret",
-                "stats-secret",
-                "https://management.example",
-            )
-            .is_err()
+        assert!(value["realm"].get("connection").is_none());
+        assert_eq!(
+            value["realm"]["stunServers"][0].as_str(),
+            Some("stun.example:3478")
         );
+        let preview = render_server_yaml_preview(
+            &options,
+            ":443",
+            "node-id",
+            "node-secret",
+            "stats-secret",
+            "https://management.example",
+        )
+        .unwrap();
+        assert!(
+            preview.contains("realm+http://REDACTED_TOKEN@127.0.0.1:10820/local-test-1?lport=443")
+        );
+        assert!(!preview.contains("private-token_123"));
     }
 
     #[test]

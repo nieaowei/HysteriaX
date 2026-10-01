@@ -81,6 +81,8 @@ struct ClashProxy {
     ech_opts: Option<ClashEchOptions>,
     #[serde(skip_serializing_if = "Option::is_none", rename = "realm-opts")]
     realm_opts: Option<ClashRealmOptions>,
+    #[serde(skip_serializing_if = "Option::is_none", rename = "handshake-timeout")]
+    handshake_timeout: Option<u64>,
 }
 
 #[derive(Serialize)]
@@ -406,6 +408,7 @@ fn build_proxy(
         .as_ref()
         .and_then(|kind| obfs.and_then(|value| value.get(kind)))
         .and_then(Value::as_object);
+    let handshake_timeout = realm_opts.as_ref().map(|_| 30);
     ClashProxy {
         name: format!("{name}-{suffix}"),
         protocol: "hysteria2".to_owned(),
@@ -439,6 +442,7 @@ fn build_proxy(
             config,
         }),
         realm_opts,
+        handshake_timeout,
     }
 }
 
@@ -545,6 +549,7 @@ mod tests {
         assert_eq!(value["server"].as_str(), Some("2001:db8::1"));
         assert_eq!(value["password"].as_str(), Some("pass:word/with?symbols"));
         assert_eq!(value["ports"].as_str(), Some("443,445-446"));
+        assert!(value.get("handshake-timeout").is_none());
     }
 
     #[test]
@@ -580,5 +585,24 @@ mod tests {
         assert!(yaml.contains("realm-id: node-realm-1"));
         assert!(yaml.contains("stun-servers:"));
         assert!(yaml.contains("skip-cert-verify: true"));
+
+        let proxy = build_proxy(
+            "Realm node",
+            "node-realm-id",
+            "node.example",
+            443,
+            None,
+            Some("node.example".to_owned()),
+            false,
+            "user-pass",
+            None,
+            None,
+            None,
+            Some(realm),
+            &config,
+        );
+        let proxy_yaml = serde_yaml::to_string(&proxy).unwrap();
+        let proxy_value: serde_yaml::Value = serde_yaml::from_str(&proxy_yaml).unwrap();
+        assert_eq!(proxy_value["handshake-timeout"].as_u64(), Some(30));
     }
 }
