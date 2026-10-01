@@ -10,3 +10,4 @@ apps/macos/.build/
 apps/macos/GeneratedAPI/
 **/xcuserdata/
 *.xcuserstate
+temp.cloud.md

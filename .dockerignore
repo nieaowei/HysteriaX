@@ -5,6 +5,7 @@ target
 apps
 docs
 .env*
+temp.cloud.md
 data
 backups
 dist

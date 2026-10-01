@@ -24,3 +24,9 @@ The live acceptance script checks deployment failures: a wrong SSH fingerprint i
 Each deploy, sync, or rollback job also runs the pinned Hysteria client against the newly started listener before reporting success. By default, it forwards a TCP request to the node's local statistics API. A node can set `proxy_probe_url` to an HTTP 200 endpoint reachable through its ACL/outbound policy. The task result labels the check as `tcp_forwarding`, `custom_tcp_forwarding`, or `authenticated_session`. The live probe fixture verifies a direct ACL/outbound route to a custom target and the session-only fallback when loopback is explicitly rejected.
 
 The live probe fixture covers both route outcomes: a custom `direct(all)` ACL/outbound completes TCP forwarding, and a `reject(127.0.0.1/32)` rule produces the explicitly labeled authenticated-session fallback.
+
+## Independent cloud VM acceptance
+
+On 2026-10-01, the service ran from the locally built Docker Hub image `nieaowei/hysteriax-server:dev` (linux/amd64, digest `sha256:041e1c3169f81cdadeea17756bb9eb40227843e86c1432916674e412cdf152db`). A Debian 13 x86_64 VM hosted the control plane, and a separate Debian 12 x86_64 VM ran as a managed node. Both nodes passed pinned-SSH deployment, health checks, UDP Hysteria reachability, and the deployment-time TCP forwarding probe. A temporary shared user produced a two-node subscription that parsed with Mihomo v1.19.31; the pinned Hysteria client fetched HTTPS content through each VM, and the usage sampler recorded traffic from both nodes. The temporary user was deleted after the check.
+
+This cloud run did not exercise active-session revocation, expiry/over-quota kicks, credential rotation, mTLS, or deployment rollback against the cloud VMs. Those cases remain covered by disposable systemd-container acceptance. The Hysteria test nodes used self-signed certificates with client verification disabled for this acceptance run.
