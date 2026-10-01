@@ -1,0 +1,5 @@
+# Official MetaCubeX/mihomo v1.19.31 release assets used by scripts/verify-mihomo-config.sh
+d131f44b3deb2a8356f7ac75048ad67a10d53243323951c4f3cda7b672922963  mihomo-darwin-arm64-v1.19.31.gz
+3546681ebef3415e5dcbe7210a61aa80748136e95e6552768fd883df345508ed  mihomo-darwin-amd64-v1.19.31.gz
+d5e74bbddbdfff49a1aef7775bf5911da59f0d7196ed509a0ac914b3653dd5f1  mihomo-linux-amd64-v1.19.31.gz
+9e0f11afbf38426b8bd88fdc594678f8161c57eccb4e1b77acb12b493904f1d4  mihomo-linux-arm64-v1.19.31.gz

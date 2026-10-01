@@ -1,0 +1,12 @@
+.DS_Store
+.env
+.env.*
+!.env.example
+data/
+backups/
+target/
+dist/
+apps/macos/.build/
+apps/macos/GeneratedAPI/
+**/xcuserdata/
+*.xcuserstate

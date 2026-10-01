@@ -1,0 +1,26 @@
+mixed-port: 7890
+allow-lan: false
+bind-address: 127.0.0.1
+mode: rule
+proxies:
+  - name: "Verification node 12345678"
+    type: hysteria2
+    server: example.com
+    port: 443
+    password: "configuration-validation-only"
+    sni: example.com
+    skip-cert-verify: true
+    up: "100 Mbps"
+    down: "200 Mbps"
+    obfs: gecko
+    obfs-password: "obfuscation-validation-only"
+    obfs-min-packet-size: 512
+    obfs-max-packet-size: 1200
+proxy-groups:
+  - name: "节点选择"
+    type: select
+    proxies:
+      - DIRECT
+      - "Verification node 12345678"
+rules:
+  - MATCH,节点选择

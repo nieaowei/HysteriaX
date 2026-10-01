@@ -1,0 +1,42 @@
+services:
+  api:
+    build: .
+    image: "${HYSTERIAX_IMAGE:-hysteriax-server}:${HYSTERIAX_VERSION:-dev}"
+    restart: unless-stopped
+    user: "${HYSTERIAX_UID:-1000}:${HYSTERIAX_GID:-1000}"
+    environment:
+      DATABASE_URL: sqlite:///data/hysteriax.db?mode=rwc
+      HYSTERIAX_MIGRATION_BACKUP_DIR: /backups/migrations
+      HYSTERIAX_LISTEN_ADDR: 0.0.0.0:8080
+      HYSTERIAX_PUBLIC_URL: https://${HYSTERIAX_DOMAIN}
+      HYSTERIAX_ADMIN_TOKEN: ${HYSTERIAX_ADMIN_TOKEN}
+      HYSTERIAX_MASTER_KEY: ${HYSTERIAX_MASTER_KEY}
+      RUST_LOG: info
+    volumes:
+      - ./data:/data
+      - ./backups:/backups
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://127.0.0.1:8080/readyz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  caddy:
+    image: caddy:2.10
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      HYSTERIAX_DOMAIN: ${HYSTERIAX_DOMAIN}
+    ports:
+      - "80:80/tcp"
+      - "443:443/tcp"
+    volumes:
+      - ./deploy/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  caddy_data:
+  caddy_config:

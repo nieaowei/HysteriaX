@@ -1,0 +1,1068 @@
+openapi: 3.1.0
+info:
+  title: HysteriaX Management API
+  version: 1.0.0
+  description: Versioned API for the HysteriaX management service.
+  license:
+    name: MIT
+    identifier: MIT
+servers:
+  - url: https://{domain}/api/v1
+    variables:
+      domain:
+        default: localhost
+security:
+  - BearerAuth: []
+paths:
+  /nodes:
+    get:
+      operationId: listNodes
+      summary: List nodes
+      responses:
+        '200':
+          description: Node list
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/NodeSummary' }
+    post:
+      operationId: createNode
+      summary: Create node
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/NodeCreate' }
+      responses:
+        '201':
+          description: Created node and one-time node token
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CreatedEntity' }
+        '400': { $ref: '#/components/responses/Error' }
+  /nodes/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      operationId: getNode
+      summary: Get node
+      responses:
+        '200':
+          description: Node detail
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/NodeDetail' }
+        '404': { $ref: '#/components/responses/Error' }
+    patch:
+      operationId: updateNode
+      summary: Update node
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/NodePatch' }
+      responses:
+        '200':
+          description: Updated node
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/NodeUpdateResponse' }
+        '409': { $ref: '#/components/responses/Error' }
+    delete:
+      operationId: deleteNode
+      summary: Delete node and queue managed remote uninstall
+      parameters:
+        - name: expected_revision
+          in: query
+          required: true
+          schema: { type: integer, minimum: 1 }
+      responses:
+        '202':
+          description: Queued remote uninstall job
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/JobReceipt' }
+        '204': { description: Deleted }
+        '409': { $ref: '#/components/responses/Error' }
+  /nodes/{id}/ssh-test:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    post:
+      operationId: testNodeSSH
+      summary: Test node ssh
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Revision' }
+      responses:
+        '202':
+          description: Queued SSH test job
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/JobReceipt' }
+        '409': { $ref: '#/components/responses/Error' }
+  /nodes/{id}/deploy:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    post:
+      operationId: deployNode
+      summary: Deploy node
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Revision' }
+      responses:
+        '202':
+          description: Queued deployment job
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/JobReceipt' }
+        '409': { $ref: '#/components/responses/Error' }
+  /nodes/{id}/sync:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    post:
+      operationId: syncNode
+      summary: Sync node
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Revision' }
+      responses:
+        '202':
+          description: Queued synchronization job
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/JobReceipt' }
+        '409': { $ref: '#/components/responses/Error' }
+  /nodes/{id}/rollback:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    post:
+      operationId: rollbackNode
+      summary: Rollback node
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Revision' }
+      responses:
+        '202':
+          description: Queued rollback job
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/JobReceipt' }
+        '409': { $ref: '#/components/responses/Error' }
+  /nodes/{id}/resources:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      operationId: listNodeResources
+      summary: List node resources
+      responses:
+        '200':
+          description: Resource metadata without resource contents
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/NodeResource' }
+    post:
+      operationId: uploadNodeResource
+      summary: Upload a node resource
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ResourceCreate' }
+      responses:
+        '201':
+          description: Created encrypted resource and reference URI
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ResourceReceipt' }
+        '400': { $ref: '#/components/responses/Error' }
+  /nodes/{id}/resources/{resource_id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+      - name: resource_id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    delete:
+      operationId: deleteNodeResource
+      summary: Delete an unreferenced node resource
+      responses:
+        '204': { description: Deleted resource }
+        '409': { $ref: '#/components/responses/Error' }
+  /users:
+    get:
+      operationId: listUsers
+      summary: List users
+      responses:
+        '200':
+          description: User list
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/UserSummary' }
+    post:
+      operationId: createUser
+      summary: Create user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UserCreate' }
+      responses:
+        '201':
+          description: Created user
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CreatedEntity' }
+  /users/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      operationId: getUser
+      summary: Get user
+      responses:
+        '200':
+          description: User detail
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UserSummary' }
+    patch:
+      operationId: updateUser
+      summary: Update user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UserPatch' }
+      responses:
+        '200':
+          description: Updated user
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UserUpdateResponse' }
+        '409': { $ref: '#/components/responses/Error' }
+    delete:
+      operationId: deleteUser
+      summary: Delete user
+      parameters:
+        - name: expected_revision
+          in: query
+          required: true
+          schema: { type: integer, minimum: 1 }
+      responses:
+        '204': { description: Deleted }
+  /users/{id}/assignments:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    post:
+      operationId: assignUserToNode
+      summary: Assign user to node
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AssignmentRequest' }
+      responses:
+        '201':
+          description: Assignment and one-time Hysteria credential
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AssignmentReceipt' }
+        '409': { $ref: '#/components/responses/Error' }
+  /users/{id}/assignments/{node_id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+      - name: node_id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    delete:
+      operationId: unassignUserFromNode
+      summary: Unassign user from node
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Revision' }
+      responses:
+        '200':
+          description: Unassigned and kick queued
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AssignmentMutationResponse' }
+    put:
+      operationId: updateAssignmentClientCertificate
+      summary: Update a user's per-node mTLS certificate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AssignmentCertificateUpdate' }
+      responses:
+        '200':
+          description: Updated client certificate and queued client kick
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AssignmentMutationResponse' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+  /users/{id}/credentials/rotate:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    post:
+      operationId: rotateUserCredentials
+      summary: Rotate user credentials
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Revision' }
+      responses:
+        '200':
+          description: "Rotated credentials, shown once"
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RotatedCredentials' }
+  /users/{id}/subscription:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      operationId: getSubscription
+      summary: Get subscription
+      responses:
+        '200':
+          description: Current subscription
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SubscriptionStatus' }
+    post:
+      operationId: rotateSubscription
+      summary: Rotate subscription
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Revision' }
+      responses:
+        '200':
+          description: New subscription token and URL
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SubscriptionReceipt' }
+  /users/{id}/usage:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      operationId: getUserUsage
+      summary: Get user usage
+      responses:
+        '200':
+          description: Aggregated usage and freshness
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UserUsageResponse' }
+  /users/{id}/quota/reset:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    post:
+      operationId: resetUserQuota
+      summary: Reset user quota
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Revision' }
+      responses:
+        '200':
+          description: Quota reset
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/QuotaResetResponse' }
+  /jobs:
+    get:
+      operationId: listJobs
+      summary: List jobs
+      responses:
+        '200':
+          description: Recent jobs
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/JobSummary' }
+  /version:
+    get:
+      operationId: getAPIVersion
+      summary: Get API and pinned dependency versions
+      responses:
+        '200':
+          description: Version compatibility information
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/APIVersion' }
+  /jobs/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      operationId: getJob
+      summary: Get job
+      responses:
+        '200':
+          description: Job detail
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/JobDetailResponse' }
+        '404': { $ref: '#/components/responses/Error' }
+  /jobs/{id}/events:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      operationId: streamJobEvents
+      summary: Stream job events
+      parameters:
+        - name: after
+          in: query
+          schema: { type: integer, minimum: 0 }
+        - name: Last-Event-ID
+          in: header
+          description: Resume after the last event ID previously received.
+          schema: { type: string, pattern: '^[0-9]+$' }
+      responses:
+        '200':
+          description: Resumable server-sent event stream
+          content:
+            text/event-stream: { schema: { type: string } }
+  /events:
+    get:
+      operationId: streamEvents
+      summary: Stream events
+      parameters:
+        - name: after
+          in: query
+          schema: { type: integer, minimum: 0 }
+        - name: Last-Event-ID
+          in: header
+          description: Resume after the last event ID previously received.
+          schema: { type: string, pattern: '^[0-9]+$' }
+        - name: job_id
+          in: query
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Resumable server-sent event stream
+          content:
+            text/event-stream: { schema: { type: string } }
+  /audit:
+    get:
+      operationId: listAuditRecords
+      summary: List audit records
+      responses:
+        '200':
+          description: Recent audit records
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/AuditSummary' }
+  /admin/tokens:
+    get:
+      operationId: listAdminTokens
+      summary: List admin tokens
+      responses:
+        '200':
+          description: Token metadata without token values
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/AdminTokenSummary' }
+    post:
+      operationId: createAdminToken
+      summary: Create admin token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [label]
+              properties:
+                label: { type: string, maxLength: 100 }
+      responses:
+        '201':
+          description: "New bearer token, shown once"
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminTokenReceipt' }
+  /admin/tokens/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    delete:
+      operationId: revokeAdminToken
+      summary: Revoke admin token
+      responses:
+        '204': { description: Revoked token }
+  /healthz:
+    get:
+      summary: Check liveness
+      operationId: healthCheck
+      servers:
+        - url: https://{domain}
+          variables:
+            domain: { default: localhost }
+      security: []
+      responses:
+        '200':
+          description: Liveness check
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/APIHealth' }
+  /readyz:
+    get:
+      summary: Check readiness
+      operationId: readinessCheck
+      servers:
+        - url: https://{domain}
+          variables:
+            domain: { default: localhost }
+      security: []
+      responses:
+        '200':
+          description: Readiness check including database
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/APIHealth' }
+  /openapi.yaml:
+    get:
+      summary: Download the OpenAPI contract
+      operationId: getOpenAPISpec
+      servers:
+        - url: https://{domain}
+          variables:
+            domain: { default: localhost }
+      security: []
+      responses:
+        '200':
+          description: OpenAPI document in YAML format
+          content:
+            application/yaml: { schema: { type: string } }
+  /sub/{token}/clash.yaml:
+    parameters:
+      - name: token
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      summary: Download Mihomo subscription
+      operationId: downloadSubscription
+      servers:
+        - url: https://{domain}
+          variables:
+            domain: { default: localhost }
+      security: []
+      responses:
+        '200':
+          description: Mihomo YAML configuration
+          headers:
+            Cache-Control: { schema: { type: string, const: no-store } }
+          content:
+            application/yaml: { schema: { type: string } }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+  /hy2/auth/{node_id}/{node_token}:
+    parameters:
+      - name: node_id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+      - name: node_token
+        in: path
+        required: true
+        schema: { type: string }
+    post:
+      security: []
+      operationId: authenticateHysteriaUser
+      servers:
+        - url: https://{domain}
+          variables:
+            domain: { default: localhost }
+      summary: Authenticate hysteria user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [addr, auth, tx]
+              properties:
+                addr: { type: string }
+                auth: { type: string }
+                tx: { type: integer, format: int64 }
+      responses:
+        '200':
+          description: Hysteria HTTP authentication result
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HysteriaAuthResponse' }
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+  parameters:
+    Id:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+  responses:
+    Error:
+      description: Structured API error
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/APIErrorResponse' }
+  schemas:
+    Revision:
+      type: object
+      required: [expected_revision]
+      properties:
+        expected_revision: { type: integer, minimum: 1 }
+    AssignmentRequest:
+      type: object
+      required: [expected_revision, node_id]
+      properties:
+        expected_revision: { type: integer, minimum: 1 }
+        node_id: { type: string, format: uuid }
+        client_certificate: { type: string, writeOnly: true, description: PEM client certificate chain required for mTLS nodes. }
+        client_private_key: { type: string, writeOnly: true, description: Matching unencrypted PEM private key required for mTLS nodes. }
+    AssignmentCertificateUpdate:
+      allOf:
+        - $ref: '#/components/schemas/Revision'
+        - type: object
+          required: [client_certificate, client_private_key]
+          properties:
+            client_certificate: { type: string, writeOnly: true }
+            client_private_key: { type: string, writeOnly: true }
+    NodeCreate:
+      type: object
+      required: [name, ssh_host, ssh_port, ssh_username, ssh_auth_type, ssh_secret, public_host, public_port, listen_addr]
+      properties:
+        name: { type: string, maxLength: 100 }
+        ssh_host: { type: string }
+        ssh_port: { type: integer, minimum: 1, maximum: 65535 }
+        ssh_username: { type: string }
+        ssh_auth_type: { type: string, enum: [password, private_key] }
+        ssh_secret: { type: string, writeOnly: true }
+        ssh_passphrase: { type: string, writeOnly: true }
+        ssh_host_fingerprint: { type: string }
+        public_host: { type: string }
+        public_port: { type: integer, minimum: 1, maximum: 65535 }
+        listen_addr: { type: string }
+        proxy_probe_url: { type: [string, 'null'], maxLength: 2048, description: "Optional HTTP 200 health target used by the deployment-time proxy probe when routing rules block the built-in loopback target" }
+        tls_sni: { type: string }
+        tls_skip_verify: { type: boolean, default: false }
+        config: { type: object, additionalProperties: true, default: {} }
+    NodePatch:
+      allOf:
+        - $ref: '#/components/schemas/Revision'
+        - type: object
+          properties:
+            name: { type: string }
+            ssh_host: { type: string }
+            ssh_port: { type: integer, minimum: 1, maximum: 65535 }
+            ssh_username: { type: string }
+            ssh_auth_type: { type: string, enum: [password, private_key] }
+            ssh_secret: { type: string, writeOnly: true }
+            ssh_passphrase: { type: string, writeOnly: true }
+            ssh_host_fingerprint: { type: string }
+            public_host: { type: string }
+            public_port: { type: integer, minimum: 1, maximum: 65535 }
+            listen_addr: { type: string }
+            proxy_probe_url: { type: string, maxLength: 2048, description: "HTTP 200 probe URL reachable through this node's ACL/outbound rules; use an empty string to restore the local statistics probe" }
+            tls_sni: { type: string }
+            tls_skip_verify: { type: boolean }
+            config: { type: object, additionalProperties: true }
+    ResourceCreate:
+      type: object
+      required: [name, resource_kind, content_base64]
+      properties:
+        name: { type: string, maxLength: 180 }
+        resource_kind: { type: string, enum: [certificate, private_key, ech_key, acl, geoip, geosite] }
+        content_base64: { type: string, format: byte, writeOnly: true, description: "Base64 encoded resource; decoded size is limited to 20 MiB" }
+    UserCreate:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string, maxLength: 100 }
+        enabled: { type: boolean, default: true }
+        expires_at: { type: [string, 'null'], format: date-time }
+        quota_bytes: { type: [integer, 'null'], format: int64, minimum: 0 }
+    UserPatch:
+      allOf:
+        - $ref: '#/components/schemas/Revision'
+        - type: object
+          properties:
+            name: { type: string }
+            enabled: { type: boolean }
+            expires_at: { type: [string, 'null'], format: date-time }
+            quota_bytes: { type: [integer, 'null'], format: int64, minimum: 0 }
+    NodeSummary:
+      type: object
+      required: [id, name, revision, state]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        revision: { type: integer }
+        deployed_revision: { type: [integer, 'null'] }
+        state: { type: string }
+        last_sample_at: { type: [string, 'null'], format: date-time }
+        data_freshness: { type: string, enum: [fresh, stale, not_collected] }
+        open_gaps: { type: integer }
+        pending_revocations: { type: integer }
+        proxy_probe_url: { type: [string, 'null'], maxLength: 2048 }
+    NodeSSHDetail:
+      type: object
+      required: [host, port, username, auth_type]
+      properties:
+        host: { type: string }
+        port: { type: integer }
+        username: { type: string }
+        auth_type: { type: string }
+        host_fingerprint: { type: [string, 'null'] }
+    NodeConnectionDetail:
+      type: object
+      required: [host, port, listen_addr, skip_cert_verify]
+      properties:
+        host: { type: string }
+        port: { type: integer }
+        listen_addr: { type: string }
+        tls_sni: { type: [string, 'null'] }
+        skip_cert_verify: { type: boolean }
+    NodeDetail:
+      type: object
+      required: [id, name, revision, config, yaml_preview, ssh, public, state, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        revision: { type: integer }
+        deployed_revision: { type: [integer, 'null'] }
+        config: { type: object, additionalProperties: true }
+        yaml_preview: { type: string }
+        ssh: { $ref: '#/components/schemas/NodeSSHDetail' }
+        public: { $ref: '#/components/schemas/NodeConnectionDetail' }
+        state: { type: string }
+        last_seen_at: { type: [string, 'null'], format: date-time }
+        last_sample_at: { type: [string, 'null'], format: date-time }
+        data_freshness: { type: string, enum: [fresh, stale, not_collected] }
+        open_gaps: { type: integer }
+        pending_revocations: { type: integer }
+        proxy_probe_url: { type: [string, 'null'], maxLength: 2048 }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    AssignmentInfo:
+      type: object
+      required: [node_id, created_at]
+      properties:
+        node_id: { type: string, format: uuid }
+        created_at: { type: string, format: date-time }
+    UserSummary:
+      type: object
+      required: [id, name, enabled, expires_at, quota_bytes, usage_bytes, revision, quota_reset_at, assignments, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        enabled: { type: boolean }
+        expires_at: { type: [string, 'null'], format: date-time }
+        quota_bytes: { type: [integer, 'null'], format: int64 }
+        usage_bytes: { type: integer, format: int64 }
+        revision: { type: integer }
+        quota_reset_at: { type: [string, 'null'], format: date-time }
+        assignments:
+          type: array
+          items: { $ref: '#/components/schemas/AssignmentInfo' }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    JobOutcome:
+      type: object
+      properties:
+        status: { type: string }
+        fingerprint: { type: string }
+        distribution: { type: string }
+        version: { type: string }
+        architecture: { type: string }
+        privilege: { type: string }
+        proxy_probe:
+          type: [object, 'null']
+          properties:
+            status: { type: string }
+            transport: { type: string }
+            route_check: { type: string, enum: [tcp_forwarding, authenticated_session] }
+          additionalProperties: true
+      additionalProperties: true
+    JobResult:
+      type: object
+      properties:
+        stage: { type: string }
+        result: { $ref: '#/components/schemas/JobOutcome' }
+      additionalProperties: true
+    JobSummary:
+      type: object
+      required: [id, kind, status, stage, attempts, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        kind: { type: string }
+        node_id: { type: [string, 'null'], format: uuid }
+        target_revision: { type: [integer, 'null'] }
+        status: { type: string }
+        stage: { type: string }
+        error_message: { type: [string, 'null'] }
+        result: { $ref: '#/components/schemas/JobResult' }
+        attempts: { type: integer }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        finished_at: { type: [string, 'null'], format: date-time }
+    AuditSummary:
+      type: object
+      required: [id, actor, action, entity_type, entity_id, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        actor: { type: string }
+        action: { type: string }
+        entity_type: { type: string }
+        entity_id: { type: string }
+        created_at: { type: string, format: date-time }
+        detail: { type: object, additionalProperties: true }
+    NodeResource:
+      type: object
+      required: [id, name, resource_kind, content_sha256, size_bytes, created_at, reference]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        resource_kind: { type: string }
+        content_sha256: { type: string }
+        size_bytes: { type: integer, format: int64 }
+        created_at: { type: string, format: date-time }
+        reference: { type: string }
+    ResourceReceipt:
+      type: object
+      required: [id, reference, content_sha256]
+      properties:
+        id: { type: string, format: uuid }
+        resource_kind: { type: string }
+        content_sha256: { type: string }
+        size_bytes: { type: integer, format: int64 }
+        reference: { type: string }
+    AssignmentReceipt:
+      type: object
+      required: [user_id, node_id, revision, hy2_credential, note]
+      properties:
+        user_id: { type: string, format: uuid }
+        node_id: { type: string, format: uuid }
+        revision: { type: integer }
+        hy2_credential: { type: string, description: One-time Hysteria credential returned after assignment. }
+        note: { type: string }
+    AssignmentMutationResponse:
+      type: object
+      required: [user_id, node_id, revision]
+      properties:
+        user_id: { type: string, format: uuid }
+        node_id: { type: string, format: uuid }
+        revision: { type: integer }
+    SubscriptionReceipt:
+      type: object
+      required: [user_id, revision, token, url, note]
+      properties:
+        user_id: { type: string, format: uuid }
+        revision: { type: integer }
+        token: { type: string, description: One-time subscription token returned on rotation. }
+        url: { type: string }
+        note: { type: string }
+    RotatedCredential:
+      type: object
+      required: [node_id, credential]
+      properties:
+        node_id: { type: string, format: uuid }
+        credential: { type: string, description: One-time Hysteria credential. }
+    RotatedCredentials:
+      type: object
+      required: [user_id, revision, credentials, note]
+      properties:
+        user_id: { type: string, format: uuid }
+        revision: { type: integer }
+        credentials:
+          type: array
+          items: { $ref: '#/components/schemas/RotatedCredential' }
+        note: { type: string }
+    JobReceipt:
+      type: object
+      required: [job_id, status]
+      properties:
+        job_id: { type: string, format: uuid }
+        status: { type: string }
+    NodeUpdateResponse:
+      type: object
+      required: [id, name, revision, state, sync_job_queued]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        revision: { type: integer }
+        state: { type: string }
+        sync_job_queued: { type: boolean }
+    UserUpdateResponse:
+      type: object
+      required: [id, name, enabled, expires_at, quota_bytes, revision]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        enabled: { type: boolean }
+        expires_at: { type: [string, 'null'], format: date-time }
+        quota_bytes: { type: [integer, 'null'], format: int64 }
+        revision: { type: integer }
+    QuotaResetResponse:
+      type: object
+      required: [user_id, usage_bytes, quota_reset_at, revision]
+      properties:
+        user_id: { type: string, format: uuid }
+        usage_bytes: { type: integer, format: int64 }
+        quota_reset_at: { type: string, format: date-time }
+        revision: { type: integer }
+    ActiveSubscription:
+      type: object
+      required: [id, token, url, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        token: { type: string, description: Current subscription token. }
+        url: { type: string }
+        created_at: { type: string, format: date-time }
+    SubscriptionStatus:
+      type: object
+      required: [user_id, revision]
+      properties:
+        user_id: { type: string, format: uuid }
+        revision: { type: integer }
+        active: { $ref: '#/components/schemas/ActiveSubscription' }
+    NodeUsageSummary:
+      type: object
+      required: [node_id, tx_bytes, rx_bytes, sampled_at]
+      properties:
+        node_id: { type: string, format: uuid }
+        tx_bytes: { type: integer, format: int64 }
+        rx_bytes: { type: integer, format: int64 }
+        sampled_at: { type: [string, 'null'], format: date-time }
+        assigned: { type: boolean }
+    DataFreshness:
+      type: object
+      required: [status, last_sample_at, open_gaps]
+      properties:
+        status: { type: string }
+        last_sample_at: { type: [string, 'null'], format: date-time }
+        open_gaps: { type: integer }
+    PendingRevocation:
+      type: object
+      required: [job_id, node_id, status, stage, updated_at]
+      properties:
+        job_id: { type: string, format: uuid }
+        node_id: { type: string, format: uuid }
+        status: { type: string, enum: [queued, running, failed] }
+        stage: { type: string }
+        updated_at: { type: string, format: date-time }
+    UserUsageResponse:
+      type: object
+      required: [user_id, name, usage_bytes, quota_bytes, quota_reset_at, by_node, data_freshness]
+      properties:
+        user_id: { type: string, format: uuid }
+        name: { type: string }
+        usage_bytes: { type: integer, format: int64 }
+        quota_bytes: { type: [integer, 'null'], format: int64 }
+        quota_reset_at: { type: [string, 'null'], format: date-time }
+        by_node:
+          type: array
+          items: { $ref: '#/components/schemas/NodeUsageSummary' }
+        data_freshness: { $ref: '#/components/schemas/DataFreshness' }
+        pending_revocations:
+          type: array
+          items: { $ref: '#/components/schemas/PendingRevocation' }
+    JobDetailResponse:
+      type: object
+      required: [job, result, logs, started_at]
+      properties:
+        job: { $ref: '#/components/schemas/JobSummary' }
+        result: { type: [object, 'null'], additionalProperties: true }
+        logs:
+          type: array
+          items: { type: object, additionalProperties: true }
+        started_at: { type: [string, 'null'], format: date-time }
+    HysteriaAuthResponse:
+      type: object
+      required: [ok, id]
+      properties:
+        ok: { type: boolean }
+        id: { type: string }
+    CreatedEntity:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        revision: { type: integer }
+        node_auth_token: { type: string, description: One-time node authentication token. }
+        node: { $ref: '#/components/schemas/NodeReceipt' }
+      additionalProperties: true
+    NodeReceipt:
+      type: object
+      required: [id, name, revision, state]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        revision: { type: integer }
+        state: { type: string }
+    APIHealth:
+      type: object
+      required: [status]
+      properties:
+        status: { type: string }
+        database: { type: string }
+    APIVersion:
+      type: object
+      required: [api_version, service_version, hysteria_version, mihomo_version]
+      properties:
+        api_version: { type: string }
+        service_version: { type: string }
+        hysteria_version: { type: string }
+        mihomo_version: { type: string }
+    APIErrorDetail:
+      type: object
+      required: [code, message]
+      properties:
+        code: { type: string }
+        message: { type: string }
+    APIErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error: { $ref: '#/components/schemas/APIErrorDetail' }
+    AdminTokenSummary:
+      type: object
+      required: [id, label, created_at, last_used_at, revoked_at]
+      properties:
+        id: { type: string, format: uuid }
+        label: { type: string }
+        created_at: { type: string, format: date-time }
+        last_used_at: { type: [string, 'null'], format: date-time }
+        revoked_at: { type: [string, 'null'], format: date-time }
+    AdminTokenReceipt:
+      type: object
+      required: [id, label, token]
+      properties:
+        id: { type: string, format: uuid }
+        label: { type: string }
+        token: { type: string, description: One-time plaintext administrator bearer token. }

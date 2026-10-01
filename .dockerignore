@@ -1,0 +1,11 @@
+.git
+.codex
+.DS_Store
+target
+apps
+docs
+.env*
+data
+backups
+dist
+*.db

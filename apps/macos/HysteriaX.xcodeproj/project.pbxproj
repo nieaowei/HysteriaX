@@ -1,0 +1,278 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 71;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		000000000000000000002000 /* App/HysteriaXApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001000 /* App/HysteriaXApp.swift */; };
+		000000000000000000002001 /* Models/APIModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001001 /* Models/APIModels.swift */; };
+		000000000000000000002002 /* Services/APIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001002 /* Services/APIClient.swift */; };
+		000000000000000000002003 /* Services/KeychainStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001003 /* Services/KeychainStore.swift */; };
+		000000000000000000002004 /* Stores/ManagementStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001004 /* Stores/ManagementStore.swift */; };
+		000000000000000000002005 /* Views/AuditView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001005 /* Views/AuditView.swift */; };
+		000000000000000000002006 /* Views/ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001006 /* Views/ContentView.swift */; };
+		000000000000000000002007 /* Views/JobsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001007 /* Views/JobsView.swift */; };
+		000000000000000000002008 /* Views/NodesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001008 /* Views/NodesView.swift */; };
+		000000000000000000002009 /* Views/OverviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001009 /* Views/OverviewView.swift */; };
+		00000000000000000000200A /* Views/SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000100A /* Views/SettingsView.swift */; };
+		00000000000000000000200B /* Views/UsersView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000100B /* Views/UsersView.swift */; };
+		00000000000000000000200C /* Views/NodeConfigurationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000100C /* Views/NodeConfigurationView.swift */; };
+		00000000000000000000200D /* Models/OpenAPIRequests.generated.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000100D /* Models/OpenAPIRequests.generated.swift */; };
+		00000000000000000000200E /* Models/OpenAPIResponses.generated.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000100E /* Models/OpenAPIResponses.generated.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		000000000000000000001000 /* App/HysteriaXApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = App/HysteriaXApp.swift; sourceTree = "<group>"; };
+		000000000000000000001001 /* Models/APIModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models/APIModels.swift; sourceTree = "<group>"; };
+		000000000000000000001002 /* Services/APIClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Services/APIClient.swift; sourceTree = "<group>"; };
+		000000000000000000001003 /* Services/KeychainStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Services/KeychainStore.swift; sourceTree = "<group>"; };
+		000000000000000000001004 /* Stores/ManagementStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Stores/ManagementStore.swift; sourceTree = "<group>"; };
+		000000000000000000001005 /* Views/AuditView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/AuditView.swift; sourceTree = "<group>"; };
+		000000000000000000001006 /* Views/ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/ContentView.swift; sourceTree = "<group>"; };
+		000000000000000000001007 /* Views/JobsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/JobsView.swift; sourceTree = "<group>"; };
+		000000000000000000001008 /* Views/NodesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/NodesView.swift; sourceTree = "<group>"; };
+		000000000000000000001009 /* Views/OverviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/OverviewView.swift; sourceTree = "<group>"; };
+		00000000000000000000100A /* Views/SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/SettingsView.swift; sourceTree = "<group>"; };
+		00000000000000000000100B /* Views/UsersView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/UsersView.swift; sourceTree = "<group>"; };
+		00000000000000000000100C /* Views/NodeConfigurationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/NodeConfigurationView.swift; sourceTree = "<group>"; };
+		00000000000000000000100D /* Models/OpenAPIRequests.generated.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models/OpenAPIRequests.generated.swift; sourceTree = "<group>"; };
+		00000000000000000000100E /* Models/OpenAPIResponses.generated.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models/OpenAPIResponses.generated.swift; sourceTree = "<group>"; };
+		000000000000000000003004 /* HysteriaX.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = HysteriaX.app; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		000000000000000000004002 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		000000000000000000003001 /* Sources/HysteriaX */ = {
+			isa = PBXGroup;
+			children = (
+				000000000000000000001000 /* App/HysteriaXApp.swift */,
+				000000000000000000001001 /* Models/APIModels.swift */,
+				000000000000000000001002 /* Services/APIClient.swift */,
+				000000000000000000001003 /* Services/KeychainStore.swift */,
+				000000000000000000001004 /* Stores/ManagementStore.swift */,
+				000000000000000000001005 /* Views/AuditView.swift */,
+				000000000000000000001006 /* Views/ContentView.swift */,
+				000000000000000000001007 /* Views/JobsView.swift */,
+				000000000000000000001008 /* Views/NodesView.swift */,
+				000000000000000000001009 /* Views/OverviewView.swift */,
+				00000000000000000000100A /* Views/SettingsView.swift */,
+				00000000000000000000100B /* Views/UsersView.swift */,
+				00000000000000000000100C /* Views/NodeConfigurationView.swift */,
+				00000000000000000000100D /* Models/OpenAPIRequests.generated.swift */,
+				00000000000000000000100E /* Models/OpenAPIResponses.generated.swift */,
+			);
+			path = Sources/HysteriaX;
+			sourceTree = "<group>";
+		};
+		000000000000000000003002 = {
+			isa = PBXGroup;
+			children = (
+				000000000000000000003001 /* Sources/HysteriaX */,
+				000000000000000000003003 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		000000000000000000003003 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				000000000000000000003004 /* HysteriaX.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		000000000000000000005001 /* HysteriaX */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 000000000000000000007002 /* Build configuration list for PBXNativeTarget "HysteriaX" */;
+			buildPhases = (
+				000000000000000000004001 /* Sources */,
+				000000000000000000004002 /* Frameworks */,
+				000000000000000000004003 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = HysteriaX;
+			productName = HysteriaX;
+			productReference = 000000000000000000003004 /* HysteriaX.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		000000000000000000006001 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastUpgradeCheck = 2700;
+				TargetAttributes = {
+					000000000000000000005001 = {
+						CreatedOnToolsVersion = 27.0;
+					};
+				};
+			};
+			buildConfigurationList = 000000000000000000007001 /* Build configuration list for PBXProject "HysteriaX" */;
+			compatibilityVersion = "Xcode 16.0";
+			developmentRegion = zh_CN;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				zh_CN,
+				en,
+				Base,
+			);
+			mainGroup = 000000000000000000003002;
+			productRefGroup = 000000000000000000003003 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				000000000000000000005001 /* HysteriaX */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		000000000000000000004003 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		000000000000000000004001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				000000000000000000002000 /* App/HysteriaXApp.swift in Sources */,
+				000000000000000000002001 /* Models/APIModels.swift in Sources */,
+				000000000000000000002002 /* Services/APIClient.swift in Sources */,
+				000000000000000000002003 /* Services/KeychainStore.swift in Sources */,
+				000000000000000000002004 /* Stores/ManagementStore.swift in Sources */,
+				000000000000000000002005 /* Views/AuditView.swift in Sources */,
+				000000000000000000002006 /* Views/ContentView.swift in Sources */,
+				000000000000000000002007 /* Views/JobsView.swift in Sources */,
+				000000000000000000002008 /* Views/NodesView.swift in Sources */,
+				000000000000000000002009 /* Views/OverviewView.swift in Sources */,
+				00000000000000000000200A /* Views/SettingsView.swift in Sources */,
+				00000000000000000000200B /* Views/UsersView.swift in Sources */,
+				00000000000000000000200C /* Views/NodeConfigurationView.swift in Sources */,
+				00000000000000000000200D /* Models/OpenAPIRequests.generated.swift in Sources */,
+				00000000000000000000200E /* Models/OpenAPIResponses.generated.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		000000000000000000007101 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_MODULES = YES;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				SDKROOT = macosx;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
+		000000000000000000007102 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_MODULES = YES;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				SDKROOT = macosx;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Release;
+		};
+		000000000000000000007201 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 2Q8B34FN8L;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = HysteriaX;
+				INFOPLIST_KEY_LSMinimumSystemVersion = 26.0;
+				INFOPLIST_KEY_NSApplicationCategoryType = "public.app-category.utilities";
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.hysteriax.app;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SUPPORTED_PLATFORMS = macosx;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
+		000000000000000000007202 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = (
+					arm64,
+					x86_64,
+				);
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 2Q8B34FN8L;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = HysteriaX;
+				INFOPLIST_KEY_LSMinimumSystemVersion = 26.0;
+				INFOPLIST_KEY_NSApplicationCategoryType = "public.app-category.utilities";
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				ONLY_ACTIVE_ARCH = NO;
+				PRODUCT_BUNDLE_IDENTIFIER = com.hysteriax.app;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SUPPORTED_PLATFORMS = macosx;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		000000000000000000007001 /* Build configuration list for PBXProject "HysteriaX" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				000000000000000000007101 /* Debug */,
+				000000000000000000007102 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		000000000000000000007002 /* Build configuration list for PBXNativeTarget "HysteriaX" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				000000000000000000007201 /* Debug */,
+				000000000000000000007202 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 000000000000000000006001 /* Project object */;
+}
