@@ -3,7 +3,7 @@ import SwiftUI
 struct AuditView: View {
     @Bindable var store: ManagementStore
     @State private var searchText = ""
-    @State private var sortOrder = [KeyPathComparator<AuditSummary>(\.createdAt)]
+    @State private var sortOrder = [KeyPathComparator<AuditSummary>(\.createdAt, order: .reverse)]
 
     private var visibleRecords: [AuditSummary] {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -19,11 +19,6 @@ struct AuditView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("审计")
-                .font(.largeTitle.bold())
-                .accessibilityLabel("审计")
-                .accessibilityIdentifier("audit.title")
-            Text("配置修改、凭据轮换、额度重置和撤权记录。").foregroundStyle(.secondary)
             Table(visibleRecords, sortOrder: $sortOrder) {
                 TableColumn("操作", value: \.localizedAction)
                 TableColumn("对象", value: \.localizedEntityType)

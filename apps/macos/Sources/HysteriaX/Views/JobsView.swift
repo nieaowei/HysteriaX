@@ -118,7 +118,7 @@ struct JobsView: View {
     @Bindable var store: ManagementStore
     @State private var selectedJobID: String?
     @State private var searchText = ""
-    @State private var sortOrder = [KeyPathComparator(\JobSummary.createdAt)]
+    @State private var sortOrder = [KeyPathComparator(\JobSummary.createdAt, order: .reverse)]
     @State private var selectedJobDetail: JobDetailResponse?
     @State private var isLoadingJobDetail = false
     @State private var confirmedFingerprintJobID: String?
@@ -149,13 +149,6 @@ struct JobsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("任务")
-                    .font(.largeTitle.bold())
-                    .accessibilityLabel("任务")
-                    .accessibilityIdentifier("jobs.title")
-                Text("部署、同步和撤权任务的阶段与结果。").foregroundStyle(.secondary)
-            }.padding(24)
             Table(visibleJobs, selection: $selectedJobID, sortOrder: $sortOrder) {
                 TableColumn("类型", value: \.localizedKind)
                 TableColumn("阶段", value: \.localizedStage)

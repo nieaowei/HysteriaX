@@ -13,6 +13,24 @@ private enum MainSection: String, CaseIterable, Identifiable {
         case .audit: "审计"
         }
     }
+    var pageTitle: String {
+        switch self {
+        case .overview: "HysteriaX 管理中心"
+        case .nodes: "节点"
+        case .users: "用户"
+        case .jobs: "任务"
+        case .audit: "审计"
+        }
+    }
+    var pageAccessibilityIdentifier: String {
+        switch self {
+        case .overview: "overview.page"
+        case .nodes: "nodes.title"
+        case .users: "users.title"
+        case .jobs: "jobs.title"
+        case .audit: "audit.title"
+        }
+    }
     var symbol: String {
         switch self {
         case .overview: "square.grid.2x2"
@@ -31,6 +49,23 @@ struct ContentView: View {
 
     private var selection: Binding<String> {
         Binding(get: { selectedSection }, set: { selectedSection = $0 })
+    }
+    private var currentSection: MainSection {
+        MainSection(rawValue: selectedSection) ?? .overview
+    }
+    private var currentPageDescription: String {
+        switch currentSection {
+        case .overview:
+            store.lastUpdated.map { "数据更新于 \($0.formatted(date: .abbreviated, time: .shortened))" } ?? "连接管理服务以读取最新状态"
+        case .nodes:
+            "管理 SSH 连接、Hysteria 配置和部署状态。"
+        case .users:
+            "管理启停、到期、流量额度和节点分配。"
+        case .jobs:
+            "部署、同步和撤权任务的阶段与结果。"
+        case .audit:
+            "配置修改、凭据轮换、额度重置和撤权记录。"
+        }
     }
 
     var body: some View {
@@ -58,13 +93,16 @@ struct ContentView: View {
             }
         } detail: {
             detail
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier(currentSection.pageAccessibilityIdentifier)
+                .navigationTitle(currentSection.pageTitle)
+                .navigationSubtitle(currentPageDescription)
                 .toolbar {
                     ToolbarItemGroup {
                         Button { Task { await store.refresh() } } label: {
                             Label("刷新", systemImage: "arrow.clockwise")
                         }
                         .disabled(store.isLoading)
-                        SettingsLink { Label("设置", systemImage: "gearshape") }
                     }
                 }
         }
@@ -81,7 +119,7 @@ struct ContentView: View {
 
     @ViewBuilder
     private var detail: some View {
-        switch MainSection(rawValue: selectedSection) ?? .overview {
+        switch currentSection {
         case .overview: OverviewView(store: store)
         case .nodes: NodesView(store: store)
         case .users: UsersView(store: store)

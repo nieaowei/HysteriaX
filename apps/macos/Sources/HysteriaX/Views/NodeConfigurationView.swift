@@ -417,8 +417,10 @@ struct NodeConfigurationView: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
-                if let errorMessage {
-                    Text(errorMessage).foregroundStyle(.red).font(.callout)
+                .verticalScrollArea {
+                    if let errorMessage {
+                        Text(errorMessage).foregroundStyle(.red).font(.callout)
+                    }
                 }
             } else if let errorMessage {
                 VStack(spacing: 12) {
@@ -1308,5 +1310,21 @@ private struct OutboundDraft: Identifiable {
         bindIPv6 = direct["bindIPv6"]?.stringValue ?? ""
         bindDevice = direct["bindDevice"]?.stringValue ?? ""
         fastOpen = direct["fastOpen"]?.boolValue ?? false
+    }
+}
+
+private extension View {
+    func verticalScrollArea<Footer: View>(
+        @ViewBuilder footer: @escaping () -> Footer
+    ) -> some View {
+        GeometryReader { geometry in
+            ScrollView(.vertical) {
+                VStack(alignment: .leading, spacing: 12) {
+                    self
+                    footer()
+                }
+                .frame(width: geometry.size.width, alignment: .leading)
+            }
+        }
     }
 }

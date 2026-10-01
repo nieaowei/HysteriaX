@@ -17,11 +17,6 @@ struct OverviewView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("HysteriaX 管理中心").font(.largeTitle.bold())
-                    Text(store.lastUpdated.map { "数据更新于 \($0.formatted(date: .abbreviated, time: .shortened))" } ?? "连接管理服务以读取最新状态")
-                        .foregroundStyle(.secondary)
-                }
                 if !store.isConnected {
                     ContentUnavailableView(
                         store.lastUpdated == nil ? "连接管理服务" : "管理服务已断开",

@@ -24,21 +24,6 @@ struct NodesView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("节点")
-                        .font(.largeTitle.bold())
-                        .accessibilityLabel("节点")
-                        .accessibilityIdentifier("nodes.title")
-                    Text("管理 SSH 连接、Hysteria 配置和部署状态。")
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
-                Button { showingAddNode = true } label: { Label("添加节点", systemImage: "plus") }
-                    .keyboardShortcut("n", modifiers: .command)
-                    .disabled(!store.isConnected)
-            }.padding(24)
-
             Table(visibleNodes, selection: $selection, sortOrder: $sortOrder) {
                 TableColumn("名称", value: \.name) { node in
                     Text(node.name)
@@ -92,6 +77,13 @@ struct NodesView: View {
                     .padding(12)
                     .background(.bar)
                 }
+            }
+        }
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button { showingAddNode = true } label: { Label("添加节点", systemImage: "plus") }
+                    .keyboardShortcut("n", modifiers: .command)
+                    .disabled(!store.isConnected)
             }
         }
         .searchable(text: $searchText, prompt: "搜索节点")

@@ -30,20 +30,6 @@ struct UsersView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("用户")
-                        .font(.largeTitle.bold())
-                        .accessibilityLabel("用户")
-                        .accessibilityIdentifier("users.title")
-                    Text("管理启停、到期、流量额度和节点分配。")
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
-                Button { showingAddUser = true } label: { Label("添加用户", systemImage: "plus") }
-                    .keyboardShortcut("n", modifiers: .command)
-                    .disabled(!store.isConnected)
-            }.padding(24)
             Table(visibleUsers, selection: $selectedUserID, sortOrder: $sortOrder) {
                 TableColumn("名称", value: \.name) { user in
                     Text(user.name)
@@ -142,6 +128,13 @@ struct UsersView: View {
                     .padding(12)
                     .background(.bar)
                 }
+            }
+        }
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button { showingAddUser = true } label: { Label("添加用户", systemImage: "plus") }
+                    .keyboardShortcut("n", modifiers: .command)
+                    .disabled(!store.isConnected)
             }
         }
         .searchable(text: $searchText, prompt: "搜索用户")
