@@ -67,6 +67,27 @@ def run_input(command, input_text, timeout=30):
     return result
 
 
+def wait_for_systemd(container, timeout=30):
+    deadline = time.monotonic() + timeout
+    last_message = "systemd has not reported a state yet"
+    while time.monotonic() < deadline:
+        result = run(
+            ["docker", "exec", container, "systemctl", "is-system-running"],
+            check=False,
+            timeout=5,
+        )
+        state = result.stdout.strip()
+        if state in {"running", "degraded"}:
+            return
+        if state == "maintenance":
+            raise RuntimeError(f"systemd entered maintenance mode in {container}")
+        last_message = (result.stdout + result.stderr).strip() or last_message
+        time.sleep(0.25)
+    raise RuntimeError(
+        f"systemd did not become ready in {container} within {timeout}s: {last_message}"
+    )
+
+
 def request(base, path, token=None, method="GET", payload=None):
     body = None if payload is None else json.dumps(payload).encode()
     headers = {}
@@ -181,6 +202,7 @@ def main():
                     if platform.system() == "Linux":
                         container_command[3:3] = ["--add-host", "host.docker.internal:host-gateway"]
                     run(container_command)
+                    wait_for_systemd(container)
                     run(
                         [
                             "docker",
