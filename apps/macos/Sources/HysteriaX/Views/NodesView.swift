@@ -3,8 +3,7 @@ import SwiftUI
 struct NodesView: View {
     @Bindable var store: ManagementStore
     @State private var showingAddNode = false
-    @State private var showingConfiguration = false
-    @State private var configurationNodeID: String?
+    @State private var configurationNode: NodeSummary?
     @State private var selection: String?
     @State private var searchText = ""
     @State private var sortOrder = [KeyPathComparator(\NodeSummary.name)]
@@ -64,8 +63,7 @@ struct NodesView: View {
                         Spacer()
                         Button("SSH 测试") { run(node, action: "ssh-test") }
                         Button("配置") {
-                            configurationNodeID = node.id
-                            showingConfiguration = true
+                            configurationNode = node
                         }
                         Button("部署") { run(node, action: "deploy") }
                         Button("同步") { run(node, action: "sync") }
@@ -89,10 +87,8 @@ struct NodesView: View {
         .searchable(text: $searchText, prompt: "搜索节点")
         .onChange(of: searchText) { _, _ in selection = nil }
         .sheet(isPresented: $showingAddNode) { NodeFormView(store: store) }
-        .sheet(isPresented: $showingConfiguration) {
-            if let configurationNodeID {
-                NodeConfigurationView(store: store, nodeID: configurationNodeID)
-            }
+        .sheet(item: $configurationNode) { node in
+            NodeConfigurationView(store: store, nodeID: node.id)
         }
         .alert("节点操作失败", isPresented: Binding(get: { actionError != nil }, set: { if !$0 { actionError = nil } })) {
             Button("好", role: .cancel) { actionError = nil }
