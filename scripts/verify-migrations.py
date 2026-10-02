@@ -94,7 +94,7 @@ def main():
                         (database.name,),
                     )
                 }
-            if version != 1:
+            if version != 2:
                 raise RuntimeError(f"unexpected PostgreSQL schema version: {version}")
             expected = {
                 "enabled": "boolean",

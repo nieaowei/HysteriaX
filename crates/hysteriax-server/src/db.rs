@@ -131,7 +131,7 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(version, 1);
+        assert_eq!(version, 2);
 
         let types: Vec<(String, String)> = sqlx::query_as(
             "SELECT column_name, data_type FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'users' AND column_name IN ('enabled', 'expires_at', 'quota_reset_at', 'usage_bytes') ORDER BY column_name",
@@ -230,5 +230,43 @@ mod tests {
         first.commit().await.unwrap();
         let second_id = second.await.unwrap();
         assert!(second_id > first_id);
+    }
+
+    #[tokio::test]
+    async fn job_snapshot_migration_backfills_existing_jobs_and_preserves_node_ids() {
+        let pool = test_pool().await;
+        let mut tx = pool.begin().await.unwrap();
+        // Recreate the version-one jobs schema to exercise an existing database upgrade.
+        sqlx::raw_sql("ALTER TABLE jobs DROP COLUMN node_name; ALTER TABLE jobs ADD CONSTRAINT jobs_node_id_fkey FOREIGN KEY (node_id) REFERENCES nodes(id) ON DELETE SET NULL;")
+                .execute(&mut *tx).await.unwrap();
+        sqlx::query("INSERT INTO nodes (id, name, ssh_host, ssh_port, ssh_username, ssh_auth_type, ssh_secret_enc, public_host, public_port, listen_addr, node_token_hash, node_token_enc, traffic_stats_secret_enc, desired_config_enc, created_at, updated_at) VALUES ('migration-node', 'Existing node', '127.0.0.1', 22, 'root', 'private_key', 'ssh-secret', 'node.example.test', 443, ':443', 'node-hash', 'node-token', 'stats-secret', '{}', now(), now())")
+                .execute(&mut *tx).await.unwrap();
+        sqlx::query("INSERT INTO jobs (id, kind, node_id, status, stage, available_at, created_at, updated_at) VALUES ('existing-job', 'sync', 'migration-node', 'succeeded', 'done', now(), now(), now()), ('unlinked-job', 'sync', NULL, 'succeeded', 'done', now(), now(), now())")
+                .execute(&mut *tx).await.unwrap();
+        sqlx::raw_sql(include_str!("../migrations/0002_job_node_snapshot.sql"))
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM nodes WHERE id = 'migration-node'")
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        let snapshots: Vec<(String, Option<String>, Option<String>)> =
+            sqlx::query_as("SELECT id, node_id, node_name FROM jobs ORDER BY id")
+                .fetch_all(&mut *tx)
+                .await
+                .unwrap();
+        assert_eq!(
+            snapshots,
+            vec![
+                (
+                    "existing-job".into(),
+                    Some("migration-node".into()),
+                    Some("Existing node".into())
+                ),
+                ("unlinked-job".into(), None, None),
+            ]
+        );
+        tx.rollback().await.unwrap();
     }
 }

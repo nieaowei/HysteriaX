@@ -263,6 +263,7 @@ struct JobSummary {
     id: String,
     kind: String,
     node_id: Option<String>,
+    node_name: Option<String>,
     target_revision: Option<i64>,
     status: String,
     stage: String,
@@ -275,7 +276,7 @@ struct JobSummary {
 }
 
 async fn list_jobs(State(state): State<AppState>) -> Result<Json<Vec<JobSummary>>, ApiError> {
-    let rows = sqlx::query("SELECT id, kind, node_id, target_revision, status, stage, result_json, error_message, attempts, created_at, updated_at, finished_at FROM jobs ORDER BY created_at DESC LIMIT 200")
+    let rows = sqlx::query("SELECT id, kind, node_id, node_name, target_revision, status, stage, result_json, error_message, attempts, created_at, updated_at, finished_at FROM jobs ORDER BY created_at DESC LIMIT 200")
         .fetch_all(&state.pool)
         .await?;
     Ok(Json(rows.iter().map(job_summary).collect()))
@@ -285,7 +286,7 @@ async fn get_job(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
-    let row = sqlx::query("SELECT id, kind, node_id, target_revision, status, stage, result_json, error_message, logs_json, attempts, created_at, updated_at, started_at, finished_at FROM jobs WHERE id = $1")
+    let row = sqlx::query("SELECT id, kind, node_id, node_name, target_revision, status, stage, result_json, error_message, logs_json, attempts, created_at, updated_at, started_at, finished_at FROM jobs WHERE id = $1")
         .bind(&id).fetch_optional(&state.pool).await?.ok_or_else(|| ApiError::not_found("job"))?;
     let summary = job_summary(&row);
     let result: Option<Value> = row.get("result_json");
@@ -300,6 +301,7 @@ fn job_summary(row: &sqlx::postgres::PgRow) -> JobSummary {
         id: row.get("id"),
         kind: row.get("kind"),
         node_id: row.get("node_id"),
+        node_name: row.get("node_name"),
         target_revision: row.get("target_revision"),
         status: row.get("status"),
         stage: row.get("stage"),
@@ -434,9 +436,20 @@ pub(crate) async fn enqueue_job_with_payload_in_tx(
 ) -> Result<String, ApiError> {
     let id = Uuid::new_v4().to_string();
     let timestamp = now();
-    let payload = json!({"id": id, "kind": kind, "node_id": node_id, "target_revision": revision, "status": "queued", "stage": "queued"});
-    sqlx::query("INSERT INTO jobs (id, kind, node_id, target_revision, payload_json, status, stage, available_at, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, 'queued', 'queued', $6, $7, $8)")
-        .bind(&id).bind(kind).bind(node_id).bind(revision).bind(job_payload).bind(timestamp).bind(timestamp).bind(timestamp).execute(&mut **tx).await?;
+    let node_name: Option<String> = if let Some(node_id) = node_id {
+        Some(
+            sqlx::query_scalar("SELECT name FROM nodes WHERE id = $1")
+                .bind(node_id)
+                .fetch_optional(&mut **tx)
+                .await?
+                .ok_or_else(|| ApiError::not_found("node"))?,
+        )
+    } else {
+        None
+    };
+    let payload = json!({"id": id, "kind": kind, "node_id": node_id, "node_name": node_name, "target_revision": revision, "status": "queued", "stage": "queued"});
+    sqlx::query("INSERT INTO jobs (id, kind, node_id, node_name, target_revision, payload_json, status, stage, available_at, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, 'queued', 'queued', $7, $8, $9)")
+        .bind(&id).bind(kind).bind(node_id).bind(node_name).bind(revision).bind(job_payload).bind(timestamp).bind(timestamp).bind(timestamp).execute(&mut **tx).await?;
     sqlx::query("INSERT INTO job_events (job_id, event_type, payload_json, created_at) VALUES ($1, 'job.queued', $2, $3)")
         .bind(&id).bind(payload).bind(timestamp).execute(&mut **tx).await?;
     Ok(id)
@@ -502,8 +515,63 @@ pub(crate) fn generate_token() -> String {
 #[cfg(test)]
 mod tests {
     use axum::http::{HeaderMap, HeaderValue};
+    use sqlx::Row;
 
-    use super::{event_cursor, validate_admin_token_label};
+    use super::{enqueue_job_in_tx, event_cursor, job_summary, validate_admin_token_label};
+
+    #[tokio::test]
+    async fn job_node_snapshot_survives_node_rename_and_deletion() {
+        let pool = crate::db::test_pool().await;
+        sqlx::query("INSERT INTO nodes (id, name, ssh_host, ssh_port, ssh_username, ssh_auth_type, ssh_secret_enc, public_host, public_port, listen_addr, node_token_hash, node_token_enc, traffic_stats_secret_enc, desired_config_enc, created_at, updated_at) VALUES ('snapshot-node', 'Original node', '127.0.0.1', 22, 'root', 'private_key', 'ssh-secret', 'node.example.test', 443, ':443', 'node-hash', 'node-token', 'stats-secret', '{}', now(), now())")
+            .execute(&pool).await.unwrap();
+
+        let mut tx = crate::db::begin_write(&pool).await.unwrap();
+        let id = enqueue_job_in_tx(&mut tx, "sync", Some("snapshot-node"), Some(1))
+            .await
+            .unwrap();
+        let global_id = enqueue_job_in_tx(&mut tx, "global", None, None)
+            .await
+            .unwrap();
+        assert!(
+            enqueue_job_in_tx(&mut tx, "sync", Some("missing-node"), Some(1))
+                .await
+                .is_err()
+        );
+        tx.commit().await.unwrap();
+
+        sqlx::query("UPDATE nodes SET name = 'Renamed node' WHERE id = 'snapshot-node'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM nodes WHERE id = 'snapshot-node'")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let row = sqlx::query("SELECT * FROM jobs WHERE id = $1")
+            .bind(&id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let summary = serde_json::to_value(job_summary(&row)).unwrap();
+        assert_eq!(summary["node_id"], "snapshot-node");
+        assert_eq!(summary["node_name"], "Original node");
+        let payload: serde_json::Value =
+            sqlx::query_scalar("SELECT payload_json FROM job_events WHERE job_id = $1")
+                .bind(&id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(payload["node_name"], "Original node");
+
+        let global = sqlx::query("SELECT node_id, node_name FROM jobs WHERE id = $1")
+            .bind(&global_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert!(global.get::<Option<String>, _>("node_id").is_none());
+        assert!(global.get::<Option<String>, _>("node_name").is_none());
+    }
 
     #[test]
     fn admin_token_labels_count_unicode_characters_not_utf8_bytes() {

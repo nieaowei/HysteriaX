@@ -109,6 +109,7 @@ enum DateDisplayText {
 }
 
 private extension JobSummary {
+    var displayNodeName: String { nodeName ?? nodeID ?? "—" }
     var localizedKind: String { JobDisplayText.kind(kind) }
     var localizedStatus: String { JobDisplayText.status(status) }
     var localizedStage: String { JobDisplayText.stage(stage) }
@@ -132,6 +133,7 @@ struct JobsView: View {
                 || job.kind.localizedCaseInsensitiveContains(query)
                 || job.stage.localizedCaseInsensitiveContains(query)
                 || job.status.localizedCaseInsensitiveContains(query)
+                || (job.nodeName?.localizedCaseInsensitiveContains(query) ?? false)
                 || (job.nodeID?.localizedCaseInsensitiveContains(query) ?? false)
                 || (job.errorMessage?.localizedCaseInsensitiveContains(query) ?? false)
         }
@@ -150,6 +152,7 @@ struct JobsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Table(visibleJobs, selection: $selectedJobID, sortOrder: $sortOrder) {
+                TableColumn("节点", value: \.displayNodeName)
                 TableColumn("类型", value: \.localizedKind)
                 TableColumn("阶段", value: \.localizedStage)
                 TableColumn("状态", value: \.localizedStatus)
@@ -167,6 +170,7 @@ struct JobsView: View {
                     VStack(alignment: .leading, spacing: 10) {
                         LabeledContent("阶段", value: JobDisplayText.stage(job.result?.stage ?? job.stage))
                         LabeledContent("尝试次数", value: String(job.attempts))
+                        if let nodeName = job.nodeName { LabeledContent("节点名称", value: nodeName) }
                         if let nodeID = job.nodeID { LabeledContent("节点 ID", value: nodeID) }
                         if let probe = job.result?.result?.proxyProbe {
                             LabeledContent("Hysteria 客户端探测", value: proxyProbeSummary(probe))

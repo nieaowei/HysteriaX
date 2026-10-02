@@ -826,6 +826,9 @@ components:
         id: { type: string, format: uuid }
         kind: { type: string }
         node_id: { type: [string, 'null'], format: uuid }
+        node_name:
+          type: [string, 'null']
+          description: Node name captured when the job was created; retained after node rename or deletion.
         target_revision: { type: [integer, 'null'] }
         status: { type: string }
         stage: { type: string }

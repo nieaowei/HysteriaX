@@ -173,6 +173,7 @@ struct JobSummary: Codable, Sendable, Identifiable {
     let id: String
     let kind: String
     let nodeID: String?
+    let nodeName: String?
     let targetRevision: Int?
     let status: String
     let stage: String
@@ -187,6 +188,7 @@ struct JobSummary: Codable, Sendable, Identifiable {
         case id
         case kind
         case nodeID = "node_id"
+        case nodeName = "node_name"
         case targetRevision = "target_revision"
         case status
         case stage
