@@ -216,6 +216,26 @@ final class ManagementStore {
         return response.hy2Credential
     }
 
+    func setNodeAssignment(
+        userID: String, nodeID: String, expectedRevision: Int, assigned: Bool,
+        clientCertificate: String? = nil, clientPrivateKey: String? = nil
+    ) async throws -> (revision: Int, credential: String?) {
+        let api = try requireConnectedAPI()
+        if assigned {
+            let response: AssignmentReceipt = try await api.post(
+                APIEndpoints.assignUserToNode(id: userID),
+                body: AssignmentRequest(expectedRevision: expectedRevision, nodeID: nodeID,
+                                        clientCertificate: clientCertificate, clientPrivateKey: clientPrivateKey)
+            )
+            return (response.revision, response.hy2Credential)
+        }
+        let response: AssignmentMutationResponse = try await api.delete(
+            APIEndpoints.unassignUserFromNode(id: userID, nodeID: nodeID),
+            body: RevisionRequest(expectedRevision: expectedRevision)
+        )
+        return (response.revision, nil)
+    }
+
     func updateAssignmentClientCertificate(
         _ user: UserSummary,
         for node: NodeSummary,

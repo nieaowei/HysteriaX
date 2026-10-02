@@ -22,6 +22,7 @@
 		00000000000000000000200C /* Views/NodeConfigurationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000100C /* Views/NodeConfigurationView.swift */; };
 		00000000000000000000200D /* Models/OpenAPIRequests.generated.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000100D /* Models/OpenAPIRequests.generated.swift */; };
 		00000000000000000000200E /* Models/OpenAPIResponses.generated.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000100E /* Models/OpenAPIResponses.generated.swift */; };
+		00000000000000000000200F /* Views/UserNodeAssignmentsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000100F /* Views/UserNodeAssignmentsView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -41,6 +42,7 @@
 		00000000000000000000100D /* Models/OpenAPIRequests.generated.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models/OpenAPIRequests.generated.swift; sourceTree = "<group>"; };
 		00000000000000000000100E /* Models/OpenAPIResponses.generated.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models/OpenAPIResponses.generated.swift; sourceTree = "<group>"; };
 		000000000000000000003004 /* HysteriaX.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = HysteriaX.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		00000000000000000000100F /* Views/UserNodeAssignmentsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/UserNodeAssignmentsView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -69,6 +71,7 @@
 				000000000000000000001009 /* Views/OverviewView.swift */,
 				00000000000000000000100A /* Views/SettingsView.swift */,
 				00000000000000000000100B /* Views/UsersView.swift */,
+				00000000000000000000100F /* Views/UserNodeAssignmentsView.swift */,
 				00000000000000000000100C /* Views/NodeConfigurationView.swift */,
 				00000000000000000000100D /* Models/OpenAPIRequests.generated.swift */,
 				00000000000000000000100E /* Models/OpenAPIResponses.generated.swift */,
@@ -172,6 +175,7 @@
 				000000000000000000002009 /* Views/OverviewView.swift in Sources */,
 				00000000000000000000200A /* Views/SettingsView.swift in Sources */,
 				00000000000000000000200B /* Views/UsersView.swift in Sources */,
+				00000000000000000000200F /* Views/UserNodeAssignmentsView.swift in Sources */,
 				00000000000000000000200C /* Views/NodeConfigurationView.swift in Sources */,
 				00000000000000000000200D /* Models/OpenAPIRequests.generated.swift in Sources */,
 				00000000000000000000200E /* Models/OpenAPIResponses.generated.swift in Sources */,

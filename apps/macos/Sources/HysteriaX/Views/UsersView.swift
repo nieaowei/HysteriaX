@@ -5,6 +5,7 @@ import UniformTypeIdentifiers
 struct UsersView: View {
     @Bindable var store: ManagementStore
     @State private var showingAddUser = false
+    @State private var assignmentUser: UserSummary?
     @State private var showingEditUser = false
     @State private var selectedUserID: String?
     @State private var searchText = ""
@@ -62,18 +63,9 @@ struct UsersView: View {
                                 .accessibilityLabel("\(user.name) · \(user.assignments.count) 个节点")
                                 .accessibilityIdentifier("user.selected.summary")
                             Spacer()
-                            Menu("分配节点") {
-                                ForEach(store.nodes.filter { node in !user.assignments.contains(where: { $0.nodeID == node.id }) }) { node in
-                                    Button(node.name) {
-                                        assignmentTarget = AssignmentTarget(user: user, node: node, isUpdating: false)
-                                    }
-                                    .accessibilityLabel(node.name)
-                                    .accessibilityIdentifier("users.assignNode.\(node.id)")
-                                }
-                            }
-                            .accessibilityLabel("分配节点")
-                            .accessibilityIdentifier("users.assignNodeMenu")
-                            .disabled(store.nodes.allSatisfy { node in user.assignments.contains(where: { $0.nodeID == node.id }) })
+                            Button("分配节点…") { assignmentUser = user }
+                                .accessibilityLabel("分配节点")
+                                .accessibilityIdentifier("users.assignNodeMenu")
                             Menu("mTLS 证书") {
                                 ForEach(user.assignments, id: \.nodeID) { assignment in
                                     if let node = store.nodes.first(where: { $0.id == assignment.nodeID }) {
@@ -161,6 +153,9 @@ struct UsersView: View {
             if let user = store.users.first(where: { $0.id == selectedUserID }) {
                 UserEditFormView(store: store, user: user)
             }
+        }
+        .sheet(item: $assignmentUser) { user in
+            UserNodeAssignmentsView(store: store, user: user)
         }
         .sheet(item: $assignmentTarget) { target in
             UserAssignmentFormView(store: store, user: target.user, node: target.node, isUpdating: target.isUpdating) { credential in
