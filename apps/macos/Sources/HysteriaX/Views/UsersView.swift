@@ -534,6 +534,7 @@ private struct UserFormView: View {
                         .accessibilityIdentifier("user.create.expiration")
                 }
             }
+            .formStyle(.grouped)
             if let errorMessage { Text(errorMessage).foregroundStyle(.red).font(.callout) }
             HStack {
                 Button("取消") { dismiss() }.keyboardShortcut(.cancelAction)

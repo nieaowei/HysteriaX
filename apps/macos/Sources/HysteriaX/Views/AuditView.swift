@@ -34,7 +34,6 @@ struct AuditView: View {
                 }
             }
         }
-        .padding(24)
         .searchable(text: $searchText, prompt: "搜索审计")
     }
 }
