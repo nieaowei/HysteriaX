@@ -210,8 +210,11 @@ struct NodeConfigurationView: View {
                             Text("GeoIP 数据").tag("geoip")
                             Text("GeoSite 数据").tag("geosite")
                         }
-                        Button("上传文件…") { showingResourceImporter = true }
-                            .disabled(!store.isConnected)
+                        HStack {
+                            Spacer()
+                            Button("上传文件…") { showingResourceImporter = true }
+                                .disabled(!store.isConnected)
+                        }
                         if let resourceMessage {
                             Text(resourceMessage).font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
                         }
@@ -1381,8 +1384,11 @@ private struct StringListEditor: View {
                     .accessibilityLabel("删除条目")
                 }
             }
-            Button("添加条目", systemImage: "plus") {
-                entries.append(StringListEntry())
+            HStack {
+                Spacer()
+                Button("添加条目", systemImage: "plus") {
+                    entries.append(StringListEntry())
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1435,8 +1441,11 @@ private struct StringMapEditor: View {
                     .accessibilityLabel("删除映射项")
                 }
             }
-            Button("添加映射项", systemImage: "plus") {
-                entries.append(StringMapEntry())
+            HStack {
+                Spacer()
+                Button("添加映射项", systemImage: "plus") {
+                    entries.append(StringMapEntry())
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
