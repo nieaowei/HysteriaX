@@ -8,6 +8,7 @@ use crate::security::SecretBox;
 pub struct AppState {
     pub pool: PgPool,
     pub secrets: Arc<SecretBox>,
+    pub monitor: Arc<crate::monitoring::Monitor>,
 }
 
 impl AppState {
@@ -15,6 +16,7 @@ impl AppState {
         Self {
             pool,
             secrets: Arc::new(secrets),
+            monitor: Arc::new(crate::monitoring::Monitor::new()),
         }
     }
 }

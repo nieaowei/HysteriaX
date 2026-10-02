@@ -4,6 +4,7 @@ mod db;
 mod deployment;
 mod error;
 mod jobs;
+mod monitoring;
 mod security;
 mod ssh;
 mod state;

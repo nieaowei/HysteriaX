@@ -600,3 +600,35 @@ struct AdminTokenReceipt: Codable, Sendable {
         case token
     }
 }
+
+struct ServerMonitoring: Codable, Sendable {
+    let serviceVersion: String
+    let serviceUptimeSeconds: Int
+    let database: String
+    let sampledAt: String
+    let hostname: String?
+    let os: String?
+    let hostUptimeSeconds: Int
+    let cpuCount: Int
+    let cpuUsagePercent: Double
+    let memoryUsedBytes: Int
+    let memoryTotalBytes: Int
+    let rootDiskUsedBytes: Int?
+    let rootDiskTotalBytes: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case serviceVersion = "service_version"
+        case serviceUptimeSeconds = "service_uptime_seconds"
+        case database
+        case sampledAt = "sampled_at"
+        case hostname
+        case os
+        case hostUptimeSeconds = "host_uptime_seconds"
+        case cpuCount = "cpu_count"
+        case cpuUsagePercent = "cpu_usage_percent"
+        case memoryUsedBytes = "memory_used_bytes"
+        case memoryTotalBytes = "memory_total_bytes"
+        case rootDiskUsedBytes = "root_disk_used_bytes"
+        case rootDiskTotalBytes = "root_disk_total_bytes"
+    }
+}

@@ -65,6 +65,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/users/{id}/quota/reset", post(users::reset_quota))
         .route("/api/v1/jobs", get(list_jobs))
         .route("/api/v1/version", get(api_version))
+        .route("/api/v1/server/monitoring", get(crate::monitoring::get))
         .route("/api/v1/jobs/{id}", get(get_job))
         .route("/api/v1/jobs/{id}/events", get(job_events))
         .route("/api/v1/events", get(events))

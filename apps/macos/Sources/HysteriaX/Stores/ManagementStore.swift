@@ -7,6 +7,7 @@ private struct ClientDisplaySnapshot: Codable {
     let jobs: [JobSummary]
     let auditRecords: [AuditSummary]
     let updatedAt: Date
+    let serverMonitoring: ServerMonitoring?
 }
 
 @MainActor
@@ -19,6 +20,8 @@ final class ManagementStore {
     var auditRecords: [AuditSummary] = []
     var adminTokens: [AdminTokenSummary] = []
     var currentAdminTokenID: String?
+    var serverMonitoring: ServerMonitoring?
+    var serverMonitoringError: String?
     var isConnected = false
     var isLoading = false
     var lastUpdated: Date?
@@ -59,6 +62,8 @@ final class ManagementStore {
         let tokenChanged = previousToken != token
         try KeychainStore.saveToken(token)
         if serviceChanged {
+            serverMonitoring = nil
+            serverMonitoringError = nil
             nodes = []
             users = []
             jobs = []
@@ -399,19 +404,24 @@ final class ManagementStore {
     }
 
     private func loadData(using client: APIClient) async throws {
+        async let loadedMonitoring = fetchServerMonitoring(using: client)
         async let loadedNodes: [NodeSummary] = client.get(APIEndpoints.listNodes)
         async let loadedUsers: [UserSummary] = client.get(APIEndpoints.listUsers)
         async let loadedJobs: [JobSummary] = client.get(APIEndpoints.listJobs)
         async let loadedAudit: [AuditSummary] = client.get(APIEndpoints.listAuditRecords)
         async let loadedAdminTokens: [AdminTokenSummary] = client.get(APIEndpoints.listAdminTokens)
         let tokens = try await loadedAdminTokens
+        let monitoring = await loadedMonitoring
         let snapshot = try await ClientDisplaySnapshot(
             nodes: loadedNodes,
             users: loadedUsers,
             jobs: loadedJobs,
             auditRecords: loadedAudit,
-            updatedAt: Date()
+            updatedAt: Date(),
+            serverMonitoring: monitoring.value ?? serverMonitoring
         )
+        serverMonitoring = snapshot.serverMonitoring
+        serverMonitoringError = monitoring.error
         nodes = snapshot.nodes
         users = snapshot.users
         jobs = snapshot.jobs
@@ -420,6 +430,14 @@ final class ManagementStore {
         lastUpdated = snapshot.updatedAt
         if let data = try? JSONEncoder().encode(snapshot) {
             UserDefaults.standard.set(data, forKey: displaySnapshotKey)
+        }
+    }
+
+    private func fetchServerMonitoring(using client: APIClient) async -> (value: ServerMonitoring?, error: String?) {
+        do {
+            return (try await client.get(APIEndpoints.getServerMonitoring), nil)
+        } catch {
+            return (nil, "监控信息暂不可用：\(error.localizedDescription)")
         }
     }
 
@@ -433,6 +451,7 @@ final class ManagementStore {
         users = snapshot.users
         jobs = snapshot.jobs
         auditRecords = snapshot.auditRecords
+        serverMonitoring = snapshot.serverMonitoring
         lastUpdated = snapshot.updatedAt
     }
 

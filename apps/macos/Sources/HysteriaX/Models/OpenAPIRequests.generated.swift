@@ -407,6 +407,7 @@ enum APIEndpoints {
         APIOperation(method: "POST", path: "api/v1/users/\(id)/quota/reset", queryParameters: [:])
     }
     static let listJobs: APIOperation<NoRequest, [JobSummary]> = APIOperation<NoRequest, [JobSummary]>(method: "GET", path: "api/v1/jobs", queryParameters: [:])
+    static let getServerMonitoring: APIOperation<NoRequest, ServerMonitoring> = APIOperation<NoRequest, ServerMonitoring>(method: "GET", path: "api/v1/server/monitoring", queryParameters: [:])
     static let getAPIVersion: APIOperation<NoRequest, APIVersion> = APIOperation<NoRequest, APIVersion>(method: "GET", path: "api/v1/version", queryParameters: [:])
     static func getJob(id: String) -> APIOperation<NoRequest, JobDetailResponse> {
         APIOperation(method: "GET", path: "api/v1/jobs/\(id)", queryParameters: [:])

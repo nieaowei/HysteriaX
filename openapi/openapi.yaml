@@ -401,6 +401,18 @@ paths:
               schema:
                 type: array
                 items: { $ref: '#/components/schemas/JobSummary' }
+  /server/monitoring:
+    get:
+      operationId: getServerMonitoring
+      summary: Get management service health and host resource snapshot
+      responses:
+        '200':
+          description: Server monitoring (host resources as visible to the service; disk is root filesystem)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ServerMonitoring' }
+        '401': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
   /version:
     get:
       operationId: getAPIVersion
@@ -1033,6 +1045,23 @@ components:
         revision: { type: integer }
         state: { type: string }
         traffic_stats_port: { type: integer, minimum: 1, maximum: 65535 }
+    ServerMonitoring:
+      type: object
+      required: [service_version, service_uptime_seconds, database, sampled_at, hostname, os, host_uptime_seconds, cpu_count, cpu_usage_percent, memory_used_bytes, memory_total_bytes, root_disk_used_bytes, root_disk_total_bytes]
+      properties:
+        service_version: { type: string }
+        service_uptime_seconds: { type: integer, minimum: 0 }
+        database: { type: string, enum: [ok, unavailable] }
+        sampled_at: { type: string, format: date-time }
+        hostname: { type: [string, 'null'] }
+        os: { type: [string, 'null'] }
+        host_uptime_seconds: { type: integer, minimum: 0 }
+        cpu_count: { type: integer, minimum: 0 }
+        cpu_usage_percent: { type: number, minimum: 0, maximum: 100 }
+        memory_used_bytes: { type: integer, minimum: 0 }
+        memory_total_bytes: { type: integer, minimum: 0 }
+        root_disk_used_bytes: { type: [integer, 'null'], minimum: 0 }
+        root_disk_total_bytes: { type: [integer, 'null'], minimum: 0 }
     APIHealth:
       type: object
       required: [status]
