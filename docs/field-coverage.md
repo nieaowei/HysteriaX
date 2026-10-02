@@ -18,7 +18,7 @@ The service accepts JSON with the fixed Hysteria 2 v2.12.3 lower camel case fiel
 | Sniffing | `enable`, `timeout`, `rewriteDomain`, `tcpPorts`, `udpPorts` | Fields are validated and editable. |
 | ACL and Geo data | `file`, `inline`, `geoip`, `geosite`, `geoUpdateInterval` | Inline rules, ACL/Geo resource references, and update interval are validated and editable. Resources are encrypted at rest. |
 | Outbounds | `name`, `type`; `direct.mode/bindIPv4/bindIPv6/bindDevice/fastOpen`; `socks5.addr/username/password`; `http.url/insecure` | Named direct, SOCKS5, and HTTP outbounds are validated and editable as an ordered list. The native form supports adding, removing, editing, and moving the default outbound; the full saved configuration is encrypted at rest. |
-| Traffic statistics | `trafficStats.listen`, `secret` | Always generated on loopback with a per-node secret. |
+| Traffic statistics | `trafficStats.listen`, `secret`; HysteriaX node `traffic_stats_port` | The port is configurable per node, defaults to 9780, and remains bound to loopback with a per-node secret. Sampling, deployment probes, and online-client actions use the deployed revision's port. |
 | Authentication | `auth.type`, `http.url`, `http.insecure` | Always generated as the HysteriaX HTTP callback. |
 | Masquerade | `type`, `listenHTTP`, `listenHTTPS`, `forceHTTPS`; `file.dir`; `proxy.url/rewriteHost/xForwarded/insecure`; `string.content/headers/statusCode` | File, proxy, and string modes and all listed fields are validated and editable. String response headers use a native key/value row editor. |
 

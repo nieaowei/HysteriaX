@@ -156,6 +156,7 @@ final class ManagementStore {
         _ detail: NodeDetail,
         config: JSONValue,
         listenAddress: String,
+        trafficStatsPort: Int,
         proxyProbeURL: String
     ) async throws {
         let api = try requireConnectedAPI()
@@ -164,6 +165,7 @@ final class ManagementStore {
             body: NodePatchRequest(
                 expectedRevision: detail.revision,
                 listenAddr: listenAddress,
+                trafficStatsPort: trafficStatsPort,
                 proxyProbeUrl: proxyProbeURL,
                 config: config.objectValue ?? [:]
             )

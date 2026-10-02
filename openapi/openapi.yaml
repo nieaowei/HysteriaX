@@ -669,6 +669,7 @@ components:
         public_host: { type: string }
         public_port: { type: integer, minimum: 1, maximum: 65535 }
         listen_addr: { type: string }
+        traffic_stats_port: { type: integer, minimum: 1, maximum: 65535, default: 9780, description: "Loopback-only Hysteria trafficStats API port" }
         proxy_probe_url: { type: [string, 'null'], maxLength: 2048, description: "Optional HTTP 200 health target used by the deployment-time proxy probe when routing rules block the built-in loopback target" }
         tls_sni: { type: string }
         tls_skip_verify: { type: boolean, default: false }
@@ -689,6 +690,7 @@ components:
             public_host: { type: string }
             public_port: { type: integer, minimum: 1, maximum: 65535 }
             listen_addr: { type: string }
+            traffic_stats_port: { type: integer, minimum: 1, maximum: 65535, description: "Loopback-only Hysteria trafficStats API port" }
             proxy_probe_url: { type: string, maxLength: 2048, description: "HTTP 200 probe URL reachable through this node's ACL/outbound rules; use an empty string to restore the local statistics probe" }
             tls_sni: { type: string }
             tls_skip_verify: { type: boolean }
@@ -761,6 +763,7 @@ components:
         yaml_preview: { type: string }
         ssh: { $ref: '#/components/schemas/NodeSSHDetail' }
         public: { $ref: '#/components/schemas/NodeConnectionDetail' }
+        traffic_stats_port: { type: integer, minimum: 1, maximum: 65535, description: "Loopback-only Hysteria trafficStats API port" }
         state: { type: string }
         last_seen_at: { type: [string, 'null'], format: date-time }
         last_sample_at: { type: [string, 'null'], format: date-time }
@@ -918,6 +921,7 @@ components:
         name: { type: string }
         revision: { type: integer }
         state: { type: string }
+        traffic_stats_port: { type: integer, minimum: 1, maximum: 65535 }
         sync_job_queued: { type: boolean }
     UserUpdateResponse:
       type: object
@@ -1025,6 +1029,7 @@ components:
         name: { type: string }
         revision: { type: integer }
         state: { type: string }
+        traffic_stats_port: { type: integer, minimum: 1, maximum: 65535 }
     APIHealth:
       type: object
       required: [status]

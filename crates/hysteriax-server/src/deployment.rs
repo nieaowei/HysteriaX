@@ -9,7 +9,9 @@ use url::{Host, Url};
 use crate::{
     api::generate_token,
     api::resources::ResourceFile,
-    config::{listener_hop_ports, render_server_yaml},
+    config::{
+        DEFAULT_TRAFFIC_STATS_PORT, listener_hop_ports, render_server_yaml_with_traffic_stats_port,
+    },
     security::{SecretBox, redact_config_secrets, redact_secret_values, token_digest},
     ssh::{self, FingerprintResult, RemoteEnvironment, SshNode, SshSession},
 };
@@ -271,6 +273,7 @@ async fn deploy_with_probe(
         .get("proxy_probe_url")
         .and_then(Value::as_str)
         .map(str::to_owned);
+    let traffic_stats_port = snapshot_traffic_stats_port(&snapshot)?;
     let name: String = row.get("name");
     let ssh_node = ssh_node_from_row(secrets, &row)?;
 
@@ -376,13 +379,14 @@ async fn deploy_with_probe(
         "Rendering the server configuration and systemd unit.",
     )
     .await?;
-    let server_yaml = render_server_yaml(
+    let server_yaml = render_server_yaml_with_traffic_stats_port(
         &resolved_options,
         listen_addr,
         node_id,
         &node_token,
         &stats_secret,
         &management_url,
+        traffic_stats_port,
     )?;
     let deployed_sha256 = hex::encode(Sha256::digest(server_yaml.as_bytes()));
     let systemd_unit = systemd_unit(port_hopping);
@@ -454,7 +458,7 @@ async fn deploy_with_probe(
     for _ in 0..20 {
         let health_check = async {
             let traffic_body = session
-                .loopback_http_get(9780, "/traffic", &stats_secret)
+                .loopback_http_get(u32::from(traffic_stats_port), "/traffic", &stats_secret)
                 .await?;
             let traffic: Value = serde_json::from_slice(&traffic_body)
                 .context("Hysteria traffic API returned invalid JSON")?;
@@ -462,7 +466,7 @@ async fn deploy_with_probe(
                 bail!("Hysteria traffic API returned an invalid response shape")
             }
             let online_body = session
-                .loopback_http_get(9780, "/online", &stats_secret)
+                .loopback_http_get(u32::from(traffic_stats_port), "/online", &stats_secret)
                 .await?;
             let online: Value = serde_json::from_slice(&online_body)
                 .context("Hysteria online API returned invalid JSON")?;
@@ -500,6 +504,7 @@ async fn deploy_with_probe(
                 node_id,
                 token: probe_token,
                 stats_secret: &stats_secret,
+                traffic_stats_port,
                 listen_addr,
                 public_host: &public_host,
                 tls_sni: tls_sni.as_deref(),
@@ -592,6 +597,7 @@ struct ProxyProbe<'a> {
     node_id: &'a str,
     token: &'a str,
     stats_secret: &'a str,
+    traffic_stats_port: u16,
     listen_addr: &'a str,
     public_host: &'a str,
     tls_sni: Option<&'a str>,
@@ -610,6 +616,7 @@ async fn run_proxy_probe(
         node_id,
         token: probe_token,
         stats_secret,
+        traffic_stats_port,
         listen_addr,
         public_host,
         tls_sni,
@@ -619,10 +626,11 @@ async fn run_proxy_probe(
     } = probe;
     let (server_address, realm_options) = deployment_probe_server_config(options, listen_addr)?;
     let custom_target = target_url.map(parse_http_probe_target).transpose()?;
+    let default_remote_target = format!("127.0.0.1:{traffic_stats_port}");
     let remote_target = custom_target
         .as_ref()
         .map(|target| target.remote_address.as_str())
-        .unwrap_or("127.0.0.1:9780");
+        .unwrap_or(&default_remote_target);
     let probe_port = free_remote_tcp_port(session, probe_token).await?;
     let remote_dir = format!("/tmp/hysteriax-probe-{node_id}");
     let client_config_path = format!("{remote_dir}/client.yaml");
@@ -739,7 +747,7 @@ async fn run_proxy_probe(
             match proxy_response {
                 Ok(_) if custom_target.is_some() => {
                     let online_body = session
-                        .loopback_http_get(9780, "/online", stats_secret)
+                        .loopback_http_get(u32::from(traffic_stats_port), "/online", stats_secret)
                         .await?;
                     let online: Value = serde_json::from_slice(&online_body)
                         .context("Hysteria online API returned invalid JSON during custom probe")?;
@@ -769,7 +777,7 @@ async fn run_proxy_probe(
 
             if restricted_egress && custom_target.is_none() {
                 let online_body = session
-                    .loopback_http_get(9780, "/online", stats_secret)
+                    .loopback_http_get(u32::from(traffic_stats_port), "/online", stats_secret)
                     .await?;
                 let online: Value = serde_json::from_slice(&online_body)
                     .context("Hysteria online API returned invalid JSON during proxy probe")?;
@@ -971,6 +979,50 @@ pub(crate) async fn load_ssh_node(
     let row = sqlx::query("SELECT id, ssh_host, ssh_port, ssh_username, ssh_auth_type, ssh_secret_enc, ssh_passphrase_enc, ssh_host_fingerprint FROM nodes WHERE id = ?")
         .bind(node_id).fetch_optional(pool).await?.context("node not found")?;
     ssh_node_from_row(secrets, &row)
+}
+
+pub(crate) async fn load_deployed_traffic_stats_port(
+    pool: &SqlitePool,
+    secrets: &SecretBox,
+    node_id: &str,
+) -> Result<u16> {
+    let row = sqlx::query("SELECT traffic_stats_port, deployed_revision FROM nodes WHERE id = ?")
+        .bind(node_id)
+        .fetch_optional(pool)
+        .await?
+        .context("node not found")?;
+    let configured_port = u16::try_from(row.get::<i64, _>("traffic_stats_port"))
+        .context("saved trafficStats port is invalid")?;
+    if let Some(revision) = row.get::<Option<i64>, _>("deployed_revision") {
+        let snapshot_enc: Option<String> = sqlx::query_scalar(
+            "SELECT config_enc FROM config_versions WHERE node_id = ? AND revision = ?",
+        )
+        .bind(node_id)
+        .bind(revision)
+        .fetch_optional(pool)
+        .await?;
+        if let Some(snapshot_enc) = snapshot_enc {
+            let snapshot: Value = serde_json::from_str(&secrets.decrypt(&snapshot_enc)?)
+                .context("stored deployed configuration snapshot is invalid")?;
+            return snapshot_traffic_stats_port(&snapshot);
+        }
+    }
+    Ok(configured_port)
+}
+
+fn snapshot_traffic_stats_port(snapshot: &Value) -> Result<u16> {
+    let Some(value) = snapshot.get("traffic_stats_port") else {
+        // Configuration snapshots created before this setting was introduced used 9780.
+        return Ok(DEFAULT_TRAFFIC_STATS_PORT);
+    };
+    let raw = value
+        .as_u64()
+        .context("deployment snapshot traffic_stats_port must be an integer")?;
+    let port = u16::try_from(raw).context("deployment snapshot traffic_stats_port is invalid")?;
+    if port == 0 {
+        bail!("deployment snapshot traffic_stats_port must be between 1 and 65535");
+    }
+    Ok(port)
 }
 
 async fn uninstall(pool: &SqlitePool, secrets: &SecretBox, job: &JobInput) -> Result<JobOutput> {
@@ -1281,6 +1333,7 @@ async fn kick(pool: &SqlitePool, secrets: &SecretBox, job: &JobInput) -> Result<
             .fetch_one(pool)
             .await?;
     let stats_secret = secrets.decrypt(&stats_secret_enc)?;
+    let traffic_stats_port = load_deployed_traffic_stats_port(pool, secrets, node_id).await?;
     let request_body = format!("[\"{user_id}\"]");
     report_progress(
         pool,
@@ -1294,7 +1347,7 @@ async fn kick(pool: &SqlitePool, secrets: &SecretBox, job: &JobInput) -> Result<
         // Hysteria stores kick IDs until the next traffic callback. Check online first
         // so an already-offline user does not leave a stale kick marker for a later login.
         let online_before = session
-            .loopback_http_get(9780, "/online", &stats_secret)
+            .loopback_http_get(u32::from(traffic_stats_port), "/online", &stats_secret)
             .await?;
         let online_before: Value = serde_json::from_slice(&online_before)
             .context("Hysteria online API returned invalid JSON")?;
@@ -1313,10 +1366,15 @@ async fn kick(pool: &SqlitePool, secrets: &SecretBox, job: &JobInput) -> Result<
             return Ok(clients_offline_output(node_id, user_id));
         }
         session
-            .loopback_http_post(9780, "/kick", &stats_secret, request_body.as_bytes())
+            .loopback_http_post(
+                u32::from(traffic_stats_port),
+                "/kick",
+                &stats_secret,
+                request_body.as_bytes(),
+            )
             .await?;
         let online_body = session
-            .loopback_http_get(9780, "/online", &stats_secret)
+            .loopback_http_get(u32::from(traffic_stats_port), "/online", &stats_secret)
             .await?;
         let online: Value = serde_json::from_slice(&online_body)
             .context("Hysteria online API returned invalid JSON")?;

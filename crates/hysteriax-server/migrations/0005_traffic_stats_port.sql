@@ -1,0 +1,3 @@
+ALTER TABLE nodes
+ADD COLUMN traffic_stats_port INTEGER NOT NULL DEFAULT 9780
+CHECK (traffic_stats_port BETWEEN 1 AND 65535);

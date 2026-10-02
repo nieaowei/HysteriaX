@@ -13,6 +13,7 @@ struct NodeCreateRequest: Encodable, Sendable {
     let publicHost: String
     let publicPort: Int
     let listenAddr: String
+    let trafficStatsPort: Int
     let proxyProbeUrl: String?
     let tlsSNI: String?
     let tlsSkipVerify: Bool
@@ -30,6 +31,7 @@ struct NodeCreateRequest: Encodable, Sendable {
         publicHost: String,
         publicPort: Int,
         listenAddr: String,
+        trafficStatsPort: Int = 9780,
         proxyProbeUrl: String? = nil,
         tlsSNI: String? = nil,
         tlsSkipVerify: Bool = false,
@@ -46,6 +48,7 @@ struct NodeCreateRequest: Encodable, Sendable {
         self.publicHost = publicHost
         self.publicPort = publicPort
         self.listenAddr = listenAddr
+        self.trafficStatsPort = trafficStatsPort
         self.proxyProbeUrl = proxyProbeUrl
         self.tlsSNI = tlsSNI
         self.tlsSkipVerify = tlsSkipVerify
@@ -64,6 +67,7 @@ struct NodeCreateRequest: Encodable, Sendable {
         case publicHost = "public_host"
         case publicPort = "public_port"
         case listenAddr = "listen_addr"
+        case trafficStatsPort = "traffic_stats_port"
         case proxyProbeUrl = "proxy_probe_url"
         case tlsSNI = "tls_sni"
         case tlsSkipVerify = "tls_skip_verify"
@@ -84,6 +88,7 @@ struct NodePatchRequest: Encodable, Sendable {
     let publicHost: String?
     let publicPort: Int?
     let listenAddr: String?
+    let trafficStatsPort: Int?
     let proxyProbeUrl: String?
     let tlsSNI: String?
     let tlsSkipVerify: Bool?
@@ -102,6 +107,7 @@ struct NodePatchRequest: Encodable, Sendable {
         publicHost: String? = nil,
         publicPort: Int? = nil,
         listenAddr: String? = nil,
+        trafficStatsPort: Int? = nil,
         proxyProbeUrl: String? = nil,
         tlsSNI: String? = nil,
         tlsSkipVerify: Bool? = nil,
@@ -119,6 +125,7 @@ struct NodePatchRequest: Encodable, Sendable {
         self.publicHost = publicHost
         self.publicPort = publicPort
         self.listenAddr = listenAddr
+        self.trafficStatsPort = trafficStatsPort
         self.proxyProbeUrl = proxyProbeUrl
         self.tlsSNI = tlsSNI
         self.tlsSkipVerify = tlsSkipVerify
@@ -138,6 +145,7 @@ struct NodePatchRequest: Encodable, Sendable {
         case publicHost = "public_host"
         case publicPort = "public_port"
         case listenAddr = "listen_addr"
+        case trafficStatsPort = "traffic_stats_port"
         case proxyProbeUrl = "proxy_probe_url"
         case tlsSNI = "tls_sni"
         case tlsSkipVerify = "tls_skip_verify"

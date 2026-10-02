@@ -12,6 +12,7 @@ struct NodeConfigurationView: View {
     @State private var isSaving = false
     @State private var errorMessage: String?
     @State private var listenAddress = ":443"
+    @State private var trafficStatsPort = "9780"
     @State private var proxyProbeURL = ""
     @State private var tlsMode = "none"
     @State private var acmeDomains: [StringListEntry] = []
@@ -110,6 +111,11 @@ struct NodeConfigurationView: View {
                     Section("监听") {
                         TextField("UDP 监听地址", text: $listenAddress)
                         Text("支持端口列表和范围，例如 :443,445-450。端口跳跃节点的公网端口须与首个监听端口相同，远端还须安装 nftables 或 iptables。")
+                            .font(.callout).foregroundStyle(.secondary)
+                    }
+                    Section("Hysteria trafficStats 接口") {
+                        TextField("本机端口", text: $trafficStatsPort)
+                        Text("仅绑定节点本机回环地址，用于流量采集和在线设备管理。请选用节点上未被占用的 TCP 端口。")
                             .font(.callout).foregroundStyle(.secondary)
                     }
                     Section("部署连通性检查") {
@@ -410,18 +416,12 @@ struct NodeConfigurationView: View {
                         Text("Realm 可使用固定版 Mihomo；生成的订阅会为 STUN 打洞设置 30 秒握手期限，服务端使用监听端口作为本地 UDP 端口。Realm 不能与端口跳跃组合。启用 Mimic 仍受兼容限制；ECH 需要使用已上传的 ech_key 资源。")
                             .font(.callout).foregroundStyle(.secondary)
                     }
-                    Section("YAML 预览") {
-                        Text(detail.yamlPreview)
-                            .font(.system(.caption, design: .monospaced))
-                            .textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
                 }
-                .verticalScrollArea {
-                    if let errorMessage {
-                        Text(errorMessage).foregroundStyle(.red).font(.callout)
-                    }
-                }
+                .formStyle(.grouped)
+                .configurationColumns(
+                    preview: yamlPreviewPane(draftYAMLPreview(for: detail)),
+                    errorMessage: errorMessage
+                )
             } else if let errorMessage {
                 VStack(spacing: 12) {
                     ContentUnavailableView(
@@ -434,17 +434,354 @@ struct NodeConfigurationView: View {
             }
         }
         .padding(20)
-        .frame(minWidth: 650, minHeight: 760)
+        .frame(minWidth: 820, idealWidth: 1080, minHeight: 760)
         .task(id: nodeID) { await load() }
         .fileImporter(isPresented: $showingResourceImporter, allowedContentTypes: [.data], allowsMultipleSelection: false) { result in
             handleResourceImport(result)
         }
     }
 
+    private func yamlPreviewPane(_ yaml: String) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("YAML 预览")
+                .font(.headline)
+                .padding(12)
+            Divider()
+            ScrollView([.horizontal, .vertical]) {
+                Text(yaml)
+                    .font(.system(.caption, design: .monospaced))
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: true, vertical: true)
+                    .padding(12)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(.background, in: RoundedRectangle(cornerRadius: 10))
+        .overlay {
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(.quaternary, lineWidth: 1)
+        }
+    }
+
+    private func draftYAMLPreview(for detail: NodeDetail) -> String {
+        var config = draftConfiguration(from: detail.config)
+        let listen = draftListenAddress(for: config)
+        if var realm = config["realm"]?.objectValue {
+            realm.removeValue(forKey: "connection")
+            if realm.isEmpty { config.removeValue(forKey: "realm") }
+            else { config["realm"] = .object(realm) }
+        }
+        config = resolveResourcePaths(in: .object(config)).objectValue ?? config
+
+        var serverConfig = config
+        serverConfig["listen"] = .string(listen)
+        serverConfig["auth"] = .object([
+            "type": .string("http"),
+            "http": .object([
+                "url": .string(managedAuthURL(from: detail.yamlPreview)),
+                "insecure": .bool(false),
+            ]),
+        ])
+        serverConfig["trafficStats"] = .object([
+            "listen": .string("127.0.0.1:\(trafficStatsPort)"),
+            "secret": .string("<managed-stats-secret>"),
+        ])
+        return NodeConfigurationYAML.render(.object(serverConfig))
+    }
+
+    private func draftConfiguration(from original: [String: JSONValue]) -> [String: JSONValue] {
+        var config = original
+
+        if tlsMode == "acme" {
+            var acme = config["acme"]?.objectValue ?? [:]
+            let domains = acmeDomains.map { $0.value.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+            acme["domains"] = .array(domains.map(JSONValue.string))
+            if acmeLegacyMode { acme.removeValue(forKey: "type") }
+            else { acme["type"] = .string(acmeType) }
+            setDraftString(acmeEmail, for: "email", in: &acme)
+            setDraftString(acmeCA, for: "ca", in: &acme)
+            setDraftString(acmeListenHost, for: "listenHost", in: &acme)
+            setDraftString(acmeDirectory, for: "dir", in: &acme)
+            if acmeLegacyMode {
+                acme["disableHTTP"] = .bool(acmeDisableHTTP)
+                acme["disableTLSALPN"] = .bool(acmeDisableTLSALPN)
+                setDraftNumber(acmeLegacyHTTPPort, for: "altHTTPPort", in: &acme)
+                setDraftNumber(acmeLegacyTLSPort, for: "altTLSALPNPort", in: &acme)
+                acme.removeValue(forKey: "http")
+                acme.removeValue(forKey: "tls")
+                acme.removeValue(forKey: "dns")
+            } else {
+                for field in ["disableHTTP", "disableTLSALPN", "altHTTPPort", "altTLSALPNPort"] {
+                    acme.removeValue(forKey: field)
+                }
+                if acmeType == "http" {
+                    var settings = acme["http"]?.objectValue ?? [:]
+                    setDraftNumber(acmeHTTPAltPort, for: "altPort", in: &settings)
+                    acme["http"] = settings.isEmpty ? nil : .object(settings)
+                    acme.removeValue(forKey: "tls")
+                    acme.removeValue(forKey: "dns")
+                } else if acmeType == "tls" {
+                    var settings = acme["tls"]?.objectValue ?? [:]
+                    setDraftNumber(acmeTLSAltPort, for: "altPort", in: &settings)
+                    acme["tls"] = settings.isEmpty ? nil : .object(settings)
+                    acme.removeValue(forKey: "http")
+                    acme.removeValue(forKey: "dns")
+                } else {
+                    acme["dns"] = .object([
+                        "name": .string(acmeDNSName),
+                        "config": .object(draftStringMap(acmeDNSEntries)),
+                    ])
+                    acme.removeValue(forKey: "http")
+                    acme.removeValue(forKey: "tls")
+                }
+            }
+            config["acme"] = .object(acme)
+            config.removeValue(forKey: "tls")
+        } else if tlsMode == "tls" {
+            var tls = config["tls"]?.objectValue ?? [:]
+            tls["cert"] = .string(certificatePath)
+            tls["key"] = .string(privateKeyPath)
+            tls["sniGuard"] = .string(tlsSNIGuard)
+            setDraftString(tlsClientCAPath, for: "clientCA", in: &tls)
+            config["tls"] = .object(tls)
+            config.removeValue(forKey: "acme")
+        } else {
+            config.removeValue(forKey: "acme")
+            config.removeValue(forKey: "tls")
+        }
+
+        if echKeyPath.isEmpty { config.removeValue(forKey: "ech") }
+        else { config["ech"] = .object(["keyPath": .string(echKeyPath)]) }
+
+        var bandwidth = config["bandwidth"]?.objectValue ?? [:]
+        setDraftString(bandwidthUp, for: "up", in: &bandwidth)
+        setDraftString(bandwidthDown, for: "down", in: &bandwidth)
+        if disableLossCompensation { bandwidth["disableLossCompensation"] = .bool(true) }
+        else { bandwidth.removeValue(forKey: "disableLossCompensation") }
+        if bandwidth.isEmpty { config.removeValue(forKey: "bandwidth") }
+        else { config["bandwidth"] = .object(bandwidth) }
+
+        var congestion = config["congestion"]?.objectValue ?? [:]
+        congestion["type"] = .string(congestionType)
+        congestion["bbrProfile"] = .string(bbrProfile)
+        config["congestion"] = .object(congestion)
+        config["disableUDP"] = .bool(disableUDP)
+        config["ignoreClientBandwidth"] = .bool(ignoreClientBandwidth)
+        config["speedTest"] = .bool(speedTest)
+        setDraftString(udpIdleTimeout, for: "udpIdleTimeout", in: &config)
+
+        if obfsType == "none" {
+            config.removeValue(forKey: "obfs")
+        } else {
+            var obfs = config["obfs"]?.objectValue ?? [:]
+            var settings = obfs[obfsType]?.objectValue ?? [:]
+            settings["password"] = .string(obfsPassword)
+            if obfsType == "gecko" {
+                settings["minPacketSize"] = draftNumber(obfsMinPacket)
+                settings["maxPacketSize"] = draftNumber(obfsMaxPacket)
+            }
+            obfs["type"] = .string(obfsType)
+            obfs[obfsType] = .object(settings)
+            config["obfs"] = .object(obfs)
+        }
+
+        var acl = config["acl"]?.objectValue ?? [:]
+        setDraftString(aclFileReference, for: "file", in: &acl)
+        setDraftString(geoIPReference, for: "geoip", in: &acl)
+        setDraftString(geoSiteReference, for: "geosite", in: &acl)
+        setDraftString(geoUpdateInterval, for: "geoUpdateInterval", in: &acl)
+        let rules = aclInline.split(whereSeparator: \.isNewline).map { JSONValue.string(String($0)) }
+        if rules.isEmpty { acl.removeValue(forKey: "inline") }
+        else { acl["inline"] = .array(rules) }
+        if acl.isEmpty { config.removeValue(forKey: "acl") }
+        else { config["acl"] = .object(acl) }
+
+        var quic = config["quic"]?.objectValue ?? [:]
+        setDraftNumber(quicInitStreamWindow, for: "initStreamReceiveWindow", in: &quic)
+        setDraftNumber(quicMaxStreamWindow, for: "maxStreamReceiveWindow", in: &quic)
+        setDraftNumber(quicInitConnectionWindow, for: "initConnReceiveWindow", in: &quic)
+        setDraftNumber(quicMaxConnectionWindow, for: "maxConnReceiveWindow", in: &quic)
+        setDraftNumber(quicMaxStreams, for: "maxIncomingStreams", in: &quic)
+        setDraftString(quicIdleTimeout, for: "maxIdleTimeout", in: &quic)
+        if disablePathMTU { quic["disablePathMTUDiscovery"] = .bool(true) }
+        else { quic.removeValue(forKey: "disablePathMTUDiscovery") }
+        if disableStatelessReset { quic["disableStatelessReset"] = .bool(true) }
+        else { quic.removeValue(forKey: "disableStatelessReset") }
+        if quic.isEmpty { config.removeValue(forKey: "quic") }
+        else { config["quic"] = .object(quic) }
+
+        if resolverType == "none" {
+            config.removeValue(forKey: "resolver")
+        } else {
+            var resolver = config["resolver"]?.objectValue ?? [:]
+            var settings = resolver[resolverType]?.objectValue ?? [:]
+            settings["addr"] = .string(resolverAddress)
+            setDraftString(resolverTimeout, for: "timeout", in: &settings)
+            if resolverType == "tls" || resolverType == "https" {
+                setDraftString(resolverSNI, for: "sni", in: &settings)
+                if resolverInsecure { settings["insecure"] = .bool(true) }
+                else { settings.removeValue(forKey: "insecure") }
+            }
+            resolver["type"] = .string(resolverType)
+            resolver[resolverType] = .object(settings)
+            config["resolver"] = .object(resolver)
+        }
+
+        if sniffEnabled {
+            var sniff: [String: JSONValue] = ["enable": .bool(true)]
+            setDraftString(sniffTimeout, for: "timeout", in: &sniff)
+            if sniffRewriteDomain { sniff["rewriteDomain"] = .bool(true) }
+            setDraftString(sniffTCPPorts, for: "tcpPorts", in: &sniff)
+            setDraftString(sniffUDPPorts, for: "udpPorts", in: &sniff)
+            config["sniff"] = .object(sniff)
+        } else {
+            config.removeValue(forKey: "sniff")
+        }
+
+        if hasOutbound {
+            let entries = outboundDrafts.map { outbound -> JSONValue in
+                let name = outbound.name.trimmingCharacters(in: .whitespacesAndNewlines)
+                var entry: [String: JSONValue] = ["name": .string(name), "type": .string(outbound.type)]
+                if outbound.type == "socks5" {
+                    var settings: [String: JSONValue] = ["addr": .string(outbound.address)]
+                    setDraftString(outbound.username, for: "username", in: &settings)
+                    setDraftString(outbound.password, for: "password", in: &settings)
+                    entry["socks5"] = .object(settings)
+                } else if outbound.type == "http" {
+                    var settings: [String: JSONValue] = ["url": .string(outbound.url)]
+                    if outbound.insecure { settings["insecure"] = .bool(true) }
+                    entry["http"] = .object(settings)
+                } else {
+                    var direct: [String: JSONValue] = [:]
+                    setDraftString(outbound.directMode, for: "mode", in: &direct)
+                    setDraftString(outbound.bindIPv4, for: "bindIPv4", in: &direct)
+                    setDraftString(outbound.bindIPv6, for: "bindIPv6", in: &direct)
+                    setDraftString(outbound.bindDevice, for: "bindDevice", in: &direct)
+                    if outbound.fastOpen { direct["fastOpen"] = .bool(true) }
+                    if !direct.isEmpty { entry["direct"] = .object(direct) }
+                }
+                return .object(entry)
+            }
+            config["outbounds"] = .array(entries)
+        } else {
+            config.removeValue(forKey: "outbounds")
+        }
+
+        if masqueradeType == "none" {
+            config.removeValue(forKey: "masquerade")
+        } else {
+            var masquerade = config["masquerade"]?.objectValue ?? [:]
+            var settings = masquerade[masqueradeType]?.objectValue ?? [:]
+            if masqueradeType == "file" {
+                settings["dir"] = .string(masqueradeDirectory)
+            } else if masqueradeType == "proxy" {
+                settings["url"] = .string(masqueradeURL)
+                if masqueradeRewriteHost { settings["rewriteHost"] = .bool(true) }
+                else { settings.removeValue(forKey: "rewriteHost") }
+                if masqueradeXForwarded { settings["xForwarded"] = .bool(true) }
+                else { settings.removeValue(forKey: "xForwarded") }
+                if masqueradeInsecure { settings["insecure"] = .bool(true) }
+                else { settings.removeValue(forKey: "insecure") }
+            } else {
+                settings["content"] = .string(masqueradeContent)
+                settings["headers"] = .object(draftStringMap(masqueradeHeaderEntries))
+                setDraftNumber(masqueradeStatusCode, for: "statusCode", in: &settings)
+            }
+            masquerade["type"] = .string(masqueradeType)
+            masquerade[masqueradeType] = .object(settings)
+            setDraftString(masqueradeListenHTTP, for: "listenHTTP", in: &masquerade)
+            setDraftString(masqueradeListenHTTPS, for: "listenHTTPS", in: &masquerade)
+            if masqueradeForceHTTPS { masquerade["forceHTTPS"] = .bool(true) }
+            else { masquerade.removeValue(forKey: "forceHTTPS") }
+            config["masquerade"] = .object(masquerade)
+        }
+        return config
+    }
+
+    private func draftListenAddress(for config: [String: JSONValue]) -> String {
+        guard let connection = config["realm"]?.objectValue?["connection"]?.objectValue,
+              let serverURL = connection["serverURL"]?.stringValue,
+              let realmID = connection["realmID"]?.stringValue,
+              var components = URLComponents(string: serverURL),
+              let scheme = components.scheme,
+              let port = listenAddress.split(separator: ":").last,
+              !port.contains(","), !port.contains("-"), Int(port) != nil else {
+            return listenAddress
+        }
+        components.scheme = "realm+\(scheme)"
+        components.user = "REDACTED_TOKEN"
+        components.password = nil
+        components.path = "/\(realmID)"
+        components.queryItems = [URLQueryItem(name: "lport", value: String(port))]
+        return components.string ?? "realm+\(scheme)://REDACTED_TOKEN@\(serverURL)/\(realmID)?lport=\(port)"
+    }
+
+    private func managedAuthURL(from yaml: String) -> String {
+        var insideAuth = false
+        for line in yaml.split(separator: "\n", omittingEmptySubsequences: false) {
+            let value = String(line)
+            let trimmed = value.trimmingCharacters(in: .whitespaces)
+            let indentation = value.prefix(while: { $0 == " " }).count
+            if indentation == 0 {
+                if insideAuth { break }
+                insideAuth = trimmed == "auth:"
+                continue
+            }
+            guard insideAuth, trimmed.hasPrefix("url:") else { continue }
+            let scalar = trimmed.dropFirst("url:".count).trimmingCharacters(in: .whitespaces)
+            if let data = scalar.data(using: .utf8),
+               let decoded = try? JSONDecoder().decode(String.self, from: data) {
+                return decoded
+            }
+            return scalar.trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+        }
+        return "<managed-auth-url>"
+    }
+
+    private func resolveResourcePaths(in value: JSONValue) -> JSONValue {
+        switch value {
+        case .string(let path) where path.hasPrefix("resource://"):
+            return .string("/etc/hysteriax/resources/\(path.dropFirst("resource://".count))")
+        case .array(let values):
+            return .array(values.map(resolveResourcePaths(in:)))
+        case .object(let values):
+            return .object(values.mapValues(resolveResourcePaths(in:)))
+        default:
+            return value
+        }
+    }
+
+    private func setDraftString(_ value: String, for key: String, in object: inout [String: JSONValue]) {
+        if value.isEmpty { object.removeValue(forKey: key) }
+        else { object[key] = .string(value) }
+    }
+
+    private func draftNumber(_ value: String) -> JSONValue? {
+        guard !value.isEmpty else { return nil }
+        if let integer = Int(value) { return .integer(integer) }
+        return .string(value)
+    }
+
+    private func setDraftNumber(_ value: String, for key: String, in object: inout [String: JSONValue]) {
+        if let number = draftNumber(value) { object[key] = number }
+        else { object.removeValue(forKey: key) }
+    }
+
+    private func draftStringMap(_ entries: [StringMapEntry]) -> [String: JSONValue] {
+        var result: [String: JSONValue] = [:]
+        for entry in entries {
+            let key = entry.key.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !key.isEmpty { result[key] = .string(entry.value) }
+        }
+        return result
+    }
+
     private func resetForm() {
         detail = nil
         errorMessage = nil
         listenAddress = ":443"
+        trafficStatsPort = "9780"
         proxyProbeURL = ""
         tlsMode = "none"
         acmeDomains = []
@@ -533,6 +870,7 @@ struct NodeConfigurationView: View {
             detail = loaded
             resources = loadedResources
             listenAddress = loaded.connection.listenAddress
+            trafficStatsPort = String(loaded.trafficStatsPort ?? 9780)
             proxyProbeURL = loaded.proxyProbeUrl ?? ""
             let config = loaded.config
             echKeyPath = config["ech"]?.objectValue?["keyPath"]?.stringValue ?? ""
@@ -816,178 +1154,94 @@ struct NodeConfigurationView: View {
         if outboundDrafts.isEmpty { hasOutbound = false }
     }
 
-    private func save() {
-        guard let detail else { return }
+    private func validateDraft() -> Bool {
         if let validationError = ProxyProbeURLValidation.error(proxyProbeURL) {
             errorMessage = validationError
-            return
+            return false
         }
-        if !bandwidthUp.isEmpty && !validateBandwidthValue(bandwidthUp, field: "上传带宽") { return }
-        if !bandwidthDown.isEmpty && !validateBandwidthValue(bandwidthDown, field: "下载带宽") { return }
-        var config = detail.config
+        guard let port = Int(trafficStatsPort), (1...65535).contains(port) else {
+            errorMessage = "trafficStats 端口必须是 1 到 65535 的整数。"
+            return false
+        }
+        if !bandwidthUp.isEmpty && !validateBandwidthValue(bandwidthUp, field: "上传带宽") { return false }
+        if !bandwidthDown.isEmpty && !validateBandwidthValue(bandwidthDown, field: "下载带宽") { return false }
 
         if tlsMode == "acme" {
-            let domains = acmeDomains.map {
-                $0.value.trimmingCharacters(in: .whitespacesAndNewlines)
-            }.filter { !$0.isEmpty }
+            let domains = acmeDomains.map { $0.value.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
             guard !domains.isEmpty else {
                 errorMessage = "请填写 ACME 域名。"
-                return
+                return false
             }
             guard Set(domains.map { $0.lowercased() }).count == domains.count else {
                 errorMessage = "ACME 域名不能重复。"
-                return
+                return false
             }
-            var acme = config["acme"]?.objectValue ?? [:]
-            acme["domains"] = .array(domains.map(JSONValue.string))
-            if acmeLegacyMode { acme.removeValue(forKey: "type") }
-            else { acme["type"] = .string(acmeType) }
-            if !acmeEmail.isEmpty { acme["email"] = .string(acmeEmail) }
-            else { acme.removeValue(forKey: "email") }
-            if acmeCA.isEmpty { acme.removeValue(forKey: "ca") }
-            else { acme["ca"] = .string(acmeCA) }
-            if acmeListenHost.isEmpty { acme.removeValue(forKey: "listenHost") }
-            else { acme["listenHost"] = .string(acmeListenHost) }
-            if acmeDirectory.isEmpty { acme.removeValue(forKey: "dir") }
-            else { acme["dir"] = .string(acmeDirectory) }
             if acmeLegacyMode {
-                acme["disableHTTP"] = .bool(acmeDisableHTTP)
-                acme["disableTLSALPN"] = .bool(acmeDisableTLSALPN)
-                guard setPort(acmeLegacyHTTPPort, field: "旧版 HTTP-01 备用端口", key: "altHTTPPort", in: &acme),
-                      setPort(acmeLegacyTLSPort, field: "旧版 TLS-ALPN-01 备用端口", key: "altTLSALPNPort", in: &acme) else { return }
-                acme.removeValue(forKey: "http")
-                acme.removeValue(forKey: "tls")
-                acme.removeValue(forKey: "dns")
+                var ports: [String: JSONValue] = [:]
+                guard setPort(acmeLegacyHTTPPort, field: "旧版 HTTP-01 备用端口", key: "altHTTPPort", in: &ports),
+                      setPort(acmeLegacyTLSPort, field: "旧版 TLS-ALPN-01 备用端口", key: "altTLSALPNPort", in: &ports) else { return false }
+            } else if acmeType == "http" {
+                var port: [String: JSONValue] = [:]
+                guard setPort(acmeHTTPAltPort, field: "HTTP-01 备用端口", key: "altPort", in: &port) else { return false }
+            } else if acmeType == "tls" {
+                var port: [String: JSONValue] = [:]
+                guard setPort(acmeTLSAltPort, field: "TLS-ALPN-01 备用端口", key: "altPort", in: &port) else { return false }
             } else {
-                for field in ["disableHTTP", "disableTLSALPN", "altHTTPPort", "altTLSALPNPort"] { acme.removeValue(forKey: field) }
-                if acmeType == "http" {
-                    var settings = acme["http"]?.objectValue ?? [:]
-                    guard setPort(acmeHTTPAltPort, field: "HTTP-01 备用端口", key: "altPort", in: &settings) else { return }
-                    acme["http"] = settings.isEmpty ? nil : .object(settings)
-                    acme.removeValue(forKey: "tls")
-                    acme.removeValue(forKey: "dns")
-                } else if acmeType == "tls" {
-                    var settings = acme["tls"]?.objectValue ?? [:]
-                    guard setPort(acmeTLSAltPort, field: "TLS-ALPN-01 备用端口", key: "altPort", in: &settings) else { return }
-                    acme["tls"] = settings.isEmpty ? nil : .object(settings)
-                    acme.removeValue(forKey: "http")
-                    acme.removeValue(forKey: "dns")
-                } else {
-                    guard !acmeDNSName.trimmingCharacters(in: .whitespaces).isEmpty else { errorMessage = "请选择 DNS 服务商。"; return }
-                    do {
-                        acme["dns"] = .object([
-                            "name": .string(acmeDNSName),
-                            "config": .object(try stringMap(acmeDNSEntries))
-                        ])
-                    } catch { errorMessage = "ACME DNS 参数名不能为空或重复。"; return }
-                    acme.removeValue(forKey: "http")
-                    acme.removeValue(forKey: "tls")
+                guard !acmeDNSName.trimmingCharacters(in: .whitespaces).isEmpty else {
+                    errorMessage = "请选择 DNS 服务商。"
+                    return false
+                }
+                do { _ = try stringMap(acmeDNSEntries) }
+                catch {
+                    errorMessage = "ACME DNS 参数名不能为空或重复。"
+                    return false
                 }
             }
-            config["acme"] = .object(acme)
-            config.removeValue(forKey: "tls")
-        } else if tlsMode == "tls" {
-            guard !certificatePath.isEmpty, !privateKeyPath.isEmpty else {
-                errorMessage = "请填写证书和私钥路径或资源引用。"
-                return
-            }
-            var tls = config["tls"]?.objectValue ?? [:]
-            tls["cert"] = .string(certificatePath)
-            tls["key"] = .string(privateKeyPath)
-            tls["sniGuard"] = .string(tlsSNIGuard)
-            if tlsClientCAPath.isEmpty { tls.removeValue(forKey: "clientCA") }
-            else { tls["clientCA"] = .string(tlsClientCAPath) }
-            config["tls"] = .object(tls)
-            config.removeValue(forKey: "acme")
-        } else {
-            config.removeValue(forKey: "acme")
-            config.removeValue(forKey: "tls")
+        } else if tlsMode == "tls", (certificatePath.isEmpty || privateKeyPath.isEmpty) {
+            errorMessage = "请填写证书和私钥路径或资源引用。"
+            return false
         }
-        if echKeyPath.isEmpty {
-            config.removeValue(forKey: "ech")
-        } else {
-            config["ech"] = .object(["keyPath": .string(echKeyPath)])
-        }
-        var bandwidth = config["bandwidth"]?.objectValue ?? [:]
-        if !bandwidthUp.isEmpty { bandwidth["up"] = .string(bandwidthUp) }
-        else { bandwidth.removeValue(forKey: "up") }
-        if !bandwidthDown.isEmpty { bandwidth["down"] = .string(bandwidthDown) }
-        else { bandwidth.removeValue(forKey: "down") }
-        if disableLossCompensation { bandwidth["disableLossCompensation"] = .bool(true) }
-        else { bandwidth.removeValue(forKey: "disableLossCompensation") }
-        if !bandwidth.isEmpty { config["bandwidth"] = .object(bandwidth) }
-        else { config.removeValue(forKey: "bandwidth") }
-        var congestion = config["congestion"]?.objectValue ?? [:]
-        congestion["type"] = .string(congestionType)
-        congestion["bbrProfile"] = .string(bbrProfile)
-        config["congestion"] = .object(congestion)
-        config["disableUDP"] = .bool(disableUDP)
-        config["ignoreClientBandwidth"] = .bool(ignoreClientBandwidth)
-        config["speedTest"] = .bool(speedTest)
-        if udpIdleTimeout.isEmpty {
-            config.removeValue(forKey: "udpIdleTimeout")
-        } else {
-            guard validateDurationRange(
-                udpIdleTimeout,
-                field: "UDP 空闲超时",
-                minimumMilliseconds: 2_000,
-                maximumMilliseconds: 600_000
-            ) else { return }
-            config["udpIdleTimeout"] = .string(udpIdleTimeout)
+
+        if !udpIdleTimeout.isEmpty,
+           !validateDurationRange(udpIdleTimeout, field: "UDP 空闲超时", minimumMilliseconds: 2_000, maximumMilliseconds: 600_000) {
+            return false
         }
         if obfsType != "none" {
-            guard !obfsPassword.isEmpty else { errorMessage = "请设置混淆密码。"; return }
-            var obfs = config["obfs"]?.objectValue ?? [:]
-            var block = obfs[obfsType]?.objectValue ?? [:]
-            block["password"] = .string(obfsPassword)
-            if obfsType == "gecko" {
-                guard let min = Int(obfsMinPacket), let max = Int(obfsMaxPacket), min >= 512, max >= min, max <= 2048 else {
-                    errorMessage = "Gecko 分片范围须满足 512 ≤ 最小值 ≤ 最大值 ≤ 2048。"
-                    return
-                }
-                block["minPacketSize"] = .integer(min)
-                block["maxPacketSize"] = .integer(max)
+            guard !obfsPassword.isEmpty else {
+                errorMessage = "请设置混淆密码。"
+                return false
             }
-            obfs["type"] = .string(obfsType)
-            obfs[obfsType] = .object(block)
-            config["obfs"] = .object(obfs)
-        } else {
-            config.removeValue(forKey: "obfs")
+            if obfsType == "gecko" {
+                guard let minimum = Int(obfsMinPacket), let maximum = Int(obfsMaxPacket),
+                      minimum >= 512, maximum >= minimum, maximum <= 2048 else {
+                    errorMessage = "Gecko 分片范围须满足 512 ≤ 最小值 ≤ 最大值 ≤ 2048。"
+                    return false
+                }
+            }
         }
-        let rules = aclInline.split(whereSeparator: \.isNewline).map { JSONValue.string(String($0)) }
-        var acl = config["acl"]?.objectValue ?? [:]
-        if !aclFileReference.isEmpty { acl["file"] = .string(aclFileReference) }
-        else { acl.removeValue(forKey: "file") }
-        if !geoIPReference.isEmpty { acl["geoip"] = .string(geoIPReference) }
-        else { acl.removeValue(forKey: "geoip") }
-        if !geoSiteReference.isEmpty { acl["geosite"] = .string(geoSiteReference) }
-        else { acl.removeValue(forKey: "geosite") }
-        if !geoUpdateInterval.isEmpty { acl["geoUpdateInterval"] = .string(geoUpdateInterval) }
-        else { acl.removeValue(forKey: "geoUpdateInterval") }
+
+        let rules = aclInline.split(whereSeparator: \.isNewline)
         if !aclFileReference.isEmpty && !rules.isEmpty {
             errorMessage = "acl.file 和内联规则不能同时启用。"
-            return
+            return false
         }
-        if !rules.isEmpty { acl["inline"] = .array(rules) }
-        else { acl.removeValue(forKey: "inline") }
-        if !acl.isEmpty { config["acl"] = .object(acl) }
-        else { config.removeValue(forKey: "acl") }
 
-        var quic = config["quic"]?.objectValue ?? [:]
+        var quic: [String: JSONValue] = [:]
         guard setInteger(quicInitStreamWindow, field: "initStreamReceiveWindow", in: &quic),
               setInteger(quicMaxStreamWindow, field: "maxStreamReceiveWindow", in: &quic),
               setInteger(quicInitConnectionWindow, field: "initConnReceiveWindow", in: &quic),
               setInteger(quicMaxConnectionWindow, field: "maxConnReceiveWindow", in: &quic),
-              setInteger(quicMaxStreams, field: "maxIncomingStreams", in: &quic) else { return }
+              setInteger(quicMaxStreams, field: "maxIncomingStreams", in: &quic) else { return false }
         for (text, field) in [
             (quicInitStreamWindow, "初始流接收窗口"),
             (quicMaxStreamWindow, "最大流接收窗口"),
             (quicInitConnectionWindow, "初始连接接收窗口"),
-            (quicMaxConnectionWindow, "最大连接接收窗口")
+            (quicMaxConnectionWindow, "最大连接接收窗口"),
         ] {
             if let value = Int(text), value > 0, value < 16_384 {
                 errorMessage = "\(field)须为0，或至少16,384字节。"
-                return
+                return false
             }
         }
         let initialStreamWindow = Int(quicInitStreamWindow).flatMap { $0 > 0 ? $0 : nil } ?? 8_388_608
@@ -996,154 +1250,82 @@ struct NodeConfigurationView: View {
         let maximumConnectionWindow = Int(quicMaxConnectionWindow).flatMap { $0 > 0 ? $0 : nil } ?? 20_971_520
         guard initialStreamWindow <= maximumStreamWindow else {
             errorMessage = "初始流接收窗口不能大于最大流接收窗口。"
-            return
+            return false
         }
         guard initialConnectionWindow <= maximumConnectionWindow else {
             errorMessage = "初始连接接收窗口不能大于最大连接接收窗口。"
-            return
+            return false
         }
         if let streams = Int(quicMaxStreams), streams > 0, streams < 8 {
             errorMessage = "最大并发流须为0，或至少为8。"
-            return
+            return false
         }
-        if quicIdleTimeout.isEmpty { quic.removeValue(forKey: "maxIdleTimeout") }
-        else {
-            guard validateDurationRange(
-                quicIdleTimeout,
-                field: "QUIC 空闲超时",
-                minimumMilliseconds: 4_000,
-                maximumMilliseconds: 120_000
-            ) else { return }
-            quic["maxIdleTimeout"] = .string(quicIdleTimeout)
-        }
-        if disablePathMTU { quic["disablePathMTUDiscovery"] = .bool(true) }
-        else { quic.removeValue(forKey: "disablePathMTUDiscovery") }
-        if disableStatelessReset { quic["disableStatelessReset"] = .bool(true) }
-        else { quic.removeValue(forKey: "disableStatelessReset") }
-        if !quic.isEmpty { config["quic"] = .object(quic) }
-        else { config.removeValue(forKey: "quic") }
-
-        if resolverType == "none" {
-            config.removeValue(forKey: "resolver")
-        } else {
-            guard !resolverAddress.isEmpty else { errorMessage = "请填写 DNS 解析器地址。"; return }
-            var resolver = config["resolver"]?.objectValue ?? [:]
-            var settings = resolver[resolverType]?.objectValue ?? [:]
-            settings["addr"] = .string(resolverAddress)
-            if resolverTimeout.isEmpty { settings.removeValue(forKey: "timeout") }
-            else { settings["timeout"] = .string(resolverTimeout) }
-            if resolverType == "tls" || resolverType == "https" {
-                if resolverSNI.isEmpty { settings.removeValue(forKey: "sni") }
-                else { settings["sni"] = .string(resolverSNI) }
-                if resolverInsecure { settings["insecure"] = .bool(true) }
-                else { settings.removeValue(forKey: "insecure") }
-            }
-            resolver["type"] = .string(resolverType)
-            resolver[resolverType] = .object(settings)
-            config["resolver"] = .object(resolver)
+        if !quicIdleTimeout.isEmpty,
+           !validateDurationRange(quicIdleTimeout, field: "QUIC 空闲超时", minimumMilliseconds: 4_000, maximumMilliseconds: 120_000) {
+            return false
         }
 
-        if sniffEnabled {
-            var sniff: [String: JSONValue] = ["enable": .bool(true)]
-            if !sniffTimeout.isEmpty { sniff["timeout"] = .string(sniffTimeout) }
-            if sniffRewriteDomain { sniff["rewriteDomain"] = .bool(true) }
-            if !sniffTCPPorts.isEmpty { sniff["tcpPorts"] = .string(sniffTCPPorts) }
-            if !sniffUDPPorts.isEmpty { sniff["udpPorts"] = .string(sniffUDPPorts) }
-            config["sniff"] = .object(sniff)
-        } else {
-            config.removeValue(forKey: "sniff")
+        if resolverType != "none", resolverAddress.isEmpty {
+            errorMessage = "请填写 DNS 解析器地址。"
+            return false
         }
 
         if hasOutbound {
             guard !outboundDrafts.isEmpty else {
                 errorMessage = "至少需要一个出站配置。"
-                return
+                return false
             }
             var names = Set<String>()
-            var entries: [JSONValue] = []
             for outbound in outboundDrafts {
                 let name = outbound.name.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !name.isEmpty else { errorMessage = "请填写每个出站名称。"; return }
+                guard !name.isEmpty else {
+                    errorMessage = "请填写每个出站名称。"
+                    return false
+                }
                 guard names.insert(name.lowercased()).inserted else {
                     errorMessage = "出站名称不能重复。"
-                    return
+                    return false
                 }
-                var entry: [String: JSONValue] = ["name": .string(name), "type": .string(outbound.type)]
-                if outbound.type == "socks5" {
-                    guard !outbound.address.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                        errorMessage = "请填写 SOCKS5 地址。"
-                        return
-                    }
-                    var settings: [String: JSONValue] = ["addr": .string(outbound.address)]
-                    if !outbound.username.isEmpty { settings["username"] = .string(outbound.username) }
-                    if !outbound.password.isEmpty { settings["password"] = .string(outbound.password) }
-                    entry["socks5"] = .object(settings)
-                } else if outbound.type == "http" {
-                    guard !outbound.url.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                        errorMessage = "请填写 HTTP(S) 代理 URL。"
-                        return
-                    }
-                    var settings: [String: JSONValue] = ["url": .string(outbound.url)]
-                    if outbound.insecure { settings["insecure"] = .bool(true) }
-                    entry["http"] = .object(settings)
-                } else {
-                    var direct: [String: JSONValue] = [:]
-                    if !outbound.directMode.isEmpty { direct["mode"] = .string(outbound.directMode) }
-                    if !outbound.bindIPv4.isEmpty { direct["bindIPv4"] = .string(outbound.bindIPv4) }
-                    if !outbound.bindIPv6.isEmpty { direct["bindIPv6"] = .string(outbound.bindIPv6) }
-                    if !outbound.bindDevice.isEmpty { direct["bindDevice"] = .string(outbound.bindDevice) }
-                    if outbound.fastOpen { direct["fastOpen"] = .bool(true) }
-                    if !direct.isEmpty { entry["direct"] = .object(direct) }
+                if outbound.type == "socks5", outbound.address.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    errorMessage = "请填写 SOCKS5 地址。"
+                    return false
                 }
-                entries.append(.object(entry))
-            }
-            config["outbounds"] = .array(entries)
-        } else {
-            config.removeValue(forKey: "outbounds")
-        }
-
-        if masqueradeType == "none" {
-            config.removeValue(forKey: "masquerade")
-        } else {
-            var masquerade = config["masquerade"]?.objectValue ?? [:]
-            var settings = masquerade[masqueradeType]?.objectValue ?? [:]
-            if masqueradeType == "file" {
-                guard !masqueradeDirectory.isEmpty else { errorMessage = "请填写伪装文件目录。"; return }
-                settings["dir"] = .string(masqueradeDirectory)
-            } else if masqueradeType == "proxy" {
-                guard !masqueradeURL.isEmpty else { errorMessage = "请填写伪装上游 URL。"; return }
-                settings["url"] = .string(masqueradeURL)
-                if masqueradeRewriteHost { settings["rewriteHost"] = .bool(true) }
-                else { settings.removeValue(forKey: "rewriteHost") }
-                if masqueradeXForwarded { settings["xForwarded"] = .bool(true) }
-                else { settings.removeValue(forKey: "xForwarded") }
-                if masqueradeInsecure { settings["insecure"] = .bool(true) }
-                else { settings.removeValue(forKey: "insecure") }
-            } else {
-                settings["content"] = .string(masqueradeContent)
-                do {
-                    settings["headers"] = .object(try stringMap(masqueradeHeaderEntries))
-                } catch { errorMessage = "伪装响应头名称不能为空或重复。"; return }
-                if masqueradeStatusCode.isEmpty {
-                    settings.removeValue(forKey: "statusCode")
-                } else if let status = Int(masqueradeStatusCode), (100...599).contains(status) {
-                    settings["statusCode"] = .integer(status)
-                } else {
-                    errorMessage = "HTTP 状态码必须在 100 到 599 之间。"
-                    return
+                if outbound.type == "http", outbound.url.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    errorMessage = "请填写 HTTP(S) 代理 URL。"
+                    return false
                 }
             }
-            masquerade["type"] = .string(masqueradeType)
-            masquerade[masqueradeType] = .object(settings)
-            if masqueradeListenHTTP.isEmpty { masquerade.removeValue(forKey: "listenHTTP") }
-            else { masquerade["listenHTTP"] = .string(masqueradeListenHTTP) }
-            if masqueradeListenHTTPS.isEmpty { masquerade.removeValue(forKey: "listenHTTPS") }
-            else { masquerade["listenHTTPS"] = .string(masqueradeListenHTTPS) }
-            if masqueradeForceHTTPS { masquerade["forceHTTPS"] = .bool(true) }
-            else { masquerade.removeValue(forKey: "forceHTTPS") }
-            config["masquerade"] = .object(masquerade)
         }
 
+        if masqueradeType == "file", masqueradeDirectory.isEmpty {
+            errorMessage = "请填写伪装文件目录。"
+            return false
+        }
+        if masqueradeType == "proxy", masqueradeURL.isEmpty {
+            errorMessage = "请填写伪装上游 URL。"
+            return false
+        }
+        if masqueradeType == "string" {
+            do { _ = try stringMap(masqueradeHeaderEntries) }
+            catch {
+                errorMessage = "伪装响应头名称不能为空或重复。"
+                return false
+            }
+            if !masqueradeStatusCode.isEmpty,
+               let status = Int(masqueradeStatusCode), (100...599).contains(status) {
+                return true
+            } else if !masqueradeStatusCode.isEmpty {
+                errorMessage = "HTTP 状态码必须在 100 到 599 之间。"
+                return false
+            }
+        }
+        return true
+    }
+
+    private func save() {
+        guard let detail, validateDraft(),
+              let trafficStatsPort = Int(self.trafficStatsPort) else { return }
+        let config = draftConfiguration(from: detail.config)
         isSaving = true
         Task {
             defer { isSaving = false }
@@ -1152,6 +1334,7 @@ struct NodeConfigurationView: View {
                     detail,
                     config: .object(config),
                     listenAddress: listenAddress,
+                    trafficStatsPort: trafficStatsPort,
                     proxyProbeURL: proxyProbeURL
                 )
                 dismiss()
@@ -1314,6 +1497,24 @@ private struct OutboundDraft: Identifiable {
 }
 
 private extension View {
+    func configurationColumns<Preview: View>(preview: Preview, errorMessage: String?) -> some View {
+        GeometryReader { geometry in
+            let previewWidth = min(380, max(280, geometry.size.width * 0.34))
+            let formWidth = max(0, geometry.size.width - previewWidth - 16)
+            HStack(alignment: .top, spacing: 16) {
+                self.verticalScrollArea {
+                    if let errorMessage {
+                        Text(errorMessage).foregroundStyle(.red).font(.callout)
+                    }
+                }
+                .frame(width: formWidth)
+
+                preview
+                    .frame(width: previewWidth)
+            }
+        }
+    }
+
     func verticalScrollArea<Footer: View>(
         @ViewBuilder footer: @escaping () -> Footer
     ) -> some View {
@@ -1325,6 +1526,66 @@ private extension View {
                 }
                 .frame(width: geometry.size.width, alignment: .leading)
             }
+        }
+    }
+}
+
+private enum NodeConfigurationYAML {
+    static func render(_ value: JSONValue) -> String {
+        switch value {
+        case .object(let object): renderObject(object, indentation: 0)
+        case .array(let values): renderArray(values, indentation: 0)
+        default: "value: \(renderInline(value))\n"
+        }
+    }
+
+    private static func renderObject(
+        _ object: [String: JSONValue],
+        indentation: Int,
+        sequenceItem: Bool = false
+    ) -> String {
+        let keys = object.keys.sorted()
+        return keys.enumerated().map { index, key in
+            let value = object[key] ?? .null
+            let prefix = String(repeating: " ", count: indentation)
+                + (sequenceItem ? (index == 0 ? "- " : "  ") : "")
+            let nestedIndentation = indentation + (sequenceItem ? 4 : 2)
+            switch value {
+            case .object(let child) where !child.isEmpty:
+                return "\(prefix)\(key):\n\(renderObject(child, indentation: nestedIndentation))"
+            case .array(let child) where !child.isEmpty:
+                return "\(prefix)\(key):\n\(renderArray(child, indentation: nestedIndentation))"
+            default:
+                return "\(prefix)\(key): \(renderInline(value))\n"
+            }
+        }.joined()
+    }
+
+    private static func renderArray(_ values: [JSONValue], indentation: Int) -> String {
+        values.map { value in
+            let prefix = String(repeating: " ", count: indentation)
+            switch value {
+            case .object(let object) where !object.isEmpty:
+                return renderObject(object, indentation: indentation, sequenceItem: true)
+            case .array(let nested) where !nested.isEmpty:
+                return "\(prefix)-\n\(renderArray(nested, indentation: indentation + 2))"
+            default:
+                return "\(prefix)- \(renderInline(value))\n"
+            }
+        }.joined()
+    }
+
+    private static func renderInline(_ value: JSONValue) -> String {
+        switch value {
+        case .string(let string):
+            let data = try? JSONEncoder().encode(string)
+            return data.flatMap { String(data: $0, encoding: .utf8) } ?? "\"\""
+        case .integer(let integer): return String(integer)
+        case .bool(let boolean): return boolean ? "true" : "false"
+        case .decimal(let decimal): return String(decimal)
+        case .array: return "[]"
+        case .object: return "{}"
+        case .null: return "null"
         }
     }
 }

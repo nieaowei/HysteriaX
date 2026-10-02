@@ -43,6 +43,7 @@ const DEFAULT_STREAM_RECEIVE_WINDOW: u64 = 8_388_608;
 const DEFAULT_CONNECTION_RECEIVE_WINDOW: u64 = 20_971_520;
 const MIN_QUIC_RECEIVE_WINDOW: u64 = 16_384;
 const MIN_BANDWIDTH_BYTES_PER_SECOND: u64 = 65_536;
+pub const DEFAULT_TRAFFIC_STATS_PORT: u16 = 9780;
 
 pub fn validate_server_options(value: &Value) -> Result<()> {
     let object = value
@@ -1069,6 +1070,7 @@ fn validate_masquerade(value: &Value) -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
 pub fn render_server_yaml(
     options: &Value,
     listen_addr: &str,
@@ -1076,6 +1078,26 @@ pub fn render_server_yaml(
     node_token: &str,
     stats_secret: &str,
     management_base_url: &str,
+) -> Result<String> {
+    render_server_yaml_with_traffic_stats_port(
+        options,
+        listen_addr,
+        node_id,
+        node_token,
+        stats_secret,
+        management_base_url,
+        DEFAULT_TRAFFIC_STATS_PORT,
+    )
+}
+
+pub fn render_server_yaml_with_traffic_stats_port(
+    options: &Value,
+    listen_addr: &str,
+    node_id: &str,
+    node_token: &str,
+    stats_secret: &str,
+    management_base_url: &str,
+    traffic_stats_port: u16,
 ) -> Result<String> {
     validate_server_options(options)?;
     let realm = realm_connection(options)?;
@@ -1107,13 +1129,14 @@ pub fn render_server_yaml(
     root.insert(
         "trafficStats".into(),
         json!({
-            "listen": "127.0.0.1:9780",
+            "listen": format!("127.0.0.1:{traffic_stats_port}"),
             "secret": stats_secret
         }),
     );
     serde_yaml::to_string(&Value::Object(root)).context("serialize Hysteria 2 server configuration")
 }
 
+#[cfg(test)]
 pub fn render_server_yaml_preview(
     options: &Value,
     listen_addr: &str,
@@ -1121,6 +1144,26 @@ pub fn render_server_yaml_preview(
     node_token: &str,
     stats_secret: &str,
     management_base_url: &str,
+) -> Result<String> {
+    render_server_yaml_preview_with_traffic_stats_port(
+        options,
+        listen_addr,
+        node_id,
+        node_token,
+        stats_secret,
+        management_base_url,
+        DEFAULT_TRAFFIC_STATS_PORT,
+    )
+}
+
+pub fn render_server_yaml_preview_with_traffic_stats_port(
+    options: &Value,
+    listen_addr: &str,
+    node_id: &str,
+    node_token: &str,
+    stats_secret: &str,
+    management_base_url: &str,
+    traffic_stats_port: u16,
 ) -> Result<String> {
     let mut preview = options.clone();
     if let Some(token) = preview
@@ -1132,13 +1175,14 @@ pub fn render_server_yaml_preview(
     {
         *token = Value::String("REDACTED_TOKEN".to_owned());
     }
-    render_server_yaml(
+    render_server_yaml_with_traffic_stats_port(
         &preview,
         listen_addr,
         node_id,
         node_token,
         stats_secret,
         management_base_url,
+        traffic_stats_port,
     )
 }
 

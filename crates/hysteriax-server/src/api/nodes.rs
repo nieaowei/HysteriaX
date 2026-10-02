@@ -15,7 +15,10 @@ use crate::{
         cancel_queued_node_jobs_in_tx, enqueue_job_in_tx, enqueue_job_with_payload_in_tx,
         generate_token, now, supersede_queued_syncs_in_tx,
     },
-    config::{render_server_yaml_preview, validate_server_options},
+    config::{
+        DEFAULT_TRAFFIC_STATS_PORT, render_server_yaml_preview_with_traffic_stats_port,
+        validate_server_options,
+    },
     error::ApiError,
     security::token_digest,
     state::AppState,
@@ -34,6 +37,8 @@ pub struct CreateNode {
     public_host: String,
     public_port: u16,
     listen_addr: String,
+    #[serde(default = "default_traffic_stats_port")]
+    traffic_stats_port: u16,
     proxy_probe_url: Option<String>,
     tls_sni: Option<String>,
     #[serde(default)]
@@ -56,6 +61,7 @@ pub struct PatchNode {
     public_host: Option<String>,
     public_port: Option<u16>,
     listen_addr: Option<String>,
+    traffic_stats_port: Option<u16>,
     proxy_probe_url: Option<String>,
     tls_sni: Option<String>,
     tls_skip_verify: Option<bool>,
@@ -104,6 +110,7 @@ pub async fn create(
     validate_text(&input.ssh_username, "ssh_username", 100)?;
     validate_text(&input.public_host, "public_host", 253)?;
     validate_text(&input.listen_addr, "listen_addr", 100)?;
+    validate_traffic_stats_port(input.traffic_stats_port)?;
     let proxy_probe_url = normalize_proxy_probe_url(input.proxy_probe_url.as_deref())?;
     let (first_listen_port, hopping) = validate_listen_addr(&input.listen_addr)?;
     validate_hop_public_port(input.public_port, first_listen_port, hopping)?;
@@ -123,6 +130,7 @@ pub async fn create(
     let deployment_snapshot = json!({
         "server_config": input.config.clone(),
         "listen_addr": input.listen_addr.clone(),
+        "traffic_stats_port": input.traffic_stats_port,
         "proxy_probe_url": proxy_probe_url
     });
     let deployment_snapshot_json = deployment_snapshot.to_string();
@@ -138,11 +146,11 @@ pub async fn create(
     let digest = hex::encode(Sha256::digest(deployment_snapshot_json.as_bytes()));
 
     let mut tx = state.pool.begin().await?;
-    sqlx::query("INSERT INTO nodes (id, name, ssh_host, ssh_port, ssh_username, ssh_auth_type, ssh_secret_enc, ssh_passphrase_enc, ssh_host_fingerprint, public_host, public_port, listen_addr, proxy_probe_url, tls_sni, tls_skip_verify, node_token_hash, node_token_enc, traffic_stats_secret_enc, desired_config_enc, desired_revision, state, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 'new', ?, ?)")
+    sqlx::query("INSERT INTO nodes (id, name, ssh_host, ssh_port, ssh_username, ssh_auth_type, ssh_secret_enc, ssh_passphrase_enc, ssh_host_fingerprint, public_host, public_port, listen_addr, traffic_stats_port, proxy_probe_url, tls_sni, tls_skip_verify, node_token_hash, node_token_enc, traffic_stats_secret_enc, desired_config_enc, desired_revision, state, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 'new', ?, ?)")
         .bind(&id).bind(input.name.trim()).bind(input.ssh_host.trim()).bind(input.ssh_port)
         .bind(input.ssh_username.trim()).bind(&input.ssh_auth_type).bind(ssh_secret_enc).bind(ssh_passphrase_enc)
         .bind(input.ssh_host_fingerprint).bind(input.public_host.trim()).bind(input.public_port)
-        .bind(input.listen_addr.trim()).bind(&proxy_probe_url).bind(input.tls_sni).bind(i64::from(input.tls_skip_verify)).bind(token_digest(&token)).bind(node_token_enc)
+        .bind(input.listen_addr.trim()).bind(input.traffic_stats_port).bind(&proxy_probe_url).bind(input.tls_sni).bind(i64::from(input.tls_skip_verify)).bind(token_digest(&token)).bind(node_token_enc)
         .bind(stats_secret_enc).bind(config_enc).bind(&now).bind(&now).execute(&mut *tx).await?;
     sqlx::query("INSERT INTO config_versions (id, node_id, revision, config_enc, content_sha256, created_at) VALUES (?, ?, 1, ?, ?, ?)")
         .bind(Uuid::new_v4().to_string()).bind(&id).bind(state.secrets.encrypt(&deployment_snapshot_json)?).bind(digest).bind(&now)
@@ -155,7 +163,7 @@ pub async fn create(
     Ok((
         StatusCode::CREATED,
         Json(json!({
-            "node": {"id": id, "name": input.name.trim(), "revision": 1, "state": "new", "proxy_probe_url": proxy_probe_url},
+            "node": {"id": id, "name": input.name.trim(), "revision": 1, "state": "new", "traffic_stats_port": input.traffic_stats_port, "proxy_probe_url": proxy_probe_url},
             "node_auth_token": token,
             "note": "The node token is shown once here and is stored encrypted for server configuration generation."
         })),
@@ -205,6 +213,11 @@ pub async fn patch(
     let public_port: u16 = input
         .public_port
         .unwrap_or_else(|| current.get::<i64, _>("public_port") as u16);
+    let previous_traffic_stats_port = current.get::<i64, _>("traffic_stats_port") as u16;
+    let traffic_stats_port = input
+        .traffic_stats_port
+        .unwrap_or(previous_traffic_stats_port);
+    let traffic_stats_port_changed = traffic_stats_port != previous_traffic_stats_port;
     let listener_changed = input.listen_addr.is_some();
     let listen_addr: String = input
         .listen_addr
@@ -236,6 +249,7 @@ pub async fn patch(
     validate_text(&ssh_username, "ssh_username", 100)?;
     validate_text(&public_host, "public_host", 253)?;
     validate_text(&listen_addr, "listen_addr", 100)?;
+    validate_traffic_stats_port(traffic_stats_port)?;
     let (first_listen_port, hopping) = validate_listen_addr(&listen_addr)?;
     validate_hop_public_port(public_port, first_listen_port, hopping)?;
     validate_auth_type(&ssh_auth_type)?;
@@ -256,6 +270,7 @@ pub async fn patch(
     let deployment_snapshot = json!({
         "server_config": config.clone(),
         "listen_addr": listen_addr.clone(),
+        "traffic_stats_port": traffic_stats_port,
         "proxy_probe_url": proxy_probe_url.clone()
     });
     let deployment_snapshot_json = deployment_snapshot.to_string();
@@ -282,10 +297,10 @@ pub async fn patch(
             ));
         }
     }
-    let updated = sqlx::query("UPDATE nodes SET name = ?, ssh_host = ?, ssh_port = ?, ssh_username = ?, ssh_auth_type = ?, ssh_secret_enc = ?, ssh_passphrase_enc = ?, ssh_host_fingerprint = ?, public_host = ?, public_port = ?, listen_addr = ?, proxy_probe_url = ?, tls_sni = ?, tls_skip_verify = ?, desired_config_enc = ?, desired_revision = ?, state = CASE WHEN ? = 1 AND state IN ('needs_fingerprint', 'fingerprint_changed') THEN 'ready' ELSE state END, updated_at = ? WHERE id = ? AND desired_revision = ?")
+    let updated = sqlx::query("UPDATE nodes SET name = ?, ssh_host = ?, ssh_port = ?, ssh_username = ?, ssh_auth_type = ?, ssh_secret_enc = ?, ssh_passphrase_enc = ?, ssh_host_fingerprint = ?, public_host = ?, public_port = ?, listen_addr = ?, traffic_stats_port = ?, proxy_probe_url = ?, tls_sni = ?, tls_skip_verify = ?, desired_config_enc = ?, desired_revision = ?, state = CASE WHEN ? = 1 AND state IN ('needs_fingerprint', 'fingerprint_changed') THEN 'ready' ELSE state END, updated_at = ? WHERE id = ? AND desired_revision = ?")
         .bind(name.trim()).bind(ssh_host.trim()).bind(ssh_port).bind(ssh_username.trim()).bind(ssh_auth_type)
         .bind(secret_enc).bind(passphrase_enc).bind(host_fingerprint).bind(public_host.trim()).bind(public_port).bind(listen_addr.trim())
-        .bind(&proxy_probe_url).bind(tls_sni).bind(i64::from(tls_skip_verify)).bind(&config_enc).bind(next_revision).bind(i64::from(fingerprint_supplied)).bind(&updated_at).bind(&id).bind(revision)
+        .bind(traffic_stats_port).bind(&proxy_probe_url).bind(tls_sni).bind(i64::from(tls_skip_verify)).bind(&config_enc).bind(next_revision).bind(i64::from(fingerprint_supplied)).bind(&updated_at).bind(&id).bind(revision)
         .execute(&mut *tx).await?;
     if updated.rows_affected() == 0 {
         return Err(ApiError::conflict(
@@ -295,17 +310,18 @@ pub async fn patch(
     sqlx::query("INSERT INTO config_versions (id, node_id, revision, config_enc, content_sha256, created_at) VALUES (?, ?, ?, ?, ?, ?)")
         .bind(Uuid::new_v4().to_string()).bind(&id).bind(next_revision).bind(state.secrets.encrypt(&deployment_snapshot_json)?)
         .bind(hex::encode(Sha256::digest(deployment_snapshot_json.as_bytes()))).bind(&updated_at).execute(&mut *tx).await?;
-    let sync_required = config_changed || listener_changed || proxy_probe_url_changed;
+    let sync_required =
+        config_changed || listener_changed || proxy_probe_url_changed || traffic_stats_port_changed;
     if sync_required {
         supersede_queued_syncs_in_tx(&mut tx, &id).await?;
         enqueue_job_in_tx(&mut tx, "sync", Some(&id), Some(next_revision)).await?;
     }
     sqlx::query("INSERT INTO audit_records (id, actor, action, entity_type, entity_id, detail_json, created_at) VALUES (?, 'admin', 'node.updated', 'node', ?, ?, ?)")
-        .bind(Uuid::new_v4().to_string()).bind(&id).bind(json!({"revision": next_revision, "config_changed": config_changed, "proxy_probe_url_changed": proxy_probe_url_changed}).to_string()).bind(&updated_at)
+        .bind(Uuid::new_v4().to_string()).bind(&id).bind(json!({"revision": next_revision, "config_changed": config_changed, "proxy_probe_url_changed": proxy_probe_url_changed, "traffic_stats_port_changed": traffic_stats_port_changed}).to_string()).bind(&updated_at)
         .execute(&mut *tx).await?;
     tx.commit().await?;
     Ok(Json(
-        json!({"id": id, "name": name.trim(), "revision": next_revision, "state": current.get::<String, _>("state"), "proxy_probe_url": proxy_probe_url, "sync_job_queued": sync_required}),
+        json!({"id": id, "name": name.trim(), "revision": next_revision, "state": current.get::<String, _>("state"), "traffic_stats_port": traffic_stats_port, "proxy_probe_url": proxy_probe_url, "sync_job_queued": sync_required}),
     ))
 }
 
@@ -553,7 +569,8 @@ async fn node_json(state: &AppState, row: &sqlx::sqlite::SqliteRow) -> Result<Va
     let (resolved_config, _) =
         super::resources::resolve_config_resources(&state.pool, &state.secrets, &node_id, &config)
             .await?;
-    let yaml_preview = render_server_yaml_preview(
+    let traffic_stats_port = row.get::<i64, _>("traffic_stats_port") as u16;
+    let yaml_preview = render_server_yaml_preview_with_traffic_stats_port(
         &resolved_config,
         row.get::<String, _>("listen_addr").as_str(),
         &node_id,
@@ -561,12 +578,14 @@ async fn node_json(state: &AppState, row: &sqlx::sqlite::SqliteRow) -> Result<Va
         "<managed-stats-secret>",
         &std::env::var("HYSTERIAX_PUBLIC_URL")
             .unwrap_or_else(|_| "https://management.example.invalid".into()),
+        traffic_stats_port,
     )
     .map_err(|_| ApiError::internal())?;
     Ok(json!({
         "id": node_id, "name": row.get::<String, _>("name"),
         "ssh": {"host": row.get::<String, _>("ssh_host"), "port": row.get::<i64, _>("ssh_port"), "username": row.get::<String, _>("ssh_username"), "auth_type": row.get::<String, _>("ssh_auth_type"), "secret_configured": true, "host_fingerprint": row.get::<Option<String>, _>("ssh_host_fingerprint")},
         "public": {"host": row.get::<String, _>("public_host"), "port": row.get::<i64, _>("public_port"), "listen_addr": row.get::<String, _>("listen_addr"), "tls_sni": row.get::<Option<String>, _>("tls_sni"), "skip_cert_verify": row.get::<i64, _>("tls_skip_verify") != 0},
+        "traffic_stats_port": traffic_stats_port,
         "config": config, "yaml_preview": yaml_preview,
         "revision": row.get::<i64, _>("desired_revision"), "deployed_revision": row.get::<Option<i64>, _>("deployed_revision"),
         "state": row.get::<String, _>("state"), "last_seen_at": row.get::<Option<String>, _>("last_seen_at"),
@@ -708,6 +727,19 @@ fn validate_text(value: &str, field: &str, max: usize) -> Result<(), ApiError> {
 
 fn empty_config() -> Value {
     json!({})
+}
+
+fn default_traffic_stats_port() -> u16 {
+    DEFAULT_TRAFFIC_STATS_PORT
+}
+
+fn validate_traffic_stats_port(port: u16) -> Result<(), ApiError> {
+    if port == 0 {
+        return Err(ApiError::bad_request(
+            "traffic_stats_port must be between 1 and 65535",
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]

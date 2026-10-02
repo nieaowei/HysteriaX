@@ -170,6 +170,7 @@ private struct NodeFormView: View {
     @State private var publicHost = ""
     @State private var publicPort = "443"
     @State private var listenAddress = ":443"
+    @State private var trafficStatsPort = "9780"
     @State private var proxyProbeURL = ""
     @State private var tlsSNI = ""
     @State private var skipCertVerify = false
@@ -244,6 +245,13 @@ private struct NodeFormView: View {
                             .accessibilityLabel("跳过证书验证")
                             .accessibilityIdentifier("node.create.skipCertVerify")
                     }
+                    Section("Hysteria trafficStats 接口") {
+                        TextField("本机端口", text: $trafficStatsPort)
+                            .accessibilityLabel("trafficStats 本机端口")
+                            .accessibilityIdentifier("node.create.trafficStatsPort")
+                        Text("仅绑定节点本机回环地址，用于流量采集和在线设备管理。请选用未被占用的 TCP 端口；默认 9780。")
+                            .font(.callout).foregroundStyle(.secondary)
+                    }
                     Section("部署连通性检查") {
                         TextField("HTTP 探测 URL（可选）", text: $proxyProbeURL, prompt: Text("http://status.example.test/health"))
                             .accessibilityLabel("HTTP 探测 URL（可选）")
@@ -301,8 +309,9 @@ private struct NodeFormView: View {
             errorMessage = validationError
             return
         }
-        guard let sshPort = Int(sshPort), let publicPort = Int(publicPort) else {
-            errorMessage = "端口必须是 1 到 65535 的整数。"
+        guard let sshPort = Int(sshPort), let publicPort = Int(publicPort),
+              let trafficStatsPort = Int(trafficStatsPort), (1...65535).contains(trafficStatsPort) else {
+            errorMessage = "SSH、公开和 trafficStats 端口都必须是 1 到 65535 的整数。"
             return
         }
         isSaving = true
@@ -329,6 +338,7 @@ private struct NodeFormView: View {
                     sshAuthType: sshAuthType, sshSecret: sshSecret,
                     sshPassphrase: sshPassphrase.isEmpty ? nil : sshPassphrase,
                     publicHost: publicHost, publicPort: publicPort, listenAddr: listenAddress,
+                    trafficStatsPort: trafficStatsPort,
                     proxyProbeUrl: proxyProbeURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : proxyProbeURL,
                     tlsSNI: tlsSNI.isEmpty ? nil : tlsSNI, tlsSkipVerify: skipCertVerify, config: config
                 ))

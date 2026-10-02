@@ -184,7 +184,7 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(version, 4);
+        assert_eq!(version, 5);
         assert!(!backup_directory.exists());
         pool.close().await;
         tokio::fs::remove_dir_all(root).await.unwrap();

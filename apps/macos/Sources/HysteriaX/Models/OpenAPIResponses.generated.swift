@@ -68,6 +68,7 @@ struct NodeDetail: Codable, Sendable, Identifiable {
     let yamlPreview: String
     let ssh: NodeSSHDetail
     let connection: NodeConnectionDetail
+    let trafficStatsPort: Int?
     let state: String
     let lastSeenAt: String?
     let lastSampleAt: String?
@@ -87,6 +88,7 @@ struct NodeDetail: Codable, Sendable, Identifiable {
         case yamlPreview = "yaml_preview"
         case ssh
         case connection = "public"
+        case trafficStatsPort = "traffic_stats_port"
         case state
         case lastSeenAt = "last_seen_at"
         case lastSampleAt = "last_sample_at"
@@ -336,6 +338,7 @@ struct NodeUpdateResponse: Codable, Sendable {
     let name: String
     let revision: Int
     let state: String
+    let trafficStatsPort: Int?
     let syncJobQueued: Bool
 
     enum CodingKeys: String, CodingKey {
@@ -343,6 +346,7 @@ struct NodeUpdateResponse: Codable, Sendable {
         case name
         case revision
         case state
+        case trafficStatsPort = "traffic_stats_port"
         case syncJobQueued = "sync_job_queued"
     }
 }
@@ -514,12 +518,14 @@ struct NodeReceipt: Codable, Sendable {
     let name: String
     let revision: Int
     let state: String
+    let trafficStatsPort: Int?
 
     enum CodingKeys: String, CodingKey {
         case id
         case name
         case revision
         case state
+        case trafficStatsPort = "traffic_stats_port"
     }
 }
 

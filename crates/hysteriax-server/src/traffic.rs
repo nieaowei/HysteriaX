@@ -95,8 +95,10 @@ async fn sample_node(pool: &SqlitePool, secrets: &SecretBox, node_id: &str) -> R
             .fetch_one(pool)
             .await?;
     let stats_secret = secrets.decrypt(&stats_secret_enc)?;
+    let traffic_stats_port =
+        deployment::load_deployed_traffic_stats_port(pool, secrets, node_id).await?;
     let body = session
-        .loopback_http_get(9780, "/traffic", &stats_secret)
+        .loopback_http_get(u32::from(traffic_stats_port), "/traffic", &stats_secret)
         .await?;
     let traffic: Value =
         serde_json::from_slice(&body).context("Hysteria traffic API returned invalid JSON")?;

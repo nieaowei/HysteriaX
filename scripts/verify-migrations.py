@@ -97,7 +97,7 @@ def main():
             legacy_node = database.execute(
                 "SELECT name, last_sample_at, proxy_probe_url FROM nodes WHERE id = 'legacy-node'"
             ).fetchone()
-        if versions != [1, 2, 3, 4] or not {"last_sample_at", "proxy_probe_url"}.issubset(columns):
+        if versions != [1, 2, 3, 4, 5] or not {"last_sample_at", "proxy_probe_url", "traffic_stats_port"}.issubset(columns):
             raise RuntimeError(f"migration history or node column was not upgraded: {versions}")
         tables = {
             row[0]
@@ -130,7 +130,7 @@ def main():
             raise RuntimeError(f"snapshot does not reflect the pre-migration database: {backup_node}")
         if backup_directory.stat().st_mode & 0o777 != 0o700 or backups[0].stat().st_mode & 0o777 != 0o600:
             raise RuntimeError("pre-migration backup directory or SQLite snapshot permissions are too broad")
-        print("Database migration 0001→0004 passed; legacy data survived and a verified, mode-restricted v0001 snapshot was created before migration.")
+        print("Database migration 0001→0005 passed; legacy data survived and a verified, mode-restricted v0001 snapshot was created before migration.")
 
 
 if __name__ == "__main__":
