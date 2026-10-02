@@ -14,6 +14,8 @@ struct NodeConfigurationView: View {
     @State private var listenAddress = ":443"
     @State private var trafficStatsPort = "9780"
     @State private var proxyProbeURL = ""
+    @State private var tlsSNI = ""
+    @State private var skipCertVerify = false
     @State private var tlsMode = "none"
     @State private var acmeDomains: [StringListEntry] = []
     @State private var acmeEmail = ""
@@ -121,6 +123,14 @@ struct NodeConfigurationView: View {
                     Section("部署连通性检查") {
                         TextField("HTTP 探测 URL（可选）", text: $proxyProbeURL, prompt: Text("http://status.example.test/health"))
                         Text("默认探测节点的本机统计接口。自定义 ACL 或 outbound 阻止该地址时，填写一个可通过当前路由访问并返回 HTTP 200 的无凭据 URL。")
+                            .font(.callout).foregroundStyle(.secondary)
+                    }
+                    Section("客户端 TLS") {
+                        TextField("TLS SNI（可选）", text: $tlsSNI)
+                            .accessibilityIdentifier("node.config.tlsSNI")
+                        Toggle("跳过证书验证", isOn: $skipCertVerify)
+                            .accessibilityIdentifier("node.config.skipCertVerify")
+                        Text("用于用户订阅中的客户端 TLS 设置；SNI 留空时默认使用公开地址。")
                             .font(.callout).foregroundStyle(.secondary)
                     }
                     Section("TLS 与证书") {
@@ -786,6 +796,8 @@ struct NodeConfigurationView: View {
         listenAddress = ":443"
         trafficStatsPort = "9780"
         proxyProbeURL = ""
+        tlsSNI = ""
+        skipCertVerify = false
         tlsMode = "none"
         acmeDomains = []
         acmeEmail = ""
@@ -873,6 +885,8 @@ struct NodeConfigurationView: View {
             detail = loaded
             resources = loadedResources
             listenAddress = loaded.connection.listenAddress
+            tlsSNI = loaded.connection.tlsSNI ?? ""
+            skipCertVerify = loaded.connection.skipCertVerify
             trafficStatsPort = String(loaded.trafficStatsPort ?? 9780)
             proxyProbeURL = loaded.proxyProbeUrl ?? ""
             let config = loaded.config
@@ -1338,7 +1352,9 @@ struct NodeConfigurationView: View {
                     config: .object(config),
                     listenAddress: listenAddress,
                     trafficStatsPort: trafficStatsPort,
-                    proxyProbeURL: proxyProbeURL
+                    proxyProbeURL: proxyProbeURL,
+                    tlsSNI: tlsSNI,
+                    skipCertVerify: skipCertVerify
                 )
                 dismiss()
             } catch { errorMessage = error.localizedDescription }

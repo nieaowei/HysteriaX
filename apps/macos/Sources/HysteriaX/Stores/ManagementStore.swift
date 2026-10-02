@@ -157,7 +157,9 @@ final class ManagementStore {
         config: JSONValue,
         listenAddress: String,
         trafficStatsPort: Int,
-        proxyProbeURL: String
+        proxyProbeURL: String,
+        tlsSNI: String,
+        skipCertVerify: Bool
     ) async throws {
         let api = try requireConnectedAPI()
         let _: NodeUpdateResponse = try await api.patch(
@@ -167,6 +169,8 @@ final class ManagementStore {
                 listenAddr: listenAddress,
                 trafficStatsPort: trafficStatsPort,
                 proxyProbeUrl: proxyProbeURL,
+                tlsSNI: tlsSNI.trimmingCharacters(in: .whitespacesAndNewlines),
+                tlsSkipVerify: skipCertVerify,
                 config: config.objectValue ?? [:]
             )
         )

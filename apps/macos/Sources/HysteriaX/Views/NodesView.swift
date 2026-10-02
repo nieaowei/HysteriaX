@@ -165,16 +165,6 @@ private struct NodeFormView: View {
     @State private var sshPassphrase = ""
     @State private var publicHost = ""
     @State private var publicPort = "443"
-    @State private var listenAddress = ":443"
-    @State private var trafficStatsPort = "9780"
-    @State private var proxyProbeURL = ""
-    @State private var tlsSNI = ""
-    @State private var skipCertVerify = false
-    @State private var tlsMode = "acme"
-    @State private var acmeEmail = ""
-    @State private var acmeType = "http"
-    @State private var certificatePath = ""
-    @State private var privateKeyPath = ""
     @State private var errorMessage: String?
     @State private var createdToken: String?
     @State private var isSaving = false
@@ -183,7 +173,7 @@ private struct NodeFormView: View {
         VStack(alignment: .leading, spacing: 18) {
             Text("添加节点").font(.title.bold())
             if let createdToken {
-                ContentUnavailableView("节点已创建", systemImage: "checkmark.circle", description: Text("节点认证令牌：\n\(createdToken)\n请将令牌保存在安全位置。"))
+                ContentUnavailableView("节点已创建", systemImage: "checkmark.circle", description: Text("节点认证令牌：\n\(createdToken)\n请将令牌保存在安全位置，并在配置页设置 TLS 证书后再部署。"))
                 HStack { Spacer(); Button("完成") { dismiss() }.keyboardShortcut(.defaultAction) }
             } else {
                 Form {
@@ -224,68 +214,18 @@ private struct NodeFormView: View {
                                 .accessibilityIdentifier("node.create.sshPassphrase")
                         }
                     }
-                    Section("Hysteria 连接") {
+                    Section("公开连接") {
                         TextField("公开地址", text: $publicHost)
                             .accessibilityLabel("公开地址")
                             .accessibilityIdentifier("node.create.publicHost")
                         TextField("公开端口", text: $publicPort)
                             .accessibilityLabel("公开端口")
                             .accessibilityIdentifier("node.create.publicPort")
-                        TextField("监听地址", text: $listenAddress)
-                            .accessibilityLabel("监听地址")
-                            .accessibilityIdentifier("node.create.listenAddress")
-                        TextField("TLS SNI（可选）", text: $tlsSNI)
-                            .accessibilityLabel("TLS SNI（可选）")
-                            .accessibilityIdentifier("node.create.tlsSNI")
-                        Toggle("跳过证书验证", isOn: $skipCertVerify)
-                            .accessibilityLabel("跳过证书验证")
-                            .accessibilityIdentifier("node.create.skipCertVerify")
-                    }
-                    Section("Hysteria trafficStats 接口") {
-                        TextField("本机端口", text: $trafficStatsPort)
-                            .accessibilityLabel("trafficStats 本机端口")
-                            .accessibilityIdentifier("node.create.trafficStatsPort")
-                        Text("仅绑定节点本机回环地址，用于流量采集和在线设备管理。请选用未被占用的 TCP 端口；默认 9780。")
+                        Text("用户客户端通过此地址和 UDP 端口连接节点。创建后请在配置页设置 TLS 证书及其他 Hysteria 参数。")
                             .font(.callout).foregroundStyle(.secondary)
-                    }
-                    Section("部署连通性检查") {
-                        TextField("HTTP 探测 URL（可选）", text: $proxyProbeURL, prompt: Text("http://status.example.test/health"))
-                            .accessibilityLabel("HTTP 探测 URL（可选）")
-                            .accessibilityIdentifier("node.create.proxyProbeURL")
-                        Text("默认探测节点的本机统计接口。自定义 ACL 或 outbound 阻止该地址时，填写一个可通过当前路由访问并返回 HTTP 200 的无凭据 URL。")
-                            .font(.callout).foregroundStyle(.secondary)
-                    }
-                    Section("TLS 证书") {
-                        Picker("证书来源", selection: $tlsMode) {
-                            Text("ACME 自动申请").tag("acme")
-                            Text("服务器已有证书").tag("tls")
-                        }
-                        .accessibilityLabel("证书来源")
-                        .accessibilityIdentifier("node.create.tlsMode")
-                        if tlsMode == "acme" {
-                            TextField("ACME 邮箱", text: $acmeEmail)
-                                .accessibilityLabel("ACME 邮箱")
-                                .accessibilityIdentifier("node.create.acmeEmail")
-                            Picker("验证方式", selection: $acmeType) {
-                                Text("HTTP-01（TCP 80）").tag("http")
-                                Text("TLS-ALPN-01（TCP 443）").tag("tls")
-                            }
-                            .accessibilityLabel("验证方式")
-                            .accessibilityIdentifier("node.create.acmeType")
-                            Text("ACME 域名使用公开连接地址。请先开放对应 TCP 验证端口。")
-                                .font(.callout).foregroundStyle(.secondary)
-                        } else {
-                            TextField("远端证书路径", text: $certificatePath)
-                                .accessibilityLabel("远端证书路径")
-                                .accessibilityIdentifier("node.create.certificatePath")
-                            TextField("远端私钥路径", text: $privateKeyPath)
-                                .accessibilityLabel("远端私钥路径")
-                                .accessibilityIdentifier("node.create.privateKeyPath")
-                            Text("文件需已存在于节点上，并允许 hysteriax 服务账户读取。")
-                                .font(.callout).foregroundStyle(.secondary)
-                        }
                     }
                 }
+                .formStyle(.grouped)
                 if let errorMessage { Text(errorMessage).foregroundStyle(.red).font(.callout) }
                 HStack {
                     Button("取消") { dismiss() }.keyboardShortcut(.cancelAction)
@@ -297,46 +237,24 @@ private struct NodeFormView: View {
             }
         }
         .padding(24)
-        .frame(width: 600, height: createdToken == nil ? 820 : 360)
+        .frame(width: 600, height: createdToken == nil ? 620 : 360)
     }
 
     private func save() {
-        if let validationError = ProxyProbeURLValidation.error(proxyProbeURL) {
-            errorMessage = validationError
-            return
-        }
-        guard let sshPort = Int(sshPort), let publicPort = Int(publicPort),
-              let trafficStatsPort = Int(trafficStatsPort), (1...65535).contains(trafficStatsPort) else {
-            errorMessage = "SSH、公开和 trafficStats 端口都必须是 1 到 65535 的整数。"
+        guard let sshPort = Int(sshPort), (1...65535).contains(sshPort),
+              let publicPort = Int(publicPort), (1...65535).contains(publicPort) else {
+            errorMessage = "SSH 和公开端口都必须是 1 到 65535 的整数。"
             return
         }
         isSaving = true
         Task {
             defer { isSaving = false }
             do {
-                var config: [String: JSONValue] = [:]
-                if tlsMode == "acme" {
-                    var acme: [String: JSONValue] = [
-                        "domains": .array([.string(publicHost)]),
-                        "type": .string(acmeType)
-                    ]
-                    if !acmeEmail.isEmpty { acme["email"] = .string(acmeEmail) }
-                    config["acme"] = .object(acme)
-                } else {
-                    guard !certificatePath.isEmpty, !privateKeyPath.isEmpty else {
-                        errorMessage = "请填写节点上的证书和私钥路径。"
-                        return
-                    }
-                    config["tls"] = .object(["cert": .string(certificatePath), "key": .string(privateKeyPath)])
-                }
                 let response = try await store.createNode(NodeCreateRequest(
                     name: name, sshHost: sshHost, sshPort: sshPort, sshUsername: sshUsername,
                     sshAuthType: sshAuthType, sshSecret: sshSecret,
                     sshPassphrase: sshPassphrase.isEmpty ? nil : sshPassphrase,
-                    publicHost: publicHost, publicPort: publicPort, listenAddr: listenAddress,
-                    trafficStatsPort: trafficStatsPort,
-                    proxyProbeUrl: proxyProbeURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : proxyProbeURL,
-                    tlsSNI: tlsSNI.isEmpty ? nil : tlsSNI, tlsSkipVerify: skipCertVerify, config: config
+                    publicHost: publicHost, publicPort: publicPort, listenAddr: ":\(publicPort)"
                 ))
                 createdToken = response.nodeAuthToken
             } catch { errorMessage = error.localizedDescription }
