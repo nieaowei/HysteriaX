@@ -425,6 +425,9 @@ enum APIEndpoints {
     static let healthCheck: APIOperation<NoRequest, APIHealth> = APIOperation<NoRequest, APIHealth>(method: "GET", path: "healthz", queryParameters: [:])
     static let readinessCheck: APIOperation<NoRequest, APIHealth> = APIOperation<NoRequest, APIHealth>(method: "GET", path: "readyz", queryParameters: [:])
     static let getOpenAPISpec: APIOperation<NoRequest, NoResponse> = APIOperation<NoRequest, NoResponse>(method: "GET", path: "openapi.yaml", queryParameters: [:])
+    static func downloadAutomaticSubscription(token: String, format: String? = nil) -> APIOperation<NoRequest, NoResponse> {
+        APIOperation(method: "GET", path: "sub/\(token)", queryParameters: ["format": format.map { String($0) }].compactMapValues { $0 })
+    }
     static func downloadSubscription(token: String) -> APIOperation<NoRequest, NoResponse> {
         APIOperation(method: "GET", path: "sub/\(token)/clash.yaml", queryParameters: [:])
     }

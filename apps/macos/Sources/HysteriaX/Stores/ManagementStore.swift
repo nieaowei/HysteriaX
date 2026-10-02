@@ -270,25 +270,37 @@ final class ManagementStore {
             body: RevisionRequest(expectedRevision: user.revision)
         )
         await refresh()
-        return response.url
+        return response.autoUrl ?? response.url
     }
 
-    func currentSubscriptionURL(for user: UserSummary) async throws -> String {
+    func currentSubscriptionURL(for user: UserSummary, format: SubscriptionFileFormat? = nil) async throws -> String {
         let api = try requireConnectedAPI()
         let subscription: SubscriptionStatus = try await api.get(APIEndpoints.getSubscription(id: user.id))
         guard let active = subscription.active else {
             throw APIClientError.server("此用户尚未生成订阅地址，请先生成订阅。")
         }
-        return active.url
+        if let format {
+            return try format.subscriptionURL(autoURL: active.autoUrl, legacyURL: active.url)
+        }
+        return active.autoUrl ?? active.url
     }
 
-    func subscriptionYAML(for user: UserSummary) async throws -> Data {
+    func subscriptionFile(for user: UserSummary, format: SubscriptionFileFormat) async throws -> Data {
         let api = try requireConnectedAPI()
         let subscription: SubscriptionStatus = try await api.get(APIEndpoints.getSubscription(id: user.id))
         guard let active = subscription.active else {
             throw APIClientError.server("此用户尚未生成订阅地址，请先生成订阅再导出。")
         }
-        return try await api.download(APIEndpoints.downloadSubscription(token: active.token))
+        let operation: APIOperation<NoRequest, NoResponse>
+        if format == .mihomo {
+            operation = APIEndpoints.downloadSubscription(token: active.token)
+        } else {
+            guard active.autoUrl != nil else {
+                throw APIClientError.server("此服务端尚未提供多格式订阅，请先升级服务端。")
+            }
+            operation = APIEndpoints.downloadAutomaticSubscription(token: active.token, format: format.rawValue)
+        }
+        return try await api.download(operation, accept: format.accept)
     }
 
     func setEnabled(_ enabled: Bool, for user: UserSummary) async throws {

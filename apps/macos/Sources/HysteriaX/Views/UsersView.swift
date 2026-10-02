@@ -87,9 +87,21 @@ struct UsersView: View {
                                 Button("生成/轮换订阅地址") { rotateSubscription(user) }
                                     .accessibilityLabel("生成/轮换订阅地址")
                                     .accessibilityIdentifier("users.subscription.rotate")
-                                Button("导出 Mihomo YAML…") { exportSubscription(user) }
+                                Menu("复制指定格式地址") {
+                                    ForEach(SubscriptionFileFormat.allCases, id: \.rawValue) { format in
+                                        Button(format.title) { copyCurrentSubscription(user, format: format) }
+                                            .accessibilityIdentifier("users.subscription.copy.\(format.rawValue)")
+                                    }
+                                }
+                                Button("导出 Mihomo YAML…") { exportSubscription(user, format: .mihomo) }
                                     .accessibilityLabel("导出 Mihomo YAML")
                                     .accessibilityIdentifier("users.subscription.export")
+                                Menu("导出其他格式") {
+                                    ForEach(SubscriptionFileFormat.allCases.filter { $0 != .mihomo }, id: \.rawValue) { format in
+                                        Button("\(format.title)…") { exportSubscription(user, format: format) }
+                                            .accessibilityIdentifier("users.subscription.export.\(format.rawValue)")
+                                    }
+                                }
                             }
                             .accessibilityLabel("订阅")
                             .accessibilityIdentifier("users.subscriptionMenu")
@@ -179,10 +191,10 @@ struct UsersView: View {
         } message: { Text(alertMessage ?? "") }
     }
 
-    private func copyCurrentSubscription(_ user: UserSummary) {
+    private func copyCurrentSubscription(_ user: UserSummary, format: SubscriptionFileFormat? = nil) {
         Task {
             do {
-                let url = try await store.currentSubscriptionURL(for: user)
+                let url = try await store.currentSubscriptionURL(for: user, format: format)
                 copy(url, message: "当前有效订阅地址已复制；现有令牌没有轮换。")
             } catch { showError(error) }
         }
@@ -197,20 +209,20 @@ struct UsersView: View {
         }
     }
 
-    private func exportSubscription(_ user: UserSummary) {
+    private func exportSubscription(_ user: UserSummary, format: SubscriptionFileFormat) {
         Task {
             do {
-                let yaml = try await store.subscriptionYAML(for: user)
+                let data = try await store.subscriptionFile(for: user, format: format)
                 let panel = NSSavePanel()
                 let safeName = user.name
                     .replacingOccurrences(of: "/", with: "-")
                     .replacingOccurrences(of: ":", with: "-")
-                panel.nameFieldStringValue = "\(safeName)-mihomo.yaml"
-                panel.allowedContentTypes = [UTType(filenameExtension: "yaml") ?? .plainText]
+                panel.nameFieldStringValue = "\(safeName)-\(format.rawValue).\(format.fileExtension)"
+                panel.allowedContentTypes = [UTType(filenameExtension: format.fileExtension) ?? .plainText]
                 guard panel.runModal() == .OK, let destination = panel.url else { return }
-                try yaml.write(to: destination, options: .atomic)
+                try data.write(to: destination, options: .atomic)
                 alertTitle = "配置已导出"
-                alertMessage = "Mihomo YAML 已保存到所选位置。该文件包含连接凭据，请妥善保管。"
+                alertMessage = "\(format.title) 已保存到所选位置。该文件包含连接凭据，请妥善保管。"
             } catch { showError(error) }
         }
     }

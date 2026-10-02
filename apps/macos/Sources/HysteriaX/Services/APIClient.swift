@@ -66,13 +66,14 @@ actor APIClient {
         return try await send(operation, method: operation.method, body: Optional<Data>.none)
     }
 
-    func download(_ operation: APIOperation<NoRequest, NoResponse>) async throws -> Data {
+    func download(_ operation: APIOperation<NoRequest, NoResponse>, accept: String = "application/yaml, text/yaml") async throws -> Data {
         try requireMethod(operation, expected: "GET")
         return try await perform(
             operation,
             method: operation.method,
             body: nil,
-            accept: "application/yaml, text/yaml"
+            accept: accept,
+            rejectHTML: true
         )
     }
 
@@ -154,7 +155,8 @@ actor APIClient {
         _ operation: APIOperation<Input, Output>,
         method: String,
         body: Data?,
-        accept: String = "application/json"
+        accept: String = "application/json",
+        rejectHTML: Bool = false
     ) async throws -> Data {
         let url = try makeURL(for: operation)
         var request = URLRequest(url: url)
@@ -173,6 +175,13 @@ actor APIClient {
                 throw APIClientError.server(error.error.message)
             }
             throw APIClientError.server("管理服务返回 HTTP \(response.statusCode)。")
+        }
+        if rejectHTML {
+            let contentType = response.value(forHTTPHeaderField: "Content-Type")?.lowercased() ?? ""
+            let prefix = String(decoding: data.prefix(256), as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            guard !contentType.contains("text/html"), !prefix.hasPrefix("<!doctype html"), !prefix.hasPrefix("<html") else {
+                throw APIClientError.server("订阅接口返回了网页，请选择明确的订阅格式。")
+            }
         }
         return data
     }

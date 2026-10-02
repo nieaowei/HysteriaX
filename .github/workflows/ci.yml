@@ -54,6 +54,7 @@ jobs:
         with:
           node-version: 22
       - run: ruby scripts/generate-swift-api-models.rb --check
+      - run: scripts/verify-subscription-client.sh
       - run: npx --yes @redocly/cli@2.55.0 lint --config redocly.yaml openapi/openapi.yaml
       - run: xcodebuild -project apps/macos/HysteriaX.xcodeproj -scheme HysteriaX -configuration Release -sdk macosx -destination 'generic/platform=macOS' -derivedDataPath apps/macos/.build/ci build CODE_SIGNING_ALLOWED=NO
       - run: scripts/verify-macos-app.sh apps/macos/.build/ci/Build/Products/Release/HysteriaX.app

@@ -85,3 +85,46 @@ enum JSONValue: Codable, Sendable {
         return value
     }
 }
+
+/// Explicit formats ensure that exports never negotiate an HTML selection page.
+enum SubscriptionFileFormat: String, CaseIterable, Sendable {
+    case mihomo, singbox, base64, uri
+
+    var title: String {
+        switch self {
+        case .mihomo: "Mihomo YAML"
+        case .singbox: "sing-box JSON"
+        case .base64: "Base64 节点订阅"
+        case .uri: "纯文本节点链接"
+        }
+    }
+
+    var fileExtension: String {
+        switch self {
+        case .mihomo: "yaml"
+        case .singbox: "json"
+        case .base64, .uri: "txt"
+        }
+    }
+
+    var accept: String {
+        switch self {
+        case .mihomo: "application/yaml, text/yaml"
+        case .singbox: "application/json"
+        case .base64, .uri: "text/plain"
+        }
+    }
+
+    func subscriptionURL(autoURL: String?, legacyURL: String) throws -> String {
+        if self == .mihomo { return legacyURL }
+        guard let autoURL, var components = URLComponents(string: autoURL) else {
+            throw APIClientError.server("此服务端尚未提供多格式订阅，请先升级服务端。")
+        }
+        var items = components.queryItems ?? []
+        items.removeAll { $0.name == "format" }
+        items.append(URLQueryItem(name: "format", value: rawValue))
+        components.queryItems = items
+        guard let url = components.url else { throw APIClientError.invalidBaseURL }
+        return url.absoluteString
+    }
+}

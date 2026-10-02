@@ -1,9 +1,9 @@
 use crate::db;
 use axum::{
     Json,
-    extract::{Path, State},
-    http::{HeaderValue, StatusCode, header},
-    response::Response,
+    extract::{Path, RawQuery, State},
+    http::{HeaderMap, HeaderValue, StatusCode, header},
+    response::{IntoResponse, Response},
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use chrono::{DateTime, Utc};
@@ -19,6 +19,9 @@ use crate::{
     security::token_digest,
     state::AppState,
 };
+
+mod formats;
+use formats::{ClientInfo, SubscriptionFormat, SubscriptionNode, SubscriptionRealm};
 
 #[derive(Deserialize)]
 pub struct RotateSubscription {
@@ -129,7 +132,7 @@ pub async fn get_user(
         let token: String = row.get("token_enc");
         let token = state.secrets.decrypt(&token)?;
         Some(
-            json!({"id": row.get::<String, _>("id"), "token": token, "url": subscription_url(&token), "created_at": row.get::<chrono::DateTime<chrono::Utc>, _>("created_at")}),
+            json!({"id": row.get::<String, _>("id"), "token": token, "url": subscription_url(&token), "auto_url": auto_subscription_url(&token), "created_at": row.get::<chrono::DateTime<chrono::Utc>, _>("created_at")}),
         )
     } else {
         None
@@ -175,15 +178,77 @@ pub async fn rotate(
         .bind(Uuid::new_v4().to_string()).bind(&user_id).bind(json!({"revision": next_revision})).bind(timestamp).execute(&mut *tx).await?;
     tx.commit().await?;
     Ok(Json(
-        json!({"user_id": user_id, "revision": next_revision, "token": token, "url": subscription_url(&token), "note": "The old subscription URL has been revoked."}),
+        json!({"user_id": user_id, "revision": next_revision, "token": token, "url": subscription_url(&token), "auto_url": auto_subscription_url(&token), "note": "The old subscription URL has been revoked."}),
     ))
 }
 
-pub async fn download(
+pub async fn download(State(state): State<AppState>, Path(token): Path<String>) -> Response {
+    let result = async {
+        let user_id = validate_subscription(&state, &token).await?;
+        let nodes = load_subscription_nodes(&state, &user_id).await?;
+        tracing::info!(
+            client = "legacy",
+            format = "mihomo",
+            "subscription format selected"
+        );
+        formats::render_subscription(&nodes, SubscriptionFormat::Mihomo, &ClientInfo::default())
+    }
+    .await;
+    subscription_response(result, false)
+}
+
+pub async fn download_auto(
     State(state): State<AppState>,
     Path(token): Path<String>,
-) -> Result<Response, ApiError> {
-    let token_hash = token_digest(&token);
+    RawQuery(query): RawQuery,
+    headers: HeaderMap,
+) -> Response {
+    let result = async {
+        let user_id = validate_subscription(&state, &token).await?;
+        let requested = formats::requested_format(query.as_deref())?;
+        let client = ClientInfo::detect(
+            headers.get(header::USER_AGENT).and_then(|v| v.to_str().ok()).unwrap_or(""),
+        );
+        let format = requested.or(client.format);
+        tracing::info!(client = client.name, version = ?client.version, format = ?format, "subscription format selected");
+        if let Some(format) = format {
+            let nodes = load_subscription_nodes(&state, &user_id).await?;
+            formats::render_subscription(&nodes, format, &client)
+        } else {
+            Ok(formats::selection_page(&auto_subscription_url(&token)))
+        }
+    }
+    .await;
+    subscription_response(result, true)
+}
+
+fn subscription_response(result: Result<Response, ApiError>, automatic: bool) -> Response {
+    let mut response = match result {
+        Ok(response) => response,
+        Err(error) => error.into_response(),
+    };
+    let headers = response.headers_mut();
+    headers.insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("private, no-store"),
+    );
+    headers.insert("referrer-policy", HeaderValue::from_static("no-referrer"));
+    headers.insert(
+        "x-robots-tag",
+        HeaderValue::from_static("noindex, nofollow"),
+    );
+    headers.insert(
+        "x-content-type-options",
+        HeaderValue::from_static("nosniff"),
+    );
+    if automatic {
+        headers.insert(header::VARY, HeaderValue::from_static("User-Agent"));
+    }
+    response
+}
+
+async fn validate_subscription(state: &AppState, token: &str) -> Result<String, ApiError> {
+    let token_hash = token_digest(token);
     let credential = sqlx::query(
         "SELECT user_id FROM subscription_credentials WHERE token_hash = $1 AND revoked_at IS NULL",
     )
@@ -211,21 +276,28 @@ pub async fn download(
         ));
     }
 
+    Ok(user_id)
+}
+
+async fn load_subscription_nodes(
+    state: &AppState,
+    user_id: &str,
+) -> Result<Vec<SubscriptionNode>, ApiError> {
     let rows = sqlx::query("SELECT n.id, n.name, n.public_host, n.public_port, n.listen_addr, n.tls_sni, n.tls_skip_verify, n.state, n.deployed_config_enc, a.credential_enc, a.client_certificate_enc, a.client_private_key_enc FROM node_assignments a JOIN nodes n ON n.id = a.node_id WHERE a.user_id = $1 AND n.state NOT IN ('deleting', 'delete_failed') AND n.deployed_revision IS NOT NULL AND n.deployed_config_enc IS NOT NULL ORDER BY lower(n.name) COLLATE \"C\", n.name COLLATE \"C\", n.id")
-        .bind(&user_id).fetch_all(&state.pool).await?;
-    let mut proxies = Vec::new();
+        .bind(user_id).fetch_all(&state.pool).await?;
+    let mut nodes = Vec::new();
     for row in rows {
         let node_id: String = row.get("id");
         let node_config_enc: String = row.get("deployed_config_enc");
         let config: Value = serde_json::from_str(&state.secrets.decrypt(&node_config_enc)?)
             .map_err(|_| ApiError::internal())?;
-        let ech_config = subscription_ech_config(&state, &node_id, &config).await?;
+        let ech_config = subscription_ech_config(state, &node_id, &config).await?;
         let realm_opts = subscription_realm_options(&config)?;
         let password_enc: String = row.get("credential_enc");
         let client_certificate_enc: Option<String> = row.get("client_certificate_enc");
         let client_private_key_enc: Option<String> = row.get("client_private_key_enc");
         let name: String = row.get("name");
-        proxies.push(build_proxy(
+        nodes.push(build_node(
             &name,
             &node_id,
             &row.get::<String, _>("public_host"),
@@ -249,37 +321,7 @@ pub async fn download(
         ));
     }
 
-    let names: Vec<String> = proxies.iter().map(|proxy| proxy.name.clone()).collect();
-    let mut group_nodes = vec!["DIRECT".to_owned()];
-    group_nodes.extend(names.iter().cloned());
-    let rules = if names.is_empty() {
-        vec!["MATCH,DIRECT".to_owned()]
-    } else {
-        vec!["MATCH,节点选择".to_owned()]
-    };
-    let config = ClashConfig {
-        mixed_port: 7890,
-        allow_lan: false,
-        bind_address: "127.0.0.1".to_owned(),
-        mode: "rule".to_owned(),
-        proxies,
-        proxy_groups: vec![ClashGroup {
-            name: "节点选择".to_owned(),
-            group_type: "select".to_owned(),
-            proxies: group_nodes,
-        }],
-        rules,
-    };
-    let yaml = serde_yaml::to_string(&config).map_err(|_| ApiError::internal())?;
-    let mut response = Response::new(axum::body::Body::from(yaml));
-    response.headers_mut().insert(
-        header::CONTENT_TYPE,
-        HeaderValue::from_static("application/yaml; charset=utf-8"),
-    );
-    response
-        .headers_mut()
-        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
-    Ok(response)
+    Ok(nodes)
 }
 
 pub async fn hy2_auth(
@@ -369,7 +411,7 @@ impl AuthResponse {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn build_proxy(
+fn build_node(
     name: &str,
     id: &str,
     server: &str,
@@ -381,9 +423,9 @@ fn build_proxy(
     certificate: Option<String>,
     private_key: Option<String>,
     ech_config: Option<String>,
-    realm_opts: Option<ClashRealmOptions>,
+    realm_opts: Option<SubscriptionRealm>,
     config: &Value,
-) -> ClashProxy {
+) -> SubscriptionNode {
     let suffix = id.split('-').next().unwrap_or(id);
     let hop_interval = ports.as_ref().map(|_| 30);
     let bandwidth = config.get("bandwidth").and_then(Value::as_object);
@@ -404,10 +446,8 @@ fn build_proxy(
         .as_ref()
         .and_then(|kind| obfs.and_then(|value| value.get(kind)))
         .and_then(Value::as_object);
-    let handshake_timeout = realm_opts.as_ref().map(|_| 30);
-    ClashProxy {
+    SubscriptionNode {
         name: format!("{name}-{suffix}"),
-        protocol: "hysteria2".to_owned(),
         server: server.to_owned(),
         port,
         ports,
@@ -433,20 +473,15 @@ fn build_proxy(
         obfs_max_packet_size: obfs_details
             .and_then(|value| value.get("maxPacketSize"))
             .and_then(Value::as_u64),
-        ech_opts: ech_config.map(|config| ClashEchOptions {
-            enable: true,
-            config,
-        }),
-        realm_opts,
-        handshake_timeout,
+        ech_config,
+        realm: realm_opts,
     }
 }
 
-fn subscription_realm_options(config: &Value) -> Result<Option<ClashRealmOptions>, ApiError> {
+fn subscription_realm_options(config: &Value) -> Result<Option<SubscriptionRealm>, ApiError> {
     let connection = crate::config::realm_connection(config)
         .map_err(|_| ApiError::bad_request("stored Realm configuration is invalid"))?;
-    Ok(connection.map(|connection| ClashRealmOptions {
-        enable: true,
+    Ok(connection.map(|connection| SubscriptionRealm {
         server_url: connection.server_url,
         token: connection.token,
         realm_id: connection.realm_id,
@@ -508,21 +543,25 @@ fn is_expired(value: Option<DateTime<Utc>>) -> bool {
     value.is_some_and(|expiration| expiration <= Utc::now())
 }
 
-fn subscription_url(token: &str) -> String {
+fn auto_subscription_url(token: &str) -> String {
     let base =
         std::env::var("HYSTERIAX_PUBLIC_URL").unwrap_or_else(|_| "https://localhost".to_owned());
-    format!("{}/sub/{token}/clash.yaml", base.trim_end_matches('/'))
+    format!("{}/sub/{token}", base.trim_end_matches('/'))
+}
+
+fn subscription_url(token: &str) -> String {
+    format!("{}/clash.yaml", auto_subscription_url(token))
 }
 
 #[cfg(test)]
 mod tests {
     use serde_json::json;
 
-    use super::{build_proxy, extract_ech_config_list, subscription_realm_options};
+    use super::{build_node, extract_ech_config_list, subscription_realm_options};
 
     #[test]
     fn serializes_special_node_names_ipv6_and_port_hopping_as_yaml_strings() {
-        let proxy = build_proxy(
+        let proxy = build_node(
             "東京: edge",
             "7ed8a6e1-1234-5678-9abc-def012345678",
             "2001:db8::1",
@@ -537,7 +576,7 @@ mod tests {
             None,
             &json!({}),
         );
-        let yaml = serde_yaml::to_string(&proxy).unwrap();
+        let yaml = serde_yaml::to_string(&proxy.to_mihomo()).unwrap();
         let value: serde_yaml::Value = serde_yaml::from_str(&yaml).unwrap();
         assert_eq!(value["name"].as_str(), Some("東京: edge-7ed8a6e1"));
         assert_eq!(value["server"].as_str(), Some("2001:db8::1"));
@@ -573,14 +612,14 @@ mod tests {
             }
         });
         let realm = subscription_realm_options(&config).unwrap().unwrap();
-        let yaml = serde_yaml::to_string(&realm).unwrap();
+        let yaml = serde_yaml::to_string(&realm.to_mihomo()).unwrap();
         assert!(yaml.contains("server-url: https://rendezvous.example"));
         assert!(yaml.contains("token: realm-token"));
         assert!(yaml.contains("realm-id: node-realm-1"));
         assert!(yaml.contains("stun-servers:"));
         assert!(yaml.contains("skip-cert-verify: true"));
 
-        let proxy = build_proxy(
+        let proxy = build_node(
             "Realm node",
             "node-realm-id",
             "node.example",
@@ -595,7 +634,7 @@ mod tests {
             Some(realm),
             &config,
         );
-        let proxy_yaml = serde_yaml::to_string(&proxy).unwrap();
+        let proxy_yaml = serde_yaml::to_string(&proxy.to_mihomo()).unwrap();
         let proxy_value: serde_yaml::Value = serde_yaml::from_str(&proxy_yaml).unwrap();
         assert_eq!(proxy_value["handshake-timeout"].as_u64(), Some(30));
     }

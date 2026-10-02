@@ -15,49 +15,56 @@ struct OverviewView: View {
     }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
-                if !store.isConnected {
-                    ContentUnavailableView(
-                        store.lastUpdated == nil ? "连接管理服务" : "管理服务已断开",
-                        systemImage: "network.slash",
-                        description: Text(store.lastUpdated.map {
-                            "以下为 \($0.formatted(date: .abbreviated, time: .shortened)) 更新的缓存数据。恢复连接后刷新；断开期间不能写入。"
-                        } ?? "打开设置，填写服务 HTTPS 地址和管理员令牌。")
-                    )
-                    .frame(maxWidth: .infinity, minHeight: 180)
-                }
-                Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 16) {
-                    GridRow {
+        GeometryReader { geometry in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 24) {
+                    if !store.isConnected {
+                        ContentUnavailableView(
+                            store.lastUpdated == nil ? "连接管理服务" : "管理服务已断开",
+                            systemImage: "network.slash",
+                            description: Text(store.lastUpdated.map {
+                                "以下为 \($0.formatted(date: .abbreviated, time: .shortened)) 更新的缓存数据。恢复连接后刷新；断开期间不能写入。"
+                            } ?? "打开设置，填写服务 HTTPS 地址和管理员令牌。")
+                        )
+                        .frame(maxWidth: .infinity, minHeight: 180)
+                    }
+                    LazyVGrid(columns: summaryColumns(for: geometry.size.width), alignment: .leading, spacing: 16) {
                         summaryCard("节点", value: "\(store.nodes.count)", symbol: "server.rack")
                         summaryCard("用户", value: "\(store.users.count)", symbol: "person.2")
                         summaryCard("待处理任务", value: "\(store.jobs.filter { $0.status == "queued" || $0.status == "running" }.count)", symbol: "hourglass")
                         summaryCard("需关注节点", value: "\(nodesNeedingAttention)", symbol: "exclamationmark.triangle")
                     }
-                }
-                serverMonitoringSection
-                GroupBox("最近任务") {
-                    if store.jobs.isEmpty {
-                        Text("暂无任务").foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 8)
-                    } else {
-                        VStack(spacing: 0) {
-                            ForEach(store.jobs.prefix(5)) { job in
-                                HStack {
-                                    Image(systemName: job.status == "failed" ? "exclamationmark.circle" : "checkmark.circle")
-                                        .foregroundStyle(job.status == "failed" ? .orange : .secondary)
-                                    Text(JobDisplayText.kind(job.kind)).fontWeight(.medium)
-                                    Spacer()
-                                    Text(JobDisplayText.stage(job.stage)).foregroundStyle(.secondary)
-                                    Text(JobDisplayText.status(job.status)).foregroundStyle(.secondary).frame(width: 92, alignment: .trailing)
-                                }.padding(.vertical, 8)
-                                if job.id != store.jobs.prefix(5).last?.id { Divider() }
+                    serverMonitoringSection
+                    GroupBox("最近任务") {
+                        if store.jobs.isEmpty {
+                            Text("暂无任务").foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 8)
+                        } else {
+                            VStack(spacing: 0) {
+                                ForEach(store.jobs.prefix(5)) { job in
+                                    HStack {
+                                        Image(systemName: job.status == "failed" ? "exclamationmark.circle" : "checkmark.circle")
+                                            .foregroundStyle(job.status == "failed" ? .orange : .secondary)
+                                        Text(JobDisplayText.kind(job.kind)).fontWeight(.medium)
+                                        Spacer()
+                                        Text(JobDisplayText.stage(job.stage)).foregroundStyle(.secondary)
+                                        Text(JobDisplayText.status(job.status)).foregroundStyle(.secondary).frame(width: 92, alignment: .trailing)
+                                    }.padding(.vertical, 8)
+                                    if job.id != store.jobs.prefix(5).last?.id { Divider() }
+                                }
                             }
                         }
                     }
                 }
+                .frame(width: max(0, geometry.size.width - 56), alignment: .leading)
+                .padding(28)
             }
-            .padding(28)
         }
+    }
+
+    private func summaryColumns(for width: CGFloat) -> [GridItem] {
+        let availableWidth = max(0, width - 56)
+        let columnCount = availableWidth >= 4 * 180 + 3 * 16 ? 4 : 2
+        return Array(repeating: GridItem(.flexible(minimum: 0), spacing: 16, alignment: .leading), count: columnCount)
     }
 
     private var serverMonitoringSection: some View {
@@ -165,7 +172,7 @@ struct OverviewView: View {
                 }
                 Spacer()
                 Image(systemName: symbol).font(.title2).foregroundStyle(.tint)
-            }.frame(minWidth: 150, minHeight: 60)
+            }.frame(maxWidth: .infinity, minHeight: 60, alignment: .leading)
         }
     }
 }

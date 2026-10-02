@@ -278,6 +278,7 @@ struct SubscriptionReceipt: Codable, Sendable {
     let revision: Int
     let token: String
     let url: String
+    let autoUrl: String?
     let note: String
 
     enum CodingKeys: String, CodingKey {
@@ -285,6 +286,7 @@ struct SubscriptionReceipt: Codable, Sendable {
         case revision
         case token
         case url
+        case autoUrl = "auto_url"
         case note
     }
 }
@@ -389,12 +391,14 @@ struct ActiveSubscription: Codable, Sendable {
     let id: String
     let token: String
     let url: String
+    let autoUrl: String?
     let createdAt: String
 
     enum CodingKeys: String, CodingKey {
         case id
         case token
         case url
+        case autoUrl = "auto_url"
         case createdAt = "created_at"
     }
 }

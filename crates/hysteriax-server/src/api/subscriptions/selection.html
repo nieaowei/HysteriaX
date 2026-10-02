@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex,nofollow">
+  <meta name="referrer" content="no-referrer">
+  <title>HysteriaX · 选择订阅格式</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Helvetica Neue", sans-serif;
+      --background: #f5f5f7;
+      --surface: #fff;
+      --text: #1d1d1f;
+      --secondary: #6e6e73;
+      --line: #e8e8ed;
+      --field: #f5f5f7;
+      --blue: #0071e3;
+      --link: #0066cc;
+      --button-hover: #0077ed;
+      background: var(--background);
+      color: var(--text);
+      -webkit-font-smoothing: antialiased;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; }
+    .brand-bar { background: var(--surface); border-bottom: 1px solid var(--line); }
+    .brand { max-width: 1040px; margin: auto; padding: 20px 32px; display: flex; align-items: center; gap: 10px; }
+    .brand-mark { width: 25px; height: 25px; display: block; }
+    .brand-name { font-size: 19px; font-weight: 600; letter-spacing: -.6px; }
+    main { max-width: 1040px; margin: auto; padding: 0 32px 64px; }
+    .hero { text-align: center; padding: 72px 0 48px; }
+    .eyebrow { color: var(--secondary); font-size: 12px; font-weight: 600; letter-spacing: 2px; margin: 0 0 16px; }
+    h1 { font-size: clamp(32px, 5vw, 48px); line-height: 1.2; font-weight: 600; letter-spacing: -1.8px; margin: 0 0 20px; }
+    .hero p:last-child { margin: 0; color: var(--secondary); font-size: 17px; line-height: 1.65; }
+    .formats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; }
+    article { background: var(--surface); border-radius: 24px; padding: 32px; display: flex; flex-direction: column; min-width: 0; box-shadow: 0 2px 8px rgb(0 0 0 / 2%); }
+    .card-top { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 22px; }
+    .file-kind { display: inline-flex; align-items: center; justify-content: center; height: 42px; min-width: 62px; padding: 0 12px; border: 1px solid var(--line); border-radius: 12px; color: var(--secondary); font: 12px ui-monospace, "SF Mono", monospace; }
+    .category { color: var(--secondary); font-size: 12px; }
+    h2 { font-size: 25px; font-weight: 600; letter-spacing: -.7px; line-height: 1.25; margin: 0 0 12px; }
+    .description { color: var(--secondary); font-size: 14px; line-height: 1.65; margin: 0 0 24px; min-height: 46px; }
+    .address-label { color: var(--secondary); font-size: 11px; margin-bottom: 8px; }
+    input { width: 100%; min-width: 0; border: 1px solid transparent; border-radius: 10px; background: var(--field); color: var(--secondary); font: 12px ui-monospace, "SF Mono", monospace; padding: 13px 12px; margin-bottom: 20px; outline: none; }
+    input:focus { border-color: var(--blue); }
+    .links { display: flex; align-items: center; flex-wrap: wrap; gap: 20px; }
+    button { cursor: pointer; border: 0; border-radius: 980px; background: var(--blue); color: #fff; padding: 11px 21px; font: inherit; font-size: 13px; line-height: 1.3; transition: background .16s; }
+    button:hover { background: var(--button-hover); }
+    a { color: var(--link); text-decoration: none; font-size: 13px; }
+    a:hover { text-decoration: underline; }
+    a .arrow { display: inline-block; margin-left: 4px; }
+    button:focus-visible, a:focus-visible, summary:focus-visible { outline: 3px solid var(--blue); outline-offset: 4px; }
+    details { margin-top: 24px; padding-top: 18px; border-top: 1px solid var(--line); font-size: 12px; color: var(--secondary); line-height: 1.7; }
+    summary { cursor: pointer; width: fit-content; }
+    details p { margin: 12px 0 0; }
+    .notes { margin: 32px 8px 0; font-size: 12px; line-height: 1.8; color: var(--secondary); }
+    .notes p { margin: 6px 0; }
+    .notes strong { font-weight: 600; color: var(--text); }
+    footer { margin: 32px 8px 0; border-top: 1px solid var(--line); padding-top: 18px; color: var(--secondary); font-size: 11px; display: flex; gap: 12px; justify-content: space-between; }
+    #status { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); width: max-content; max-width: calc(100% - 40px); margin: 0; padding: 12px 20px; border-radius: 16px; background: var(--text); color: var(--surface); box-shadow: 0 4px 24px rgb(0 0 0 / 12%); font-size: 13px; line-height: 1.5; z-index: 1; }
+    #status:empty { display: none; }
+    @media (max-width: 640px) {
+      .brand { padding: 18px 24px; }
+      main { padding: 0 20px 40px; }
+      .hero { padding: 48px 8px 32px; }
+      h1 { letter-spacing: -1px; margin-bottom: 16px; }
+      .hero p:last-child { font-size: 15px; }
+      .formats { grid-template-columns: 1fr; gap: 16px; }
+      article { padding: 26px; border-radius: 22px; }
+      .description { min-height: 0; }
+      footer { flex-wrap: wrap; }
+    }
+    @media (prefers-color-scheme: dark) {
+      :root { --background: #000; --surface: #1c1c1e; --text: #f5f5f7; --secondary: #a1a1a6; --line: #38383a; --field: #2c2c2e; --link: #2997ff; }
+      .brand-bar { background: #161617; }
+    }
+    @media (prefers-reduced-motion: reduce) { button { transition: none; } }
+  </style>
+</head>
+<body>
+  <header class="brand-bar">
+    <div class="brand">
+      <svg class="brand-mark" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 5v14M19 5v14M5 12h14M9 5l6 14M15 5L9 19" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+      <span class="brand-name">HysteriaX</span>
+    </div>
+  </header>
+  <main>
+    <section class="hero" aria-labelledby="page-title">
+      <p class="eyebrow">HYSTERIAX SUBSCRIPTIONS</p>
+      <h1 id="page-title">选择订阅格式。</h1>
+      <p>找到你使用的客户端。<br>复制地址，即可添加订阅。</p>
+    </section>
+    <section class="formats" aria-label="可用订阅格式">
+      <article>
+        <div class="card-top"><span class="file-kind">.yaml</span><span class="category">完整配置</span></div>
+        <h2>Mihomo YAML</h2>
+        <p class="description">适用于 Mihomo / Clash.Meta 内核客户端。<br>包含节点选择组与默认路由。</p>
+        <label class="address-label" for="mihomo-url">订阅地址</label>
+        <input id="mihomo-url" aria-label="Mihomo 订阅地址" readonly spellcheck="false" value="{{AUTO_URL}}?format=mihomo">
+        <div class="links"><button type="button" aria-label="复制 Mihomo 订阅地址">复制地址</button><a href="{{AUTO_URL}}?format=mihomo">查看订阅<span class="arrow" aria-hidden="true">↗</span></a></div>
+        <details><summary>兼容性说明</summary><p>高级功能请使用项目验证版本 v1.19.31 或更新版本。普通 Clash 不支持全部功能。</p></details>
+      </article>
+      <article>
+        <div class="card-top"><span class="file-kind">.json</span><span class="category">完整配置</span></div>
+        <h2>sing-box JSON</h2>
+        <p class="description">适用于 sing-box 1.11 及更新版本。<br>提供本地代理入口与节点选择组。</p>
+        <label class="address-label" for="singbox-url">订阅地址</label>
+        <input id="singbox-url" aria-label="sing-box 订阅地址" readonly spellcheck="false" value="{{AUTO_URL}}?format=singbox">
+        <div class="links"><button type="button" aria-label="复制 sing-box 订阅地址">复制地址</button><a href="{{AUTO_URL}}?format=singbox">查看订阅<span class="arrow" aria-hidden="true">↗</span></a></div>
+        <details><summary>兼容性说明</summary><p>mTLS 需要 1.13+，Gecko / Realm 需要 1.14+，ECH 使用验证版本 1.14.2+。无法确认客户端版本时仅生成基础兼容配置。</p><p>浏览器查看和管理端导出会过滤上述高级功能。请在支持的 sing-box 客户端中添加此链接并更新订阅，以启用高级功能。</p></details>
+      </article>
+      <article>
+        <div class="card-top"><span class="file-kind">Base64</span><span class="category">通用订阅</span></div>
+        <h2>Base64 节点订阅</h2>
+        <p class="description">适用于支持 Hysteria2 的 Shadowrocket、<br>v2rayN、v2rayNG 等客户端。</p>
+        <label class="address-label" for="base64-url">订阅地址</label>
+        <input id="base64-url" aria-label="Base64 订阅地址" readonly spellcheck="false" value="{{AUTO_URL}}?format=base64">
+        <div class="links"><button type="button" aria-label="复制 Base64 订阅地址">复制地址</button><a href="{{AUTO_URL}}?format=base64">查看订阅<span class="arrow" aria-hidden="true">↗</span></a></div>
+        <details><summary>兼容性说明</summary><p>仅包含节点链接，不包含完整路由配置。mTLS、ECH、端口跳跃、Gecko 和 Realm 节点会被过滤。</p></details>
+      </article>
+      <article>
+        <div class="card-top"><span class="file-kind">URI</span><span class="category">手动导入</span></div>
+        <h2>纯文本节点链接</h2>
+        <p class="description">每行一个 hysteria2:// 链接。<br>适合手动导入或与其他工具配合使用。</p>
+        <label class="address-label" for="uri-url">订阅地址</label>
+        <input id="uri-url" aria-label="纯文本订阅地址" readonly spellcheck="false" value="{{AUTO_URL}}?format=uri">
+        <div class="links"><button type="button" aria-label="复制纯文本订阅地址">复制地址</button><a href="{{AUTO_URL}}?format=uri">查看订阅<span class="arrow" aria-hidden="true">↗</span></a></div>
+        <details><summary>兼容性说明</summary><p>链接列表采用基础兼容配置。mTLS、ECH、端口跳跃、Gecko 和 Realm 节点会被过滤。</p></details>
+      </article>
+    </section>
+    <aside class="notes" aria-label="订阅说明">
+      <p><strong>关于兼容性</strong> · 部分节点不兼容时仍返回可用节点，全部不兼容时提示错误。</p>
+      <p><strong>保护你的订阅</strong> · 订阅地址包含访问凭据，请妥善保存。</p>
+    </aside>
+    <footer><span>HysteriaX</span></footer>
+  </main>
+  <p id="status" role="status" aria-live="polite" aria-atomic="true"></p>
+  <script>
+    let statusTimer;
+    document.querySelectorAll('button').forEach(button => button.addEventListener('click', async () => {
+      const input = button.closest('article').querySelector('input');
+      const status = document.getElementById('status');
+      clearTimeout(statusTimer);
+      try {
+        await navigator.clipboard.writeText(input.value);
+        status.textContent = '订阅地址已复制。';
+      } catch {
+        input.focus();
+        input.select();
+        status.textContent = '请复制已选中的订阅地址。';
+      }
+      statusTimer = setTimeout(() => { status.textContent = ''; }, 5000);
+    }));
+    document.querySelectorAll('input').forEach(input => input.addEventListener('click', () => input.select()));
+  </script>
+</body>
+</html>

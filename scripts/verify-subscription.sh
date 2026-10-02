@@ -14,6 +14,7 @@ import urllib.error
 import urllib.request
 
 from postgres_test import PostgresTestSchema
+from subscription_formats_test import run as verify_formats
 
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -333,6 +334,7 @@ def main():
                 check=True,
                 stdout=subprocess.DEVNULL,
             )
+            verify_formats(base, admin, database, temp, subscription, first_subscription, user_id, empty_token)
             print("Generated mTLS, ECH, port-hopping, and Realm subscriptions parse with pinned Mihomo v1.19.31; the Realm subscription includes handshake-timeout: 30.")
         finally:
             server.terminate()

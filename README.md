@@ -35,6 +35,24 @@ curl --fail https://manage.example.com/readyz
 
 Management endpoints are under `/api/v1` and require `Authorization: Bearer …`. The OpenAPI document is available at `/openapi.yaml`. A local API process can be started with `scripts/run.sh` after setting `DATABASE_URL`, `HYSTERIAX_ADMIN_TOKEN`, and `HYSTERIAX_MASTER_KEY`.
 
+## Client-aware subscriptions
+
+The macOS subscription menu copies the automatic URL by default. The same
+`/sub/{token}` URL returns Mihomo YAML, sing-box JSON, or Base64 Hysteria2 links
+according to the client's User-Agent. Browsers and unknown clients receive a
+format selection page with copyable links. Use `?format=mihomo`, `singbox`,
+`base64`, or `uri` to select a format explicitly. Existing
+`/sub/{token}/clash.yaml` subscriptions remain fixed Mihomo YAML and use the same token.
+
+The macOS menu also copies individual format URLs and exports `.yaml`, `.json`,
+or `.txt` files. sing-box exports provide a localhost mixed proxy on port 7890
+and a node selector, without TUN or remote rule sets. Older servers remain usable
+for automatic-link copying and Mihomo exports; additional formats require a
+server upgrade. Deploy the server before updating the macOS client.
+
+See [subscription formats and compatibility](docs/subscriptions.md) for version
+requirements and filtering behavior.
+
 ## Development
 
 Start the PostgreSQL service for local tests with `docker compose --env-file .env -f compose.yaml -f compose.test.yaml up -d postgres`. Load the generated database password into the shell before setting `TEST_DATABASE_URL`:
@@ -55,6 +73,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 xcodebuild -project apps/macos/HysteriaX.xcodeproj -scheme HysteriaX -configuration Release -sdk macosx -destination 'generic/platform=macOS' build CODE_SIGNING_ALLOWED=NO
 scripts/verify-mihomo-config.sh tests/fixtures/mihomo-hysteria2.yaml
 scripts/verify-subscription.sh
+scripts/verify-subscription-client.sh
 scripts/verify-restart-recovery.py
 scripts/verify-sampling-failure.py
 scripts/backup-restore.py backup

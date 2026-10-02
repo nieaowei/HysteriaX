@@ -83,6 +83,7 @@ pub fn router(state: AppState) -> Router {
         .route("/healthz", get(healthz))
         .route("/readyz", get(readyz))
         .route("/openapi.yaml", get(openapi))
+        .route("/sub/{token}", get(subscriptions::download_auto))
         .route("/sub/{token}/clash.yaml", get(subscriptions::download))
         .route(
             "/hy2/auth/{node_id}/{node_token}",
@@ -94,7 +95,7 @@ pub fn router(state: AppState) -> Router {
                 |request: &axum::http::Request<_>| {
                     let path = request.uri().path();
                     let path = if path.starts_with("/sub/") {
-                        "/sub/:token/clash.yaml"
+                        "/sub/:token"
                     } else if path.starts_with("/hy2/auth/") {
                         "/hy2/auth/:node_id/:node_token"
                     } else {

@@ -569,6 +569,54 @@ paths:
           description: OpenAPI document in YAML format
           content:
             application/yaml: { schema: { type: string } }
+  /sub/{token}:
+    parameters:
+      - name: token
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      summary: Download a negotiated subscription or the format selection page
+      operationId: downloadAutomaticSubscription
+      x-swift-include-optional-query: true
+      description: |
+        Explicit format overrides User-Agent. Auto recognizes Mihomo, sing-box,
+        Shadowrocket, v2rayN and v2rayNG; unknown clients receive an HTML selection page.
+        Advanced nodes are filtered when the client/version cannot preserve required features.
+        All incompatible nodes produce 422; an unassigned user receives an empty subscription.
+      parameters:
+        - name: format
+          in: query
+          schema: { type: string, enum: [auto, mihomo, singbox, base64, uri], default: auto }
+        - name: User-Agent
+          in: header
+          description: Client kernel and version; unknown versions use conservative capabilities.
+          schema: { type: string }
+      servers:
+        - url: https://{domain}
+          variables:
+            domain: { default: localhost }
+      security: []
+      responses:
+        '200':
+          description: Subscription file or static format selection page
+          headers:
+            Cache-Control: { schema: { type: string, const: 'private, no-store' } }
+            Vary: { schema: { type: string, const: User-Agent } }
+            Referrer-Policy: { schema: { type: string, const: no-referrer } }
+            X-Robots-Tag: { schema: { type: string, const: 'noindex, nofollow' } }
+            X-HysteriaX-Filtered-Nodes:
+              description: Number of incompatible nodes omitted from a subscription file.
+              schema: { type: integer, minimum: 0 }
+          content:
+            application/yaml: { schema: { type: string } }
+            application/json: { schema: { type: string, format: binary } }
+            text/plain: { schema: { type: string } }
+            text/html: { schema: { type: string } }
+        '400': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
   /sub/{token}/clash.yaml:
     parameters:
       - name: token
@@ -587,7 +635,7 @@ paths:
         '200':
           description: Mihomo YAML configuration
           headers:
-            Cache-Control: { schema: { type: string, const: no-store } }
+            Cache-Control: { schema: { type: string, const: 'private, no-store' } }
           content:
             application/yaml: { schema: { type: string } }
         '403': { $ref: '#/components/responses/Error' }
@@ -905,6 +953,7 @@ components:
         revision: { type: integer }
         token: { type: string, description: One-time subscription token returned on rotation. }
         url: { type: string }
+        auto_url: { type: string, description: Automatic subscription URL; optional for compatibility with older servers. }
         note: { type: string }
     RotatedCredential:
       type: object
@@ -963,6 +1012,7 @@ components:
         id: { type: string, format: uuid }
         token: { type: string, description: Current subscription token. }
         url: { type: string }
+        auto_url: { type: string, description: Automatic subscription URL; optional for compatibility with older servers. }
         created_at: { type: string, format: date-time }
     SubscriptionStatus:
       type: object

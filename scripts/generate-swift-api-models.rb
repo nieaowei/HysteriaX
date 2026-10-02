@@ -216,6 +216,7 @@ def operation_response_type(operation, schemas)
   success = operation.fetch("responses", {}).find { |status, _| status.match?(/\A2\d\d\z/) }
   schema = success&.last&.dig("content", "application/json", "schema")
   return "NoResponse" unless schema
+  return "NoResponse" if schema["format"] == "binary"
   swift_type(schema, schemas)
 end
 
@@ -232,7 +233,8 @@ def operation_path(path, operation, spec)
   "#{prefix}#{escaped}".sub(%r{\A/}, "")
 end
 
-def required_query_parameters(path_item, operation, spec)
+# Optional query parameters are opt-in to preserve existing no-argument endpoint APIs.
+def swift_query_parameters(path_item, operation, spec)
   parameters = (path_item.fetch("parameters", []) + operation.fetch("parameters", [])).map do |parameter|
     if parameter.key?("$ref")
       name = parameter.fetch("$ref").split("/").last
@@ -242,7 +244,7 @@ def required_query_parameters(path_item, operation, spec)
     end
   end
   parameters
-    .select { |parameter| parameter["in"] == "query" && parameter["required"] }
+    .select { |parameter| parameter["in"] == "query" && (parameter["required"] || operation["x-swift-include-optional-query"]) }
     .uniq { |parameter| parameter.fetch("name") }
 end
 
@@ -264,22 +266,29 @@ spec.fetch("paths").each do |path, path_item|
     name = operation.fetch("operationId")
     path_parameters = path.scan(/\{([^}]+)\}/).flatten
     generated_path = operation_path(path, operation, spec)
-    query_parameters = required_query_parameters(path_item, operation, spec)
+    query_parameters = swift_query_parameters(path_item, operation, spec)
     all_parameters = path_parameters.map { |parameter| [parameter, "String", swift_name(parameter), false] }
     query_parameters.each do |parameter|
       field = parameter.fetch("name")
       type = swift_type(parameter.fetch("schema", {"type" => "string"}), schemas)
-      all_parameters << [field, type, swift_name(field), true]
+      all_parameters << [field, type, swift_name(field), !parameter["required"]]
     end
-    signature = all_parameters.map { |_, type, name, _| "#{name}: #{type}" }.join(", ")
+    signature = all_parameters.map { |_, type, name, optional| optional ? "#{name}: #{type}? = nil" : "#{name}: #{type}" }.join(", ")
     query_pairs = query_parameters.map do |parameter|
       field = parameter.fetch("name")
       query_swift_name = swift_name(field)
       schema_type = swift_type(parameter.fetch("schema", {"type" => "string"}), schemas)
       value = schema_type == "String" ? query_swift_name : "String(#{query_swift_name})"
-      "#{field.dump}: #{value}"
+      if parameter["required"]
+        "#{field.dump}: #{value}"
+      else
+        "#{field.dump}: #{query_swift_name}.map { String($0) }"
+      end
     end.join(", ")
     query_literal = query_pairs.empty? ? "[:]" : "[#{query_pairs}]"
+    if query_parameters.any? { |parameter| !parameter["required"] }
+      query_literal += ".compactMapValues { $0 }"
+    end
     request_type = operation_request_type(operation, schemas, request_model_by_schema)
     response_type = operation_response_type(operation, schemas)
     endpoint = "APIOperation<#{request_type}, #{response_type}>(method: #{method.upcase.dump}, path: #{generated_path.dump}, queryParameters: #{query_literal})"
