@@ -1,20 +1,37 @@
 services:
+  postgres:
+    image: postgres:18-bookworm
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: hysteriax
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${HYSTERIAX_DB_ADMIN_PASSWORD:?run scripts/init-secrets.sh first}
+      HYSTERIAX_DB_USER: ${HYSTERIAX_DB_USER:-hysteriax}
+      HYSTERIAX_DB_PASSWORD: ${HYSTERIAX_DB_PASSWORD:?run scripts/init-secrets.sh first}
+    volumes:
+      - postgres_data:/var/lib/postgresql
+      - ./scripts/provision-postgres.sh:/docker-entrypoint-initdb.d/10-provision-hysteriax.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
   api:
     build: .
     image: "${HYSTERIAX_IMAGE:-hysteriax-server}:${HYSTERIAX_VERSION:-dev}"
     restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
     user: "${HYSTERIAX_UID:-1000}:${HYSTERIAX_GID:-1000}"
     environment:
-      DATABASE_URL: sqlite:///data/hysteriax.db?mode=rwc
-      HYSTERIAX_MIGRATION_BACKUP_DIR: /backups/migrations
+      DATABASE_URL: postgresql://${HYSTERIAX_DB_USER:-hysteriax}:${HYSTERIAX_DB_PASSWORD}@postgres:5432/${POSTGRES_DB:-hysteriax}
       HYSTERIAX_LISTEN_ADDR: 0.0.0.0:8080
       HYSTERIAX_PUBLIC_URL: https://${HYSTERIAX_DOMAIN}
       HYSTERIAX_ADMIN_TOKEN: ${HYSTERIAX_ADMIN_TOKEN}
       HYSTERIAX_MASTER_KEY: ${HYSTERIAX_MASTER_KEY}
       RUST_LOG: info
-    volumes:
-      - ./data:/data
-      - ./backups:/backups
     healthcheck:
       test: ["CMD", "curl", "--fail", "http://127.0.0.1:8080/readyz"]
       interval: 30s
@@ -38,5 +55,6 @@ services:
       - caddy_config:/config
 
 volumes:
+  postgres_data:
   caddy_data:
   caddy_config:

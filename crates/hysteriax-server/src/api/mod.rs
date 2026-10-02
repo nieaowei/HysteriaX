@@ -15,10 +15,10 @@ use axum::{
     response::{IntoResponse, Response, Sse, sse::Event},
     routing::{delete, get, post},
 };
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use sqlx::{Row, Sqlite, SqlitePool, Transaction};
+use sqlx::{PgPool, Postgres, Row, Transaction};
 use subtle::ConstantTimeEq;
 use uuid::Uuid;
 
@@ -165,7 +165,7 @@ async fn api_version() -> Json<Value> {
 }
 
 async fn readyz(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
-    sqlx::query_scalar::<_, i64>("SELECT 1")
+    sqlx::query_scalar::<_, i64>("SELECT 1::BIGINT")
         .fetch_one(&state.pool)
         .await?;
     Ok(Json(json!({"status": "ready", "database": "ok"})))
@@ -200,7 +200,7 @@ async fn job_events(
     Query(query): Query<EventsQuery>,
     headers: HeaderMap,
 ) -> Result<Sse<impl futures_core::Stream<Item = Result<Event, Infallible>>>, ApiError> {
-    let exists: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM jobs WHERE id = ?")
+    let exists: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM jobs WHERE id = $1")
         .bind(&id)
         .fetch_one(&state.pool)
         .await?;
@@ -234,10 +234,10 @@ fn stream_events(
     let output = stream! {
         loop {
             let rows = if let Some(job_id) = &job_id {
-                sqlx::query("SELECT id, event_type, payload_json FROM job_events WHERE id > ? AND job_id = ? ORDER BY id LIMIT 100")
+                sqlx::query("SELECT id, event_type, payload_json FROM job_events WHERE id > $1 AND job_id = $2 ORDER BY id LIMIT 100")
                     .bind(cursor).bind(job_id).fetch_all(&state.pool).await
             } else {
-                sqlx::query("SELECT id, event_type, payload_json FROM job_events WHERE id > ? ORDER BY id LIMIT 100")
+                sqlx::query("SELECT id, event_type, payload_json FROM job_events WHERE id > $1 ORDER BY id LIMIT 100")
                     .bind(cursor).fetch_all(&state.pool).await
             };
             match rows {
@@ -245,9 +245,9 @@ fn stream_events(
                     for row in rows {
                         let id: i64 = row.get("id");
                         let event_type: String = row.get("event_type");
-                        let payload: String = row.get("payload_json");
+                        let payload: Value = row.get("payload_json");
                         cursor = id;
-                        yield Ok(Event::default().id(id.to_string()).event(event_type).data(payload));
+                        yield Ok(Event::default().id(id.to_string()).event(event_type).data(payload.to_string()));
                     }
                 }
                 Err(error) => tracing::error!(%error, "failed to load persisted SSE events"),
@@ -269,9 +269,9 @@ struct JobSummary {
     error_message: Option<String>,
     result: Option<Value>,
     attempts: i64,
-    created_at: String,
-    updated_at: String,
-    finished_at: Option<String>,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+    finished_at: Option<DateTime<Utc>>,
 }
 
 async fn list_jobs(State(state): State<AppState>) -> Result<Json<Vec<JobSummary>>, ApiError> {
@@ -285,17 +285,17 @@ async fn get_job(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
-    let row = sqlx::query("SELECT id, kind, node_id, target_revision, status, stage, result_json, error_message, logs_json, attempts, created_at, updated_at, started_at, finished_at FROM jobs WHERE id = ?")
+    let row = sqlx::query("SELECT id, kind, node_id, target_revision, status, stage, result_json, error_message, logs_json, attempts, created_at, updated_at, started_at, finished_at FROM jobs WHERE id = $1")
         .bind(&id).fetch_optional(&state.pool).await?.ok_or_else(|| ApiError::not_found("job"))?;
     let summary = job_summary(&row);
-    let result: Option<String> = row.get("result_json");
-    let logs: String = row.get("logs_json");
+    let result: Option<Value> = row.get("result_json");
+    let logs: Value = row.get("logs_json");
     Ok(Json(
-        json!({"job": summary, "result": result.and_then(|v| serde_json::from_str::<Value>(&v).ok()), "logs": serde_json::from_str::<Value>(&logs).unwrap_or_else(|_| json!([])), "started_at": row.get::<Option<String>, _>("started_at")}),
+        json!({"job": summary, "result": result, "logs": logs, "started_at": row.get::<Option<chrono::DateTime<chrono::Utc>>, _>("started_at")}),
     ))
 }
 
-fn job_summary(row: &sqlx::sqlite::SqliteRow) -> JobSummary {
+fn job_summary(row: &sqlx::postgres::PgRow) -> JobSummary {
     JobSummary {
         id: row.get("id"),
         kind: row.get("kind"),
@@ -304,9 +304,7 @@ fn job_summary(row: &sqlx::sqlite::SqliteRow) -> JobSummary {
         status: row.get("status"),
         stage: row.get("stage"),
         error_message: row.get("error_message"),
-        result: row
-            .get::<Option<String>, _>("result_json")
-            .and_then(|value| serde_json::from_str(&value).ok()),
+        result: row.get::<Option<Value>, _>("result_json"),
         attempts: row.get("attempts"),
         created_at: row.get("created_at"),
         updated_at: row.get("updated_at"),
@@ -319,8 +317,8 @@ async fn list_admin_tokens(State(state): State<AppState>) -> Result<Json<Vec<Val
         .fetch_all(&state.pool).await?;
     Ok(Json(rows.iter().map(|row| json!({
         "id": row.get::<String, _>("id"), "label": row.get::<String, _>("label"),
-        "created_at": row.get::<String, _>("created_at"), "last_used_at": row.get::<Option<String>, _>("last_used_at"),
-        "revoked_at": row.get::<Option<String>, _>("revoked_at")
+        "created_at": row.get::<chrono::DateTime<chrono::Utc>, _>("created_at"), "last_used_at": row.get::<Option<chrono::DateTime<chrono::Utc>>, _>("last_used_at"),
+        "revoked_at": row.get::<Option<chrono::DateTime<chrono::Utc>>, _>("revoked_at")
     })).collect()))
 }
 
@@ -331,8 +329,8 @@ async fn list_audit_records(State(state): State<AppState>) -> Result<Json<Vec<Va
         "id": row.get::<String, _>("id"), "actor": row.get::<String, _>("actor"),
         "action": row.get::<String, _>("action"), "entity_type": row.get::<String, _>("entity_type"),
         "entity_id": row.get::<String, _>("entity_id"),
-        "detail": serde_json::from_str::<Value>(&row.get::<String, _>("detail_json")).unwrap_or_else(|_| json!({})),
-        "created_at": row.get::<String, _>("created_at")
+        "detail": row.get::<Value, _>("detail_json"),
+        "created_at": row.get::<chrono::DateTime<chrono::Utc>, _>("created_at")
     })).collect()))
 }
 
@@ -348,13 +346,15 @@ async fn create_admin_token(
     let label = validate_admin_token_label(&input.label)?;
     let token = generate_token();
     let id = Uuid::new_v4().to_string();
-    sqlx::query("INSERT INTO admin_tokens (id, token_hash, label, created_at) VALUES (?, ?, ?, ?)")
-        .bind(&id)
-        .bind(token_digest(&token))
-        .bind(label)
-        .bind(now())
-        .execute(&state.pool)
-        .await?;
+    sqlx::query(
+        "INSERT INTO admin_tokens (id, token_hash, label, created_at) VALUES ($1, $2, $3, $4)",
+    )
+    .bind(&id)
+    .bind(token_digest(&token))
+    .bind(label)
+    .bind(now())
+    .execute(&state.pool)
+    .await?;
     audit(
         &state.pool,
         "admin_token.created",
@@ -384,7 +384,7 @@ async fn revoke_admin_token(
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
     let result =
-        sqlx::query("UPDATE admin_tokens SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL")
+        sqlx::query("UPDATE admin_tokens SET revoked_at = $1 WHERE id = $2 AND revoked_at IS NULL")
             .bind(now())
             .bind(&id)
             .execute(&state.pool)
@@ -404,20 +404,20 @@ async fn revoke_admin_token(
 }
 
 pub(crate) async fn audit(
-    pool: &SqlitePool,
+    pool: &PgPool,
     action: &str,
     entity_type: &str,
     entity_id: &str,
     detail: Value,
 ) -> Result<(), ApiError> {
-    sqlx::query("INSERT INTO audit_records (id, actor, action, entity_type, entity_id, detail_json, created_at) VALUES (?, 'admin', ?, ?, ?, ?, ?)")
+    sqlx::query("INSERT INTO audit_records (id, actor, action, entity_type, entity_id, detail_json, created_at) VALUES ($1, 'admin', $2, $3, $4, $5, $6)")
         .bind(Uuid::new_v4().to_string()).bind(action).bind(entity_type).bind(entity_id)
-        .bind(detail.to_string()).bind(now()).execute(pool).await?;
+        .bind(detail).bind(now()).execute(pool).await?;
     Ok(())
 }
 
 pub(crate) async fn enqueue_job_in_tx(
-    tx: &mut Transaction<'_, Sqlite>,
+    tx: &mut Transaction<'_, Postgres>,
     kind: &str,
     node_id: Option<&str>,
     revision: Option<i64>,
@@ -426,7 +426,7 @@ pub(crate) async fn enqueue_job_in_tx(
 }
 
 pub(crate) async fn enqueue_job_with_payload_in_tx(
-    tx: &mut Transaction<'_, Sqlite>,
+    tx: &mut Transaction<'_, Postgres>,
     kind: &str,
     node_id: Option<&str>,
     revision: Option<i64>,
@@ -435,19 +435,19 @@ pub(crate) async fn enqueue_job_with_payload_in_tx(
     let id = Uuid::new_v4().to_string();
     let timestamp = now();
     let payload = json!({"id": id, "kind": kind, "node_id": node_id, "target_revision": revision, "status": "queued", "stage": "queued"});
-    sqlx::query("INSERT INTO jobs (id, kind, node_id, target_revision, payload_json, status, stage, available_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'queued', 'queued', ?, ?, ?)")
-        .bind(&id).bind(kind).bind(node_id).bind(revision).bind(job_payload.to_string()).bind(&timestamp).bind(&timestamp).bind(&timestamp).execute(&mut **tx).await?;
-    sqlx::query("INSERT INTO job_events (job_id, event_type, payload_json, created_at) VALUES (?, 'job.queued', ?, ?)")
-        .bind(&id).bind(payload.to_string()).bind(&timestamp).execute(&mut **tx).await?;
+    sqlx::query("INSERT INTO jobs (id, kind, node_id, target_revision, payload_json, status, stage, available_at, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, 'queued', 'queued', $6, $7, $8)")
+        .bind(&id).bind(kind).bind(node_id).bind(revision).bind(job_payload).bind(timestamp).bind(timestamp).bind(timestamp).execute(&mut **tx).await?;
+    sqlx::query("INSERT INTO job_events (job_id, event_type, payload_json, created_at) VALUES ($1, 'job.queued', $2, $3)")
+        .bind(&id).bind(payload).bind(timestamp).execute(&mut **tx).await?;
     Ok(id)
 }
 
 pub(crate) async fn supersede_queued_syncs_in_tx(
-    tx: &mut Transaction<'_, Sqlite>,
+    tx: &mut Transaction<'_, Postgres>,
     node_id: &str,
 ) -> Result<(), ApiError> {
     let rows = sqlx::query(
-        "SELECT id FROM jobs WHERE node_id = ? AND kind = 'sync' AND status = 'queued'",
+        "SELECT id FROM jobs WHERE node_id = $1 AND kind = 'sync' AND status = 'queued'",
     )
     .bind(node_id)
     .fetch_all(&mut **tx)
@@ -455,21 +455,21 @@ pub(crate) async fn supersede_queued_syncs_in_tx(
     for row in rows {
         let id: String = row.get("id");
         let timestamp = now();
-        sqlx::query("UPDATE jobs SET status = 'cancelled', stage = 'superseded', updated_at = ?, finished_at = ? WHERE id = ? AND status = 'queued'")
-            .bind(&timestamp).bind(&timestamp).bind(&id).execute(&mut **tx).await?;
+        sqlx::query("UPDATE jobs SET status = 'cancelled', stage = 'superseded', updated_at = $1, finished_at = $2 WHERE id = $3 AND status = 'queued'")
+            .bind(timestamp).bind(timestamp).bind(&id).execute(&mut **tx).await?;
         let payload =
             json!({"id": id, "status": "cancelled", "stage": "superseded", "node_id": node_id});
-        sqlx::query("INSERT INTO job_events (job_id, event_type, payload_json, created_at) VALUES (?, 'job.superseded', ?, ?)")
-            .bind(&id).bind(payload.to_string()).bind(timestamp).execute(&mut **tx).await?;
+        sqlx::query("INSERT INTO job_events (job_id, event_type, payload_json, created_at) VALUES ($1, 'job.superseded', $2, $3)")
+            .bind(&id).bind(payload).bind(timestamp).execute(&mut **tx).await?;
     }
     Ok(())
 }
 
 pub(crate) async fn cancel_queued_node_jobs_in_tx(
-    tx: &mut Transaction<'_, Sqlite>,
+    tx: &mut Transaction<'_, Postgres>,
     node_id: &str,
 ) -> Result<(), ApiError> {
-    let rows = sqlx::query("SELECT id, kind FROM jobs WHERE node_id = ? AND status = 'queued'")
+    let rows = sqlx::query("SELECT id, kind FROM jobs WHERE node_id = $1 AND status = 'queued'")
         .bind(node_id)
         .fetch_all(&mut **tx)
         .await?;
@@ -477,17 +477,17 @@ pub(crate) async fn cancel_queued_node_jobs_in_tx(
         let id: String = row.get("id");
         let kind: String = row.get("kind");
         let timestamp = now();
-        sqlx::query("UPDATE jobs SET status = 'cancelled', stage = 'node_deleting', updated_at = ?, finished_at = ? WHERE id = ? AND status = 'queued'")
-            .bind(&timestamp).bind(&timestamp).bind(&id).execute(&mut **tx).await?;
+        sqlx::query("UPDATE jobs SET status = 'cancelled', stage = 'node_deleting', updated_at = $1, finished_at = $2 WHERE id = $3 AND status = 'queued'")
+            .bind(timestamp).bind(timestamp).bind(&id).execute(&mut **tx).await?;
         let payload = json!({"id": id, "kind": kind, "node_id": node_id, "status": "cancelled", "stage": "node_deleting"});
-        sqlx::query("INSERT INTO job_events (job_id, event_type, payload_json, created_at) VALUES (?, 'job.cancelled', ?, ?)")
-            .bind(&id).bind(payload.to_string()).bind(timestamp).execute(&mut **tx).await?;
+        sqlx::query("INSERT INTO job_events (job_id, event_type, payload_json, created_at) VALUES ($1, 'job.cancelled', $2, $3)")
+            .bind(&id).bind(payload).bind(timestamp).execute(&mut **tx).await?;
     }
     Ok(())
 }
 
-pub(crate) fn now() -> String {
-    Utc::now().to_rfc3339()
+pub(crate) fn now() -> DateTime<Utc> {
+    Utc::now()
 }
 
 pub(crate) fn generate_token() -> String {

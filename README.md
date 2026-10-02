@@ -4,7 +4,7 @@ HysteriaX is a self hosted Hysteria 2 node and user manager. The repository cont
 
 ## Current implementation
 
-- Rust workspace and Axum API with SQLite WAL migrations.
+- Rust workspace and Axum API backed by PostgreSQL 18.
 - Encrypted at rest SSH secrets, Hysteria node tokens, user credentials, subscription tokens, configuration snapshots, and uploaded config resources.
 - Bearer token authentication with one time token creation and revocation.
 - Revision guarded node and user updates; configuration updates and sync job creation share a database transaction.
@@ -23,7 +23,9 @@ scripts/init-secrets.sh manage.example.com
 docker compose up -d --build
 ```
 
-The administrator token and encryption key are written to `.env` with mode 600. Store the administrator token in a password manager. Back up `HYSTERIAX_MASTER_KEY` separately from the database; encrypted secrets cannot be recovered without it.
+Administrator, encryption, and PostgreSQL credentials are written to `.env` with mode 600. Store the administrator token in a password manager. Back up `HYSTERIAX_MASTER_KEY` separately from the database; encrypted secrets cannot be recovered without it.
+
+Existing SQLite installations start with an empty PostgreSQL database and are not imported automatically. See the [installation guide](docs/installation.md#existing-sqlite-installations) before switching an existing service.
 
 Check readiness:
 
@@ -34,6 +36,16 @@ curl --fail https://manage.example.com/readyz
 Management endpoints are under `/api/v1` and require `Authorization: Bearer …`. The OpenAPI document is available at `/openapi.yaml`. A local API process can be started with `scripts/run.sh` after setting `DATABASE_URL`, `HYSTERIAX_ADMIN_TOKEN`, and `HYSTERIAX_MASTER_KEY`.
 
 ## Development
+
+Start the PostgreSQL service for local tests with `docker compose --env-file .env -f compose.yaml -f compose.test.yaml up -d postgres`. Load the generated database password into the shell before setting `TEST_DATABASE_URL`:
+
+```sh
+set -a
+. ./.env
+set +a
+export TEST_DATABASE_URL="postgresql://postgres:${HYSTERIAX_DB_ADMIN_PASSWORD}@127.0.0.1:${HYSTERIAX_DB_HOST_PORT:-55432}/hysteriax"
+python3 -m pip install -r scripts/requirements-test.txt
+```
 
 ```sh
 cargo fmt --all

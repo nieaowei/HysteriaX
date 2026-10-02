@@ -1,8 +1,9 @@
+use crate::db;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use serde_json::{Map, Value, json};
-use sqlx::{Row, SqlitePool};
+use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
 use crate::{
@@ -62,7 +63,7 @@ pub async fn run(state: AppState) {
     }
 }
 
-async fn collect_all(pool: &SqlitePool, secrets: &SecretBox) -> Result<()> {
+async fn collect_all(pool: &PgPool, secrets: &SecretBox) -> Result<()> {
     let rows = sqlx::query("SELECT id FROM nodes WHERE deployed_revision IS NOT NULL AND state NOT IN ('deleting', 'delete_failed') ORDER BY id")
         .fetch_all(pool)
         .await?;
@@ -70,14 +71,14 @@ async fn collect_all(pool: &SqlitePool, secrets: &SecretBox) -> Result<()> {
         let node_id: String = row.get("id");
         if let Err(error) = sample_node(pool, secrets, &node_id).await {
             record_gap(pool, &node_id, classify_sample_error(&error)).await?;
-            sqlx::query("UPDATE nodes SET state = CASE WHEN state IN ('deployed', 'syncing') THEN 'unreachable' ELSE state END, updated_at = ? WHERE id = ?")
+            sqlx::query("UPDATE nodes SET state = CASE WHEN state IN ('deployed', 'syncing') THEN 'unreachable' ELSE state END, updated_at = $1 WHERE id = $2")
                 .bind(now()).bind(&node_id).execute(pool).await?;
         }
     }
     Ok(())
 }
 
-async fn sample_node(pool: &SqlitePool, secrets: &SecretBox, node_id: &str) -> Result<()> {
+async fn sample_node(pool: &PgPool, secrets: &SecretBox, node_id: &str) -> Result<()> {
     let node = deployment::load_ssh_node(pool, secrets, node_id).await?;
     let session = match ssh::connect(&node).await? {
         FingerprintResult::Trusted(session) => session,
@@ -90,7 +91,7 @@ async fn sample_node(pool: &SqlitePool, secrets: &SecretBox, node_id: &str) -> R
     };
     let before_instance = systemd_instance(&session).await?;
     let stats_secret_enc: String =
-        sqlx::query_scalar("SELECT traffic_stats_secret_enc FROM nodes WHERE id = ?")
+        sqlx::query_scalar("SELECT traffic_stats_secret_enc FROM nodes WHERE id = $1")
             .bind(node_id)
             .fetch_one(pool)
             .await?;
@@ -112,9 +113,9 @@ async fn sample_node(pool: &SqlitePool, secrets: &SecretBox, node_id: &str) -> R
         .context("Hysteria traffic API returned an invalid response shape")?;
     apply_sample(pool, node_id, &before_instance, counters).await?;
     let sampled_at = now();
-    sqlx::query("UPDATE nodes SET state = CASE WHEN state = 'unreachable' THEN 'deployed' ELSE state END, last_seen_at = ?, last_sample_at = ?, updated_at = ? WHERE id = ?")
-        .bind(&sampled_at).bind(&sampled_at).bind(&sampled_at).bind(node_id).execute(pool).await?;
-    sqlx::query("UPDATE data_gaps SET resolved_at = ? WHERE node_id = ? AND resolved_at IS NULL")
+    sqlx::query("UPDATE nodes SET state = CASE WHEN state = 'unreachable' THEN 'deployed' ELSE state END, last_seen_at = $1, last_sample_at = $2, updated_at = $3 WHERE id = $4")
+        .bind(sampled_at).bind(sampled_at).bind(sampled_at).bind(node_id).execute(pool).await?;
+    sqlx::query("UPDATE data_gaps SET resolved_at = $1 WHERE node_id = $2 AND resolved_at IS NULL")
         .bind(now())
         .bind(node_id)
         .execute(pool)
@@ -143,21 +144,21 @@ async fn systemd_instance(session: &ssh::SshSession) -> Result<String> {
 }
 
 async fn apply_sample(
-    pool: &SqlitePool,
+    pool: &PgPool,
     node_id: &str,
     instance_id: &str,
     counters: &Map<String, Value>,
 ) -> Result<()> {
     let counters = parse_counters(counters)?;
     let timestamp = now();
-    let mut tx = pool.begin().await?;
+    let mut tx = db::begin_write(pool).await?;
     for (user_id, tx_total, rx_total) in counters {
         let tx_total_i64 = tx_total as i64;
         let rx_total_i64 = rx_total as i64;
-        let user = sqlx::query("SELECT u.usage_bytes, u.quota_bytes, u.enabled, u.expires_at FROM users u JOIN node_assignments a ON a.user_id = u.id WHERE u.id = ? AND a.node_id = ?")
+        let user = sqlx::query("SELECT u.usage_bytes, u.quota_bytes, u.enabled, u.expires_at FROM users u JOIN node_assignments a ON a.user_id = u.id WHERE u.id = $1 AND a.node_id = $2")
             .bind(&user_id).bind(node_id).fetch_optional(&mut *tx).await?;
         let Some(user) = user else { continue };
-        let baseline = sqlx::query("SELECT instance_id, tx_total, rx_total FROM traffic_baselines WHERE node_id = ? AND user_id = ?")
+        let baseline = sqlx::query("SELECT instance_id, tx_total, rx_total FROM traffic_baselines WHERE node_id = $1 AND user_id = $2")
             .bind(node_id).bind(&user_id).fetch_optional(&mut *tx).await?;
         let previous = baseline.as_ref().map(|row| {
             (
@@ -179,44 +180,41 @@ async fn apply_sample(
         let delta_bytes = delta_tx.saturating_add(delta_rx);
         let old_usage: i64 = user.get("usage_bytes");
         let new_usage = old_usage.saturating_add(delta_bytes);
-        sqlx::query("INSERT INTO traffic_baselines (node_id, user_id, instance_id, tx_total, rx_total, sampled_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(node_id, user_id) DO UPDATE SET instance_id = excluded.instance_id, tx_total = excluded.tx_total, rx_total = excluded.rx_total, sampled_at = excluded.sampled_at")
-            .bind(node_id).bind(&user_id).bind(instance_id).bind(tx_total_i64).bind(rx_total_i64).bind(&timestamp).execute(&mut *tx).await?;
-        sqlx::query("INSERT INTO traffic_records (id, node_id, user_id, instance_id, baseline_tx, baseline_rx, delta_tx, delta_rx, gap_reason, sampled_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-            .bind(Uuid::new_v4().to_string()).bind(node_id).bind(&user_id).bind(instance_id).bind(tx_total_i64).bind(rx_total_i64).bind(delta_tx).bind(delta_rx).bind(delta.gap_reason).bind(&timestamp).execute(&mut *tx).await?;
-        sqlx::query("UPDATE users SET usage_bytes = ?, updated_at = ? WHERE id = ?")
+        sqlx::query("INSERT INTO traffic_baselines (node_id, user_id, instance_id, tx_total, rx_total, sampled_at) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT(node_id, user_id) DO UPDATE SET instance_id = excluded.instance_id, tx_total = excluded.tx_total, rx_total = excluded.rx_total, sampled_at = excluded.sampled_at")
+            .bind(node_id).bind(&user_id).bind(instance_id).bind(tx_total_i64).bind(rx_total_i64).bind(timestamp).execute(&mut *tx).await?;
+        sqlx::query("INSERT INTO traffic_records (id, node_id, user_id, instance_id, baseline_tx, baseline_rx, delta_tx, delta_rx, gap_reason, sampled_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)")
+            .bind(Uuid::new_v4().to_string()).bind(node_id).bind(&user_id).bind(instance_id).bind(tx_total_i64).bind(rx_total_i64).bind(delta_tx).bind(delta_rx).bind(delta.gap_reason).bind(timestamp).execute(&mut *tx).await?;
+        sqlx::query("UPDATE users SET usage_bytes = $1, updated_at = $2 WHERE id = $3")
             .bind(new_usage)
-            .bind(&timestamp)
+            .bind(timestamp)
             .bind(&user_id)
             .execute(&mut *tx)
             .await?;
 
-        let enabled: i64 = user.get("enabled");
-        let expires_at: Option<String> = user.get("expires_at");
+        let enabled: bool = user.get("enabled");
+        let expires_at: Option<chrono::DateTime<chrono::Utc>> = user.get("expires_at");
         let quota: Option<i64> = user.get("quota_bytes");
-        let expired = expires_at
-            .as_deref()
-            .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
-            .is_some_and(|expiration| expiration <= chrono::Utc::now());
-        let restricted = enabled == 0 || expired || quota.is_some_and(|limit| new_usage >= limit);
+        let expired = expires_at.is_some_and(|expiration| expiration <= chrono::Utc::now());
+        let restricted = !enabled || expired || quota.is_some_and(|limit| new_usage >= limit);
         if restricted {
             let marked: i64 = sqlx::query_scalar(
-                "SELECT COUNT(*) FROM users WHERE id = ? AND access_kick_enqueued_at IS NOT NULL",
+                "SELECT COUNT(*) FROM users WHERE id = $1 AND access_kick_enqueued_at IS NOT NULL",
             )
             .bind(&user_id)
             .fetch_one(&mut *tx)
             .await?;
             if marked == 0 {
                 let assignments = sqlx::query_scalar::<_, String>(
-                    "SELECT node_id FROM node_assignments WHERE user_id = ?",
+                    "SELECT node_id FROM node_assignments WHERE user_id = $1",
                 )
                 .bind(&user_id)
                 .fetch_all(&mut *tx)
                 .await?;
                 sqlx::query(
-                    "UPDATE users SET access_kick_enqueued_at = ?, updated_at = ? WHERE id = ?",
+                    "UPDATE users SET access_kick_enqueued_at = $1, updated_at = $2 WHERE id = $3",
                 )
-                .bind(&timestamp)
-                .bind(&timestamp)
+                .bind(timestamp)
+                .bind(timestamp)
                 .bind(&user_id)
                 .execute(&mut *tx)
                 .await?;
@@ -264,31 +262,31 @@ fn parse_counters(counters: &Map<String, Value>) -> Result<Vec<(String, u64, u64
         .collect()
 }
 
-async fn schedule_expirations(pool: &SqlitePool) -> Result<()> {
+async fn schedule_expirations(pool: &PgPool) -> Result<()> {
     let timestamp = now();
-    let rows = sqlx::query("SELECT id FROM users WHERE enabled = 0 OR (expires_at IS NOT NULL AND expires_at <= ?) OR (quota_bytes IS NOT NULL AND usage_bytes >= quota_bytes)")
-        .bind(&timestamp).fetch_all(pool).await?;
+    let rows = sqlx::query("SELECT id FROM users WHERE enabled = FALSE OR (expires_at IS NOT NULL AND expires_at <= $1) OR (quota_bytes IS NOT NULL AND usage_bytes >= quota_bytes)")
+        .bind(timestamp).fetch_all(pool).await?;
     for row in rows {
         let user_id: String = row.get("id");
-        let mut tx = pool.begin().await?;
+        let mut tx = db::begin_write(pool).await?;
         let needs_kick: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM users WHERE id = ? AND access_kick_enqueued_at IS NULL",
+            "SELECT COUNT(*) FROM users WHERE id = $1 AND access_kick_enqueued_at IS NULL",
         )
         .bind(&user_id)
         .fetch_one(&mut *tx)
         .await?;
         if needs_kick > 0 {
             let node_ids = sqlx::query_scalar::<_, String>(
-                "SELECT node_id FROM node_assignments WHERE user_id = ?",
+                "SELECT node_id FROM node_assignments WHERE user_id = $1",
             )
             .bind(&user_id)
             .fetch_all(&mut *tx)
             .await?;
             sqlx::query(
-                "UPDATE users SET access_kick_enqueued_at = ?, updated_at = ? WHERE id = ?",
+                "UPDATE users SET access_kick_enqueued_at = $1, updated_at = $2 WHERE id = $3",
             )
-            .bind(&timestamp)
-            .bind(&timestamp)
+            .bind(timestamp)
+            .bind(timestamp)
             .bind(&user_id)
             .execute(&mut *tx)
             .await?;
@@ -309,34 +307,36 @@ async fn schedule_expirations(pool: &SqlitePool) -> Result<()> {
     Ok(())
 }
 
-async fn record_gap(pool: &SqlitePool, node_id: &str, reason: &str) -> Result<()> {
+async fn record_gap(pool: &PgPool, node_id: &str, reason: &str) -> Result<()> {
     let timestamp = now();
-    let mut tx = pool.begin().await?;
+    let mut tx = db::begin_write(pool).await?;
     record_gap_in_tx(&mut tx, node_id, reason, &timestamp).await?;
     tx.commit().await?;
     Ok(())
 }
 
 async fn record_gap_in_tx(
-    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     node_id: &str,
     reason: &str,
-    timestamp: &str,
+    timestamp: &chrono::DateTime<chrono::Utc>,
 ) -> Result<()> {
     let open: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM data_gaps WHERE node_id = ? AND resolved_at IS NULL",
+        "SELECT COUNT(*) FROM data_gaps WHERE node_id = $1 AND resolved_at IS NULL",
     )
     .bind(node_id)
     .fetch_one(&mut **tx)
     .await?;
     if open == 0 {
-        sqlx::query("INSERT INTO data_gaps (id, node_id, opened_at, reason) VALUES (?, ?, ?, ?)")
-            .bind(Uuid::new_v4().to_string())
-            .bind(node_id)
-            .bind(timestamp)
-            .bind(reason)
-            .execute(&mut **tx)
-            .await?;
+        sqlx::query(
+            "INSERT INTO data_gaps (id, node_id, opened_at, reason) VALUES ($1, $2, $3, $4)",
+        )
+        .bind(Uuid::new_v4().to_string())
+        .bind(node_id)
+        .bind(timestamp)
+        .bind(reason)
+        .execute(&mut **tx)
+        .await?;
     }
     Ok(())
 }
@@ -353,20 +353,17 @@ fn classify_sample_error(error: &anyhow::Error) -> &'static str {
 #[cfg(test)]
 mod tests {
     use serde_json::{Map, Value, json};
-    use sqlx::{SqlitePool, sqlite::SqlitePoolOptions};
+    use sqlx::PgPool;
 
     use super::{apply_sample, counter_delta, record_gap};
 
-    async fn sample_pool(user_id: &str) -> SqlitePool {
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect("sqlite::memory:")
-            .await
-            .unwrap();
-        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
-        let timestamp = "2026-01-01T00:00:00Z";
+    async fn sample_pool(user_id: &str) -> PgPool {
+        let pool = crate::db::test_pool().await;
+        let timestamp = chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
         sqlx::query(
-            "INSERT INTO users (id, name, created_at, updated_at) VALUES (?, 'Sample user', ?, ?)",
+            "INSERT INTO users (id, name, created_at, updated_at) VALUES ($1, 'Sample user', $2, $3)",
         )
         .bind(user_id)
         .bind(timestamp)
@@ -374,13 +371,13 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        sqlx::query("INSERT INTO nodes (id, name, ssh_host, ssh_port, ssh_username, ssh_auth_type, ssh_secret_enc, public_host, public_port, listen_addr, node_token_hash, node_token_enc, traffic_stats_secret_enc, desired_config_enc, created_at, updated_at) VALUES ('node-one', 'Node one', '127.0.0.1', 22, 'root', 'private_key', 'ssh-secret', 'node.example.test', 443, ':443', 'node-hash', 'node-token', 'stats-secret', '{}', ?, ?)")
+        sqlx::query("INSERT INTO nodes (id, name, ssh_host, ssh_port, ssh_username, ssh_auth_type, ssh_secret_enc, public_host, public_port, listen_addr, node_token_hash, node_token_enc, traffic_stats_secret_enc, desired_config_enc, created_at, updated_at) VALUES ('node-one', 'Node one', '127.0.0.1', 22, 'root', 'private_key', 'ssh-secret', 'node.example.test', 443, ':443', 'node-hash', 'node-token', 'stats-secret', '{}', $1, $2)")
             .bind(timestamp)
             .bind(timestamp)
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::query("INSERT INTO node_assignments (user_id, node_id, credential_hash, credential_enc, created_at) VALUES (?, 'node-one', 'credential-hash', 'credential', ?)")
+        sqlx::query("INSERT INTO node_assignments (user_id, node_id, credential_hash, credential_enc, created_at) VALUES ($1, 'node-one', 'credential-hash', 'credential', $2)")
             .bind(user_id)
             .bind(timestamp)
             .execute(&pool)
@@ -505,25 +502,22 @@ mod tests {
 
     #[tokio::test]
     async fn same_user_usage_aggregates_across_nodes_and_enqueues_one_kick_per_node() {
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect("sqlite::memory:")
-            .await
-            .unwrap();
-        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        let pool = crate::db::test_pool().await;
 
         let user_id = "quota-user";
-        let timestamp = "2026-01-01T00:00:00Z";
-        sqlx::query("INSERT INTO users (id, name, enabled, quota_bytes, usage_bytes, revision, created_at, updated_at) VALUES (?, ?, 1, 500, 0, 1, ?, ?)")
+        let timestamp = chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        sqlx::query("INSERT INTO users (id, name, enabled, quota_bytes, usage_bytes, revision, created_at, updated_at) VALUES ($1, $2, TRUE, 500, 0, 1, $3, $4)")
             .bind(user_id).bind("Shared user").bind(timestamp).bind(timestamp)
             .execute(&pool).await.unwrap();
 
         for (index, node_id) in ["node-one", "node-two"].into_iter().enumerate() {
-            sqlx::query("INSERT INTO nodes (id, name, ssh_host, ssh_port, ssh_username, ssh_auth_type, ssh_secret_enc, public_host, public_port, listen_addr, node_token_hash, node_token_enc, traffic_stats_secret_enc, desired_config_enc, created_at, updated_at) VALUES (?, ?, ?, 22, 'root', 'private_key', 'ssh-secret', ?, 443, ':443', ?, 'node-token', 'stats-secret', '{}', ?, ?)")
+            sqlx::query("INSERT INTO nodes (id, name, ssh_host, ssh_port, ssh_username, ssh_auth_type, ssh_secret_enc, public_host, public_port, listen_addr, node_token_hash, node_token_enc, traffic_stats_secret_enc, desired_config_enc, created_at, updated_at) VALUES ($1, $2, $3, 22, 'root', 'private_key', 'ssh-secret', $4, 443, ':443', $5, 'node-token', 'stats-secret', '{}', $6, $7)")
                 .bind(node_id).bind(node_id).bind("127.0.0.1").bind("node.example.test")
                 .bind(format!("node-hash-{index}" )).bind(timestamp).bind(timestamp)
                 .execute(&pool).await.unwrap();
-            sqlx::query("INSERT INTO node_assignments (user_id, node_id, credential_hash, credential_enc, created_at) VALUES (?, ?, ?, 'credential', ?)")
+            sqlx::query("INSERT INTO node_assignments (user_id, node_id, credential_hash, credential_enc, created_at) VALUES ($1, $2, $3, 'credential', $4)")
                 .bind(user_id).bind(node_id).bind(format!("credential-hash-{index}" )).bind(timestamp)
                 .execute(&pool).await.unwrap();
         }
@@ -545,7 +539,7 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(
-            sqlx::query_scalar::<_, i64>("SELECT usage_bytes FROM users WHERE id = ?")
+            sqlx::query_scalar::<_, i64>("SELECT usage_bytes FROM users WHERE id = $1")
                 .bind(user_id)
                 .fetch_one(&pool)
                 .await
@@ -571,7 +565,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            sqlx::query_scalar::<_, i64>("SELECT usage_bytes FROM users WHERE id = ?")
+            sqlx::query_scalar::<_, i64>("SELECT usage_bytes FROM users WHERE id = $1")
                 .bind(user_id)
                 .fetch_one(&pool)
                 .await
@@ -595,7 +589,7 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(
-            sqlx::query_scalar::<_, i64>("SELECT usage_bytes FROM users WHERE id = ?")
+            sqlx::query_scalar::<_, i64>("SELECT usage_bytes FROM users WHERE id = $1")
                 .bind(user_id)
                 .fetch_one(&pool)
                 .await

@@ -2,9 +2,9 @@ CREATE TABLE admin_tokens (
     id TEXT PRIMARY KEY NOT NULL,
     token_hash TEXT NOT NULL UNIQUE,
     label TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    last_used_at TEXT,
-    revoked_at TEXT
+    created_at TIMESTAMPTZ NOT NULL,
+    last_used_at TIMESTAMPTZ,
+    revoked_at TIMESTAMPTZ
 );
 
 CREATE TABLE nodes (
@@ -21,29 +21,32 @@ CREATE TABLE nodes (
     public_port INTEGER NOT NULL CHECK (public_port BETWEEN 1 AND 65535),
     listen_addr TEXT NOT NULL,
     tls_sni TEXT,
-    tls_skip_verify INTEGER NOT NULL DEFAULT 0 CHECK (tls_skip_verify IN (0, 1)),
+    tls_skip_verify BOOLEAN NOT NULL DEFAULT FALSE,
     node_token_hash TEXT NOT NULL UNIQUE,
     node_token_enc TEXT NOT NULL,
     traffic_stats_secret_enc TEXT NOT NULL,
     desired_config_enc TEXT NOT NULL,
-    desired_revision INTEGER NOT NULL DEFAULT 1,
+    desired_revision BIGINT NOT NULL DEFAULT 1,
     deployed_config_enc TEXT,
-    deployed_revision INTEGER,
+    deployed_revision BIGINT,
     deployed_content_sha256 TEXT,
     state TEXT NOT NULL DEFAULT 'new',
-    last_seen_at TEXT,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    last_seen_at TIMESTAMPTZ,
+    last_sample_at TIMESTAMPTZ,
+    proxy_probe_url TEXT,
+    traffic_stats_port INTEGER NOT NULL DEFAULT 9780 CHECK (traffic_stats_port BETWEEN 1 AND 65535),
+    created_at TIMESTAMPTZ NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL
 );
 
 CREATE TABLE config_versions (
     id TEXT PRIMARY KEY NOT NULL,
     node_id TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
-    revision INTEGER NOT NULL,
+    revision BIGINT NOT NULL,
     config_enc TEXT NOT NULL,
     content_sha256 TEXT NOT NULL,
-    deployed_success INTEGER NOT NULL DEFAULT 0 CHECK (deployed_success IN (0, 1)),
-    created_at TEXT NOT NULL,
+    deployed_success BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at TIMESTAMPTZ NOT NULL,
     UNIQUE(node_id, revision)
 );
 
@@ -54,8 +57,8 @@ CREATE TABLE config_resources (
     resource_kind TEXT NOT NULL CHECK (resource_kind IN ('certificate', 'private_key', 'ech_key', 'acl', 'geoip', 'geosite')),
     content_enc TEXT NOT NULL,
     content_sha256 TEXT NOT NULL,
-    size_bytes INTEGER NOT NULL CHECK (size_bytes BETWEEN 1 AND 20971520),
-    created_at TEXT NOT NULL,
+    size_bytes BIGINT NOT NULL CHECK (size_bytes BETWEEN 1 AND 20971520),
+    created_at TIMESTAMPTZ NOT NULL,
     UNIQUE(node_id, name)
 );
 
@@ -64,15 +67,15 @@ CREATE INDEX config_resources_node_idx ON config_resources(node_id, resource_kin
 CREATE TABLE users (
     id TEXT PRIMARY KEY NOT NULL,
     name TEXT NOT NULL,
-    enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
-    expires_at TEXT,
-    quota_bytes INTEGER CHECK (quota_bytes IS NULL OR quota_bytes >= 0),
-    usage_bytes INTEGER NOT NULL DEFAULT 0 CHECK (usage_bytes >= 0),
-    revision INTEGER NOT NULL DEFAULT 1,
-    quota_reset_at TEXT,
-    access_kick_enqueued_at TEXT,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    expires_at TIMESTAMPTZ,
+    quota_bytes BIGINT CHECK (quota_bytes IS NULL OR quota_bytes >= 0),
+    usage_bytes BIGINT NOT NULL DEFAULT 0 CHECK (usage_bytes >= 0),
+    revision BIGINT NOT NULL DEFAULT 1,
+    quota_reset_at TIMESTAMPTZ,
+    access_kick_enqueued_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL
 );
 
 CREATE TABLE node_assignments (
@@ -82,7 +85,7 @@ CREATE TABLE node_assignments (
     credential_enc TEXT NOT NULL,
     client_certificate_enc TEXT,
     client_private_key_enc TEXT,
-    created_at TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL,
     PRIMARY KEY(user_id, node_id),
     UNIQUE(node_id, credential_hash)
 );
@@ -92,8 +95,8 @@ CREATE TABLE subscription_credentials (
     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     token_hash TEXT NOT NULL UNIQUE,
     token_enc TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    revoked_at TEXT
+    created_at TIMESTAMPTZ NOT NULL,
+    revoked_at TIMESTAMPTZ
 );
 
 CREATE TABLE traffic_records (
@@ -101,29 +104,29 @@ CREATE TABLE traffic_records (
     node_id TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     instance_id TEXT NOT NULL,
-    baseline_tx INTEGER NOT NULL CHECK (baseline_tx >= 0),
-    baseline_rx INTEGER NOT NULL CHECK (baseline_rx >= 0),
-    delta_tx INTEGER NOT NULL CHECK (delta_tx >= 0),
-    delta_rx INTEGER NOT NULL CHECK (delta_rx >= 0),
+    baseline_tx BIGINT NOT NULL CHECK (baseline_tx >= 0),
+    baseline_rx BIGINT NOT NULL CHECK (baseline_rx >= 0),
+    delta_tx BIGINT NOT NULL CHECK (delta_tx >= 0),
+    delta_rx BIGINT NOT NULL CHECK (delta_rx >= 0),
     gap_reason TEXT,
-    sampled_at TEXT NOT NULL
+    sampled_at TIMESTAMPTZ NOT NULL
 );
 
 CREATE TABLE traffic_baselines (
     node_id TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     instance_id TEXT NOT NULL,
-    tx_total INTEGER NOT NULL CHECK (tx_total >= 0),
-    rx_total INTEGER NOT NULL CHECK (rx_total >= 0),
-    sampled_at TEXT NOT NULL,
+    tx_total BIGINT NOT NULL CHECK (tx_total >= 0),
+    rx_total BIGINT NOT NULL CHECK (rx_total >= 0),
+    sampled_at TIMESTAMPTZ NOT NULL,
     PRIMARY KEY(node_id, user_id)
 );
 
 CREATE TABLE data_gaps (
     id TEXT PRIMARY KEY NOT NULL,
     node_id TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
-    opened_at TEXT NOT NULL,
-    resolved_at TEXT,
+    opened_at TIMESTAMPTZ NOT NULL,
+    resolved_at TIMESTAMPTZ,
     reason TEXT NOT NULL
 );
 
@@ -133,31 +136,31 @@ CREATE TABLE jobs (
     id TEXT PRIMARY KEY NOT NULL,
     kind TEXT NOT NULL,
     node_id TEXT REFERENCES nodes(id) ON DELETE SET NULL,
-    target_revision INTEGER,
-    payload_json TEXT NOT NULL DEFAULT '{}',
+    target_revision BIGINT,
+    payload_json JSONB NOT NULL DEFAULT '{}'::jsonb CHECK (jsonb_typeof(payload_json) = 'object'),
     status TEXT NOT NULL CHECK (status IN ('queued', 'running', 'succeeded', 'failed', 'rolled_back', 'cancelled')),
     stage TEXT NOT NULL,
-    result_json TEXT,
+    result_json JSONB CHECK (result_json IS NULL OR jsonb_typeof(result_json) = 'object'),
     error_message TEXT,
-    logs_json TEXT NOT NULL DEFAULT '[]',
-    attempts INTEGER NOT NULL DEFAULT 0,
-    max_attempts INTEGER NOT NULL DEFAULT 3,
-    available_at TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    started_at TEXT,
-    finished_at TEXT
+    logs_json JSONB NOT NULL DEFAULT '[]'::jsonb CHECK (jsonb_typeof(logs_json) = 'array'),
+    attempts BIGINT NOT NULL DEFAULT 0,
+    max_attempts BIGINT NOT NULL DEFAULT 3,
+    available_at TIMESTAMPTZ NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL,
+    started_at TIMESTAMPTZ,
+    finished_at TIMESTAMPTZ
 );
 
 CREATE INDEX jobs_status_available_idx ON jobs(status, available_at, created_at);
 CREATE INDEX jobs_node_idx ON jobs(node_id, created_at DESC);
 
 CREATE TABLE job_events (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
     event_type TEXT NOT NULL,
-    payload_json TEXT NOT NULL,
-    created_at TEXT NOT NULL
+    payload_json JSONB NOT NULL CHECK (jsonb_typeof(payload_json) = 'object'),
+    created_at TIMESTAMPTZ NOT NULL
 );
 
 CREATE INDEX job_events_job_id_idx ON job_events(job_id, id);
@@ -168,6 +171,38 @@ CREATE TABLE audit_records (
     action TEXT NOT NULL,
     entity_type TEXT NOT NULL,
     entity_id TEXT NOT NULL,
-    detail_json TEXT NOT NULL,
-    created_at TEXT NOT NULL
+    detail_json JSONB NOT NULL CHECK (jsonb_typeof(detail_json) = 'object'),
+    created_at TIMESTAMPTZ NOT NULL
 );
+
+CREATE OR REPLACE FUNCTION hysteriax_serialize_writes() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+    PERFORM pg_advisory_xact_lock(62177345902811);
+    RETURN NULL;
+END;
+$$;
+
+CREATE TABLE deployment_probe_tokens (
+    node_id TEXT PRIMARY KEY NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+    token_hash TEXT NOT NULL,
+    expires_at TIMESTAMPTZ NOT NULL
+);
+
+DO $$
+DECLARE
+    table_name text;
+BEGIN
+    FOREACH table_name IN ARRAY ARRAY[
+        'admin_tokens', 'nodes', 'config_versions', 'config_resources', 'users',
+        'node_assignments', 'subscription_credentials', 'traffic_records',
+        'traffic_baselines', 'data_gaps', 'jobs', 'job_events', 'audit_records',
+        'deployment_probe_tokens'
+    ] LOOP
+        EXECUTE format(
+            'CREATE TRIGGER hysteriax_serialize_writes BEFORE INSERT OR UPDATE OR DELETE ON %I FOR EACH STATEMENT EXECUTE FUNCTION hysteriax_serialize_writes()',
+            table_name
+        );
+    END LOOP;
+END;
+$$;

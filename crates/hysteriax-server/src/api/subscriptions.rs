@@ -1,3 +1,4 @@
+use crate::db;
 use axum::{
     Json,
     extract::{Path, State},
@@ -117,18 +118,18 @@ pub async fn get_user(
     State(state): State<AppState>,
     Path(user_id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
-    let user = sqlx::query("SELECT id, revision FROM users WHERE id = ?")
+    let user = sqlx::query("SELECT id, revision FROM users WHERE id = $1")
         .bind(&user_id)
         .fetch_optional(&state.pool)
         .await?
         .ok_or_else(|| ApiError::not_found("user"))?;
-    let credential = sqlx::query("SELECT id, token_enc, created_at FROM subscription_credentials WHERE user_id = ? AND revoked_at IS NULL ORDER BY created_at DESC LIMIT 1")
+    let credential = sqlx::query("SELECT id, token_enc, created_at FROM subscription_credentials WHERE user_id = $1 AND revoked_at IS NULL ORDER BY created_at DESC LIMIT 1")
         .bind(&user_id).fetch_optional(&state.pool).await?;
     let active = if let Some(row) = credential {
         let token: String = row.get("token_enc");
         let token = state.secrets.decrypt(&token)?;
         Some(
-            json!({"id": row.get::<String, _>("id"), "token": token, "url": subscription_url(&token), "created_at": row.get::<String, _>("created_at")}),
+            json!({"id": row.get::<String, _>("id"), "token": token, "url": subscription_url(&token), "created_at": row.get::<chrono::DateTime<chrono::Utc>, _>("created_at")}),
         )
     } else {
         None
@@ -143,8 +144,8 @@ pub async fn rotate(
     Path(user_id): Path<String>,
     Json(input): Json<RotateSubscription>,
 ) -> Result<Json<Value>, ApiError> {
-    let mut tx = state.pool.begin().await?;
-    let user = sqlx::query("SELECT revision FROM users WHERE id = ?")
+    let mut tx = db::begin_write(&state.pool).await?;
+    let user = sqlx::query("SELECT revision FROM users WHERE id = $1")
         .bind(&user_id)
         .fetch_optional(&mut *tx)
         .await?
@@ -157,21 +158,21 @@ pub async fn rotate(
     }
     let token = generate_token();
     let timestamp = now();
-    sqlx::query("UPDATE subscription_credentials SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL")
-        .bind(&timestamp).bind(&user_id).execute(&mut *tx).await?;
-    sqlx::query("INSERT INTO subscription_credentials (id, user_id, token_hash, token_enc, created_at) VALUES (?, ?, ?, ?, ?)")
+    sqlx::query("UPDATE subscription_credentials SET revoked_at = $1 WHERE user_id = $2 AND revoked_at IS NULL")
+        .bind(timestamp).bind(&user_id).execute(&mut *tx).await?;
+    sqlx::query("INSERT INTO subscription_credentials (id, user_id, token_hash, token_enc, created_at) VALUES ($1, $2, $3, $4, $5)")
         .bind(Uuid::new_v4().to_string()).bind(&user_id).bind(token_digest(&token))
-        .bind(state.secrets.encrypt(&token)?).bind(&timestamp).execute(&mut *tx).await?;
+        .bind(state.secrets.encrypt(&token)?).bind(timestamp).execute(&mut *tx).await?;
     let next_revision = revision + 1;
-    sqlx::query("UPDATE users SET revision = ?, updated_at = ? WHERE id = ? AND revision = ?")
+    sqlx::query("UPDATE users SET revision = $1, updated_at = $2 WHERE id = $3 AND revision = $4")
         .bind(next_revision)
-        .bind(&timestamp)
+        .bind(timestamp)
         .bind(&user_id)
         .bind(revision)
         .execute(&mut *tx)
         .await?;
-    sqlx::query("INSERT INTO audit_records (id, actor, action, entity_type, entity_id, detail_json, created_at) VALUES (?, 'admin', 'user.subscription_rotated', 'user', ?, ?, ?)")
-        .bind(Uuid::new_v4().to_string()).bind(&user_id).bind(json!({"revision": next_revision}).to_string()).bind(&timestamp).execute(&mut *tx).await?;
+    sqlx::query("INSERT INTO audit_records (id, actor, action, entity_type, entity_id, detail_json, created_at) VALUES ($1, 'admin', 'user.subscription_rotated', 'user', $2, $3, $4)")
+        .bind(Uuid::new_v4().to_string()).bind(&user_id).bind(json!({"revision": next_revision})).bind(timestamp).execute(&mut *tx).await?;
     tx.commit().await?;
     Ok(Json(
         json!({"user_id": user_id, "revision": next_revision, "token": token, "url": subscription_url(&token), "note": "The old subscription URL has been revoked."}),
@@ -184,27 +185,25 @@ pub async fn download(
 ) -> Result<Response, ApiError> {
     let token_hash = token_digest(&token);
     let credential = sqlx::query(
-        "SELECT user_id FROM subscription_credentials WHERE token_hash = ? AND revoked_at IS NULL",
+        "SELECT user_id FROM subscription_credentials WHERE token_hash = $1 AND revoked_at IS NULL",
     )
     .bind(token_hash)
     .fetch_optional(&state.pool)
     .await?
     .ok_or_else(|| ApiError::not_found("subscription"))?;
     let user_id: String = credential.get("user_id");
-    let user =
-        sqlx::query("SELECT enabled, expires_at, quota_bytes, usage_bytes FROM users WHERE id = ?")
-            .bind(&user_id)
-            .fetch_optional(&state.pool)
-            .await?
-            .ok_or_else(|| ApiError::not_found("subscription"))?;
-    let enabled: i64 = user.get("enabled");
-    let expires_at: Option<String> = user.get("expires_at");
+    let user = sqlx::query(
+        "SELECT enabled, expires_at, quota_bytes, usage_bytes FROM users WHERE id = $1",
+    )
+    .bind(&user_id)
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or_else(|| ApiError::not_found("subscription"))?;
+    let enabled: bool = user.get("enabled");
+    let expires_at: Option<chrono::DateTime<chrono::Utc>> = user.get("expires_at");
     let quota: Option<i64> = user.get("quota_bytes");
     let usage: i64 = user.get("usage_bytes");
-    if enabled == 0
-        || is_expired(expires_at.as_deref())
-        || quota.is_some_and(|limit| usage >= limit)
-    {
+    if !enabled || is_expired(expires_at) || quota.is_some_and(|limit| usage >= limit) {
         return Err(ApiError::new(
             StatusCode::FORBIDDEN,
             "subscription_inactive",
@@ -212,7 +211,7 @@ pub async fn download(
         ));
     }
 
-    let rows = sqlx::query("SELECT n.id, n.name, n.public_host, n.public_port, n.listen_addr, n.tls_sni, n.tls_skip_verify, n.state, n.deployed_config_enc, a.credential_enc, a.client_certificate_enc, a.client_private_key_enc FROM node_assignments a JOIN nodes n ON n.id = a.node_id WHERE a.user_id = ? AND n.state NOT IN ('deleting', 'delete_failed') AND n.deployed_revision IS NOT NULL AND n.deployed_config_enc IS NOT NULL ORDER BY n.name COLLATE NOCASE")
+    let rows = sqlx::query("SELECT n.id, n.name, n.public_host, n.public_port, n.listen_addr, n.tls_sni, n.tls_skip_verify, n.state, n.deployed_config_enc, a.credential_enc, a.client_certificate_enc, a.client_private_key_enc FROM node_assignments a JOIN nodes n ON n.id = a.node_id WHERE a.user_id = $1 AND n.state NOT IN ('deleting', 'delete_failed') AND n.deployed_revision IS NOT NULL AND n.deployed_config_enc IS NOT NULL ORDER BY lower(n.name) COLLATE \"C\", n.name COLLATE \"C\", n.id")
         .bind(&user_id).fetch_all(&state.pool).await?;
     let mut proxies = Vec::new();
     for row in rows {
@@ -230,11 +229,11 @@ pub async fn download(
             &name,
             &node_id,
             &row.get::<String, _>("public_host"),
-            row.get::<i64, _>("public_port") as u16,
+            row.get::<i32, _>("public_port") as u16,
             crate::config::listener_hop_ports(&row.get::<String, _>("listen_addr"))
                 .map(str::to_owned),
             row.get("tls_sni"),
-            row.get::<i64, _>("tls_skip_verify") != 0,
+            row.get::<bool, _>("tls_skip_verify"),
             &state.secrets.decrypt(&password_enc)?,
             client_certificate_enc
                 .as_deref()
@@ -288,7 +287,7 @@ pub async fn hy2_auth(
     Path((node_id, node_token)): Path<(String, String)>,
     Json(input): Json<AuthRequest>,
 ) -> Result<Json<AuthResponse>, ApiError> {
-    let node = sqlx::query("SELECT node_token_hash, state FROM nodes WHERE id = ?")
+    let node = sqlx::query("SELECT node_token_hash, state FROM nodes WHERE id = $1")
         .bind(&node_id)
         .fetch_optional(&state.pool)
         .await?;
@@ -312,7 +311,7 @@ pub async fn hy2_auth(
 
     let auth_hash = token_digest(&input.auth);
     let probe_hash: Option<String> = sqlx::query_scalar(
-        "SELECT token_hash FROM deployment_probe_tokens WHERE node_id = ? AND expires_at > ?",
+        "SELECT token_hash FROM deployment_probe_tokens WHERE node_id = $1 AND expires_at > $2",
     )
     .bind(&node_id)
     .bind(now())
@@ -327,19 +326,16 @@ pub async fn hy2_auth(
             id: format!("probe-{node_id}"),
         }));
     }
-    let assignment = sqlx::query("SELECT u.id, u.enabled, u.expires_at, u.quota_bytes, u.usage_bytes FROM node_assignments a JOIN users u ON u.id = a.user_id WHERE a.node_id = ? AND a.credential_hash = ?")
+    let assignment = sqlx::query("SELECT u.id, u.enabled, u.expires_at, u.quota_bytes, u.usage_bytes FROM node_assignments a JOIN users u ON u.id = a.user_id WHERE a.node_id = $1 AND a.credential_hash = $2")
         .bind(&node_id).bind(auth_hash).fetch_optional(&state.pool).await?;
     let Some(assignment) = assignment else {
         return Ok(Json(AuthResponse::denied()));
     };
-    let enabled: i64 = assignment.get("enabled");
-    let expires_at: Option<String> = assignment.get("expires_at");
+    let enabled: bool = assignment.get("enabled");
+    let expires_at: Option<chrono::DateTime<chrono::Utc>> = assignment.get("expires_at");
     let quota: Option<i64> = assignment.get("quota_bytes");
     let usage: i64 = assignment.get("usage_bytes");
-    if enabled == 0
-        || is_expired(expires_at.as_deref())
-        || quota.is_some_and(|limit| usage >= limit)
-    {
+    if !enabled || is_expired(expires_at) || quota.is_some_and(|limit| usage >= limit) {
         return Ok(Json(AuthResponse::denied()));
     }
     Ok(Json(AuthResponse {
@@ -477,7 +473,7 @@ async fn subscription_ech_config(
         .filter(|id| !id.is_empty() && !id.contains('/'))
         .ok_or_else(|| ApiError::bad_request("ECH key must use an uploaded resource"))?;
     let encrypted: String = sqlx::query_scalar(
-        "SELECT content_enc FROM config_resources WHERE node_id = ? AND id = ? AND resource_kind = 'ech_key'",
+        "SELECT content_enc FROM config_resources WHERE node_id = $1 AND id = $2 AND resource_kind = 'ech_key'",
     )
     .bind(node_id)
     .bind(resource_id)
@@ -508,10 +504,8 @@ pub(crate) fn extract_ech_config_list(pem: &str) -> Result<String, ApiError> {
     Ok(encoded)
 }
 
-fn is_expired(value: Option<&str>) -> bool {
-    value
-        .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
-        .is_some_and(|expiration| expiration.with_timezone(&Utc) <= Utc::now())
+fn is_expired(value: Option<DateTime<Utc>>) -> bool {
+    value.is_some_and(|expiration| expiration <= Utc::now())
 }
 
 fn subscription_url(token: &str) -> String {

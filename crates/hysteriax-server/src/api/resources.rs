@@ -27,7 +27,7 @@ pub(crate) struct ResourceFile {
 }
 
 pub(crate) async fn resolve_config_resources(
-    pool: &sqlx::SqlitePool,
+    pool: &sqlx::PgPool,
     secrets: &crate::security::SecretBox,
     node_id: &str,
     config: &Value,
@@ -50,7 +50,7 @@ pub(crate) async fn resolve_config_resources(
         return Ok((config.clone(), Vec::new()));
     }
     let rows = sqlx::query(
-        "SELECT id, resource_kind, content_enc FROM config_resources WHERE node_id = ?",
+        "SELECT id, resource_kind, content_enc FROM config_resources WHERE node_id = $1",
     )
     .bind(node_id)
     .fetch_all(pool)
@@ -226,12 +226,12 @@ pub async fn list(
     AxumPath(node_id): AxumPath<String>,
 ) -> Result<Json<Vec<Value>>, ApiError> {
     ensure_node(&state, &node_id).await?;
-    let rows = sqlx::query("SELECT id, name, resource_kind, content_sha256, size_bytes, created_at FROM config_resources WHERE node_id = ? ORDER BY name COLLATE NOCASE")
+    let rows = sqlx::query("SELECT id, name, resource_kind, content_sha256, size_bytes, created_at FROM config_resources WHERE node_id = $1 ORDER BY lower(name) COLLATE \"C\", name COLLATE \"C\", id")
         .bind(&node_id).fetch_all(&state.pool).await?;
     Ok(Json(rows.iter().map(|row| json!({
         "id": row.get::<String, _>("id"), "name": row.get::<String, _>("name"),
         "resource_kind": row.get::<String, _>("resource_kind"), "content_sha256": row.get::<String, _>("content_sha256"),
-        "size_bytes": row.get::<i64, _>("size_bytes"), "created_at": row.get::<String, _>("created_at"),
+        "size_bytes": row.get::<i64, _>("size_bytes"), "created_at": row.get::<chrono::DateTime<chrono::Utc>, _>("created_at"),
         "reference": format!("resource://{}", row.get::<String, _>("id"))
     })).collect()))
 }
@@ -247,12 +247,13 @@ pub async fn create(
             "name must be a single filename without path separators",
         ));
     }
-    let duplicate: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM config_resources WHERE node_id = ? AND name = ?")
-            .bind(&node_id)
-            .bind(input.name.trim())
-            .fetch_one(&state.pool)
-            .await?;
+    let duplicate: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM config_resources WHERE node_id = $1 AND name = $2",
+    )
+    .bind(&node_id)
+    .bind(input.name.trim())
+    .fetch_one(&state.pool)
+    .await?;
     if duplicate > 0 {
         return Err(ApiError::conflict(
             "a resource with this name already exists on the node",
@@ -277,9 +278,9 @@ pub async fn create(
     let digest = hex::encode(sha2::Sha256::digest(&content));
     let timestamp = now();
     let content_enc = state.secrets.encrypt_bytes(&content)?;
-    sqlx::query("INSERT INTO config_resources (id, node_id, name, resource_kind, content_enc, content_sha256, size_bytes, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+    sqlx::query("INSERT INTO config_resources (id, node_id, name, resource_kind, content_enc, content_sha256, size_bytes, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)")
         .bind(&id).bind(&node_id).bind(input.name.trim()).bind(&input.resource_kind).bind(content_enc)
-        .bind(&digest).bind(content.len() as i64).bind(&timestamp).execute(&state.pool).await?;
+        .bind(&digest).bind(content.len() as i64).bind(timestamp).execute(&state.pool).await?;
     super::audit(
         &state.pool,
         "node.resource_uploaded",
@@ -306,13 +307,13 @@ pub async fn delete(
     AxumPath((node_id, resource_id)): AxumPath<(String, String)>,
 ) -> Result<StatusCode, ApiError> {
     let resource =
-        sqlx::query("SELECT id, name FROM config_resources WHERE node_id = ? AND id = ?")
+        sqlx::query("SELECT id, name FROM config_resources WHERE node_id = $1 AND id = $2")
             .bind(&node_id)
             .bind(&resource_id)
             .fetch_optional(&state.pool)
             .await?
             .ok_or_else(|| ApiError::not_found("config resource"))?;
-    let configs = sqlx::query("SELECT desired_config_enc AS config_enc, deployed_config_enc AS deployed_enc FROM nodes WHERE id = ?")
+    let configs = sqlx::query("SELECT desired_config_enc AS config_enc, deployed_config_enc AS deployed_enc FROM nodes WHERE id = $1")
         .bind(&node_id).fetch_optional(&state.pool).await?.ok_or_else(|| ApiError::not_found("node"))?;
     for cipher in [
         configs.get::<String, _>("config_enc"),
@@ -332,7 +333,7 @@ pub async fn delete(
             ));
         }
     }
-    let versions = sqlx::query("SELECT config_enc FROM config_versions WHERE node_id = ?")
+    let versions = sqlx::query("SELECT config_enc FROM config_versions WHERE node_id = $1")
         .bind(&node_id)
         .fetch_all(&state.pool)
         .await?;
@@ -346,7 +347,7 @@ pub async fn delete(
             ));
         }
     }
-    sqlx::query("DELETE FROM config_resources WHERE node_id = ? AND id = ?")
+    sqlx::query("DELETE FROM config_resources WHERE node_id = $1 AND id = $2")
         .bind(&node_id)
         .bind(&resource_id)
         .execute(&state.pool)
@@ -363,7 +364,7 @@ pub async fn delete(
 }
 
 async fn ensure_node(state: &AppState, node_id: &str) -> Result<(), ApiError> {
-    let exists: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM nodes WHERE id = ?")
+    let exists: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM nodes WHERE id = $1")
         .bind(node_id)
         .fetch_one(&state.pool)
         .await?;

@@ -1,3 +1,4 @@
+use crate::db;
 use axum::{
     Json,
     extract::{Path, Query, State},
@@ -79,9 +80,11 @@ pub struct NodeAction {
 }
 
 pub async fn list(State(state): State<AppState>) -> Result<Json<Vec<Value>>, ApiError> {
-    let rows = sqlx::query("SELECT * FROM nodes ORDER BY name COLLATE NOCASE")
-        .fetch_all(&state.pool)
-        .await?;
+    let rows = sqlx::query(
+        "SELECT * FROM nodes ORDER BY lower(name) COLLATE \"C\", name COLLATE \"C\", id",
+    )
+    .fetch_all(&state.pool)
+    .await?;
     let mut values = Vec::with_capacity(rows.len());
     for row in rows {
         values.push(node_json(&state, &row).await?);
@@ -93,7 +96,7 @@ pub async fn get(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
-    let row = sqlx::query("SELECT * FROM nodes WHERE id = ?")
+    let row = sqlx::query("SELECT * FROM nodes WHERE id = $1")
         .bind(&id)
         .fetch_optional(&state.pool)
         .await?
@@ -145,18 +148,18 @@ pub async fn create(
     let stats_secret_enc = state.secrets.encrypt(&stats_secret)?;
     let digest = hex::encode(Sha256::digest(deployment_snapshot_json.as_bytes()));
 
-    let mut tx = state.pool.begin().await?;
-    sqlx::query("INSERT INTO nodes (id, name, ssh_host, ssh_port, ssh_username, ssh_auth_type, ssh_secret_enc, ssh_passphrase_enc, ssh_host_fingerprint, public_host, public_port, listen_addr, traffic_stats_port, proxy_probe_url, tls_sni, tls_skip_verify, node_token_hash, node_token_enc, traffic_stats_secret_enc, desired_config_enc, desired_revision, state, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 'new', ?, ?)")
-        .bind(&id).bind(input.name.trim()).bind(input.ssh_host.trim()).bind(input.ssh_port)
+    let mut tx = db::begin_write(&state.pool).await?;
+    sqlx::query("INSERT INTO nodes (id, name, ssh_host, ssh_port, ssh_username, ssh_auth_type, ssh_secret_enc, ssh_passphrase_enc, ssh_host_fingerprint, public_host, public_port, listen_addr, traffic_stats_port, proxy_probe_url, tls_sni, tls_skip_verify, node_token_hash, node_token_enc, traffic_stats_secret_enc, desired_config_enc, desired_revision, state, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, 1, 'new', $21, $22)")
+        .bind(&id).bind(input.name.trim()).bind(input.ssh_host.trim()).bind(i32::from(input.ssh_port))
         .bind(input.ssh_username.trim()).bind(&input.ssh_auth_type).bind(ssh_secret_enc).bind(ssh_passphrase_enc)
-        .bind(input.ssh_host_fingerprint).bind(input.public_host.trim()).bind(input.public_port)
-        .bind(input.listen_addr.trim()).bind(input.traffic_stats_port).bind(&proxy_probe_url).bind(input.tls_sni).bind(i64::from(input.tls_skip_verify)).bind(token_digest(&token)).bind(node_token_enc)
-        .bind(stats_secret_enc).bind(config_enc).bind(&now).bind(&now).execute(&mut *tx).await?;
-    sqlx::query("INSERT INTO config_versions (id, node_id, revision, config_enc, content_sha256, created_at) VALUES (?, ?, 1, ?, ?, ?)")
-        .bind(Uuid::new_v4().to_string()).bind(&id).bind(state.secrets.encrypt(&deployment_snapshot_json)?).bind(digest).bind(&now)
+        .bind(input.ssh_host_fingerprint).bind(input.public_host.trim()).bind(i32::from(input.public_port))
+        .bind(input.listen_addr.trim()).bind(i32::from(input.traffic_stats_port)).bind(&proxy_probe_url).bind(input.tls_sni).bind(input.tls_skip_verify).bind(token_digest(&token)).bind(node_token_enc)
+        .bind(stats_secret_enc).bind(config_enc).bind(now).bind(now).execute(&mut *tx).await?;
+    sqlx::query("INSERT INTO config_versions (id, node_id, revision, config_enc, content_sha256, created_at) VALUES ($1, $2, 1, $3, $4, $5)")
+        .bind(Uuid::new_v4().to_string()).bind(&id).bind(state.secrets.encrypt(&deployment_snapshot_json)?).bind(digest).bind(now)
         .execute(&mut *tx).await?;
-    sqlx::query("INSERT INTO audit_records (id, actor, action, entity_type, entity_id, detail_json, created_at) VALUES (?, 'admin', 'node.created', 'node', ?, ?, ?)")
-        .bind(Uuid::new_v4().to_string()).bind(&id).bind(json!({"name": input.name.trim()}).to_string()).bind(&now)
+    sqlx::query("INSERT INTO audit_records (id, actor, action, entity_type, entity_id, detail_json, created_at) VALUES ($1, 'admin', 'node.created', 'node', $2, $3, $4)")
+        .bind(Uuid::new_v4().to_string()).bind(&id).bind(json!({"name": input.name.trim()})).bind(now)
         .execute(&mut *tx).await?;
     tx.commit().await?;
 
@@ -178,7 +181,7 @@ pub async fn patch(
     if input.expected_revision < 1 {
         return Err(ApiError::bad_request("expected_revision must be positive"));
     }
-    let current = sqlx::query("SELECT * FROM nodes WHERE id = ?")
+    let current = sqlx::query("SELECT * FROM nodes WHERE id = $1")
         .bind(&id)
         .fetch_optional(&state.pool)
         .await?
@@ -200,7 +203,7 @@ pub async fn patch(
     let ssh_host: String = input.ssh_host.unwrap_or_else(|| current.get("ssh_host"));
     let ssh_port: u16 = input
         .ssh_port
-        .unwrap_or_else(|| current.get::<i64, _>("ssh_port") as u16);
+        .unwrap_or_else(|| current.get::<i32, _>("ssh_port") as u16);
     let ssh_username: String = input
         .ssh_username
         .unwrap_or_else(|| current.get("ssh_username"));
@@ -212,8 +215,8 @@ pub async fn patch(
         .unwrap_or_else(|| current.get("public_host"));
     let public_port: u16 = input
         .public_port
-        .unwrap_or_else(|| current.get::<i64, _>("public_port") as u16);
-    let previous_traffic_stats_port = current.get::<i64, _>("traffic_stats_port") as u16;
+        .unwrap_or_else(|| current.get::<i32, _>("public_port") as u16);
+    let previous_traffic_stats_port = current.get::<i32, _>("traffic_stats_port") as u16;
     let traffic_stats_port = input
         .traffic_stats_port
         .unwrap_or(previous_traffic_stats_port);
@@ -231,7 +234,7 @@ pub async fn patch(
     let tls_sni = input.tls_sni.or_else(|| current.get("tls_sni"));
     let tls_skip_verify = input
         .tls_skip_verify
-        .unwrap_or_else(|| current.get::<i64, _>("tls_skip_verify") != 0);
+        .unwrap_or_else(|| current.get::<bool, _>("tls_skip_verify"));
     let fingerprint_supplied = input.ssh_host_fingerprint.is_some();
     let host_fingerprint = input
         .ssh_host_fingerprint
@@ -277,7 +280,7 @@ pub async fn patch(
     let config_enc = state.secrets.encrypt(&config_json)?;
     let updated_at = now();
     let next_revision = revision + 1;
-    let mut tx = state.pool.begin().await?;
+    let mut tx = db::begin_write(&state.pool).await?;
     let m_tls_enabled = config
         .get("tls")
         .and_then(Value::as_object)
@@ -286,7 +289,7 @@ pub async fn patch(
         .is_some_and(|value| !value.trim().is_empty());
     if m_tls_enabled {
         let missing_client_credentials: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM node_assignments WHERE node_id = ? AND (client_certificate_enc IS NULL OR client_private_key_enc IS NULL)",
+            "SELECT COUNT(*) FROM node_assignments WHERE node_id = $1 AND (client_certificate_enc IS NULL OR client_private_key_enc IS NULL)",
         )
         .bind(&id)
         .fetch_one(&mut *tx)
@@ -297,27 +300,27 @@ pub async fn patch(
             ));
         }
     }
-    let updated = sqlx::query("UPDATE nodes SET name = ?, ssh_host = ?, ssh_port = ?, ssh_username = ?, ssh_auth_type = ?, ssh_secret_enc = ?, ssh_passphrase_enc = ?, ssh_host_fingerprint = ?, public_host = ?, public_port = ?, listen_addr = ?, traffic_stats_port = ?, proxy_probe_url = ?, tls_sni = ?, tls_skip_verify = ?, desired_config_enc = ?, desired_revision = ?, state = CASE WHEN ? = 1 AND state IN ('needs_fingerprint', 'fingerprint_changed') THEN 'ready' ELSE state END, updated_at = ? WHERE id = ? AND desired_revision = ?")
-        .bind(name.trim()).bind(ssh_host.trim()).bind(ssh_port).bind(ssh_username.trim()).bind(ssh_auth_type)
-        .bind(secret_enc).bind(passphrase_enc).bind(host_fingerprint).bind(public_host.trim()).bind(public_port).bind(listen_addr.trim())
-        .bind(traffic_stats_port).bind(&proxy_probe_url).bind(tls_sni).bind(i64::from(tls_skip_verify)).bind(&config_enc).bind(next_revision).bind(i64::from(fingerprint_supplied)).bind(&updated_at).bind(&id).bind(revision)
+    let updated = sqlx::query("UPDATE nodes SET name = $1, ssh_host = $2, ssh_port = $3, ssh_username = $4, ssh_auth_type = $5, ssh_secret_enc = $6, ssh_passphrase_enc = $7, ssh_host_fingerprint = $8, public_host = $9, public_port = $10, listen_addr = $11, traffic_stats_port = $12, proxy_probe_url = $13, tls_sni = $14, tls_skip_verify = $15, desired_config_enc = $16, desired_revision = $17, state = CASE WHEN $18 = TRUE AND state IN ('needs_fingerprint', 'fingerprint_changed') THEN 'ready' ELSE state END, updated_at = $19 WHERE id = $20 AND desired_revision = $21")
+        .bind(name.trim()).bind(ssh_host.trim()).bind(i32::from(ssh_port)).bind(ssh_username.trim()).bind(ssh_auth_type)
+        .bind(secret_enc).bind(passphrase_enc).bind(host_fingerprint).bind(public_host.trim()).bind(i32::from(public_port)).bind(listen_addr.trim())
+        .bind(i32::from(traffic_stats_port)).bind(&proxy_probe_url).bind(tls_sni).bind(tls_skip_verify).bind(&config_enc).bind(next_revision).bind(fingerprint_supplied).bind(updated_at).bind(&id).bind(revision)
         .execute(&mut *tx).await?;
     if updated.rows_affected() == 0 {
         return Err(ApiError::conflict(
             "node changed while saving; reload before editing",
         ));
     }
-    sqlx::query("INSERT INTO config_versions (id, node_id, revision, config_enc, content_sha256, created_at) VALUES (?, ?, ?, ?, ?, ?)")
+    sqlx::query("INSERT INTO config_versions (id, node_id, revision, config_enc, content_sha256, created_at) VALUES ($1, $2, $3, $4, $5, $6)")
         .bind(Uuid::new_v4().to_string()).bind(&id).bind(next_revision).bind(state.secrets.encrypt(&deployment_snapshot_json)?)
-        .bind(hex::encode(Sha256::digest(deployment_snapshot_json.as_bytes()))).bind(&updated_at).execute(&mut *tx).await?;
+        .bind(hex::encode(Sha256::digest(deployment_snapshot_json.as_bytes()))).bind(updated_at).execute(&mut *tx).await?;
     let sync_required =
         config_changed || listener_changed || proxy_probe_url_changed || traffic_stats_port_changed;
     if sync_required {
         supersede_queued_syncs_in_tx(&mut tx, &id).await?;
         enqueue_job_in_tx(&mut tx, "sync", Some(&id), Some(next_revision)).await?;
     }
-    sqlx::query("INSERT INTO audit_records (id, actor, action, entity_type, entity_id, detail_json, created_at) VALUES (?, 'admin', 'node.updated', 'node', ?, ?, ?)")
-        .bind(Uuid::new_v4().to_string()).bind(&id).bind(json!({"revision": next_revision, "config_changed": config_changed, "proxy_probe_url_changed": proxy_probe_url_changed, "traffic_stats_port_changed": traffic_stats_port_changed}).to_string()).bind(&updated_at)
+    sqlx::query("INSERT INTO audit_records (id, actor, action, entity_type, entity_id, detail_json, created_at) VALUES ($1, 'admin', 'node.updated', 'node', $2, $3, $4)")
+        .bind(Uuid::new_v4().to_string()).bind(&id).bind(json!({"revision": next_revision, "config_changed": config_changed, "proxy_probe_url_changed": proxy_probe_url_changed, "traffic_stats_port_changed": traffic_stats_port_changed})).bind(updated_at)
         .execute(&mut *tx).await?;
     tx.commit().await?;
     Ok(Json(
@@ -334,7 +337,7 @@ pub async fn delete(
         .expected_revision
         .ok_or_else(|| ApiError::bad_request("expected_revision query parameter is required"))?;
     let node =
-        sqlx::query("SELECT desired_revision, deployed_revision, state FROM nodes WHERE id = ?")
+        sqlx::query("SELECT desired_revision, deployed_revision, state FROM nodes WHERE id = $1")
             .bind(&id)
             .fetch_optional(&state.pool)
             .await?
@@ -346,13 +349,13 @@ pub async fn delete(
         ));
     }
     let deployed_revision: Option<i64> = node.get("deployed_revision");
-    let mut tx = state.pool.begin().await?;
-    let node_state: String = sqlx::query_scalar("SELECT state FROM nodes WHERE id = ?")
+    let mut tx = db::begin_write(&state.pool).await?;
+    let node_state: String = sqlx::query_scalar("SELECT state FROM nodes WHERE id = $1")
         .bind(&id)
         .fetch_one(&mut *tx)
         .await?;
     if node_state == "deleting" {
-        let existing: Option<String> = sqlx::query_scalar("SELECT id FROM jobs WHERE node_id = ? AND kind = 'uninstall' AND status IN ('queued', 'running') ORDER BY created_at DESC LIMIT 1")
+        let existing: Option<String> = sqlx::query_scalar("SELECT id FROM jobs WHERE node_id = $1 AND kind = 'uninstall' AND status IN ('queued', 'running') ORDER BY created_at DESC LIMIT 1")
             .bind(&id).fetch_optional(&mut *tx).await?;
         if let Some(job_id) = existing {
             tx.rollback().await?;
@@ -362,7 +365,7 @@ pub async fn delete(
             ));
         }
     }
-    let active_deployment: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM jobs WHERE node_id = ? AND status = 'running' AND kind IN ('deploy', 'sync', 'rollback', 'uninstall')")
+    let active_deployment: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM jobs WHERE node_id = $1 AND status = 'running' AND kind IN ('deploy', 'sync', 'rollback', 'uninstall')")
         .bind(&id).fetch_one(&mut *tx).await?;
     let never_installed = deployed_revision.is_none()
         && active_deployment == 0
@@ -372,21 +375,21 @@ pub async fn delete(
         );
     if never_installed {
         cancel_queued_node_jobs_in_tx(&mut tx, &id).await?;
-        sqlx::query("DELETE FROM nodes WHERE id = ? AND desired_revision = ?")
+        sqlx::query("DELETE FROM nodes WHERE id = $1 AND desired_revision = $2")
             .bind(&id)
             .bind(expected)
             .execute(&mut *tx)
             .await?;
-        sqlx::query("INSERT INTO audit_records (id, actor, action, entity_type, entity_id, detail_json, created_at) VALUES (?, 'admin', 'node.deleted', 'node', ?, ?, ?)")
-            .bind(Uuid::new_v4().to_string()).bind(&id).bind(json!({"expected_revision": expected, "remote_install": false}).to_string()).bind(now()).execute(&mut *tx).await?;
+        sqlx::query("INSERT INTO audit_records (id, actor, action, entity_type, entity_id, detail_json, created_at) VALUES ($1, 'admin', 'node.deleted', 'node', $2, $3, $4)")
+            .bind(Uuid::new_v4().to_string()).bind(&id).bind(json!({"expected_revision": expected, "remote_install": false})).bind(now()).execute(&mut *tx).await?;
         tx.commit().await?;
         return Ok((StatusCode::NO_CONTENT, Json(Value::Null)));
     }
     if node_state != "deleting" {
-        let updated = sqlx::query("UPDATE nodes SET state = 'deleting', updated_at = ? WHERE id = ? AND desired_revision = ? AND state = ?")
+        let updated = sqlx::query("UPDATE nodes SET state = 'deleting', updated_at = $1 WHERE id = $2 AND desired_revision = $3 AND state = $4")
             .bind(now()).bind(&id).bind(expected).bind(&node_state).execute(&mut *tx).await?;
         if updated.rows_affected() == 0 {
-            let existing: Option<String> = sqlx::query_scalar("SELECT id FROM jobs WHERE node_id = ? AND kind = 'uninstall' AND status IN ('queued', 'running') ORDER BY created_at DESC LIMIT 1")
+            let existing: Option<String> = sqlx::query_scalar("SELECT id FROM jobs WHERE node_id = $1 AND kind = 'uninstall' AND status IN ('queued', 'running') ORDER BY created_at DESC LIMIT 1")
                 .bind(&id).fetch_optional(&mut *tx).await?;
             if let Some(job_id) = existing {
                 tx.rollback().await?;
@@ -402,8 +405,8 @@ pub async fn delete(
     }
     cancel_queued_node_jobs_in_tx(&mut tx, &id).await?;
     let job_id = enqueue_job_in_tx(&mut tx, "uninstall", Some(&id), Some(revision)).await?;
-    sqlx::query("INSERT INTO audit_records (id, actor, action, entity_type, entity_id, detail_json, created_at) VALUES (?, 'admin', 'node.uninstall_requested', 'node', ?, ?, ?)")
-        .bind(Uuid::new_v4().to_string()).bind(&id).bind(json!({"job_id": job_id, "expected_revision": expected}).to_string()).bind(now()).execute(&mut *tx).await?;
+    sqlx::query("INSERT INTO audit_records (id, actor, action, entity_type, entity_id, detail_json, created_at) VALUES ($1, 'admin', 'node.uninstall_requested', 'node', $2, $3, $4)")
+        .bind(Uuid::new_v4().to_string()).bind(&id).bind(json!({"job_id": job_id, "expected_revision": expected})).bind(now()).execute(&mut *tx).await?;
     tx.commit().await?;
     Ok((
         StatusCode::ACCEPTED,
@@ -440,7 +443,7 @@ pub async fn rollback(
     Path(id): Path<String>,
     Json(input): Json<NodeAction>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
-    let row = sqlx::query("SELECT deployed_revision FROM nodes WHERE id = ?")
+    let row = sqlx::query("SELECT deployed_revision FROM nodes WHERE id = $1")
         .bind(&id)
         .fetch_optional(&state.pool)
         .await?
@@ -451,7 +454,7 @@ pub async fn rollback(
             "node has no successful deployment to roll back",
         ));
     };
-    let previous: Option<i64> = sqlx::query_scalar("SELECT MAX(revision) FROM config_versions WHERE node_id = ? AND deployed_success = 1 AND revision < ?")
+    let previous: Option<i64> = sqlx::query_scalar("SELECT MAX(revision) FROM config_versions WHERE node_id = $1 AND deployed_success = TRUE AND revision < $2")
         .bind(&id).bind(deployed).fetch_one(&state.pool).await?;
     let Some(previous) = previous else {
         return Err(ApiError::conflict(
@@ -475,7 +478,7 @@ async fn action(
     expected: i64,
     kind: &str,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
-    let row = sqlx::query("SELECT desired_revision, state FROM nodes WHERE id = ?")
+    let row = sqlx::query("SELECT desired_revision, state FROM nodes WHERE id = $1")
         .bind(id)
         .fetch_optional(&state.pool)
         .await?
@@ -508,7 +511,7 @@ async fn action_to(
     target_revision: i64,
     payload: Value,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
-    let row = sqlx::query("SELECT desired_revision, state FROM nodes WHERE id = ?")
+    let row = sqlx::query("SELECT desired_revision, state FROM nodes WHERE id = $1")
         .bind(id)
         .fetch_optional(&state.pool)
         .await?
@@ -525,12 +528,12 @@ async fn action_to(
             "node revision is {desired_revision}; reload before starting {kind}"
         )));
     }
-    let mut tx = state.pool.begin().await?;
+    let mut tx = db::begin_write(&state.pool).await?;
     let job_id =
         enqueue_job_with_payload_in_tx(&mut tx, kind, Some(id), Some(target_revision), payload)
             .await?;
-    sqlx::query("INSERT INTO audit_records (id, actor, action, entity_type, entity_id, detail_json, created_at) VALUES (?, 'admin', ?, 'node', ?, ?, ?)")
-        .bind(Uuid::new_v4().to_string()).bind(format!("node.{kind}" )).bind(id).bind(json!({"job_id": job_id, "target_revision": target_revision}).to_string()).bind(now())
+    sqlx::query("INSERT INTO audit_records (id, actor, action, entity_type, entity_id, detail_json, created_at) VALUES ($1, 'admin', $2, 'node', $3, $4, $5)")
+        .bind(Uuid::new_v4().to_string()).bind(format!("node.{kind}" )).bind(id).bind(json!({"job_id": job_id, "target_revision": target_revision})).bind(now())
         .execute(&mut *tx).await?;
     tx.commit().await?;
     Ok((
@@ -539,28 +542,21 @@ async fn action_to(
     ))
 }
 
-async fn node_json(state: &AppState, row: &sqlx::sqlite::SqliteRow) -> Result<Value, ApiError> {
+async fn node_json(state: &AppState, row: &sqlx::postgres::PgRow) -> Result<Value, ApiError> {
     let config_enc: String = row.get("desired_config_enc");
     let config: Value = serde_json::from_str(&state.secrets.decrypt(&config_enc)?)
         .map_err(|_| ApiError::internal())?;
     let node_id: String = row.get("id");
-    let last_sample_at: Option<String> = row.get("last_sample_at");
-    let data_freshness = match last_sample_at.as_deref() {
+    let last_sample_at: Option<chrono::DateTime<chrono::Utc>> = row.get("last_sample_at");
+    let data_freshness = match last_sample_at.as_ref() {
         None => "not_collected",
-        Some(value) => match chrono::DateTime::parse_from_rfc3339(value) {
-            Ok(sample)
-                if (chrono::Utc::now() - sample.with_timezone(&chrono::Utc)).num_seconds()
-                    <= 30 =>
-            {
-                "fresh"
-            }
-            _ => "stale",
-        },
+        Some(sample) if (chrono::Utc::now() - *sample).num_seconds() <= 30 => "fresh",
+        Some(_) => "stale",
     };
     let telemetry = sqlx::query(
         "SELECT
-            (SELECT COUNT(*) FROM data_gaps WHERE node_id = ? AND resolved_at IS NULL) AS open_gaps,
-            (SELECT COUNT(*) FROM jobs WHERE node_id = ? AND kind = 'kick' AND status IN ('queued', 'running')) AS pending_revocations",
+            (SELECT COUNT(*) FROM data_gaps WHERE node_id = $1 AND resolved_at IS NULL) AS open_gaps,
+            (SELECT COUNT(*) FROM jobs WHERE node_id = $2 AND kind = 'kick' AND status IN ('queued', 'running')) AS pending_revocations",
     )
     .bind(&node_id)
     .bind(&node_id)
@@ -569,7 +565,7 @@ async fn node_json(state: &AppState, row: &sqlx::sqlite::SqliteRow) -> Result<Va
     let (resolved_config, _) =
         super::resources::resolve_config_resources(&state.pool, &state.secrets, &node_id, &config)
             .await?;
-    let traffic_stats_port = row.get::<i64, _>("traffic_stats_port") as u16;
+    let traffic_stats_port = row.get::<i32, _>("traffic_stats_port") as u16;
     let yaml_preview = render_server_yaml_preview_with_traffic_stats_port(
         &resolved_config,
         row.get::<String, _>("listen_addr").as_str(),
@@ -583,17 +579,17 @@ async fn node_json(state: &AppState, row: &sqlx::sqlite::SqliteRow) -> Result<Va
     .map_err(|_| ApiError::internal())?;
     Ok(json!({
         "id": node_id, "name": row.get::<String, _>("name"),
-        "ssh": {"host": row.get::<String, _>("ssh_host"), "port": row.get::<i64, _>("ssh_port"), "username": row.get::<String, _>("ssh_username"), "auth_type": row.get::<String, _>("ssh_auth_type"), "secret_configured": true, "host_fingerprint": row.get::<Option<String>, _>("ssh_host_fingerprint")},
-        "public": {"host": row.get::<String, _>("public_host"), "port": row.get::<i64, _>("public_port"), "listen_addr": row.get::<String, _>("listen_addr"), "tls_sni": row.get::<Option<String>, _>("tls_sni"), "skip_cert_verify": row.get::<i64, _>("tls_skip_verify") != 0},
+        "ssh": {"host": row.get::<String, _>("ssh_host"), "port": row.get::<i32, _>("ssh_port"), "username": row.get::<String, _>("ssh_username"), "auth_type": row.get::<String, _>("ssh_auth_type"), "secret_configured": true, "host_fingerprint": row.get::<Option<String>, _>("ssh_host_fingerprint")},
+        "public": {"host": row.get::<String, _>("public_host"), "port": row.get::<i32, _>("public_port"), "listen_addr": row.get::<String, _>("listen_addr"), "tls_sni": row.get::<Option<String>, _>("tls_sni"), "skip_cert_verify": row.get::<bool, _>("tls_skip_verify")},
         "traffic_stats_port": traffic_stats_port,
         "config": config, "yaml_preview": yaml_preview,
         "revision": row.get::<i64, _>("desired_revision"), "deployed_revision": row.get::<Option<i64>, _>("deployed_revision"),
-        "state": row.get::<String, _>("state"), "last_seen_at": row.get::<Option<String>, _>("last_seen_at"),
+        "state": row.get::<String, _>("state"), "last_seen_at": row.get::<Option<chrono::DateTime<chrono::Utc>>, _>("last_seen_at"),
         "proxy_probe_url": row.get::<Option<String>, _>("proxy_probe_url"),
         "last_sample_at": last_sample_at, "data_freshness": data_freshness,
         "open_gaps": telemetry.get::<i64, _>("open_gaps"),
         "pending_revocations": telemetry.get::<i64, _>("pending_revocations"),
-        "created_at": row.get::<String, _>("created_at"), "updated_at": row.get::<String, _>("updated_at")
+        "created_at": row.get::<chrono::DateTime<chrono::Utc>, _>("created_at"), "updated_at": row.get::<chrono::DateTime<chrono::Utc>, _>("updated_at")
     }))
 }
 

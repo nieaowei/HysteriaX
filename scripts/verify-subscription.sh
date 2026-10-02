@@ -7,12 +7,13 @@ import os
 import pathlib
 import secrets
 import socket
-import sqlite3
 import subprocess
 import tempfile
 import time
 import urllib.error
 import urllib.request
+
+from postgres_test import PostgresTestSchema
 
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -40,7 +41,7 @@ def main():
         stdout=subprocess.DEVNULL,
     )
 
-    with tempfile.TemporaryDirectory(prefix="hysteriax-subscription-check-") as temporary:
+    with PostgresTestSchema() as database, tempfile.TemporaryDirectory(prefix="hysteriax-subscription-check-") as temporary:
         temp = pathlib.Path(temporary)
         with socket.socket() as socket_:
             socket_.bind(("127.0.0.1", 0))
@@ -51,7 +52,7 @@ def main():
         environment = os.environ.copy()
         environment.update(
             {
-                "DATABASE_URL": f"sqlite://{temp / 'service.db'}?mode=rwc",
+                "DATABASE_URL": database.url,
                 "HYSTERIAX_LISTEN_ADDR": f"127.0.0.1:{port}",
                 "HYSTERIAX_PUBLIC_URL": "https://management.example.test",
                 "HYSTERIAX_ADMIN_TOKEN": admin,
@@ -283,14 +284,13 @@ def main():
             empty_token = json.loads(body)["token"]
 
             # This test isolates the subscription renderer from SSH deployment.
-            with sqlite3.connect(temp / "service.db") as database:
-                database.execute(
+            with database.connect() as connection:
+                connection.execute(
                     "UPDATE nodes SET deployed_revision = desired_revision, "
                     "deployed_config_enc = desired_config_enc, state = 'deployed' "
-                    "WHERE id IN (?, ?)",
+                    "WHERE id IN (%s, %s)",
                     (node_id, realm_node_id),
                 )
-                database.commit()
 
             status, config = request(
                 base, f"/sub/{subscription}/clash.yaml", admin, method="GET"

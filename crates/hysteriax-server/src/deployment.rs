@@ -1,9 +1,10 @@
+use crate::db;
 use std::{env, time::Duration};
 
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use sqlx::{Row, SqlitePool};
+use sqlx::{PgPool, Row};
 use url::{Host, Url};
 
 use crate::{
@@ -41,7 +42,7 @@ pub struct JobOutput {
     pub delete_node: bool,
 }
 
-pub async fn run_job(pool: &SqlitePool, secrets: &SecretBox, job: &JobInput) -> Result<JobOutput> {
+pub async fn run_job(pool: &PgPool, secrets: &SecretBox, job: &JobInput) -> Result<JobOutput> {
     match job.kind.as_str() {
         "ssh-test" => ssh_test(pool, secrets, job).await,
         "deploy" | "sync" | "rollback" => deploy(pool, secrets, job).await,
@@ -62,15 +63,10 @@ pub fn retryable(error: &anyhow::Error) -> bool {
     })
 }
 
-async fn report_progress(
-    pool: &SqlitePool,
-    job: &JobInput,
-    stage: &str,
-    message: &str,
-) -> Result<()> {
+async fn report_progress(pool: &PgPool, job: &JobInput, stage: &str, message: &str) -> Result<()> {
     let timestamp = now();
-    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
-    let Some(row) = sqlx::query("SELECT logs_json FROM jobs WHERE id = ? AND status = 'running'")
+    let mut tx = db::begin_write(pool).await?;
+    let Some(row) = sqlx::query("SELECT logs_json FROM jobs WHERE id = $1 AND status = 'running'")
         .bind(&job.id)
         .fetch_optional(&mut *tx)
         .await?
@@ -78,8 +74,7 @@ async fn report_progress(
         tx.rollback().await?;
         return Ok(());
     };
-    let current_logs: String = row.get("logs_json");
-    let mut logs = serde_json::from_str::<Vec<Value>>(&current_logs).unwrap_or_default();
+    let mut logs: Vec<Value> = row.get::<sqlx::types::Json<Vec<Value>>, _>("logs_json").0;
     logs.push(json!({
         "created_at": timestamp,
         "stage": stage,
@@ -89,13 +84,13 @@ async fn report_progress(
     if logs.len() > 100 {
         logs.drain(..logs.len() - 100);
     }
-    let logs_json = serde_json::to_string(&logs)?;
+    let logs_json = logs;
     let updated = sqlx::query(
-        "UPDATE jobs SET stage = ?, logs_json = ?, updated_at = ? WHERE id = ? AND status = 'running'",
+        "UPDATE jobs SET stage = $1, logs_json = $2, updated_at = $3 WHERE id = $4 AND status = 'running'",
     )
     .bind(stage)
-    .bind(logs_json)
-    .bind(&timestamp)
+    .bind(sqlx::types::Json(logs_json))
+    .bind(timestamp)
     .bind(&job.id)
     .execute(&mut *tx)
     .await?;
@@ -112,9 +107,9 @@ async fn report_progress(
         "message": message,
         "attempts": job.attempts,
     });
-    sqlx::query("INSERT INTO job_events (job_id, event_type, payload_json, created_at) VALUES (?, 'job.progress', ?, ?)")
+    sqlx::query("INSERT INTO job_events (job_id, event_type, payload_json, created_at) VALUES ($1, 'job.progress', $2, $3)")
         .bind(&job.id)
-        .bind(payload.to_string())
+        .bind(payload)
         .bind(timestamp)
         .execute(&mut *tx)
         .await?;
@@ -122,7 +117,7 @@ async fn report_progress(
     Ok(())
 }
 
-async fn ssh_test(pool: &SqlitePool, secrets: &SecretBox, job: &JobInput) -> Result<JobOutput> {
+async fn ssh_test(pool: &PgPool, secrets: &SecretBox, job: &JobInput) -> Result<JobOutput> {
     let node_id = job
         .node_id
         .as_deref()
@@ -145,7 +140,7 @@ async fn ssh_test(pool: &SqlitePool, secrets: &SecretBox, job: &JobInput) -> Res
     match ssh::connect(&node).await? {
         FingerprintResult::NeedsConfirmation { fingerprint } => {
             sqlx::query(
-                "UPDATE nodes SET state = 'needs_fingerprint', updated_at = ? WHERE id = ?",
+                "UPDATE nodes SET state = 'needs_fingerprint', updated_at = $1 WHERE id = $2",
             )
             .bind(now())
             .bind(node_id)
@@ -163,7 +158,7 @@ async fn ssh_test(pool: &SqlitePool, secrets: &SecretBox, job: &JobInput) -> Res
         }
         FingerprintResult::Changed { expected, observed } => {
             sqlx::query(
-                "UPDATE nodes SET state = 'fingerprint_changed', updated_at = ? WHERE id = ?",
+                "UPDATE nodes SET state = 'fingerprint_changed', updated_at = $1 WHERE id = $2",
             )
             .bind(now())
             .bind(node_id)
@@ -181,7 +176,7 @@ async fn ssh_test(pool: &SqlitePool, secrets: &SecretBox, job: &JobInput) -> Res
             .await?;
             let environment = ssh::inspect_connected(&session).await?;
             remote_guard(&session, &environment, false, None).await?;
-            sqlx::query("UPDATE nodes SET state = 'ready', ssh_host_fingerprint = ?, updated_at = ? WHERE id = ?")
+            sqlx::query("UPDATE nodes SET state = 'ready', ssh_host_fingerprint = $1, updated_at = $2 WHERE id = $3")
                 .bind(&environment.fingerprint).bind(now()).bind(node_id).execute(pool).await?;
             Ok(JobOutput {
                 stage: "environment_checked".to_owned(),
@@ -196,7 +191,7 @@ async fn ssh_test(pool: &SqlitePool, secrets: &SecretBox, job: &JobInput) -> Res
     }
 }
 
-async fn deploy(pool: &SqlitePool, secrets: &SecretBox, job: &JobInput) -> Result<JobOutput> {
+async fn deploy(pool: &PgPool, secrets: &SecretBox, job: &JobInput) -> Result<JobOutput> {
     let node_id = job
         .node_id
         .as_deref()
@@ -204,7 +199,7 @@ async fn deploy(pool: &SqlitePool, secrets: &SecretBox, job: &JobInput) -> Resul
     let probe_token = generate_token();
     let result = deploy_with_probe(pool, secrets, job, &probe_token).await;
     if let Err(error) =
-        sqlx::query("DELETE FROM deployment_probe_tokens WHERE node_id = ? AND token_hash = ?")
+        sqlx::query("DELETE FROM deployment_probe_tokens WHERE node_id = $1 AND token_hash = $2")
             .bind(node_id)
             .bind(token_digest(&probe_token))
             .execute(pool)
@@ -216,7 +211,7 @@ async fn deploy(pool: &SqlitePool, secrets: &SecretBox, job: &JobInput) -> Resul
 }
 
 async fn deploy_with_probe(
-    pool: &SqlitePool,
+    pool: &PgPool,
     secrets: &SecretBox,
     job: &JobInput,
     probe_token: &str,
@@ -235,13 +230,13 @@ async fn deploy_with_probe(
     let revision = job
         .target_revision
         .context("deployment job is missing target_revision")?;
-    let row = sqlx::query("SELECT * FROM nodes WHERE id = ?")
+    let row = sqlx::query("SELECT * FROM nodes WHERE id = $1")
         .bind(node_id)
         .fetch_optional(pool)
         .await?
         .context("node was deleted before deployment")?;
     let snapshot_enc: Option<String> = sqlx::query_scalar(
-        "SELECT config_enc FROM config_versions WHERE node_id = ? AND revision = ?",
+        "SELECT config_enc FROM config_versions WHERE node_id = $1 AND revision = $2",
     )
     .bind(node_id)
     .bind(revision)
@@ -288,7 +283,7 @@ async fn deploy_with_probe(
         FingerprintResult::Trusted(session) => session,
         FingerprintResult::NeedsConfirmation { fingerprint } => {
             sqlx::query(
-                "UPDATE nodes SET state = 'needs_fingerprint', updated_at = ? WHERE id = ?",
+                "UPDATE nodes SET state = 'needs_fingerprint', updated_at = $1 WHERE id = $2",
             )
             .bind(now())
             .bind(node_id)
@@ -298,7 +293,7 @@ async fn deploy_with_probe(
         }
         FingerprintResult::Changed { expected, observed } => {
             sqlx::query(
-                "UPDATE nodes SET state = 'fingerprint_changed', updated_at = ? WHERE id = ?",
+                "UPDATE nodes SET state = 'fingerprint_changed', updated_at = $1 WHERE id = $2",
             )
             .bind(now())
             .bind(node_id)
@@ -343,7 +338,7 @@ async fn deploy_with_probe(
             .await?;
         let remote_hash = remote_hash_output.trim();
         if remote_hash != expected_hash {
-            sqlx::query("UPDATE nodes SET state = 'drift', updated_at = ? WHERE id = ?")
+            sqlx::query("UPDATE nodes SET state = 'drift', updated_at = $1 WHERE id = $2")
                 .bind(now())
                 .bind(node_id)
                 .execute(pool)
@@ -426,8 +421,8 @@ async fn deploy_with_probe(
             )
             .await?;
     }
-    let probe_expires_at = (chrono::Utc::now() + chrono::Duration::minutes(15)).to_rfc3339();
-    sqlx::query("INSERT INTO deployment_probe_tokens (node_id, token_hash, expires_at) VALUES (?, ?, ?) ON CONFLICT(node_id) DO UPDATE SET token_hash = excluded.token_hash, expires_at = excluded.expires_at")
+    let probe_expires_at = chrono::Utc::now() + chrono::Duration::minutes(15);
+    sqlx::query("INSERT INTO deployment_probe_tokens (node_id, token_hash, expires_at) VALUES ($1, $2, $3) ON CONFLICT(node_id) DO UPDATE SET token_hash = excluded.token_hash, expires_at = excluded.expires_at")
         .bind(node_id)
         .bind(token_digest(probe_token))
         .bind(probe_expires_at)
@@ -607,7 +602,7 @@ struct ProxyProbe<'a> {
 }
 
 async fn run_proxy_probe(
-    pool: &SqlitePool,
+    pool: &PgPool,
     secrets: &SecretBox,
     session: &SshSession,
     probe: ProxyProbe<'_>,
@@ -651,7 +646,7 @@ async fn run_proxy_probe(
         .and_then(Value::as_str)
         .is_some_and(|path| !path.trim().is_empty());
     let client_certificate = if needs_client_certificate {
-        let row = sqlx::query("SELECT client_certificate_enc, client_private_key_enc FROM node_assignments WHERE node_id = ? AND client_certificate_enc IS NOT NULL AND client_private_key_enc IS NOT NULL ORDER BY created_at LIMIT 1")
+        let row = sqlx::query("SELECT client_certificate_enc, client_private_key_enc FROM node_assignments WHERE node_id = $1 AND client_certificate_enc IS NOT NULL AND client_private_key_enc IS NOT NULL ORDER BY created_at LIMIT 1")
             .bind(node_id)
             .fetch_optional(pool)
             .await?
@@ -972,30 +967,30 @@ async fn free_remote_tcp_port(session: &SshSession, seed: &str) -> Result<u16> {
 }
 
 pub(crate) async fn load_ssh_node(
-    pool: &SqlitePool,
+    pool: &PgPool,
     secrets: &SecretBox,
     node_id: &str,
 ) -> Result<SshNode> {
-    let row = sqlx::query("SELECT id, ssh_host, ssh_port, ssh_username, ssh_auth_type, ssh_secret_enc, ssh_passphrase_enc, ssh_host_fingerprint FROM nodes WHERE id = ?")
+    let row = sqlx::query("SELECT id, ssh_host, ssh_port, ssh_username, ssh_auth_type, ssh_secret_enc, ssh_passphrase_enc, ssh_host_fingerprint FROM nodes WHERE id = $1")
         .bind(node_id).fetch_optional(pool).await?.context("node not found")?;
     ssh_node_from_row(secrets, &row)
 }
 
 pub(crate) async fn load_deployed_traffic_stats_port(
-    pool: &SqlitePool,
+    pool: &PgPool,
     secrets: &SecretBox,
     node_id: &str,
 ) -> Result<u16> {
-    let row = sqlx::query("SELECT traffic_stats_port, deployed_revision FROM nodes WHERE id = ?")
+    let row = sqlx::query("SELECT traffic_stats_port, deployed_revision FROM nodes WHERE id = $1")
         .bind(node_id)
         .fetch_optional(pool)
         .await?
         .context("node not found")?;
-    let configured_port = u16::try_from(row.get::<i64, _>("traffic_stats_port"))
+    let configured_port = u16::try_from(row.get::<i32, _>("traffic_stats_port"))
         .context("saved trafficStats port is invalid")?;
     if let Some(revision) = row.get::<Option<i64>, _>("deployed_revision") {
         let snapshot_enc: Option<String> = sqlx::query_scalar(
-            "SELECT config_enc FROM config_versions WHERE node_id = ? AND revision = ?",
+            "SELECT config_enc FROM config_versions WHERE node_id = $1 AND revision = $2",
         )
         .bind(node_id)
         .bind(revision)
@@ -1025,7 +1020,7 @@ fn snapshot_traffic_stats_port(snapshot: &Value) -> Result<u16> {
     Ok(port)
 }
 
-async fn uninstall(pool: &SqlitePool, secrets: &SecretBox, job: &JobInput) -> Result<JobOutput> {
+async fn uninstall(pool: &PgPool, secrets: &SecretBox, job: &JobInput) -> Result<JobOutput> {
     report_progress(
         pool,
         job,
@@ -1077,11 +1072,11 @@ async fn uninstall(pool: &SqlitePool, secrets: &SecretBox, job: &JobInput) -> Re
     })
 }
 
-fn ssh_node_from_row(secrets: &SecretBox, row: &sqlx::sqlite::SqliteRow) -> Result<SshNode> {
+fn ssh_node_from_row(secrets: &SecretBox, row: &sqlx::postgres::PgRow) -> Result<SshNode> {
     let passphrase_enc: Option<String> = row.get("ssh_passphrase_enc");
     Ok(SshNode {
         host: row.get("ssh_host"),
-        port: row.get::<i64, _>("ssh_port") as u16,
+        port: row.get::<i32, _>("ssh_port") as u16,
         username: row.get("ssh_username"),
         auth_type: row.get("ssh_auth_type"),
         secret: secrets.decrypt(&row.get::<String, _>("ssh_secret_enc"))?,
@@ -1298,8 +1293,8 @@ fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
 
-fn now() -> String {
-    chrono::Utc::now().to_rfc3339()
+fn now() -> chrono::DateTime<chrono::Utc> {
+    chrono::Utc::now()
 }
 
 fn primary_listener_port(listen_addr: &str) -> Option<u16> {
@@ -1307,7 +1302,7 @@ fn primary_listener_port(listen_addr: &str) -> Option<u16> {
     ports.split([',', '-']).next()?.parse().ok()
 }
 
-async fn kick(pool: &SqlitePool, secrets: &SecretBox, job: &JobInput) -> Result<JobOutput> {
+async fn kick(pool: &PgPool, secrets: &SecretBox, job: &JobInput) -> Result<JobOutput> {
     let node_id = job
         .node_id
         .as_deref()
@@ -1328,7 +1323,7 @@ async fn kick(pool: &SqlitePool, secrets: &SecretBox, job: &JobInput) -> Result<
         }
     };
     let stats_secret_enc: String =
-        sqlx::query_scalar("SELECT traffic_stats_secret_enc FROM nodes WHERE id = ?")
+        sqlx::query_scalar("SELECT traffic_stats_secret_enc FROM nodes WHERE id = $1")
             .bind(node_id)
             .fetch_one(pool)
             .await?;
@@ -1422,7 +1417,7 @@ fn clients_offline_output(node_id: &str, user_id: &str) -> JobOutput {
 mod tests {
     use serde_json::json;
     use sha2::{Digest, Sha256};
-    use sqlx::{Row, SqlitePool, sqlite::SqlitePoolOptions};
+    use sqlx::{PgPool, Row};
 
     use super::{
         JobInput, deployment_probe_server_config, parse_http_probe_target, primary_listener_port,
@@ -1462,14 +1457,8 @@ mod tests {
         assert!(realm.is_none());
     }
 
-    async fn test_pool() -> SqlitePool {
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect("sqlite::memory:")
-            .await
-            .unwrap();
-        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
-        pool
+    async fn test_pool() -> PgPool {
+        crate::db::test_pool().await
     }
 
     #[test]
@@ -1531,8 +1520,9 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(row.get::<String, _>("stage"), "downloading_release");
-        let logs: serde_json::Value =
-            serde_json::from_str(&row.get::<String, _>("logs_json")).unwrap();
+        let logs: serde_json::Value = row
+            .get::<sqlx::types::Json<serde_json::Value>, _>("logs_json")
+            .0;
         assert_eq!(logs[0]["stage"], "downloading_release");
         assert_eq!(logs[0]["message"], "Verifying pinned release.");
 
@@ -1543,8 +1533,7 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(event.get::<String, _>("event_type"), "job.progress");
-        let payload: serde_json::Value =
-            serde_json::from_str(&event.get::<String, _>("payload_json")).unwrap();
+        let payload: serde_json::Value = event.get("payload_json");
         assert_eq!(payload["stage"], "downloading_release");
         assert_eq!(payload["message"], "Verifying pinned release.");
     }

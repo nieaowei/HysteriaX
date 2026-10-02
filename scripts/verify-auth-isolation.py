@@ -9,13 +9,16 @@ import os
 import pathlib
 import secrets
 import socket
-import sqlite3
+import sys
 import subprocess
 import tempfile
 import time
 import urllib.error
 import urllib.request
 import uuid
+
+from psycopg.types.json import Jsonb
+from postgres_test import PostgresTestSchema
 
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -40,7 +43,7 @@ def request(base, path, token=None, method="GET", payload=None):
 def main():
     subprocess.run(["cargo", "build", "-p", "hysteriax-server"], cwd=ROOT, check=True)
 
-    with tempfile.TemporaryDirectory(prefix="hysteriax-auth-isolation-") as temporary:
+    with PostgresTestSchema() as database, tempfile.TemporaryDirectory(prefix="hysteriax-auth-isolation-") as temporary:
         temp = pathlib.Path(temporary)
         with socket.socket() as listener:
             listener.bind(("127.0.0.1", 0))
@@ -52,7 +55,7 @@ def main():
         environment = os.environ.copy()
         environment.update(
             {
-                "DATABASE_URL": f"sqlite://{temp / 'service.db'}?mode=rwc",
+                "DATABASE_URL": database.url,
                 "HYSTERIAX_LISTEN_ADDR": f"127.0.0.1:{port}",
                 "HYSTERIAX_PUBLIC_URL": "https://management.example.test",
                 "HYSTERIAX_ADMIN_TOKEN": admin,
@@ -370,17 +373,17 @@ def main():
                     raise RuntimeError("un-deployed test node should report traffic as not collected")
                 pending_job_id = str(uuid.uuid4())
                 future_time = "2099-01-01T00:00:00Z"
-                with sqlite3.connect(temp / "service.db", timeout=10) as database:
-                    database.execute(
+                with database.connect() as connection:
+                    connection.execute(
                         "INSERT INTO jobs (id, kind, node_id, target_revision, payload_json, status, stage, available_at, created_at, updated_at) "
-                        "VALUES (?, 'kick', ?, NULL, ?, 'queued', 'retry_wait', ?, ?, ?)",
+                        "VALUES (%s, 'kick', %s, NULL, %s, 'queued', 'retry_wait', %s, %s, %s)",
                         (
                             pending_job_id,
                             node2,
-                            json.dumps({"user_id": user2}, separators=(",", ":")),
-                            future_time,
-                            future_time,
-                            future_time,
+                            Jsonb({"user_id": user2}),
+                            datetime.fromisoformat(future_time.replace("Z", "+00:00")),
+                            datetime.fromisoformat(future_time.replace("Z", "+00:00")),
+                            datetime.fromisoformat(future_time.replace("Z", "+00:00")),
                         ),
                     )
                 usage = expect(f"/api/v1/users/{user2}/usage")
@@ -397,20 +400,20 @@ def main():
                 if node_two_usage is None or node_two_usage["assigned"] is not True or node_two_usage["sampled_at"] is not None:
                     raise RuntimeError("usage did not show an assigned node with no sampling record")
 
-                sampled_at = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
-                with sqlite3.connect(temp / "service.db", timeout=10) as database:
-                    database.execute(
+                sampled_at = datetime.now(timezone.utc)
+                with database.connect() as connection:
+                    connection.execute(
                         "INSERT INTO traffic_records (id, node_id, user_id, instance_id, baseline_tx, baseline_rx, delta_tx, delta_rx, gap_reason, sampled_at) "
-                        "VALUES (?, ?, ?, 'usage-fixture', 10, 20, 10, 20, NULL, ?)",
+                        "VALUES (%s, %s, %s, 'usage-fixture', 10, 20, 10, 20, NULL, %s)",
                         (str(uuid.uuid4()), node1, shared, sampled_at),
                     )
-                    database.execute(
+                    connection.execute(
                         "INSERT INTO traffic_baselines (node_id, user_id, instance_id, tx_total, rx_total, sampled_at) "
-                        "VALUES (?, ?, 'zero-traffic-fixture', 0, 0, ?)",
+                        "VALUES (%s, %s, 'zero-traffic-fixture', 0, 0, %s)",
                         (node1, user1, sampled_at),
                     )
-                    database.execute(
-                        "UPDATE users SET usage_bytes = usage_bytes + 30 WHERE id = ?",
+                    connection.execute(
+                        "UPDATE users SET usage_bytes = usage_bytes + 30 WHERE id = %s",
                         (shared,),
                     )
                 zero_usage = expect(f"/api/v1/users/{user1}/usage")
@@ -421,7 +424,10 @@ def main():
                 if (
                     zero_usage["data_freshness"]["status"] != "fresh"
                     or zero_node is None
-                    or zero_node["sampled_at"] != sampled_at
+                    or datetime.fromisoformat(
+                        zero_node["sampled_at"].replace("Z", "+00:00")
+                    )
+                    != sampled_at
                     or zero_node["tx_bytes"] != 0
                     or zero_node["rx_bytes"] != 0
                 ):
@@ -558,6 +564,14 @@ def main():
                     "Admin token create/use/revoke, two-node auth isolation, server TLS resource parsing/key matching, mTLS certificate requirements/updates, stable identity, simultaneous edit conflict, credential rotation, "
                     "per-node usage freshness, pending revocation, quota clearing, expiry denial, and over-quota subscription denial passed."
                 )
+            except Exception:
+                log.flush()
+                print(
+                    "Auth-isolation server log tail:\n"
+                    + (temp / "server.log").read_text(errors="replace")[-5000:],
+                    file=sys.stderr,
+                )
+                raise
             finally:
                 server.terminate()
                 try:

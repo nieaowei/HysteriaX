@@ -1,6 +1,7 @@
 import importlib.util
+import io
+import json
 import pathlib
-import sqlite3
 import tarfile
 import tempfile
 import unittest
@@ -15,48 +16,36 @@ SPEC.loader.exec_module(backup_restore)
 
 
 class BackupArchiveTests(unittest.TestCase):
-    def make_project(self, root):
-        data = root / "data"
-        data.mkdir()
-        with sqlite3.connect(data / "hysteriax.db") as database:
-            database.execute("PRAGMA journal_mode=WAL")
-            database.execute("CREATE TABLE resources (id TEXT PRIMARY KEY, body BLOB)")
-            database.execute(
-                "INSERT INTO resources VALUES ('resource-1', ?)", (b"encrypted fixture",)
-            )
-        (data / "resource.pem.enc").write_bytes(b"encrypted resource fixture")
-        return data
-
-    def test_backup_extracts_database_and_encrypted_resources(self):
+    def test_backup_extracts_verified_postgresql_custom_dump(self):
         with tempfile.TemporaryDirectory(prefix="hysteriax-backup-test-") as folder:
             root = pathlib.Path(folder)
-            data = self.make_project(root)
             key = b"k" * 32
             archive = root / "backups" / "test.tar.gz"
-            metadata = backup_restore.create_archive(root, archive, key)
-
-            stage = root / "stage"
-            restored = backup_restore.extract_verified_archive(archive, stage, key)
-
-            with sqlite3.connect(restored / "hysteriax.db") as database:
-                value = database.execute(
-                    "SELECT body FROM resources WHERE id = 'resource-1'"
-                ).fetchone()[0]
-            self.assertEqual(value, b"encrypted fixture")
-            self.assertEqual(
-                (restored / "resource.pem.enc").read_bytes(),
-                (data / "resource.pem.enc").read_bytes(),
+            dump = b"PGDMP" + b"encrypted PostgreSQL archive fixture"
+            metadata = backup_restore.create_archive(
+                root, archive, key, dump_bytes=dump, schema_version=1
             )
+
+            restored, restored_metadata = backup_restore.extract_verified_archive(
+                archive, root / "stage", key
+            )
+
+            self.assertEqual(restored.read_bytes(), dump)
+            self.assertEqual(restored_metadata, metadata)
             self.assertEqual(len(metadata["master_key_sha256"]), 64)
+            self.assertEqual(metadata["schema_version"], 1)
+            self.assertEqual(archive.stat().st_mode & 0o777, 0o600)
             with tarfile.open(archive, "r:gz") as stored:
                 self.assertNotIn(".env", stored.getnames())
+                self.assertIn("data/hysteriax.dump", stored.getnames())
 
     def test_restore_rejects_a_different_master_key(self):
         with tempfile.TemporaryDirectory(prefix="hysteriax-backup-key-test-") as folder:
             root = pathlib.Path(folder)
-            self.make_project(root)
             archive = root / "backup.tar.gz"
-            backup_restore.create_archive(root, archive, b"a" * 32)
+            backup_restore.create_archive(
+                root, archive, b"a" * 32, dump_bytes=b"PGDMP fixture", schema_version=1
+            )
 
             with self.assertRaisesRegex(RuntimeError, "does not match"):
                 backup_restore.extract_verified_archive(
@@ -70,11 +59,59 @@ class BackupArchiveTests(unittest.TestCase):
             with tarfile.open(archive, "w:gz") as stored:
                 member = tarfile.TarInfo("../outside")
                 member.size = 1
-                import io
-
                 stored.addfile(member, io.BytesIO(b"x"))
 
             with self.assertRaisesRegex(RuntimeError, "unsafe path"):
+                backup_restore.extract_verified_archive(
+                    archive, root / "restore", b"k" * 32
+                )
+
+    def test_restore_rejects_modified_dump_content(self):
+        with tempfile.TemporaryDirectory(prefix="hysteriax-backup-integrity-test-") as folder:
+            root = pathlib.Path(folder)
+            original = root / "original.tar.gz"
+            backup_restore.create_archive(
+                root, original, b"k" * 32, dump_bytes=b"PGDMP original", schema_version=1
+            )
+            tampered = root / "tampered.tar.gz"
+            with tarfile.open(original, "r:gz") as source, tarfile.open(
+                tampered, "w:gz"
+            ) as destination:
+                for member in source.getmembers():
+                    stream = source.extractfile(member) if member.isfile() else None
+                    if member.name == "data/hysteriax.dump":
+                        content = b"PGDMP tampered"
+                        member.size = len(content)
+                        stream = io.BytesIO(content)
+                    if member.isfile():
+                        destination.addfile(member, stream)
+                    else:
+                        destination.addfile(member)
+
+            with self.assertRaisesRegex(RuntimeError, "checksums"):
+                backup_restore.extract_verified_archive(
+                    tampered, root / "restore", b"k" * 32
+                )
+
+    def test_legacy_sqlite_archive_is_not_accepted(self):
+        with tempfile.TemporaryDirectory(prefix="hysteriax-backup-legacy-test-") as folder:
+            root = pathlib.Path(folder)
+            archive = root / "legacy.tar.gz"
+            metadata = {
+                "format_version": 1,
+                "master_key_sha256": backup_restore.hashlib.sha256(b"k" * 32).hexdigest(),
+                "files": {},
+            }
+            with tarfile.open(archive, "w:gz") as stored:
+                manifest = json.dumps(metadata).encode()
+                member = tarfile.TarInfo(backup_restore.MANIFEST)
+                member.size = len(manifest)
+                stored.addfile(member, io.BytesIO(manifest))
+                directory = tarfile.TarInfo("data")
+                directory.type = tarfile.DIRTYPE
+                stored.addfile(directory)
+
+            with self.assertRaisesRegex(RuntimeError, "SQLite archives"):
                 backup_restore.extract_verified_archive(
                     archive, root / "restore", b"k" * 32
                 )

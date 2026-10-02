@@ -17,6 +17,8 @@ import time
 import urllib.error
 import urllib.request
 
+from postgres_test import PostgresTestSchema
+
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SERVER = ROOT / "target" / "debug" / "hysteriax-server"
@@ -143,7 +145,7 @@ def main():
 
     built_images = []
     containers = []
-    with tempfile.TemporaryDirectory(prefix="hysteriax-deployment-matrix-") as temporary:
+    with PostgresTestSchema() as database, tempfile.TemporaryDirectory(prefix="hysteriax-deployment-matrix-") as temporary:
         temp = pathlib.Path(temporary)
         ssh_key = temp / "id_ed25519"
         subprocess.run(
@@ -247,7 +249,7 @@ def main():
             environment = os.environ.copy()
             environment.update(
                 {
-                    "DATABASE_URL": f"sqlite://{temp / 'service.db'}?mode=rwc",
+                    "DATABASE_URL": database.url,
                     "HYSTERIAX_LISTEN_ADDR": f"0.0.0.0:{api_port}",
                     "HYSTERIAX_PUBLIC_URL": public_url,
                     "HYSTERIAX_ADMIN_TOKEN": admin,

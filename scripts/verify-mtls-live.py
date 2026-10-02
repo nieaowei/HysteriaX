@@ -11,7 +11,6 @@ import pathlib
 import secrets
 import signal
 import socket
-import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -19,6 +18,8 @@ import time
 import urllib.error
 import urllib.request
 import uuid
+
+from postgres_test import PostgresTestSchema
 
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -131,6 +132,27 @@ def restore_systemctl(container):
     run(["docker", "exec", container, "python3", "-c", restore_code])
 
 
+def wait_for_systemd(container, timeout=30):
+    deadline = time.monotonic() + timeout
+    last_message = "systemd has not reported a state yet"
+    while time.monotonic() < deadline:
+        result = run(
+            ["docker", "exec", container, "systemctl", "is-system-running"],
+            check=False,
+            timeout=5,
+        )
+        state = result.stdout.strip()
+        if state in {"running", "degraded"}:
+            return
+        if state == "maintenance":
+            raise RuntimeError(f"systemd entered maintenance mode in {container}")
+        last_message = (result.stdout + result.stderr).strip() or last_message
+        time.sleep(0.25)
+    raise RuntimeError(
+        f"systemd did not become ready in {container} within {timeout}s: {last_message}"
+    )
+
+
 def main():
     subprocess.run(["cargo", "build", "-p", "hysteriax-server"], cwd=ROOT, check=True)
 
@@ -141,7 +163,7 @@ def main():
     hy2_first_port, hy2_last_port = free_port_range(8)
     socks_port = free_port()
     mihomo_port = free_port()
-    with tempfile.TemporaryDirectory(prefix="hysteriax-mtls-live-") as temporary:
+    with PostgresTestSchema() as database, tempfile.TemporaryDirectory(prefix="hysteriax-mtls-live-") as temporary:
         temp = pathlib.Path(temporary)
         ssh_key = temp / "id_ed25519"
         subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(ssh_key)], check=True)
@@ -174,6 +196,7 @@ def main():
                     "-d", image,
                 ]
             )
+            wait_for_systemd(container)
             run(["docker", "cp", str(ssh_key.with_suffix(".pub")), f"{container}:/root/.ssh/authorized_keys"])
             run(
                 [
@@ -215,7 +238,7 @@ def main():
             environment = os.environ.copy()
             environment.update(
                 {
-                    "DATABASE_URL": f"sqlite://{temp / 'service.db'}?mode=rwc",
+                    "DATABASE_URL": database.url,
                     "HYSTERIAX_LISTEN_ADDR": f"0.0.0.0:{api_port}",
                     "HYSTERIAX_PUBLIC_URL": public_url,
                     "HYSTERIAX_ADMIN_TOKEN": admin,
@@ -722,8 +745,8 @@ def main():
                     or proxy_probe.get("route_check") != "tcp_forwarding"
                 ):
                     raise RuntimeError("deployment succeeded without its mTLS+ECH Hysteria TCP forwarding probe")
-                with sqlite3.connect(temp / "service.db") as database:
-                    active_probes = database.execute(
+                with database.connect() as connection:
+                    active_probes = connection.execute(
                         "SELECT COUNT(*) FROM deployment_probe_tokens"
                     ).fetchone()[0]
                 if active_probes != 0:

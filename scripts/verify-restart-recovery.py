@@ -2,17 +2,19 @@
 """Restart the service with an interrupted job and verify persisted recovery."""
 
 import base64
+from datetime import datetime, timezone
 import json
 import os
 import pathlib
 import secrets
 import socket
-import sqlite3
 import subprocess
 import tempfile
 import time
 import urllib.request
 import uuid
+
+from postgres_test import PostgresTestSchema
 
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -62,7 +64,7 @@ def job_detail(base, job_id, admin_token):
 def main():
     subprocess.run(["cargo", "build", "-p", "hysteriax-server"], cwd=ROOT, check=True)
 
-    with tempfile.TemporaryDirectory(prefix="hysteriax-restart-recovery-") as folder:
+    with PostgresTestSchema() as database, tempfile.TemporaryDirectory(prefix="hysteriax-restart-recovery-") as folder:
         temp = pathlib.Path(folder)
         port = free_port()
         base = f"http://127.0.0.1:{port}"
@@ -70,7 +72,7 @@ def main():
         admin_token = "hx_" + base64.urlsafe_b64encode(secrets.token_bytes(32)).decode().rstrip("=")
         environment.update(
             {
-                "DATABASE_URL": f"sqlite://{temp / 'service.db'}?mode=rwc",
+                "DATABASE_URL": database.url,
                 "HYSTERIAX_LISTEN_ADDR": f"127.0.0.1:{port}",
                 "HYSTERIAX_PUBLIC_URL": "http://127.0.0.1",
                 "HYSTERIAX_ADMIN_TOKEN": admin_token,
@@ -88,24 +90,23 @@ def main():
             process = None
 
             job_id = str(uuid.uuid4())
-            timestamp = "2026-01-01T00:00:00Z"
-            with sqlite3.connect(temp / "service.db") as database:
-                database.execute(
+            timestamp = datetime(2026, 1, 1, tzinfo=timezone.utc)
+            with database.connect() as connection:
+                connection.execute(
                     "INSERT INTO nodes (id, name, ssh_host, ssh_port, ssh_username, ssh_auth_type, "
                     "ssh_secret_enc, public_host, public_port, listen_addr, node_token_hash, node_token_enc, "
                     "traffic_stats_secret_enc, desired_config_enc, created_at, updated_at) "
                     "VALUES ('recovery-node', 'Recovery node', '127.0.0.1', 22, 'root', 'private_key', "
                     "'encrypted-ssh', 'node.example.test', 443, ':443', 'node-hash', 'encrypted-token', "
-                    "'encrypted-stats', 'encrypted-config', ?, ?)",
+                    "'encrypted-stats', 'encrypted-config', %s, %s)",
                     (timestamp, timestamp),
                 )
-                database.execute(
+                connection.execute(
                     "INSERT INTO jobs (id, kind, node_id, target_revision, status, stage, payload_json, attempts, "
                     "available_at, created_at, updated_at, started_at) "
-                    "VALUES (?, 'sync', 'recovery-node', 1, 'running', 'interrupted', '{}', 4, ?, ?, ?, ?)",
+                    "VALUES (%s, 'sync', 'recovery-node', 1, 'running', 'interrupted', '{}', 4, %s, %s, %s, %s)",
                     (job_id, timestamp, timestamp, timestamp, timestamp),
                 )
-                database.commit()
 
             process = subprocess.Popen(
                 [str(SERVER)], cwd=ROOT, env=environment, stdout=api_log, stderr=api_log
@@ -115,18 +116,18 @@ def main():
             recovered_event = None
             job = None
             while time.time() < deadline:
-                with sqlite3.connect(temp / "service.db") as database:
-                    row = database.execute(
-                        "SELECT status, stage, attempts FROM jobs WHERE id = ?", (job_id,)
+                with database.connect() as connection:
+                    row = connection.execute(
+                        "SELECT status, stage, attempts FROM jobs WHERE id = %s", (job_id,)
                     ).fetchone()
-                    events = database.execute(
-                        "SELECT event_type, payload_json FROM job_events WHERE job_id = ? ORDER BY id",
+                    events = connection.execute(
+                        "SELECT event_type, payload_json FROM job_events WHERE job_id = %s ORDER BY id",
                         (job_id,),
                     ).fetchall()
                 job = row
                 for event_type, payload_json in events:
                     if event_type == "job.recovered":
-                        recovered_event = json.loads(payload_json)
+                        recovered_event = payload_json
                         break
                 if recovered_event is not None and row and row[2] >= 5:
                     break
