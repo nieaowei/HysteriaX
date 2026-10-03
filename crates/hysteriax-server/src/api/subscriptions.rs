@@ -288,6 +288,12 @@ async fn load_subscription_nodes(
     let mut nodes = Vec::new();
     for row in rows {
         let node_id: String = row.get("id");
+        if crate::node_limits::restricted(&state.pool, &node_id)
+            .await
+            .map_err(|_| ApiError::internal())?
+        {
+            continue;
+        }
         let node_config_enc: String = row.get("deployed_config_enc");
         let config: Value = serde_json::from_str(&state.secrets.decrypt(&node_config_enc)?)
             .map_err(|_| ApiError::internal())?;
@@ -322,6 +328,14 @@ async fn load_subscription_nodes(
     }
 
     Ok(nodes)
+}
+
+#[cfg(test)]
+pub(crate) async fn subscription_node_count(
+    state: &AppState,
+    user_id: &str,
+) -> Result<usize, ApiError> {
+    Ok(load_subscription_nodes(state, user_id).await?.len())
 }
 
 pub async fn hy2_auth(
@@ -367,6 +381,12 @@ pub async fn hy2_auth(
             ok: true,
             id: format!("probe-{node_id}"),
         }));
+    }
+    if crate::node_limits::restricted(&state.pool, &node_id)
+        .await
+        .map_err(|_| ApiError::internal())?
+    {
+        return Ok(Json(AuthResponse::denied()));
     }
     let assignment = sqlx::query("SELECT u.id, u.enabled, u.expires_at, u.quota_bytes, u.usage_bytes FROM node_assignments a JOIN users u ON u.id = a.user_id WHERE a.node_id = $1 AND a.credential_hash = $2")
         .bind(&node_id).bind(auth_hash).fetch_optional(&state.pool).await?;

@@ -23,10 +23,18 @@ actor APIClient {
     private let token: String
     private let session: URLSession
 
-    init(baseURL: URL, token: String, session: URLSession = .shared) {
+    init(baseURL: URL, token: String, session: URLSession? = nil) {
         self.baseURL = baseURL
         self.token = token
-        self.session = session
+        if let session {
+            self.session = session
+        } else {
+            // Keep management requests fresh and isolate stale transport/cache state.
+            let configuration = URLSessionConfiguration.ephemeral
+            configuration.urlCache = nil
+            configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+            self.session = URLSession(configuration: configuration)
+        }
     }
 
     func get<Value: Decodable>(_ operation: APIOperation<NoRequest, Value>) async throws -> Value {

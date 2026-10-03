@@ -1312,6 +1312,11 @@ async fn kick(pool: &PgPool, secrets: &SecretBox, job: &JobInput) -> Result<JobO
         .get("user_id")
         .and_then(Value::as_str)
         .context("kick job is missing user_id")?;
+    if job.payload.get("node_limit").and_then(Value::as_bool) == Some(true)
+        && !crate::node_limits::restricted(pool, node_id).await?
+    {
+        return Ok(restriction_cleared_output(node_id, user_id));
+    }
     let node = load_ssh_node(pool, secrets, node_id).await?;
     let session = match ssh::connect(&node).await? {
         FingerprintResult::Trusted(session) => session,
@@ -1339,6 +1344,11 @@ async fn kick(pool: &PgPool, secrets: &SecretBox, job: &JobInput) -> Result<JobO
     .await?;
     let mut remaining = 0_u64;
     for attempt in 0..6 {
+        if job.payload.get("node_limit").and_then(Value::as_bool) == Some(true)
+            && !crate::node_limits::restricted(pool, node_id).await?
+        {
+            return Ok(restriction_cleared_output(node_id, user_id));
+        }
         // Hysteria stores kick IDs until the next traffic callback. Check online first
         // so an already-offline user does not leave a stale kick marker for a later login.
         let online_before = session
@@ -1359,6 +1369,12 @@ async fn kick(pool: &PgPool, secrets: &SecretBox, job: &JobInput) -> Result<JobO
             )
             .await?;
             return Ok(clients_offline_output(node_id, user_id));
+        }
+        // The online query can block while a renewal or billing reset commits.
+        if job.payload.get("node_limit").and_then(Value::as_bool) == Some(true)
+            && !crate::node_limits::restricted(pool, node_id).await?
+        {
+            return Ok(restriction_cleared_output(node_id, user_id));
         }
         session
             .loopback_http_post(
@@ -1399,6 +1415,13 @@ async fn kick(pool: &PgPool, secrets: &SecretBox, job: &JobInput) -> Result<JobO
         }
     }
     Err(ssh::SshError::ClientsStillOnline { remaining }.into())
+}
+
+fn restriction_cleared_output(node_id: &str, user_id: &str) -> JobOutput {
+    let mut output = clients_offline_output(node_id, user_id);
+    output.stage = "restriction_cleared".into();
+    output.result = json!({"node_id": node_id, "user_id": user_id, "skipped": true, "reason": "node_limit_cleared"});
+    output
 }
 
 fn clients_offline_output(node_id: &str, user_id: &str) -> JobOutput {

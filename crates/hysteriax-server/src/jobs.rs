@@ -103,8 +103,10 @@ async fn execute_one(state: AppState, job: JobInput) {
         }
         Err(error) => {
             let message = safe_error(&state.pool, &state.secrets, &job, &error).await;
-            let retry = deployment::retryable(&error)
-                && (job.kind == "kick" || job.attempts < MAX_ATTEMPTS);
+            let retry = (job.kind == "kick"
+                && job.payload.get("node_limit").and_then(Value::as_bool) == Some(true))
+                || (deployment::retryable(&error)
+                    && (job.kind == "kick" || job.attempts < MAX_ATTEMPTS));
             let rolled_back = was_rolled_back(&error);
             let rollback_failed = was_rollback_failed(&error);
             if let Err(persist_error) = fail(

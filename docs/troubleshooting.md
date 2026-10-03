@@ -19,3 +19,7 @@ Another client saved a newer revision. Fetch the node or user again, merge the i
 ## A node does not appear in a subscription
 
 The subscription includes only assignments on nodes with a successful deployed revision. The current API foundation persists deploy and sync jobs; until the SSH worker stage is complete, queued jobs do not install Hysteria on remote hosts.
+
+## macOS client times out while curl succeeds
+
+Check Caddy's `Alt-Svc` response header and the client's CFNetwork logs. Advertising HTTP/3 while UDP 443 is unavailable to the management listener can make URLSession attempt a QUIC connection that times out. The bundled Caddyfile uses HTTP/1.1 and HTTP/2 and returns `Alt-Svc: clear` to remove old alternatives. The Mac client uses a fresh ephemeral session without HTTP response caching. After updating Caddy's configuration, validate and reload it with `docker compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile`, then restart the updated client. TLS certificate validation remains enabled.

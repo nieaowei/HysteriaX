@@ -22,6 +22,7 @@ final class ManagementStore {
     var currentAdminTokenID: String?
     var serverMonitoring: ServerMonitoring?
     var serverMonitoringError: String?
+    var supportsNodePackages = false
     var isConnected = false
     var isLoading = false
     var lastUpdated: Date?
@@ -85,11 +86,13 @@ final class ManagementStore {
             try await loadData(using: client)
             isConnected = true
             errorMessage = nil
+            await NodeAlertNotifications.shared.deliver(nodes: nodes, service: serviceAddress)
         } catch {
             isConnected = false
             errorMessage = error.localizedDescription
             throw error
         }
+        supportsNodePackages = version.features?.contains("node_packages") == true
         startEventUpdates(using: client)
     }
 
@@ -101,8 +104,10 @@ final class ManagementStore {
             let version: APIVersion = try await api.get(APIEndpoints.getAPIVersion)
             guard version.apiVersion == "1.0.0" else { throw APIClientError.incompatibleAPI(version.apiVersion) }
             try await loadData(using: api)
+            supportsNodePackages = version.features?.contains("node_packages") == true
             isConnected = true
             errorMessage = nil
+            await NodeAlertNotifications.shared.deliver(nodes: nodes, service: serviceAddress)
         } catch {
             isConnected = false
             errorMessage = error.localizedDescription
@@ -178,6 +183,30 @@ final class ManagementStore {
                 tlsSkipVerify: skipCertVerify,
                 config: config.objectValue ?? [:]
             )
+        )
+        await refresh()
+    }
+
+    func updateServerConfiguration(nodeID: String, request: NodePatchRequest) async throws {
+        let api = try requireConnectedAPI()
+        let _: NodeUpdateResponse = try await api.patch(APIEndpoints.updateNode(id: nodeID), body: request)
+        await refresh()
+    }
+
+    func updateNodePackage(_ detail: NodeDetail, package: NodePackage) async throws {
+        let api = try requireConnectedAPI()
+        let _: NodeUpdateResponse = try await api.patch(
+            APIEndpoints.updateNode(id: detail.id),
+            body: NodePatchRequest(expectedRevision: detail.revision, package: package)
+        )
+        await refresh()
+    }
+
+    func updateNodePackageUsage(_ detail: NodeDetail, usage: Int64, reset: Bool) async throws {
+        let api = try requireConnectedAPI()
+        let _: NodeUsageUpdateResponse = try await api.put(
+            APIEndpoints.updateNodeUsage(id: detail.id),
+            body: NodeUsageUpdateRequest(expectedRevision: detail.revision, usageBytes: usage, reset: reset)
         )
         await refresh()
     }
@@ -395,6 +424,7 @@ final class ManagementStore {
             try await loadData(using: nextAPI)
             isConnected = true
             errorMessage = nil
+            await NodeAlertNotifications.shared.deliver(nodes: nodes, service: serviceAddress)
         } catch {
             isConnected = false
             errorMessage = "新令牌已保存并切换，但服务暂不可用：\(error.localizedDescription)"

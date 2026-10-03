@@ -5,6 +5,7 @@ mod deployment;
 mod error;
 mod jobs;
 mod monitoring;
+mod node_limits;
 mod security;
 mod ssh;
 mod state;
@@ -45,6 +46,8 @@ async fn main() -> Result<()> {
     let state = AppState::new(pool, secret_box);
     let jobs = tokio::spawn(jobs::run(state.clone()));
     let traffic = tokio::spawn(traffic::run(state.clone()));
+    let network = tokio::spawn(node_limits::collect(state.clone()));
+    let limits = tokio::spawn(node_limits::run(state.clone()));
     let app = api::router(state);
 
     let address = env::var("HYSTERIAX_LISTEN_ADDR").unwrap_or_else(|_| "0.0.0.0:8080".to_owned());
@@ -65,12 +68,16 @@ async fn main() -> Result<()> {
         result = &mut monitor => {
             jobs.abort();
             traffic.abort();
+            network.abort();
+            limits.abort();
             result?;
             bail!("single-instance lock monitor stopped unexpectedly");
         }
     }
     jobs.abort();
     traffic.abort();
+    network.abort();
+    limits.abort();
     Ok(())
 }
 

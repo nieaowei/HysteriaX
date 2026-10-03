@@ -1,9 +1,86 @@
 // Generated from openapi/openapi.yaml by scripts/generate-swift-api-models.rb. Do not edit.
 import Foundation
 
+struct NodePackage: Codable, Sendable {
+    let expiresAt: String?
+    let quotaBytes: Int64?
+    let cycle: String
+    let resetDay: Int
+    let timezone: String
+    let interface: String?
+    let direction: String
+    let expiryWarningDays: Int
+    let trafficWarningPercent: Int
+
+    enum CodingKeys: String, CodingKey {
+        case expiresAt = "expires_at"
+        case quotaBytes = "quota_bytes"
+        case cycle
+        case resetDay = "reset_day"
+        case timezone
+        case interface
+        case direction
+        case expiryWarningDays = "expiry_warning_days"
+        case trafficWarningPercent = "traffic_warning_percent"
+    }
+}
+
+struct NodePackageUsage: Codable, Sendable {
+    let usageBytes: Int64
+    let restricted: Bool
+    let reasons: [String]
+    let nextResetAt: String?
+    let interface: String?
+    let sampledAt: String?
+    let gapReason: String?
+    let freshness: String
+    let pendingDisconnects: Int?
+    let failedDisconnects: Int?
+    let alerts: [NodeAlert]
+
+    enum CodingKeys: String, CodingKey {
+        case usageBytes = "usage_bytes"
+        case restricted
+        case reasons
+        case nextResetAt = "next_reset_at"
+        case interface
+        case sampledAt = "sampled_at"
+        case gapReason = "gap_reason"
+        case freshness
+        case pendingDisconnects = "pending_disconnects"
+        case failedDisconnects = "failed_disconnects"
+        case alerts
+    }
+}
+
+struct NodeAlert: Codable, Sendable {
+    let id: String
+    let kind: String
+    let createdAt: String
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case kind
+        case createdAt = "created_at"
+    }
+}
+
+struct NodeUsageUpdateResponse: Codable, Sendable {
+    let id: String
+    let revision: Int
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case revision
+    }
+}
+
 struct NodeSummary: Codable, Sendable, Identifiable {
+    let package: NodePackage?
+    let packageUsage: NodePackageUsage?
     let id: String
     let name: String
+    let ssh: NodeSSHDetail?
     let revision: Int
     let deployedRevision: Int?
     let state: String
@@ -14,8 +91,11 @@ struct NodeSummary: Codable, Sendable, Identifiable {
     let proxyProbeUrl: String?
 
     enum CodingKeys: String, CodingKey {
+        case package
+        case packageUsage = "package_usage"
         case id
         case name
+        case ssh
         case revision
         case deployedRevision = "deployed_revision"
         case state
@@ -60,6 +140,8 @@ struct NodeConnectionDetail: Codable, Sendable {
 }
 
 struct NodeDetail: Codable, Sendable, Identifiable {
+    let package: NodePackage?
+    let packageUsage: NodePackageUsage?
     let id: String
     let name: String
     let revision: Int
@@ -80,6 +162,8 @@ struct NodeDetail: Codable, Sendable, Identifiable {
     let updatedAt: String
 
     enum CodingKeys: String, CodingKey {
+        case package
+        case packageUsage = "package_usage"
         case id
         case name
         case revision
@@ -546,12 +630,14 @@ struct APIHealth: Codable, Sendable {
 }
 
 struct APIVersion: Codable, Sendable {
+    let features: [String]?
     let apiVersion: String
     let serviceVersion: String
     let hysteriaVersion: String
     let mihomoVersion: String
 
     enum CodingKeys: String, CodingKey {
+        case features
         case apiVersion = "api_version"
         case serviceVersion = "service_version"
         case hysteriaVersion = "hysteria_version"

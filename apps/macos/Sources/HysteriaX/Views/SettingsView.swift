@@ -10,6 +10,8 @@ struct SettingsView: View {
 #else
     @State private var serviceAddress = UserDefaults.standard.string(forKey: "serviceAddress") ?? ""
 #endif
+    @AppStorage(NodeAlertNotifications.preferenceKey) private var packageNotifications = false
+    @State private var notificationMessage: String?
     @State private var token = KeychainStore.readToken() ?? ""
     @State private var message: String?
     @State private var isConnecting = false
@@ -50,6 +52,19 @@ struct SettingsView: View {
                     .font(.callout)
                     .accessibilityLabel(message)
                     .accessibilityIdentifier("settings.connectionMessage")
+            }
+            Section("节点套餐通知") {
+                Toggle("启用 macOS 系统通知", isOn: $packageNotifications)
+                    .onChange(of: packageNotifications) { _, enabled in
+                        if enabled {
+                            Task {
+                                notificationMessage = await NodeAlertNotifications.shared.requestPermission()
+                                await store.refresh()
+                            }
+                        }
+                    }
+                Text(notificationMessage ?? "应用内始终显示提醒；系统通知需要应用运行、联网并获得授权。")
+                    .font(.callout).foregroundStyle(.secondary)
             }
             Section("安全") {
                 #if HYSTERIAX_UI_TESTING

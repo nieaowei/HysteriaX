@@ -85,6 +85,26 @@ paths:
               schema: { $ref: '#/components/schemas/JobReceipt' }
         '204': { description: Deleted }
         '409': { $ref: '#/components/responses/Error' }
+  /nodes/{id}/usage:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    put:
+      operationId: updateNodeUsage
+      summary: Correct or reset whole-host package usage without deploying the node
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/NodeUsageUpdate' }
+      responses:
+        '200':
+          description: Updated usage and node revision
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/NodeUsageUpdateResponse' }
+        '400': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
   /nodes/{id}/ssh-test:
     parameters:
       - $ref: '#/components/parameters/Id'
@@ -714,10 +734,62 @@ components:
           properties:
             client_certificate: { type: string, writeOnly: true }
             client_private_key: { type: string, writeOnly: true }
+    NodePackage:
+      type: object
+      description: Complete package replacement on PATCH; omission preserves the package. Null expiry/quota removes that limit. Usage is changed only through the usage endpoint.
+      required: [cycle, reset_day, timezone, direction, expiry_warning_days, traffic_warning_percent]
+      properties:
+        expires_at: { type: [string, 'null'], format: date-time }
+        quota_bytes: { type: [integer, 'null'], format: int64, minimum: 1 }
+        cycle: { type: string, enum: [fixed, monthly] }
+        reset_day: { type: integer, minimum: 1, maximum: 31 }
+        timezone: { type: string, description: IANA timezone; default Asia/Shanghai. }
+        interface: { type: [string, 'null'], description: Null selects the default-route interface automatically. }
+        direction: { type: string, enum: [tx, rx, both] }
+        expiry_warning_days: { type: integer, minimum: 0, maximum: 365 }
+        traffic_warning_percent: { type: integer, minimum: 1, maximum: 99 }
+    NodePackageUsage:
+      type: object
+      required: [usage_bytes, restricted, reasons, alerts, freshness]
+      properties:
+        usage_bytes: { type: integer, format: int64 }
+        restricted: { type: boolean }
+        reasons: { type: array, items: { type: string } }
+        next_reset_at: { type: [string, 'null'], format: date-time }
+        interface: { type: [string, 'null'] }
+        sampled_at: { type: [string, 'null'], format: date-time }
+        gap_reason: { type: [string, 'null'] }
+        freshness: { type: string, enum: [fresh, stale, not_collected] }
+        pending_disconnects: { type: integer }
+        failed_disconnects: { type: integer }
+        alerts: { type: array, items: { $ref: '#/components/schemas/NodeAlert' } }
+    NodeAlert:
+      type: object
+      required: [id, kind, created_at]
+      properties:
+        id: { type: string }
+        kind: { type: string, enum: [expiring, expired, traffic_warning, quota_exhausted] }
+        created_at: { type: string, format: date-time }
+    NodeUsageUpdate:
+      allOf:
+        - $ref: '#/components/schemas/Revision'
+        - type: object
+          required: [usage_bytes]
+          properties:
+            usage_bytes: { type: integer, format: int64, minimum: 0 }
+            reset: { type: boolean, description: Start a new alert period; preserves the monthly billing schedule. }
+    NodeUsageUpdateResponse:
+      type: object
+      required: [id, revision]
+      properties:
+        id: { type: string }
+        revision: { type: integer }
     NodeCreate:
       type: object
       required: [name, ssh_host, ssh_port, ssh_username, ssh_auth_type, ssh_secret, public_host, public_port, listen_addr]
       properties:
+        package: { $ref: '#/components/schemas/NodePackage' }
+        initial_usage_bytes: { type: integer, format: int64, minimum: 0, description: Existing provider usage before first network sample. }
         name: { type: string, maxLength: 100 }
         ssh_host: { type: string }
         ssh_port: { type: integer, minimum: 1, maximum: 65535 }
@@ -739,6 +811,7 @@ components:
         - $ref: '#/components/schemas/Revision'
         - type: object
           properties:
+            package: { $ref: '#/components/schemas/NodePackage' }
             name: { type: string }
             ssh_host: { type: string }
             ssh_port: { type: integer, minimum: 1, maximum: 65535 }
@@ -783,8 +856,11 @@ components:
       type: object
       required: [id, name, revision, state]
       properties:
+        package: { $ref: '#/components/schemas/NodePackage' }
+        package_usage: { $ref: '#/components/schemas/NodePackageUsage' }
         id: { type: string, format: uuid }
         name: { type: string }
+        ssh: { $ref: '#/components/schemas/NodeSSHDetail' }
         revision: { type: integer }
         deployed_revision: { type: [integer, 'null'] }
         state: { type: string }
@@ -815,6 +891,8 @@ components:
       type: object
       required: [id, name, revision, config, yaml_preview, ssh, public, state, created_at, updated_at]
       properties:
+        package: { $ref: '#/components/schemas/NodePackage' }
+        package_usage: { $ref: '#/components/schemas/NodePackageUsage' }
         id: { type: string, format: uuid }
         name: { type: string }
         revision: { type: integer }
@@ -1122,6 +1200,7 @@ components:
       type: object
       required: [api_version, service_version, hysteria_version, mihomo_version]
       properties:
+        features: { type: array, items: { type: string }, description: Optional supported features; node_packages enables node package writes. }
         api_version: { type: string }
         service_version: { type: string }
         hysteria_version: { type: string }

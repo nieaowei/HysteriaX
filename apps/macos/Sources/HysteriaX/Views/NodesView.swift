@@ -4,6 +4,7 @@ struct NodesView: View {
     @Bindable var store: ManagementStore
     @State private var showingAddNode = false
     @State private var configurationNode: NodeSummary?
+    @State private var serverConfigurationNode: NodeSummary?
     @State private var selection: String?
     @State private var searchText = ""
     @State private var sortOrder = [KeyPathComparator(\NodeSummary.name)]
@@ -15,6 +16,7 @@ struct NodesView: View {
         let filtered = store.nodes.filter { node in
             query.isEmpty
                 || node.name.localizedStandardContains(query)
+                || node.ssh?.host.localizedCaseInsensitiveContains(query) == true
                 || node.id.localizedCaseInsensitiveContains(query)
                 || node.state.localizedCaseInsensitiveContains(query)
         }
@@ -29,7 +31,27 @@ struct NodesView: View {
                         .accessibilityLabel(node.name)
                         .accessibilityIdentifier("nodes.row.\(node.id)")
                 }
+                TableColumn("IP / 主机", value: \.displayHost) { node in
+                    Text(node.displayHost)
+                        .monospaced()
+                        .textSelection(.enabled)
+                        .lineLimit(1)
+                        .help(node.ssh?.host ?? "暂无 SSH 主机地址")
+                }
+                .width(min: 120, ideal: 180)
                 TableColumn("状态", value: \.localizedState)
+                TableColumn("有效期") { node in Text(PackageDisplay.expiry(node.package)) }
+                TableColumn("套餐流量") { node in
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(PackageDisplay.usage(node.package, node.packageUsage))
+                        if let next = node.packageUsage?.nextResetAt {
+                            Text("重置：\(DateDisplayText.local(next))").font(.caption).foregroundStyle(.secondary)
+                        }
+                        if let alert = node.packageUsage?.alerts.first {
+                            Text(PackageDisplay.warning(alert.kind)).font(.caption).foregroundStyle(.orange)
+                        }
+                    }
+                }
                 TableColumn("配置版本") { node in Text("\(node.revision)") }
                 TableColumn("已部署") { node in Text(node.deployedRevision.map(String.init) ?? "—") }
                 TableColumn("最近采样") { node in
@@ -62,7 +84,8 @@ struct NodesView: View {
                         Text("\(node.name) · 修订版 \(node.revision)").foregroundStyle(.secondary)
                         Spacer()
                         Button("SSH 测试") { run(node, action: "ssh-test") }
-                        Button("配置") {
+                        Button("服务器配置") { serverConfigurationNode = node }
+                        Button("代理配置") {
                             configurationNode = node
                         }
                         Button("部署") { run(node, action: "deploy") }
@@ -87,8 +110,11 @@ struct NodesView: View {
         .searchable(text: $searchText, prompt: "搜索节点")
         .onChange(of: searchText) { _, _ in selection = nil }
         .sheet(isPresented: $showingAddNode) { NodeFormView(store: store) }
+        .sheet(item: $serverConfigurationNode) { node in
+            ServerConfigurationView(store: store, nodeID: node.id)
+        }
         .sheet(item: $configurationNode) { node in
-            NodeConfigurationView(store: store, nodeID: node.id)
+            ProxyConfigurationView(store: store, nodeID: node.id)
         }
         .alert("节点操作失败", isPresented: Binding(get: { actionError != nil }, set: { if !$0 { actionError = nil } })) {
             Button("好", role: .cancel) { actionError = nil }
@@ -115,6 +141,11 @@ struct NodesView: View {
 }
 
 private extension NodeSummary {
+    var displayHost: String {
+        guard let host = ssh?.host, !host.isEmpty else { return "—" }
+        return host
+    }
+
     var localizedState: String {
         let labels = [
             "new": "未部署",
@@ -166,6 +197,8 @@ private struct NodeFormView: View {
     @State private var publicHost = ""
     @State private var publicPort = "443"
     @State private var errorMessage: String?
+    @State private var packageDraft = NodePackageDraft()
+    @State private var initialUsageGB = "0"
     @State private var createdToken: String?
     @State private var isSaving = false
 
@@ -173,7 +206,7 @@ private struct NodeFormView: View {
         VStack(alignment: .leading, spacing: 18) {
             Text("添加节点").font(.title.bold())
             if let createdToken {
-                ContentUnavailableView("节点已创建", systemImage: "checkmark.circle", description: Text("节点认证令牌：\n\(createdToken)\n请将令牌保存在安全位置，并在配置页设置 TLS 证书后再部署。"))
+                ContentUnavailableView("节点已创建", systemImage: "checkmark.circle", description: Text("节点认证令牌：\n\(createdToken)\n请将令牌保存在安全位置，并在代理配置页设置 TLS 证书后再部署。"))
                 HStack { Spacer(); Button("完成") { dismiss() }.keyboardShortcut(.defaultAction) }
             } else {
                 Form {
@@ -214,6 +247,12 @@ private struct NodeFormView: View {
                                 .accessibilityIdentifier("node.create.sshPassphrase")
                         }
                     }
+                    Section("有效期与流量套餐") {
+                        if store.supportsNodePackages {
+                            NodePackageFields(draft: $packageDraft)
+                            if packageDraft.hasQuota { TextField("已有用量（GB）", text: $initialUsageGB) }
+                        } else { Text("升级管理服务后可设置有效期和流量套餐。").foregroundStyle(.secondary) }
+                    }
                     Section("公开连接") {
                         TextField("公开地址", text: $publicHost)
                             .accessibilityLabel("公开地址")
@@ -221,7 +260,7 @@ private struct NodeFormView: View {
                         TextField("公开端口", text: $publicPort)
                             .accessibilityLabel("公开端口")
                             .accessibilityIdentifier("node.create.publicPort")
-                        Text("用户客户端通过此地址和 UDP 端口连接节点。创建后请在配置页设置 TLS 证书及其他 Hysteria 参数。")
+                        Text("用户客户端通过此地址和 UDP 端口连接节点。创建后请在代理配置页设置 TLS 证书及其他 Hysteria 参数。")
                             .font(.callout).foregroundStyle(.secondary)
                     }
                 }
@@ -251,6 +290,8 @@ private struct NodeFormView: View {
             defer { isSaving = false }
             do {
                 let response = try await store.createNode(NodeCreateRequest(
+                    package: store.supportsNodePackages ? packageDraft.package() : nil,
+                    initialUsageBytes: store.supportsNodePackages ? NodePackageDraft.bytes(initialUsageGB) : nil,
                     name: name, sshHost: sshHost, sshPort: sshPort, sshUsername: sshUsername,
                     sshAuthType: sshAuthType, sshSecret: sshSecret,
                     sshPassphrase: sshPassphrase.isEmpty ? nil : sshPassphrase,

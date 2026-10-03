@@ -1,4 +1,4 @@
-mod nodes;
+pub(crate) mod nodes;
 pub(crate) mod resources;
 pub(crate) mod subscriptions;
 mod users;
@@ -30,6 +30,10 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/api/v1/nodes/{id}",
             get(nodes::get).patch(nodes::patch).delete(nodes::delete),
+        )
+        .route(
+            "/api/v1/nodes/{id}/usage",
+            axum::routing::put(crate::node_limits::update_usage),
         )
         .route("/api/v1/nodes/{id}/deploy", post(nodes::deploy))
         .route("/api/v1/nodes/{id}/ssh-test", post(nodes::ssh_test))
@@ -160,6 +164,7 @@ async fn healthz() -> Json<Value> {
 async fn api_version() -> Json<Value> {
     Json(json!({
         "api_version": "1.0.0",
+        "features": ["node_packages"],
         "service_version": env!("CARGO_PKG_VERSION"),
         "hysteria_version": "app/v2.12.3",
         "mihomo_version": "v1.19.31"

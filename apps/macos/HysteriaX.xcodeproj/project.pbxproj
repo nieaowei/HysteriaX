@@ -19,10 +19,16 @@
 		000000000000000000002009 /* Views/OverviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001009 /* Views/OverviewView.swift */; };
 		00000000000000000000200A /* Views/SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000100A /* Views/SettingsView.swift */; };
 		00000000000000000000200B /* Views/UsersView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000100B /* Views/UsersView.swift */; };
-		00000000000000000000200C /* Views/NodeConfigurationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000100C /* Views/NodeConfigurationView.swift */; };
+		00000000000000000000200C /* Views/ProxyConfigurationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000100C /* Views/ProxyConfigurationView.swift */; };
 		00000000000000000000200D /* Models/OpenAPIRequests.generated.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000100D /* Models/OpenAPIRequests.generated.swift */; };
 		00000000000000000000200E /* Models/OpenAPIResponses.generated.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000100E /* Models/OpenAPIResponses.generated.swift */; };
 		00000000000000000000200F /* Views/UserNodeAssignmentsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000100F /* Views/UserNodeAssignmentsView.swift */; };
+		000000000000000000002100 /* Models/NodePackageDraft.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001100 /* Models/NodePackageDraft.swift */; };
+		000000000000000000002101 /* Views/NodePackageFields.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001101 /* Views/NodePackageFields.swift */; };
+		000000000000000000002102 /* Services/NodeAlertNotifications.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001102 /* Services/NodeAlertNotifications.swift */; };
+		000000000000000000002200 /* Models/ServerConfigurationDraft.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001200 /* Models/ServerConfigurationDraft.swift */; };
+		000000000000000000002201 /* Views/ServerConfigurationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001201 /* Views/ServerConfigurationView.swift */; };
+		000000000000000000002300 /* Views/NodeNotificationsButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001300 /* Views/NodeNotificationsButton.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -38,11 +44,17 @@
 		000000000000000000001009 /* Views/OverviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/OverviewView.swift; sourceTree = "<group>"; };
 		00000000000000000000100A /* Views/SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/SettingsView.swift; sourceTree = "<group>"; };
 		00000000000000000000100B /* Views/UsersView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/UsersView.swift; sourceTree = "<group>"; };
-		00000000000000000000100C /* Views/NodeConfigurationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/NodeConfigurationView.swift; sourceTree = "<group>"; };
+		00000000000000000000100C /* Views/ProxyConfigurationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/ProxyConfigurationView.swift; sourceTree = "<group>"; };
 		00000000000000000000100D /* Models/OpenAPIRequests.generated.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models/OpenAPIRequests.generated.swift; sourceTree = "<group>"; };
 		00000000000000000000100E /* Models/OpenAPIResponses.generated.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models/OpenAPIResponses.generated.swift; sourceTree = "<group>"; };
 		000000000000000000003004 /* HysteriaX.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = HysteriaX.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		00000000000000000000100F /* Views/UserNodeAssignmentsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/UserNodeAssignmentsView.swift; sourceTree = "<group>"; };
+		000000000000000000001100 /* Models/NodePackageDraft.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models/NodePackageDraft.swift; sourceTree = "<group>"; };
+		000000000000000000001101 /* Views/NodePackageFields.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/NodePackageFields.swift; sourceTree = "<group>"; };
+		000000000000000000001102 /* Services/NodeAlertNotifications.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Services/NodeAlertNotifications.swift; sourceTree = "<group>"; };
+		000000000000000000001200 /* Models/ServerConfigurationDraft.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models/ServerConfigurationDraft.swift; sourceTree = "<group>"; };
+		000000000000000000001201 /* Views/ServerConfigurationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/ServerConfigurationView.swift; sourceTree = "<group>"; };
+		000000000000000000001300 /* Views/NodeNotificationsButton.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/NodeNotificationsButton.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -60,6 +72,12 @@
 			isa = PBXGroup;
 			children = (
 				000000000000000000001000 /* App/HysteriaXApp.swift */,
+				000000000000000000001300 /* Views/NodeNotificationsButton.swift */,
+				000000000000000000001201 /* Views/ServerConfigurationView.swift */,
+				000000000000000000001200 /* Models/ServerConfigurationDraft.swift */,
+				000000000000000000001102 /* Services/NodeAlertNotifications.swift */,
+				000000000000000000001101 /* Views/NodePackageFields.swift */,
+				000000000000000000001100 /* Models/NodePackageDraft.swift */,
 				000000000000000000001001 /* Models/APIModels.swift */,
 				000000000000000000001002 /* Services/APIClient.swift */,
 				000000000000000000001003 /* Services/KeychainStore.swift */,
@@ -72,7 +90,7 @@
 				00000000000000000000100A /* Views/SettingsView.swift */,
 				00000000000000000000100B /* Views/UsersView.swift */,
 				00000000000000000000100F /* Views/UserNodeAssignmentsView.swift */,
-				00000000000000000000100C /* Views/NodeConfigurationView.swift */,
+				00000000000000000000100C /* Views/ProxyConfigurationView.swift */,
 				00000000000000000000100D /* Models/OpenAPIRequests.generated.swift */,
 				00000000000000000000100E /* Models/OpenAPIResponses.generated.swift */,
 			);
@@ -164,6 +182,12 @@
 			buildActionMask = 2147483647;
 			files = (
 				000000000000000000002000 /* App/HysteriaXApp.swift in Sources */,
+				000000000000000000002300 /* Views/NodeNotificationsButton.swift in Sources */,
+				000000000000000000002201 /* Views/ServerConfigurationView.swift in Sources */,
+				000000000000000000002200 /* Models/ServerConfigurationDraft.swift in Sources */,
+				000000000000000000002102 /* Services/NodeAlertNotifications.swift in Sources */,
+				000000000000000000002101 /* Views/NodePackageFields.swift in Sources */,
+				000000000000000000002100 /* Models/NodePackageDraft.swift in Sources */,
 				000000000000000000002001 /* Models/APIModels.swift in Sources */,
 				000000000000000000002002 /* Services/APIClient.swift in Sources */,
 				000000000000000000002003 /* Services/KeychainStore.swift in Sources */,
@@ -176,7 +200,7 @@
 				00000000000000000000200A /* Views/SettingsView.swift in Sources */,
 				00000000000000000000200B /* Views/UsersView.swift in Sources */,
 				00000000000000000000200F /* Views/UserNodeAssignmentsView.swift in Sources */,
-				00000000000000000000200C /* Views/NodeConfigurationView.swift in Sources */,
+				00000000000000000000200C /* Views/ProxyConfigurationView.swift in Sources */,
 				00000000000000000000200D /* Models/OpenAPIRequests.generated.swift in Sources */,
 				00000000000000000000200E /* Models/OpenAPIResponses.generated.swift in Sources */,
 			);

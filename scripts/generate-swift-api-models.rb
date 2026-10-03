@@ -18,6 +18,7 @@ end.parse!
 spec = YAML.load_file(spec_path)
 schemas = spec.fetch("components").fetch("schemas")
 models = {
+  "NodeUsageUpdate" => "NodeUsageUpdateRequest",
   "NodeCreate" => "NodeCreateRequest",
   "NodePatch" => "NodePatchRequest",
   "ResourceCreate" => "ResourceUploadRequest",
@@ -28,6 +29,7 @@ models = {
   "AssignmentCertificateUpdate" => "AssignmentCertificateUpdateRequest",
 }
 response_models = %w[
+  NodePackage NodePackageUsage NodeAlert NodeUsageUpdateResponse
   NodeSummary NodeSSHDetail NodeConnectionDetail NodeDetail
   AssignmentInfo UserSummary JobOutcome JobResult JobSummary AuditSummary
   NodeResource ResourceReceipt AssignmentReceipt SubscriptionReceipt

@@ -27,6 +27,8 @@ use crate::{
 
 #[derive(Deserialize)]
 pub struct CreateNode {
+    package: Option<crate::node_limits::Package>,
+    initial_usage_bytes: Option<i64>,
     name: String,
     ssh_host: String,
     ssh_port: u16,
@@ -50,6 +52,7 @@ pub struct CreateNode {
 
 #[derive(Deserialize)]
 pub struct PatchNode {
+    package: Option<crate::node_limits::Package>,
     expected_revision: i64,
     name: Option<String>,
     ssh_host: Option<String>,
@@ -108,6 +111,12 @@ pub async fn create(
     State(state): State<AppState>,
     Json(input): Json<CreateNode>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
+    if input.initial_usage_bytes.is_some_and(|x| x < 0) {
+        return Err(ApiError::bad_request("initial usage must be nonnegative"));
+    }
+    if let Some(package) = &input.package {
+        package.validate()?;
+    }
     validate_text(&input.name, "name", 100)?;
     validate_text(&input.ssh_host, "ssh_host", 253)?;
     validate_text(&input.ssh_username, "ssh_username", 100)?;
@@ -155,11 +164,20 @@ pub async fn create(
         .bind(input.ssh_host_fingerprint).bind(input.public_host.trim()).bind(i32::from(input.public_port))
         .bind(input.listen_addr.trim()).bind(i32::from(input.traffic_stats_port)).bind(&proxy_probe_url).bind(input.tls_sni).bind(input.tls_skip_verify).bind(token_digest(&token)).bind(node_token_enc)
         .bind(stats_secret_enc).bind(config_enc).bind(now).bind(now).execute(&mut *tx).await?;
+    crate::node_limits::ensure(&mut tx, &id).await?;
+    if let Some(package) = &input.package {
+        crate::node_limits::save(&mut tx, &id, package).await?;
+    }
+    sqlx::query("UPDATE node_packages SET usage_bytes = $1 WHERE node_id = $2")
+        .bind(input.initial_usage_bytes.unwrap_or(0))
+        .bind(&id)
+        .execute(&mut *tx)
+        .await?;
     sqlx::query("INSERT INTO config_versions (id, node_id, revision, config_enc, content_sha256, created_at) VALUES ($1, $2, 1, $3, $4, $5)")
         .bind(Uuid::new_v4().to_string()).bind(&id).bind(state.secrets.encrypt(&deployment_snapshot_json)?).bind(digest).bind(now)
         .execute(&mut *tx).await?;
     sqlx::query("INSERT INTO audit_records (id, actor, action, entity_type, entity_id, detail_json, created_at) VALUES ($1, 'admin', 'node.created', 'node', $2, $3, $4)")
-        .bind(Uuid::new_v4().to_string()).bind(&id).bind(json!({"name": input.name.trim()})).bind(now)
+        .bind(Uuid::new_v4().to_string()).bind(&id).bind(json!({"name": input.name.trim(), "package": input.package, "initial_usage_bytes": input.initial_usage_bytes.unwrap_or(0)})).bind(now)
         .execute(&mut *tx).await?;
     tx.commit().await?;
 
@@ -313,6 +331,9 @@ pub async fn patch(
     sqlx::query("INSERT INTO config_versions (id, node_id, revision, config_enc, content_sha256, created_at) VALUES ($1, $2, $3, $4, $5, $6)")
         .bind(Uuid::new_v4().to_string()).bind(&id).bind(next_revision).bind(state.secrets.encrypt(&deployment_snapshot_json)?)
         .bind(hex::encode(Sha256::digest(deployment_snapshot_json.as_bytes()))).bind(updated_at).execute(&mut *tx).await?;
+    if let Some(package) = &input.package {
+        crate::node_limits::save(&mut tx, &id, package).await?;
+    }
     let sync_required =
         config_changed || listener_changed || proxy_probe_url_changed || traffic_stats_port_changed;
     if sync_required {
@@ -320,7 +341,7 @@ pub async fn patch(
         enqueue_job_in_tx(&mut tx, "sync", Some(&id), Some(next_revision)).await?;
     }
     sqlx::query("INSERT INTO audit_records (id, actor, action, entity_type, entity_id, detail_json, created_at) VALUES ($1, 'admin', 'node.updated', 'node', $2, $3, $4)")
-        .bind(Uuid::new_v4().to_string()).bind(&id).bind(json!({"revision": next_revision, "config_changed": config_changed, "proxy_probe_url_changed": proxy_probe_url_changed, "traffic_stats_port_changed": traffic_stats_port_changed})).bind(updated_at)
+        .bind(Uuid::new_v4().to_string()).bind(&id).bind(json!({"revision": next_revision, "config_changed": config_changed, "proxy_probe_url_changed": proxy_probe_url_changed, "traffic_stats_port_changed": traffic_stats_port_changed, "package_changed": input.package.is_some(), "package": input.package})).bind(updated_at)
         .execute(&mut *tx).await?;
     tx.commit().await?;
     Ok(Json(
@@ -577,7 +598,11 @@ async fn node_json(state: &AppState, row: &sqlx::postgres::PgRow) -> Result<Valu
         traffic_stats_port,
     )
     .map_err(|_| ApiError::internal())?;
+    let (package, package_usage) = crate::node_limits::snapshot(&state.pool, &node_id)
+        .await
+        .map_err(|_| ApiError::internal())?;
     Ok(json!({
+        "package": package, "package_usage": package_usage,
         "id": node_id, "name": row.get::<String, _>("name"),
         "ssh": {"host": row.get::<String, _>("ssh_host"), "port": row.get::<i32, _>("ssh_port"), "username": row.get::<String, _>("ssh_username"), "auth_type": row.get::<String, _>("ssh_auth_type"), "secret_configured": true, "host_fingerprint": row.get::<Option<String>, _>("ssh_host_fingerprint")},
         "public": {"host": row.get::<String, _>("public_host"), "port": row.get::<i32, _>("public_port"), "listen_addr": row.get::<String, _>("listen_addr"), "tls_sni": row.get::<Option<String>, _>("tls_sni"), "skip_cert_verify": row.get::<bool, _>("tls_skip_verify")},

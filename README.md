@@ -53,6 +53,10 @@ server upgrade. Deploy the server before updating the macOS client.
 See [subscription formats and compatibility](docs/subscriptions.md) for version
 requirements and filtering behavior.
 
+## Node packages
+
+Nodes support expiry, whole-host network quotas, monthly or fixed billing cycles, advance warnings, and automatic proxy restriction/recovery. See [node package configuration and limitations](docs/node-packages.md). System notifications can be enabled in the macOS settings.
+
 ## Development
 
 Start the PostgreSQL service for local tests with `docker compose --env-file .env -f compose.yaml -f compose.test.yaml up -d postgres`. Load the generated database password into the shell before setting `TEST_DATABASE_URL`:
@@ -74,6 +78,7 @@ xcodebuild -project apps/macos/HysteriaX.xcodeproj -scheme HysteriaX -configurat
 scripts/verify-mihomo-config.sh tests/fixtures/mihomo-hysteria2.yaml
 scripts/verify-subscription.sh
 scripts/verify-subscription-client.sh
+scripts/verify-node-package-client.sh
 scripts/verify-restart-recovery.py
 scripts/verify-sampling-failure.py
 scripts/backup-restore.py backup

@@ -1,7 +1,31 @@
 // Generated from openapi/openapi.yaml by scripts/generate-swift-api-models.rb. Do not edit.
 import Foundation
 
+struct NodeUsageUpdateRequest: Encodable, Sendable {
+    let expectedRevision: Int
+    let usageBytes: Int64
+    let reset: Bool?
+
+    init(
+        expectedRevision: Int,
+        usageBytes: Int64,
+        reset: Bool? = nil
+    ) {
+        self.expectedRevision = expectedRevision
+        self.usageBytes = usageBytes
+        self.reset = reset
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case expectedRevision = "expected_revision"
+        case usageBytes = "usage_bytes"
+        case reset
+    }
+}
+
 struct NodeCreateRequest: Encodable, Sendable {
+    let package: NodePackage?
+    let initialUsageBytes: Int64?
     let name: String
     let sshHost: String
     let sshPort: Int
@@ -20,6 +44,8 @@ struct NodeCreateRequest: Encodable, Sendable {
     let config: [String: JSONValue]
 
     init(
+        package: NodePackage? = nil,
+        initialUsageBytes: Int64? = nil,
         name: String,
         sshHost: String,
         sshPort: Int,
@@ -37,6 +63,8 @@ struct NodeCreateRequest: Encodable, Sendable {
         tlsSkipVerify: Bool = false,
         config: [String: JSONValue] = [:]
     ) {
+        self.package = package
+        self.initialUsageBytes = initialUsageBytes
         self.name = name
         self.sshHost = sshHost
         self.sshPort = sshPort
@@ -56,6 +84,8 @@ struct NodeCreateRequest: Encodable, Sendable {
     }
 
     enum CodingKeys: String, CodingKey {
+        case package
+        case initialUsageBytes = "initial_usage_bytes"
         case name
         case sshHost = "ssh_host"
         case sshPort = "ssh_port"
@@ -77,6 +107,7 @@ struct NodeCreateRequest: Encodable, Sendable {
 
 struct NodePatchRequest: Encodable, Sendable {
     let expectedRevision: Int
+    let package: NodePackage?
     let name: String?
     let sshHost: String?
     let sshPort: Int?
@@ -96,6 +127,7 @@ struct NodePatchRequest: Encodable, Sendable {
 
     init(
         expectedRevision: Int,
+        package: NodePackage? = nil,
         name: String? = nil,
         sshHost: String? = nil,
         sshPort: Int? = nil,
@@ -114,6 +146,7 @@ struct NodePatchRequest: Encodable, Sendable {
         config: [String: JSONValue]? = nil
     ) {
         self.expectedRevision = expectedRevision
+        self.package = package
         self.name = name
         self.sshHost = sshHost
         self.sshPort = sshPort
@@ -134,6 +167,7 @@ struct NodePatchRequest: Encodable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case expectedRevision = "expected_revision"
+        case package
         case name
         case sshHost = "ssh_host"
         case sshPort = "ssh_port"
@@ -349,6 +383,9 @@ enum APIEndpoints {
     }
     static func deleteNode(id: String, expectedRevision: Int) -> APIOperation<NoRequest, JobReceipt> {
         APIOperation(method: "DELETE", path: "api/v1/nodes/\(id)", queryParameters: ["expected_revision": String(expectedRevision)])
+    }
+    static func updateNodeUsage(id: String) -> APIOperation<NodeUsageUpdateRequest, NodeUsageUpdateResponse> {
+        APIOperation(method: "PUT", path: "api/v1/nodes/\(id)/usage", queryParameters: [:])
     }
     static func testNodeSSH(id: String) -> APIOperation<RevisionRequest, JobReceipt> {
         APIOperation(method: "POST", path: "api/v1/nodes/\(id)/ssh-test", queryParameters: [:])

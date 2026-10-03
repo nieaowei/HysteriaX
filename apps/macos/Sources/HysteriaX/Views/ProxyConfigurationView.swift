@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
-struct NodeConfigurationView: View {
+struct ProxyConfigurationView: View {
     @Environment(\.dismiss) private var dismiss
     @Bindable var store: ManagementStore
     let nodeID: String
@@ -96,8 +96,8 @@ struct NodeConfigurationView: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("节点配置").font(.title.bold())
-                    Text(detail.map { "\($0.name) · 修订版 \($0.revision)" } ?? (isLoading ? "加载节点配置…" : "节点配置不可用"))
+                    Text("代理配置").font(.title.bold())
+                    Text(detail.map { "\($0.name) · 修订版 \($0.revision)" } ?? (isLoading ? "加载代理配置…" : "代理配置不可用"))
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
@@ -107,7 +107,7 @@ struct NodeConfigurationView: View {
                     .keyboardShortcut(.defaultAction)
             }
             if isLoading {
-                ProgressView("读取节点配置…").frame(maxWidth: .infinity, maxHeight: .infinity)
+                ProgressView("读取代理配置…").frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if let detail {
                 Form {
                     Section("监听") {
@@ -391,8 +391,11 @@ struct NodeConfigurationView: View {
                                 .padding(10)
                                 .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
                             }
-                            Button("添加出站", systemImage: "plus") {
-                                outboundDrafts.append(OutboundDraft())
+                            HStack {
+                                Spacer()
+                                Button("添加出站", systemImage: "plus") {
+                                    outboundDrafts.append(OutboundDraft())
+                                }
                             }
                         }
                     }
@@ -438,7 +441,7 @@ struct NodeConfigurationView: View {
             } else if let errorMessage {
                 VStack(spacing: 12) {
                     ContentUnavailableView(
-                        "无法加载节点配置",
+                        "无法加载代理配置",
                         systemImage: "exclamationmark.triangle",
                         description: Text(errorMessage)
                     )

@@ -31,6 +31,7 @@ enum JobDisplayText {
             "running": "执行中",
             "starting": "准备中",
             "retry_wait": "等待重试",
+            "restriction_cleared": "节点限制已解除，跳过断开",
             "recovered": "重启后恢复",
             "loading_connection": "读取 SSH 连接",
             "connecting": "连接节点",

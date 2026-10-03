@@ -94,7 +94,7 @@ def main():
                         (database.name,),
                     )
                 }
-            if version != 2:
+            if version != 3:
                 raise RuntimeError(f"unexpected PostgreSQL schema version: {version}")
             expected = {
                 "enabled": "boolean",
@@ -104,8 +104,8 @@ def main():
             }
             if any(columns.get(name) != value for name, value in expected.items()):
                 raise RuntimeError(f"PostgreSQL native column types differ: {columns}")
-            if "deployment_probe_tokens" not in tables:
-                raise RuntimeError("deployment-probe token table was not created")
+            if not {"deployment_probe_tokens", "node_packages", "node_network_samples", "node_alerts"}.issubset(tables):
+                raise RuntimeError("deployment-probe or node-package tables were not created")
 
             duplicate_environment = environment.copy()
             duplicate_environment["HYSTERIAX_LISTEN_ADDR"] = f"127.0.0.1:{free_port()}"

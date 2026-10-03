@@ -43,6 +43,10 @@ private extension AuditSummary {
         let labels = [
             "node.created": "创建节点",
             "node.updated": "更新节点",
+            "node.restricted": "限制节点代理",
+            "node.restored": "恢复节点代理",
+            "node.usage_reset": "重置节点套餐用量",
+            "node.usage_corrected": "校正节点套餐用量",
             "node.deleted": "删除节点",
             "node.uninstall_requested": "请求卸载节点",
             "user.created": "创建用户",

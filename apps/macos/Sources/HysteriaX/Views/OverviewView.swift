@@ -6,7 +6,10 @@ struct OverviewView: View {
     private var nodesNeedingAttention: Int {
         let failedStates: Set<String> = ["fingerprint_changed", "sync_failed", "rollback_failed", "drift", "unreachable", "delete_failed"]
         return store.nodes.filter { node in
-            failedStates.contains(node.state)
+            !(node.packageUsage?.alerts.isEmpty ?? true)
+                || node.packageUsage?.restricted == true
+                || (node.package?.quotaBytes != nil && node.packageUsage?.freshness != "fresh")
+                || failedStates.contains(node.state)
                 || node.dataFreshness == "stale"
                 || (node.state == "deployed" && node.dataFreshness == "not_collected")
                 || (node.openGaps ?? 0) > 0
@@ -57,6 +60,11 @@ struct OverviewView: View {
                 }
                 .frame(width: max(0, geometry.size.width - 56), alignment: .leading)
                 .padding(28)
+            }
+        }
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                NodeNotificationsButton(store: store)
             }
         }
     }

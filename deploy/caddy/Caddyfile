@@ -1,4 +1,12 @@
+{
+    # The management service publishes TCP ports only.
+    servers {
+        protocols h1 h2
+    }
+}
+
 {$HYSTERIAX_DOMAIN} {
     encode zstd gzip
+    header Alt-Svc clear
     reverse_proxy api:8080
 }
