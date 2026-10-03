@@ -43,7 +43,7 @@ struct NodesView: View {
                 TableColumn("有效期") { node in Text(PackageDisplay.expiry(node.package)) }
                 TableColumn("套餐流量") { node in
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(PackageDisplay.usage(node.package, node.packageUsage))
+                        Text(PackageDisplay.listUsage(node.package, node.packageUsage))
                         if let next = node.packageUsage?.nextResetAt {
                             Text("重置：\(DateDisplayText.local(next))").font(.caption).foregroundStyle(.secondary)
                         }

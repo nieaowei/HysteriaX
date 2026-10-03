@@ -88,6 +88,18 @@ enum PackageDisplay {
         let days = Int(ceil(date.timeIntervalSinceNow / 86400))
         return days <= 0 ? "已到期" : "剩余 \(days) 天"
     }
+    static func listUsage(_ package: NodePackage?, _ usage: NodePackageUsage?) -> String {
+        guard let quota = package?.quotaBytes else { return "不限流量" }
+        let used = usage.map { twoDecimalGB($0.usageBytes) } ?? "—"
+        return "\(used) / \(twoDecimalGB(quota)) GB"
+    }
+
+    private static func twoDecimalGB(_ bytes: Int64) -> String {
+        (Decimal(bytes) / 1_000_000_000).formatted(
+            .number.precision(.fractionLength(2)).grouping(.never).locale(Locale(identifier: "en_US_POSIX"))
+        )
+    }
+
     static func usage(_ package: NodePackage?, _ usage: NodePackageUsage?) -> String {
         guard let quota = package?.quotaBytes else { return "不限流量" }
         let used = usage.map { NodePackageDraft.gbText($0.usageBytes) } ?? "—"
