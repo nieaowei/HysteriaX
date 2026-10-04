@@ -1,0 +1,10 @@
+[
+  {"provider":"cloudflare","required":["cloudflare_api_token"],"optional":[],"config":{"cloudflare_api_token":"fixture-cloudflare-token"}},
+  {"provider":"duckdns","required":["duckdns_api_token"],"optional":["duckdns_override_domain"],"config":{"duckdns_api_token":"fixture-duckdns-token","duckdns_override_domain":"example.duckdns.org"}},
+  {"provider":"gandi","required":["gandi_api_token"],"optional":[],"config":{"gandi_api_token":"fixture-gandi-token"}},
+  {"provider":"godaddy","required":["godaddy_api_token"],"optional":[],"config":{"godaddy_api_token":"fixture-key:fixture-secret"}},
+  {"provider":"namecheap","required":["namecheap_api_key","namecheap_api_user"],"optional":["namecheap_client_ip","namecheap_api_endpoint"],"config":{"namecheap_api_key":"fixture-namecheap-key","namecheap_api_user":"fixture-user","namecheap_client_ip":"203.0.113.1","namecheap_api_endpoint":"https://api.sandbox.namecheap.com/xml.response"}},
+  {"provider":"njalla","required":["njalla_api_token"],"optional":[],"config":{"njalla_api_token":"fixture-njalla-token"}},
+  {"provider":"porkbun","required":["porkbun_api_key","porkbun_api_secret_key"],"optional":[],"config":{"porkbun_api_key":"fixture-porkbun-key","porkbun_api_secret_key":"fixture-porkbun-secret"}},
+  {"provider":"vultr","required":["vultr_api_token"],"optional":[],"config":{"vultr_api_token":"fixture-vultr-token"}}
+]

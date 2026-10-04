@@ -41,6 +41,8 @@
 		000000000000000000002505 /* Views/OverviewCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001505 /* Views/OverviewCard.swift */; };
 		000000000000000000002506 /* Support/DateDisplayParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001506 /* Support/DateDisplayParser.swift */; };
 		000000000000000000002507 /* Views/OverviewNodeInspector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001507 /* Views/OverviewNodeInspector.swift */; };
+		000000000000000000002600 /* Models/ACMEDNSDraft.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001600 /* Models/ACMEDNSDraft.swift */; };
+		000000000000000000002601 /* Views/ACMEDNSFields.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001601 /* Views/ACMEDNSFields.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -79,6 +81,8 @@
 		000000000000000000001505 /* Views/OverviewCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/OverviewCard.swift; sourceTree = "<group>"; };
 		000000000000000000001506 /* Support/DateDisplayParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Support/DateDisplayParser.swift; sourceTree = "<group>"; };
 		000000000000000000001507 /* Views/OverviewNodeInspector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/OverviewNodeInspector.swift; sourceTree = "<group>"; };
+		000000000000000000001600 /* Models/ACMEDNSDraft.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models/ACMEDNSDraft.swift; sourceTree = "<group>"; };
+		000000000000000000001601 /* Views/ACMEDNSFields.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/ACMEDNSFields.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -127,6 +131,8 @@
 				000000000000000000001508 /* Views/QuotaProgressView.swift */,
 				00000000000000000000100F /* Views/UserNodeAssignmentsView.swift */,
 				00000000000000000000100C /* Views/ProxyConfigurationView.swift */,
+				000000000000000000001601 /* Views/ACMEDNSFields.swift */,
+				000000000000000000001600 /* Models/ACMEDNSDraft.swift */,
 				00000000000000000000100D /* Models/OpenAPIRequests.generated.swift */,
 				00000000000000000000100E /* Models/OpenAPIResponses.generated.swift */,
 			);
@@ -249,6 +255,8 @@
 				000000000000000000002508 /* Views/QuotaProgressView.swift in Sources */,
 				00000000000000000000200F /* Views/UserNodeAssignmentsView.swift in Sources */,
 				00000000000000000000200C /* Views/ProxyConfigurationView.swift in Sources */,
+				000000000000000000002601 /* Views/ACMEDNSFields.swift in Sources */,
+				000000000000000000002600 /* Models/ACMEDNSDraft.swift in Sources */,
 				00000000000000000000200D /* Models/OpenAPIRequests.generated.swift in Sources */,
 				00000000000000000000200E /* Models/OpenAPIResponses.generated.swift in Sources */,
 			);

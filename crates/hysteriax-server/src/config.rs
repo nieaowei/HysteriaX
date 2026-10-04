@@ -511,6 +511,7 @@ fn validate_acme(value: &Value) -> Result<()> {
         if config.values().any(|value| !value.is_string()) {
             bail!("acme.dns.config values must be strings");
         }
+        validate_acme_dns_credentials(&provider, config)?;
     } else if kind.as_deref() == Some("dns") {
         bail!("acme.dns is required when acme.type is dns");
     }
@@ -590,6 +591,54 @@ fn validate_obfs(value: &Value) -> Result<()> {
             .unwrap_or(1200);
         if min < 512 || max < min || max > 2048 {
             bail!("Gecko packet sizes must satisfy 512 <= minPacketSize <= maxPacketSize <= 2048");
+        }
+    }
+    Ok(())
+}
+
+// Keep credential keys aligned with Hysteria app/v2.12.3 app/cmd/server.go
+// and the macOS ACMEDNSProvider fields. Unknown legacy keys are preserved.
+fn validate_acme_dns_credentials(provider: &str, config: &Map<String, Value>) -> Result<()> {
+    let required: &[&str] = match provider {
+        "cloudflare" => &["cloudflare_api_token"],
+        "duckdns" => &["duckdns_api_token"],
+        "gandi" => &["gandi_api_token"],
+        "godaddy" => &["godaddy_api_token"],
+        "namecheap" => &["namecheap_api_key", "namecheap_api_user"],
+        "njalla" => &["njalla_api_token"],
+        "porkbun" => &["porkbun_api_key", "porkbun_api_secret_key"],
+        "vultr" => &["vultr_api_token"],
+        _ => bail!("unsupported ACME DNS provider"),
+    };
+    for key in required {
+        if config
+            .get(*key)
+            .and_then(Value::as_str)
+            .is_none_or(|value| value.trim().is_empty())
+        {
+            bail!("acme.dns.config.{key} is required for {provider}");
+        }
+    }
+    if provider == "namecheap" {
+        if let Some(ip) = config
+            .get("namecheap_client_ip")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            && ip.parse::<std::net::Ipv4Addr>().is_err()
+        {
+            bail!("acme.dns.config.namecheap_client_ip must be a valid IPv4 address");
+        }
+        if let Some(endpoint) = config
+            .get("namecheap_api_endpoint")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+        {
+            let valid = url::Url::parse(endpoint).is_ok_and(|url| {
+                matches!(url.scheme(), "http" | "https") && url.host_str().is_some()
+            });
+            if !valid || endpoint.chars().any(char::is_whitespace) {
+                bail!("acme.dns.config.namecheap_api_endpoint must be a complete HTTP(S) URL");
+            }
         }
     }
     Ok(())
@@ -1193,7 +1242,7 @@ pub fn listener_hop_ports(listen_addr: &str) -> Option<&str> {
 
 #[cfg(test)]
 mod tests {
-    use serde_json::json;
+    use serde_json::{Value, json};
 
     use super::{
         DEFAULT_REALM_STUN_SERVERS, realm_client_uri, realm_connection, render_server_yaml,
@@ -1534,6 +1583,90 @@ mod tests {
             }}))
             .is_ok()
         );
+    }
+
+    #[test]
+    fn validates_acme_dns_provider_credentials() {
+        let fixtures: Value = serde_json::from_str(include_str!(
+            "../../../tests/fixtures/acme-dns-providers.json"
+        ))
+        .unwrap();
+        for fixture in fixtures.as_array().unwrap() {
+            let config = fixture["config"].clone();
+            let node = |config: Value| {
+                json!({"acme": {
+                    "domains": ["proxy.example"], "type": "dns",
+                    "dns": {"name": fixture["provider"], "config": config}
+                }})
+            };
+            assert!(validate_server_options(&node(config.clone())).is_ok());
+            for key in fixture["required"].as_array().unwrap() {
+                let key = key.as_str().unwrap();
+                for value in [None, Some(json!("")), Some(json!(" \n\t"))] {
+                    let mut invalid = config.clone();
+                    invalid.as_object_mut().unwrap().remove(key);
+                    if let Some(value) = value {
+                        invalid[key] = value;
+                    }
+                    let error = validate_server_options(&node(invalid)).unwrap_err();
+                    assert!(error.to_string().contains(key));
+                    assert!(!error.to_string().contains("fixture-"));
+                }
+            }
+            let mut optional = config.clone();
+            for key in fixture["optional"].as_array().unwrap() {
+                optional
+                    .as_object_mut()
+                    .unwrap()
+                    .remove(key.as_str().unwrap());
+            }
+            assert!(validate_server_options(&node(optional.clone())).is_ok());
+            optional["legacy_unknown"] = json!("preserved-secret");
+            assert!(validate_server_options(&node(optional)).is_ok());
+            assert!(validate_server_options(&node(json!({}))).is_err());
+        }
+    }
+
+    #[test]
+    fn validates_namecheap_optional_ip_and_endpoint() {
+        let node = |extra: Value| {
+            let mut config =
+                json!({"namecheap_api_key": "secret-key", "namecheap_api_user": "user"});
+            config
+                .as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            json!({"acme": {
+                "domains": ["proxy.example"], "type": "dns",
+                "dns": {"name": "namecheap", "config": config}
+            }})
+        };
+        for ip in ["127.0.0.1", "203.0.113.1", "", " \n"] {
+            assert!(validate_server_options(&node(json!({"namecheap_client_ip": ip}))).is_ok());
+        }
+        for ip in ["999.1.1.1", "::1", "invalid", " 203.0.113.1", "1.2.3"] {
+            assert!(validate_server_options(&node(json!({"namecheap_client_ip": ip}))).is_err());
+        }
+        for endpoint in [
+            "https://api.namecheap.com/xml.response",
+            "http://localhost/xml.response",
+            "",
+            " \n",
+        ] {
+            assert!(
+                validate_server_options(&node(json!({"namecheap_api_endpoint": endpoint}))).is_ok()
+            );
+        }
+        for endpoint in [
+            "ftp://example.com",
+            "example.com",
+            "https://",
+            "https://example.com/a b",
+        ] {
+            let error = validate_server_options(&node(json!({"namecheap_api_endpoint": endpoint})))
+                .unwrap_err();
+            assert!(!error.to_string().contains("secret-key"));
+        }
     }
 
     #[test]

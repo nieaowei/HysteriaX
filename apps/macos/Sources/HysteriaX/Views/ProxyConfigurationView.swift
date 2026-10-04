@@ -25,8 +25,7 @@ struct ProxyConfigurationView: View {
     @State private var acmeDirectory = ""
     @State private var acmeHTTPAltPort = ""
     @State private var acmeTLSAltPort = ""
-    @State private var acmeDNSName = ""
-    @State private var acmeDNSEntries: [StringMapEntry] = []
+    @State private var acmeDNS = ACMEDNSDraft()
     @State private var acmeLegacyMode = false
     @State private var acmeDisableHTTP = false
     @State private var acmeDisableTLSALPN = false
@@ -167,27 +166,7 @@ struct ProxyConfigurationView: View {
                                 } else if acmeType == "tls" {
                                     TextField("TLS-ALPN-01 备用端口", text: $acmeTLSAltPort)
                                 } else {
-                                    Picker("DNS 服务商", selection: $acmeDNSName) {
-                                        Text("选择服务商").tag("")
-                                        Text("Cloudflare").tag("cloudflare")
-                                        Text("DuckDNS").tag("duckdns")
-                                        Text("Gandi").tag("gandi")
-                                        Text("GoDaddy").tag("godaddy")
-                                        Text("Namecheap").tag("namecheap")
-                                        Text("Njalla").tag("njalla")
-                                        Text("Porkbun").tag("porkbun")
-                                        Text("Vultr").tag("vultr")
-                                    }
-                                    Text("DNS 服务商参数会加密保存在管理服务。")
-                                        .font(.callout).foregroundStyle(.secondary)
-                                    Text("参数名须符合所选服务商要求，例如 cloudflare_api_token 或 porkbun_api_secret_key。")
-                                        .font(.callout).foregroundStyle(.secondary)
-                                    StringMapEditor(
-                                        entries: $acmeDNSEntries,
-                                        keyPrompt: "参数名",
-                                        valuePrompt: "凭据或参数值",
-                                        masksValues: true
-                                    )
+                                    ACMEDNSFields(draft: $acmeDNS)
                                 }
                             }
                         } else if tlsMode == "tls" {
@@ -502,7 +481,7 @@ struct ProxyConfigurationView: View {
             "listen": .string("127.0.0.1:\(trafficStatsPort)"),
             "secret": .string("<managed-stats-secret>"),
         ])
-        return NodeConfigurationYAML.render(.object(serverConfig))
+        return NodeConfigurationYAML.render(.object(ACMEDNSDraft.redactingDNSValues(in: serverConfig)))
     }
 
     private func draftConfiguration(from original: [String: JSONValue]) -> [String: JSONValue] {
@@ -545,8 +524,8 @@ struct ProxyConfigurationView: View {
                     acme.removeValue(forKey: "dns")
                 } else {
                     acme["dns"] = .object([
-                        "name": .string(acmeDNSName),
-                        "config": .object(draftStringMap(acmeDNSEntries)),
+                        "name": .string(acmeDNS.provider),
+                        "config": .object(acmeDNS.configuration),
                     ])
                     acme.removeValue(forKey: "http")
                     acme.removeValue(forKey: "tls")
@@ -810,8 +789,7 @@ struct ProxyConfigurationView: View {
         acmeDirectory = ""
         acmeHTTPAltPort = ""
         acmeTLSAltPort = ""
-        acmeDNSName = ""
-        acmeDNSEntries = []
+        acmeDNS = ACMEDNSDraft()
         acmeLegacyMode = false
         acmeDisableHTTP = false
         acmeDisableTLSALPN = false
@@ -912,8 +890,10 @@ struct ProxyConfigurationView: View {
                 if let http = acme["http"]?.objectValue { acmeHTTPAltPort = integerText(http["altPort"]) }
                 if let tls = acme["tls"]?.objectValue { acmeTLSAltPort = integerText(tls["altPort"]) }
                 if let dns = acme["dns"]?.objectValue {
-                    acmeDNSName = dns["name"]?.stringValue ?? ""
-                    acmeDNSEntries = mapEntries(dns["config"])
+                    acmeDNS = ACMEDNSDraft(
+                        provider: dns["name"]?.stringValue ?? "",
+                        config: dns["config"]?.objectValue ?? [:]
+                    )
                 }
             } else if let tls = config["tls"]?.objectValue {
                 tlsMode = "tls"
@@ -1208,13 +1188,8 @@ struct ProxyConfigurationView: View {
                 var port: [String: JSONValue] = [:]
                 guard setPort(acmeTLSAltPort, field: "TLS-ALPN-01 备用端口", key: "altPort", in: &port) else { return false }
             } else {
-                guard !acmeDNSName.trimmingCharacters(in: .whitespaces).isEmpty else {
-                    errorMessage = "请选择 DNS 服务商。"
-                    return false
-                }
-                do { _ = try stringMap(acmeDNSEntries) }
-                catch {
-                    errorMessage = "ACME DNS 参数名不能为空或重复。"
+                if let validationError = acmeDNS.validationError {
+                    errorMessage = validationError
                     return false
                 }
             }
