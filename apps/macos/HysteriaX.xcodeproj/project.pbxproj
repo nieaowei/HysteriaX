@@ -19,6 +19,7 @@
 		000000000000000000002009 /* Views/OverviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001009 /* Views/OverviewView.swift */; };
 		00000000000000000000200A /* Views/SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000100A /* Views/SettingsView.swift */; };
 		00000000000000000000200B /* Views/UsersView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000100B /* Views/UsersView.swift */; };
+		000000000000000000002508 /* Views/QuotaProgressView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001508 /* Views/QuotaProgressView.swift */; };
 		00000000000000000000200C /* Views/ProxyConfigurationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000100C /* Views/ProxyConfigurationView.swift */; };
 		00000000000000000000200D /* Models/OpenAPIRequests.generated.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000100D /* Models/OpenAPIRequests.generated.swift */; };
 		00000000000000000000200E /* Models/OpenAPIResponses.generated.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000100E /* Models/OpenAPIResponses.generated.swift */; };
@@ -55,6 +56,7 @@
 		000000000000000000001009 /* Views/OverviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/OverviewView.swift; sourceTree = "<group>"; };
 		00000000000000000000100A /* Views/SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/SettingsView.swift; sourceTree = "<group>"; };
 		00000000000000000000100B /* Views/UsersView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/UsersView.swift; sourceTree = "<group>"; };
+		000000000000000000001508 /* Views/QuotaProgressView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/QuotaProgressView.swift; sourceTree = "<group>"; };
 		00000000000000000000100C /* Views/ProxyConfigurationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/ProxyConfigurationView.swift; sourceTree = "<group>"; };
 		00000000000000000000100D /* Models/OpenAPIRequests.generated.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models/OpenAPIRequests.generated.swift; sourceTree = "<group>"; };
 		00000000000000000000100E /* Models/OpenAPIResponses.generated.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models/OpenAPIResponses.generated.swift; sourceTree = "<group>"; };
@@ -122,6 +124,7 @@
 				000000000000000000001009 /* Views/OverviewView.swift */,
 				00000000000000000000100A /* Views/SettingsView.swift */,
 				00000000000000000000100B /* Views/UsersView.swift */,
+				000000000000000000001508 /* Views/QuotaProgressView.swift */,
 				00000000000000000000100F /* Views/UserNodeAssignmentsView.swift */,
 				00000000000000000000100C /* Views/ProxyConfigurationView.swift */,
 				00000000000000000000100D /* Models/OpenAPIRequests.generated.swift */,
@@ -243,6 +246,7 @@
 				000000000000000000002009 /* Views/OverviewView.swift in Sources */,
 				00000000000000000000200A /* Views/SettingsView.swift in Sources */,
 				00000000000000000000200B /* Views/UsersView.swift in Sources */,
+				000000000000000000002508 /* Views/QuotaProgressView.swift in Sources */,
 				00000000000000000000200F /* Views/UserNodeAssignmentsView.swift in Sources */,
 				00000000000000000000200C /* Views/ProxyConfigurationView.swift in Sources */,
 				00000000000000000000200D /* Models/OpenAPIRequests.generated.swift in Sources */,

@@ -45,7 +45,10 @@ struct NodesView: View {
                 TableColumn("有效期") { node in Text(PackageDisplay.expiry(node.package)) }
                 TableColumn("套餐流量") { node in
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(PackageDisplay.listUsage(node.package, node.packageUsage))
+                        QuotaProgressView(
+                            usageBytes: node.packageUsage?.usageBytes,
+                            quotaBytes: node.package?.quotaBytes
+                        )
                         if let next = node.packageUsage?.nextResetAt {
                             Text("重置：\(DateDisplayText.local(next))").font(.caption).foregroundStyle(.secondary)
                         }
@@ -54,6 +57,7 @@ struct NodesView: View {
                         }
                     }
                 }
+                .width(min: 180, ideal: 220)
                 TableColumn("配置版本") { node in Text("\(node.revision)") }
                 TableColumn("已部署") { node in Text(node.deployedRevision.map(String.init) ?? "—") }
                 TableColumn("最近采样") { node in

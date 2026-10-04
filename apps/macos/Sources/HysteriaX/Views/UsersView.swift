@@ -44,8 +44,10 @@ struct UsersView: View {
                         .accessibilityLabel(user.enabled ? "启用" : "已停用")
                         .accessibilityIdentifier("users.status.\(user.id)")
                 }
-                TableColumn("用量") { user in Text(ByteCountFormatter.string(fromByteCount: user.usageBytes, countStyle: .file)) }
-                TableColumn("额度") { user in Text(user.quotaBytes.map { ByteCountFormatter.string(fromByteCount: $0, countStyle: .file) } ?? "不限") }
+                TableColumn("用量 / 额度") { user in
+                    QuotaProgressView(usageBytes: user.usageBytes, quotaBytes: user.quotaBytes)
+                }
+                .width(min: 180, ideal: 220)
                 TableColumn("节点") { user in Text("\(user.assignments.count)") }
                 TableColumn("到期") { user in Text(user.expiresAt.map { DateDisplayText.local($0) } ?? "不限") }
             }

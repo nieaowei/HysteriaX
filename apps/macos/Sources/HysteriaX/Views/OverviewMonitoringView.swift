@@ -125,7 +125,10 @@ struct OverviewMonitoringView: View {
                         VStack(alignment: .leading, spacing: 6) {
                             HStack { Text(node.name).fontWeight(.medium); Spacer(); Text(PackageDisplay.usage(node.package, node.packageUsage)).font(.caption) }
                             if let quota = node.package?.quotaBytes, let used = node.packageUsage?.usageBytes {
-                                if quota > 0 { ProgressView(value: min(1, Double(used) / Double(quota))) }
+                                if quota > 0 {
+                                    ProgressView(value: min(1, max(0, Double(used) / Double(quota))))
+                                        .progressViewStyle(GradientUsageProgressStyle())
+                                }
                                 Text("剩余 \(OverviewDisplay.bytes(max(0, quota - used)))").font(.caption).foregroundStyle(.secondary)
                             }
                             Text("到期：\(DateDisplayText.local(node.package?.expiresAt)) · 重置：\(DateDisplayText.local(node.packageUsage?.nextResetAt))").font(.caption).foregroundStyle(.secondary)

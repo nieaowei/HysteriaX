@@ -79,7 +79,7 @@ struct OverviewServerCard: View {
             Text(value).font(.title3).fontWeight(.semibold).monospacedDigit()
             if let fraction {
                 ProgressView(value: min(max(fraction, 0), 1))
-                    .tint(fraction >= 0.9 ? .orange : .accentColor)
+                    .progressViewStyle(GradientUsageProgressStyle())
             }
             Text(detail).font(.caption).foregroundStyle(.secondary)
         }.frame(maxWidth: .infinity, alignment: .leading)
