@@ -59,12 +59,7 @@ struct NodePackageDraft {
 }
 
 enum PackageDisplay {
-    static func date(_ value: String?) -> Date? {
-        guard let value else { return nil }
-        let fractional = ISO8601DateFormatter()
-        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return fractional.date(from: value) ?? ISO8601DateFormatter().date(from: value)
-    }
+    static func date(_ value: String?) -> Date? { DateDisplayParser.shared.parse(value) }
     static func warning(_ kind: String) -> String {
         switch kind {
         case "expiring": "节点即将到期"

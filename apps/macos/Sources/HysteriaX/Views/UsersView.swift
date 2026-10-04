@@ -4,6 +4,8 @@ import UniformTypeIdentifiers
 
 struct UsersView: View {
     @Bindable var store: ManagementStore
+    var initialSelection: String? = nil
+    var onInitialSelectionHandled: () -> Void = {}
     @State private var showingAddUser = false
     @State private var assignmentUser: UserSummary?
     @State private var showingEditUser = false
@@ -46,6 +48,12 @@ struct UsersView: View {
                 TableColumn("额度") { user in Text(user.quotaBytes.map { ByteCountFormatter.string(fromByteCount: $0, countStyle: .file) } ?? "不限") }
                 TableColumn("节点") { user in Text("\(user.assignments.count)") }
                 TableColumn("到期") { user in Text(user.expiresAt.map { DateDisplayText.local($0) } ?? "不限") }
+            }
+            .task(id: initialSelection) {
+                guard let initialSelection else { return }
+                searchText = ""
+                selectedUserID = initialSelection
+                onInitialSelectionHandled()
             }
             .overlay {
                 if store.users.isEmpty {

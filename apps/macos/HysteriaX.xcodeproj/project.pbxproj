@@ -29,6 +29,17 @@
 		000000000000000000002200 /* Models/ServerConfigurationDraft.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001200 /* Models/ServerConfigurationDraft.swift */; };
 		000000000000000000002201 /* Views/ServerConfigurationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001201 /* Views/ServerConfigurationView.swift */; };
 		000000000000000000002300 /* Views/NodeNotificationsButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001300 /* Views/NodeNotificationsButton.swift */; };
+		000000000000000000002400 /* Models/OverviewDisplay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001400 /* Models/OverviewDisplay.swift */; };
+		000000000000000000002401 /* Views/OverviewMonitoringView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001401 /* Views/OverviewMonitoringView.swift */; };
+		000000000000000000002402 /* Views/OverviewHistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001402 /* Views/OverviewHistoryView.swift */; };
+		000000000000000000002500 /* Models/OverviewSceneState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001500 /* Models/OverviewSceneState.swift */; };
+		000000000000000000002501 /* Models/OverviewHistoryDisplay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001501 /* Models/OverviewHistoryDisplay.swift */; };
+		000000000000000000002502 /* Views/OverviewLayouts.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001502 /* Views/OverviewLayouts.swift */; };
+		000000000000000000002503 /* Views/OverviewTabPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001503 /* Views/OverviewTabPane.swift */; };
+		000000000000000000002504 /* Views/OverviewServerCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001504 /* Views/OverviewServerCard.swift */; };
+		000000000000000000002505 /* Views/OverviewCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001505 /* Views/OverviewCard.swift */; };
+		000000000000000000002506 /* Support/DateDisplayParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001506 /* Support/DateDisplayParser.swift */; };
+		000000000000000000002507 /* Views/OverviewNodeInspector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001507 /* Views/OverviewNodeInspector.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -55,6 +66,17 @@
 		000000000000000000001200 /* Models/ServerConfigurationDraft.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models/ServerConfigurationDraft.swift; sourceTree = "<group>"; };
 		000000000000000000001201 /* Views/ServerConfigurationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/ServerConfigurationView.swift; sourceTree = "<group>"; };
 		000000000000000000001300 /* Views/NodeNotificationsButton.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/NodeNotificationsButton.swift; sourceTree = "<group>"; };
+		000000000000000000001400 /* Models/OverviewDisplay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models/OverviewDisplay.swift; sourceTree = "<group>"; };
+		000000000000000000001401 /* Views/OverviewMonitoringView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/OverviewMonitoringView.swift; sourceTree = "<group>"; };
+		000000000000000000001402 /* Views/OverviewHistoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/OverviewHistoryView.swift; sourceTree = "<group>"; };
+		000000000000000000001500 /* Models/OverviewSceneState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models/OverviewSceneState.swift; sourceTree = "<group>"; };
+		000000000000000000001501 /* Models/OverviewHistoryDisplay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models/OverviewHistoryDisplay.swift; sourceTree = "<group>"; };
+		000000000000000000001502 /* Views/OverviewLayouts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/OverviewLayouts.swift; sourceTree = "<group>"; };
+		000000000000000000001503 /* Views/OverviewTabPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/OverviewTabPane.swift; sourceTree = "<group>"; };
+		000000000000000000001504 /* Views/OverviewServerCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/OverviewServerCard.swift; sourceTree = "<group>"; };
+		000000000000000000001505 /* Views/OverviewCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/OverviewCard.swift; sourceTree = "<group>"; };
+		000000000000000000001506 /* Support/DateDisplayParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Support/DateDisplayParser.swift; sourceTree = "<group>"; };
+		000000000000000000001507 /* Views/OverviewNodeInspector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/OverviewNodeInspector.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -72,6 +94,17 @@
 			isa = PBXGroup;
 			children = (
 				000000000000000000001000 /* App/HysteriaXApp.swift */,
+				000000000000000000001402 /* Views/OverviewHistoryView.swift */,
+				000000000000000000001507 /* Views/OverviewNodeInspector.swift */,
+				000000000000000000001506 /* Support/DateDisplayParser.swift */,
+				000000000000000000001505 /* Views/OverviewCard.swift */,
+				000000000000000000001504 /* Views/OverviewServerCard.swift */,
+				000000000000000000001503 /* Views/OverviewTabPane.swift */,
+				000000000000000000001502 /* Views/OverviewLayouts.swift */,
+				000000000000000000001501 /* Models/OverviewHistoryDisplay.swift */,
+				000000000000000000001500 /* Models/OverviewSceneState.swift */,
+				000000000000000000001401 /* Views/OverviewMonitoringView.swift */,
+				000000000000000000001400 /* Models/OverviewDisplay.swift */,
 				000000000000000000001300 /* Views/NodeNotificationsButton.swift */,
 				000000000000000000001201 /* Views/ServerConfigurationView.swift */,
 				000000000000000000001200 /* Models/ServerConfigurationDraft.swift */,
@@ -182,6 +215,17 @@
 			buildActionMask = 2147483647;
 			files = (
 				000000000000000000002000 /* App/HysteriaXApp.swift in Sources */,
+				000000000000000000002402 /* Views/OverviewHistoryView.swift in Sources */,
+				000000000000000000002507 /* Views/OverviewNodeInspector.swift in Sources */,
+				000000000000000000002506 /* Support/DateDisplayParser.swift in Sources */,
+				000000000000000000002505 /* Views/OverviewCard.swift in Sources */,
+				000000000000000000002504 /* Views/OverviewServerCard.swift in Sources */,
+				000000000000000000002503 /* Views/OverviewTabPane.swift in Sources */,
+				000000000000000000002502 /* Views/OverviewLayouts.swift in Sources */,
+				000000000000000000002501 /* Models/OverviewHistoryDisplay.swift in Sources */,
+				000000000000000000002500 /* Models/OverviewSceneState.swift in Sources */,
+				000000000000000000002401 /* Views/OverviewMonitoringView.swift in Sources */,
+				000000000000000000002400 /* Models/OverviewDisplay.swift in Sources */,
 				000000000000000000002300 /* Views/NodeNotificationsButton.swift in Sources */,
 				000000000000000000002201 /* Views/ServerConfigurationView.swift in Sources */,
 				000000000000000000002200 /* Models/ServerConfigurationDraft.swift in Sources */,

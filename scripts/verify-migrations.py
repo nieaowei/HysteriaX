@@ -94,7 +94,8 @@ def main():
                         (database.name,),
                     )
                 }
-            if version != 3:
+            expected_version = max(int(path.name.split("_", 1)[0]) for path in (ROOT / "crates/hysteriax-server/migrations").glob("*.sql"))
+            if version != expected_version:
                 raise RuntimeError(f"unexpected PostgreSQL schema version: {version}")
             expected = {
                 "enabled": "boolean",

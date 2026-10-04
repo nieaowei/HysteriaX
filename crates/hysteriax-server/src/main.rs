@@ -6,6 +6,8 @@ mod error;
 mod jobs;
 mod monitoring;
 mod node_limits;
+mod overview;
+mod proxy_monitor;
 mod security;
 mod ssh;
 mod state;
@@ -47,6 +49,7 @@ async fn main() -> Result<()> {
     let jobs = tokio::spawn(jobs::run(state.clone()));
     let traffic = tokio::spawn(traffic::run(state.clone()));
     let network = tokio::spawn(node_limits::collect(state.clone()));
+    let probes = tokio::spawn(proxy_monitor::run(state.clone()));
     let limits = tokio::spawn(node_limits::run(state.clone()));
     let app = api::router(state);
 
@@ -70,6 +73,7 @@ async fn main() -> Result<()> {
             traffic.abort();
             network.abort();
             limits.abort();
+            probes.abort();
             result?;
             bail!("single-instance lock monitor stopped unexpectedly");
         }
@@ -78,6 +82,7 @@ async fn main() -> Result<()> {
     traffic.abort();
     network.abort();
     limits.abort();
+    probes.abort();
     Ok(())
 }
 

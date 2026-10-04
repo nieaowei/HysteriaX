@@ -143,7 +143,9 @@ pub async fn create(
         "server_config": input.config.clone(),
         "listen_addr": input.listen_addr.clone(),
         "traffic_stats_port": input.traffic_stats_port,
-        "proxy_probe_url": proxy_probe_url
+        "proxy_probe_url": proxy_probe_url,
+        "public_host": input.public_host.clone(), "public_port": input.public_port,
+        "tls_sni": input.tls_sni.clone(), "tls_skip_verify": input.tls_skip_verify
     });
     let deployment_snapshot_json = deployment_snapshot.to_string();
     let config_enc = state.secrets.encrypt(&config_json)?;
@@ -292,7 +294,9 @@ pub async fn patch(
         "server_config": config.clone(),
         "listen_addr": listen_addr.clone(),
         "traffic_stats_port": traffic_stats_port,
-        "proxy_probe_url": proxy_probe_url.clone()
+        "proxy_probe_url": proxy_probe_url.clone(),
+        "public_host": public_host.clone(), "public_port": public_port,
+        "tls_sni": tls_sni.clone(), "tls_skip_verify": tls_skip_verify
     });
     let deployment_snapshot_json = deployment_snapshot.to_string();
     let config_enc = state.secrets.encrypt(&config_json)?;

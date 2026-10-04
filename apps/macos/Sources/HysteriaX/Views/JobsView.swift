@@ -93,14 +93,7 @@ enum JobDisplayText {
 }
 
 enum DateDisplayText {
-    static func parse(_ value: String?) -> Date? {
-        guard let value else { return nil }
-        let fractional = ISO8601DateFormatter()
-        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        let standard = ISO8601DateFormatter()
-        standard.formatOptions = [.withInternetDateTime]
-        return fractional.date(from: value) ?? standard.date(from: value)
-    }
+    static func parse(_ value: String?) -> Date? { DateDisplayParser.shared.parse(value) }
 
     static func local(_ value: String?) -> String {
         guard let value else { return "—" }
@@ -118,6 +111,8 @@ private extension JobSummary {
 
 struct JobsView: View {
     @Bindable var store: ManagementStore
+    var initialSelection: String? = nil
+    var onInitialSelectionHandled: () -> Void = {}
     @State private var selectedJobID: String?
     @State private var searchText = ""
     @State private var sortOrder = [KeyPathComparator(\JobSummary.createdAt, order: .reverse)]
@@ -142,12 +137,13 @@ struct JobsView: View {
     }
 
     private var selectedJob: JobSummary? {
-        visibleJobs.first(where: { $0.id == selectedJobID })
+        visibleJobs.first(where: { $0.id == selectedJobID }) ?? (selectedJobDetail?.job.id == selectedJobID ? selectedJobDetail?.job : nil)
     }
 
     private var detailRequestKey: String {
-        guard let selectedJob else { return "none" }
-        return "\(selectedJob.id):\(selectedJob.updatedAt):\(store.isConnected)"
+        guard let selectedJobID else { return "none" }
+        let updatedAt = store.jobs.first { $0.id == selectedJobID }?.updatedAt ?? "detail"
+        return "\(selectedJobID):\(updatedAt):\(store.isConnected)"
     }
 
     var body: some View {
@@ -158,6 +154,12 @@ struct JobsView: View {
                 TableColumn("阶段", value: \.localizedStage)
                 TableColumn("状态", value: \.localizedStatus)
                 TableColumn("创建时间") { job in Text(DateDisplayText.local(job.createdAt)) }
+            }
+            .task(id: initialSelection) {
+                guard let initialSelection else { return }
+                searchText = ""
+                selectedJobID = initialSelection
+                onInitialSelectionHandled()
             }
             .overlay {
                 if store.jobs.isEmpty {
@@ -198,13 +200,19 @@ struct JobsView: View {
                                 }
                             }
                         }
+                        if job.retryOfJobId != nil { Text("此任务为关联重试，成功后会移除原失败提醒。").font(.caption).foregroundStyle(.secondary) }
+                        if let retryID = job.retryJobId {
+                            Button("查看重试任务") { selectedJobID = retryID }.accessibilityIdentifier("jobs.retryLink.\(job.id)")
+                        }
                         if let error = job.errorMessage { Text(error).foregroundStyle(.orange).textSelection(.enabled) }
                         if let action = retryAction(for: job),
                            let node = store.nodes.first(where: { $0.id == job.nodeID }) {
                             Button("重试：\(retryLabel(action))") {
                                 retry(job, on: node, action: action)
                             }
-                            .disabled(!store.isConnected)
+                            .accessibilityIdentifier("jobs.retry.\(job.id)")
+                            .disabled(!store.isConnected || !store.supportsJobRetryLinks)
+                            .help(store.supportsJobRetryLinks ? "创建关联重试，成功后自动移除失败提醒" : "管理服务需更新后才能关联重试")
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -283,7 +291,7 @@ struct JobsView: View {
     }
 
     private func retryAction(for job: JobSummary) -> String? {
-        guard job.status == "failed", job.nodeID != nil else { return nil }
+        guard (job.status == "failed" || (["cancelled", "rolled_back"].contains(job.status) && job.retryOfJobId != nil)), job.nodeID != nil, job.retryJobId == nil else { return nil }
         switch job.kind {
         case "ssh-test": return "ssh-test"
         case "deploy", "sync": return "sync"
@@ -303,7 +311,7 @@ struct JobsView: View {
     private func retry(_ job: JobSummary, on node: NodeSummary, action: String) {
         Task {
             do {
-                try await store.runNodeAction(node, action: action)
+                try await store.retryJob(job, on: node)
                 selectedJobID = nil
             } catch { actionError = error.localizedDescription }
         }

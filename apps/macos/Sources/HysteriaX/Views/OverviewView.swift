@@ -2,6 +2,7 @@ import SwiftUI
 
 struct OverviewView: View {
     @Bindable var store: ManagementStore
+    var navigate: (OverviewDestination) -> Void = { _ in }
 
     private var nodesNeedingAttention: Int {
         let failedStates: Set<String> = ["fingerprint_changed", "sync_failed", "rollback_failed", "drift", "unreachable", "delete_failed"]
@@ -17,158 +18,156 @@ struct OverviewView: View {
         }.count
     }
 
+    @SceneStorage("overview.tab") private var selectedTab = "summary"
+    @State private var quotaScrollRequest: UUID?
+    @State private var sceneState = OverviewSceneState()
+
+    private var activeTab: String { ["summary", "traffic", "quality"].contains(selectedTab) ? selectedTab : "summary" }
+
+    private var hasMonitoring: Bool { store.supportsOverviewMonitoring || store.overview != nil }
+
     var body: some View {
-        GeometryReader { geometry in
-            ScrollView {
-                VStack(alignment: .leading, spacing: 24) {
-                    if !store.isConnected {
-                        ContentUnavailableView(
-                            store.lastUpdated == nil ? "连接管理服务" : "管理服务已断开",
-                            systemImage: "network.slash",
-                            description: Text(store.lastUpdated.map {
-                                "以下为 \($0.formatted(date: .abbreviated, time: .shortened)) 更新的缓存数据。恢复连接后刷新；断开期间不能写入。"
-                            } ?? "打开设置，填写服务 HTTPS 地址和管理员令牌。")
-                        )
-                        .frame(maxWidth: .infinity, minHeight: 180)
-                    }
-                    LazyVGrid(columns: summaryColumns(for: geometry.size.width), alignment: .leading, spacing: 16) {
-                        summaryCard("节点", value: "\(store.nodes.count)", symbol: "server.rack")
-                        summaryCard("用户", value: "\(store.users.count)", symbol: "person.2")
-                        summaryCard("待处理任务", value: "\(store.jobs.filter { $0.status == "queued" || $0.status == "running" }.count)", symbol: "hourglass")
-                        summaryCard("需关注节点", value: "\(nodesNeedingAttention)", symbol: "exclamationmark.triangle")
-                    }
-                    serverMonitoringSection
-                    GroupBox("最近任务") {
-                        if store.jobs.isEmpty {
-                            Text("暂无任务").foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 8)
-                        } else {
-                            VStack(spacing: 0) {
-                                ForEach(store.jobs.prefix(5)) { job in
-                                    HStack {
-                                        Image(systemName: job.status == "failed" ? "exclamationmark.circle" : "checkmark.circle")
-                                            .foregroundStyle(job.status == "failed" ? .orange : .secondary)
-                                        Text(JobDisplayText.kind(job.kind)).fontWeight(.medium)
-                                        Spacer()
-                                        Text(JobDisplayText.stage(job.stage)).foregroundStyle(.secondary)
-                                        Text(JobDisplayText.status(job.status)).foregroundStyle(.secondary).frame(width: 92, alignment: .trailing)
-                                    }.padding(.vertical, 8)
-                                    if job.id != store.jobs.prefix(5).last?.id { Divider() }
-                                }
-                            }
-                        }
-                    }
+        @Bindable var quality = sceneState.quality
+        return VStack(alignment: .leading, spacing: 0) {
+            OverviewTabPane(state: sceneState.tab(activeTab), tabID: activeTab, scrollRequest: activeTab == "traffic" ? quotaScrollRequest : nil) {
+                VStack(alignment: .leading, spacing: 6) {
+                    statusBar
+                    tabContent(activeTab)
                 }
-                .frame(width: max(0, geometry.size.width - 56), alignment: .leading)
-                .padding(28)
             }
+            .id(activeTab)
+        }
+        .onAppear {
+            if !["summary", "traffic", "quality"].contains(selectedTab) { selectedTab = "summary" }
+        }
+        .onChange(of: store.serviceAddress) { _, _ in quotaScrollRequest = nil; sceneState.changedService() }
+        .sheet(item: $quality.inspectedNode) { node in
+            OverviewNodeInspector(store: store, selected: node, close: { quality.inspectedNode = nil }, navigate: navigate)
         }
         .toolbar {
+            ToolbarItem(placement: .principal) {
+                Picker("概览分类", selection: $selectedTab) {
+                    tabLabel("运行概况", symbol: "square.grid.2x2", id: "summary")
+                    tabLabel("流量与额度", symbol: "chart.bar.xaxis", id: "traffic")
+                    tabLabel("连接与质量", symbol: "network", id: "quality")
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .accessibilityIdentifier("overview.tabPicker")
+            }
             ToolbarItem(placement: .primaryAction) {
-                NodeNotificationsButton(store: store)
+                NodeNotificationsButton(store: store, navigate: navigate)
             }
         }
     }
 
-    private func summaryColumns(for width: CGFloat) -> [GridItem] {
-        let availableWidth = max(0, width - 56)
-        let columnCount = availableWidth >= 4 * 180 + 3 * 16 ? 4 : 2
-        return Array(repeating: GridItem(.flexible(minimum: 0), spacing: 16, alignment: .leading), count: columnCount)
+    private var statusBar: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if !store.isConnected {
+                Text(store.lastUpdated == nil ? "打开设置，填写管理服务地址和令牌。" : "显示上次更新的缓存数据，恢复连接后刷新。")
+                    .foregroundStyle(.orange)
+            }
+            if let error = store.overviewError { Text(error).foregroundStyle(.orange) }
+        }.font(.caption2)
     }
 
-    private var serverMonitoringSection: some View {
-        GroupBox {
-            VStack(alignment: .leading, spacing: 16) {
-                HStack {
-                    Label("管理服务器", systemImage: "server.rack").font(.headline)
-                    Spacer()
-                    Label(store.isConnected ? "已连接" : "未连接", systemImage: "circle.fill")
-                        .foregroundStyle(store.isConnected ? .green : .secondary)
+    private func tabLabel(_ title: String, symbol: String, id: String) -> some View {
+        Label(title, systemImage: symbol)
+            .labelStyle(.iconOnly)
+            .help(title)
+            .accessibilityLabel(title)
+            .accessibilityIdentifier("overview.tab.\(id)")
+            .tag(id)
+    }
+
+    @ViewBuilder private func tabContent(_ tab: String) -> some View {
+        switch tab {
+        case "summary":
+            if hasMonitoring {
+                OverviewMonitoringView(store: store, navigate: navigate, section: .metrics, state: sceneState.summary) {
+                    selectedTab = "traffic"
+                    quotaScrollRequest = UUID()
                 }
-                if let monitor = store.serverMonitoring {
-                    if !store.isConnected || store.serverMonitoringError != nil {
-                        Label("以下为上次采集的数据", systemImage: "clock.arrow.circlepath")
-                            .font(.callout).foregroundStyle(.orange)
-                    }
-                    HStack(alignment: .top, spacing: 24) {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text(monitor.hostname ?? "主机名未提供").fontWeight(.medium)
-                            Text(monitor.os ?? "系统信息未提供").foregroundStyle(.secondary)
-                            Text(store.serviceAddress).font(.caption).foregroundStyle(.secondary)
-                                .textSelection(.enabled)
-                        }
-                        Spacer()
-                        VStack(alignment: .trailing, spacing: 6) {
-                            Text("服务版本 \(monitor.serviceVersion)")
-                            Text("服务运行 \(uptime(monitor.serviceUptimeSeconds))")
-                            Text("主机运行 \(uptime(monitor.hostUptimeSeconds))").foregroundStyle(.secondary)
-                        }
-                    }
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 200), spacing: 16)], alignment: .leading, spacing: 16) {
-                        resourceMetric("CPU", symbol: "cpu", fraction: monitor.cpuUsagePercent / 100,
-                                       value: String(format: "%.1f%%", monitor.cpuUsagePercent),
-                                       detail: "\(monitor.cpuCount) 个逻辑核心")
-                        resourceMetric("内存", symbol: "memorychip",
-                                       fraction: fraction(used: monitor.memoryUsedBytes, total: monitor.memoryTotalBytes),
-                                       value: usage(monitor.memoryUsedBytes, monitor.memoryTotalBytes), detail: "已用 / 总量")
-                        resourceMetric("根目录磁盘", symbol: "internaldrive",
-                                       fraction: fraction(used: monitor.rootDiskUsedBytes, total: monitor.rootDiskTotalBytes),
-                                       value: usage(monitor.rootDiskUsedBytes, monitor.rootDiskTotalBytes), detail: "已用 / 总量")
-                    }
-                    HStack {
-                        Label(monitor.database == "ok" ? "数据库正常" : "数据库不可用",
-                              systemImage: monitor.database == "ok" ? "checkmark.circle" : "exclamationmark.triangle")
-                            .foregroundStyle(monitor.database == "ok" ? Color.secondary : Color.orange)
-                        Spacer()
-                        Text("采集于 \(sampleTime(monitor.sampledAt)) · 每 15 秒刷新")
-                            .foregroundStyle(.secondary)
-                    }.font(.caption)
-                    Text("资源指标为管理服务所在环境可见的主机数据。")
-                        .font(.caption).foregroundStyle(.secondary)
-                } else {
-                    Text(store.isLoading ? "正在获取服务器监控信息…" : "暂无服务器监控信息")
-                        .foregroundStyle(.secondary).padding(.vertical, 8)
+            } else {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 180))], spacing: 16) {
+                    summaryCard("节点", value: "\(store.nodes.count)", symbol: "server.rack")
+                    summaryCard("用户", value: "\(store.users.count)", symbol: "person.2")
+                    summaryCard("最近任务中待处理", value: "\(store.jobs.filter { $0.status == "queued" || $0.status == "running" }.count)", symbol: "hourglass")
+                    summaryCard("需关注节点", value: "\(nodesNeedingAttention)", symbol: "exclamationmark.triangle")
                 }
-                if let error = store.serverMonitoringError {
-                    Text(error).font(.caption).foregroundStyle(.orange)
-                }
-            }.frame(maxWidth: .infinity, alignment: .leading).padding(8)
+                monitoringUnavailable
+            }
+            OverviewSummaryLayout {
+                summaryTasksColumn
+                serverMonitoringSection
+            }
+        case "traffic":
+            if hasMonitoring { OverviewHistoryView(store: store, category: .traffic, isActive: true, state: sceneState.traffic.history) }
+            else { monitoringUnavailable }
+            OverviewMonitoringView(store: store, navigate: navigate, section: .quota).id("overview.quota")
+            userSummarySection
+        case "quality":
+            if hasMonitoring {
+                OverviewMonitoringView(store: store, navigate: navigate, section: .quality, state: sceneState.quality)
+                OverviewHistoryView(store: store, category: .quality, isActive: true, state: sceneState.quality.history)
+            } else { monitoringUnavailable }
+        default:
+            EmptyView()
         }
     }
 
-    private func resourceMetric(_ title: String, symbol: String, fraction: Double?, value: String, detail: String) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Label(title, systemImage: symbol).foregroundStyle(.secondary)
-            Text(value).font(.title3).fontWeight(.semibold).monospacedDigit()
-            if let fraction {
-                ProgressView(value: min(max(fraction, 0), 1))
-                    .tint(fraction >= 0.9 ? .orange : .accentColor)
-            }
-            Text(detail).font(.caption).foregroundStyle(.secondary)
+    private var summaryTasksColumn: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            if hasMonitoring { OverviewMonitoringView(store: store, navigate: navigate, section: .issues, state: sceneState.summary) }
+            recentJobsSection
         }.frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func fraction(used: Int?, total: Int?) -> Double? {
-        guard let used, let total, total > 0 else { return nil }
-        return Double(used) / Double(total)
+    private var monitoringUnavailable: some View {
+        Text("当前服务不支持高级概览监控，升级后可查看持续探测、在线统计与历史趋势。")
+            .font(.callout).foregroundStyle(.secondary)
     }
 
-    private func usage(_ used: Int?, _ total: Int?) -> String {
-        guard let used, let total, total > 0 else { return "未提供" }
-        return "\(ByteCountFormatter.string(fromByteCount: Int64(used), countStyle: .binary)) / \(ByteCountFormatter.string(fromByteCount: Int64(total), countStyle: .binary))"
+    private var recentJobsSection: some View {
+        OverviewCard("最近任务", systemImage: "list.bullet.rectangle") {
+            if store.jobs.isEmpty {
+                Text("暂无任务").foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 8)
+            } else {
+                VStack(spacing: 0) {
+                    ForEach(store.jobs.prefix(5)) { job in
+                        HStack {
+                            Image(systemName: job.status == "failed" ? "exclamationmark.circle" : "checkmark.circle")
+                                .foregroundStyle(job.status == "failed" ? .orange : .secondary)
+                            Button(JobDisplayText.kind(job.kind)) { navigate(OverviewDestination(section: "jobs", entityID: job.id)) }.buttonStyle(.plain).fontWeight(.medium).accessibilityIdentifier("overview.job.\(job.id)")
+                            Spacer()
+                            Text(JobDisplayText.stage(job.stage)).foregroundStyle(.secondary).lineLimit(1)
+                            Text(JobDisplayText.status(job.status)).foregroundStyle(.secondary).frame(width: 60, alignment: .trailing)
+                        }.padding(.vertical, 8)
+                        if job.id != store.jobs.prefix(5).last?.id { Divider() }
+                    }
+                }
+            }
+        }
     }
 
-    private func uptime(_ seconds: Int) -> String {
-        let days = seconds / 86_400
-        let hours = seconds % 86_400 / 3_600
-        let minutes = seconds % 3_600 / 60
-        return days > 0 ? "\(days) 天 \(hours) 小时" : "\(hours) 小时 \(minutes) 分钟"
+    private var userSummarySection: some View {
+        let now = Date()
+        let enabled = store.users.filter(\.enabled).count
+        let expired = store.users.filter { DateDisplayText.parse($0.expiresAt).map { $0 <= now } ?? false }.count
+        let expiring = store.users.filter { DateDisplayText.parse($0.expiresAt).map { $0 > now && $0 <= now.addingTimeInterval(7 * 86400) } ?? false }.count
+        let depleted = store.users.filter { user in user.quotaBytes.map { user.usageBytes >= $0 } ?? false }.count
+        return OverviewCard("用户状态", systemImage: "person.2") {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("全部 \(store.users.count) · 启用 \(enabled) · 停用 \(store.users.count - enabled)")
+                Text("已过期 \(expired) · 7 天内到期 \(expiring) · 额度耗尽 \(depleted)").foregroundStyle(.secondary)
+                Text("到期与额度分类可能重叠；启用状态不代表用户在线。").font(.caption).foregroundStyle(.secondary)
+            }.frame(maxWidth: .infinity, alignment: .leading)
+        }
     }
 
-    private func sampleTime(_ timestamp: String) -> String {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        let date = formatter.date(from: timestamp) ?? ISO8601DateFormatter().date(from: timestamp)
-        return date?.formatted(date: .abbreviated, time: .standard) ?? timestamp
+    private var serverMonitoringSection: some View {
+        OverviewServerCard(monitoring: store.serverMonitoring, serviceAddress: store.serviceAddress,
+                           isConnected: store.isConnected, isLoading: store.isLoading, error: store.serverMonitoringError)
     }
 
     private func summaryCard(_ title: String, value: String, symbol: String) -> some View {

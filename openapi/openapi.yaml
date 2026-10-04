@@ -14,6 +14,65 @@ servers:
 security:
   - BearerAuth: []
 paths:
+  "/overview":
+    get:
+      operationId: getOverview
+      summary: Read full dashboard summary and actionable issues
+      responses:
+        '200':
+          description: Monitoring overview
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/OverviewResponse"
+        '400':
+          "$ref": "#/components/responses/Error"
+  "/overview/history":
+    get:
+      operationId: getOverviewHistory
+      summary: Read rolling monitoring history (24h, 7d, 30d; legacy today)
+      responses:
+        '200':
+          description: Monitoring overview
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/OverviewHistory"
+        '400':
+          "$ref": "#/components/responses/Error"
+        '404':
+          "$ref": "#/components/responses/Error"
+      x-swift-include-optional-query: true
+      parameters:
+      - name: range
+        description: Rolling elapsed time (24h, 7d, 30d), with hourly or 24-hour buckets anchored at window start. Legacy today uses local midnight.
+        in: query
+        required: true
+        schema:
+          type: string
+          enum:
+          - 24h
+          - today
+          - 7d
+          - 30d
+      - name: timezone
+        in: query
+        required: true
+        schema:
+          type: string
+      - name: node_id
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: source
+        in: query
+        required: false
+        schema:
+          type: string
+          enum:
+          - users
+          - network
   /nodes:
     get:
       operationId: listNodes
@@ -456,6 +515,27 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/JobDetailResponse' }
         '404': { $ref: '#/components/responses/Error' }
+  /jobs/{id}/retry:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    post:
+      operationId: retryJob
+      summary: Retry a failed job with an explicit link to its prior attempt
+      description: Supports SSH test, deployment/sync and rollback. Active duplicate requests return the same retry. Retry success resolves only the linked failure reminders.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Revision' }
+      responses:
+        '202':
+          description: Linked retry queued or already active
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/JobReceipt' }
+        '400': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
   /jobs/{id}/events:
     parameters:
       - $ref: '#/components/parameters/Id'
@@ -967,6 +1047,8 @@ components:
         node_name:
           type: [string, 'null']
           description: Node name captured when the job was created; retained after node rename or deletion.
+        retry_of_job_id: { type: [string, 'null'], description: Prior failed or unsuccessful retry attempt. }
+        retry_job_id: { type: [string, 'null'], description: Direct retry attempt, when present. }
         target_revision: { type: [integer, 'null'] }
         status: { type: string }
         stage: { type: string }
@@ -1232,3 +1314,274 @@ components:
         id: { type: string, format: uuid }
         label: { type: string }
         token: { type: string, description: One-time plaintext administrator bearer token. }
+    OverviewIssue:
+      type: object
+      required:
+      - id
+      - entity_type
+      - entity_id
+      - name
+      - kind
+      - severity
+      - reason
+      - occurred_at
+      properties:
+        id:
+          type: string
+        entity_type:
+          type: string
+        entity_id:
+          type: string
+        name:
+          type: string
+        kind:
+          type: string
+        severity:
+          type: integer
+          format: int64
+        reason:
+          type: string
+        occurred_at:
+          type:
+          - string
+          - 'null'
+    OverviewNode:
+      type: object
+      required:
+      - node_id
+      - name
+      - deployment_state
+      - online_status
+      - online_users
+      - connections
+      - online_sampled_at
+      - probe_status
+      - inlet_status
+      - probe_sampled_at
+      - latency_ms
+      - connection_ms
+      - external_status
+      - reason
+      properties:
+        node_id:
+          type: string
+        name:
+          type: string
+        deployment_state:
+          type: string
+        online_status:
+          type: string
+        online_users:
+          type:
+          - integer
+          - 'null'
+          format: int64
+        connections:
+          type:
+          - integer
+          - 'null'
+          format: int64
+        online_sampled_at:
+          type:
+          - string
+          - 'null'
+        probe_status:
+          type: string
+        inlet_status:
+          type: string
+        probe_sampled_at:
+          type:
+          - string
+          - 'null'
+        latency_ms:
+          type:
+          - number
+          - 'null'
+        connection_ms:
+          type:
+          - number
+          - 'null'
+        external_status:
+          type:
+          - string
+          - 'null'
+        reason:
+          type:
+          - string
+          - 'null'
+    OverviewResponse:
+      type: object
+      required:
+      - generated_at
+      - node_count
+      - node_states
+      - attention_nodes
+      - risk_nodes
+      - queued_jobs
+      - running_jobs
+      - failed_jobs_24h
+      - online_users
+      - connections
+      - eligible_nodes
+      - covered_nodes
+      - issues
+      - nodes
+      - quota_rank
+      properties:
+        generated_at:
+          type: string
+        node_count:
+          type: integer
+          format: int64
+        node_states:
+          type: object
+          additionalProperties:
+            type: integer
+            format: int64
+        attention_nodes:
+          type: integer
+          format: int64
+        risk_nodes:
+          type: integer
+          format: int64
+        queued_jobs:
+          type: integer
+          format: int64
+        running_jobs:
+          type: integer
+          format: int64
+        failed_jobs_24h:
+          type: integer
+          format: int64
+        online_users:
+          type:
+          - integer
+          - 'null'
+          format: int64
+        connections:
+          type:
+          - integer
+          - 'null'
+          format: int64
+        eligible_nodes:
+          type: integer
+          format: int64
+        covered_nodes:
+          type: integer
+          format: int64
+        issues:
+          type: array
+          items:
+            "$ref": "#/components/schemas/OverviewIssue"
+        nodes:
+          type: array
+          items:
+            "$ref": "#/components/schemas/OverviewNode"
+        quota_rank:
+          type: array
+          items:
+            "$ref": "#/components/schemas/NodeSummary"
+    OverviewBucket:
+      type: object
+      required:
+      - start
+      - end
+      - tx_bytes
+      - rx_bytes
+      - incomplete
+      - traffic_covered_nodes
+      - traffic_expected_nodes
+      - online_incomplete
+      - missing_reason
+      - online_users_avg
+      - online_users_peak
+      - connections_avg
+      - connections_peak
+      - covered_nodes
+      - probe_attempts
+      - probe_successes
+      - latency_p50_ms
+      - latency_p95_ms
+      properties:
+        start:
+          type: string
+        end:
+          type: string
+        tx_bytes:
+          type:
+          - integer
+          - 'null'
+          format: int64
+        rx_bytes:
+          type:
+          - integer
+          - 'null'
+          format: int64
+        incomplete:
+          type: boolean
+        traffic_covered_nodes:
+          type: integer
+          format: int64
+        traffic_expected_nodes:
+          type: integer
+          format: int64
+        online_incomplete:
+          type: boolean
+        missing_reason:
+          type:
+          - string
+          - 'null'
+        online_users_avg:
+          type:
+          - number
+          - 'null'
+        online_users_peak:
+          type:
+          - number
+          - 'null'
+        connections_avg:
+          type:
+          - number
+          - 'null'
+        connections_peak:
+          type:
+          - number
+          - 'null'
+        covered_nodes:
+          type: integer
+          format: int64
+        probe_attempts:
+          type: integer
+          format: int64
+        probe_successes:
+          type: integer
+          format: int64
+        latency_p50_ms:
+          type:
+          - number
+          - 'null'
+        latency_p95_ms:
+          type:
+          - number
+          - 'null'
+    OverviewHistory:
+      type: object
+      required:
+      - generated_at
+      - range
+      - timezone
+      - source
+      - buckets
+      properties:
+        generated_at:
+          type: string
+        range:
+          type: string
+        timezone:
+          type: string
+        source:
+          type: string
+        buckets:
+          type: array
+          items:
+            "$ref": "#/components/schemas/OverviewBucket"

@@ -373,6 +373,10 @@ struct APIOperation<Request: Sendable, Response: Sendable>: Sendable {
 }
 
 enum APIEndpoints {
+    static let getOverview: APIOperation<NoRequest, OverviewResponse> = APIOperation<NoRequest, OverviewResponse>(method: "GET", path: "api/v1/overview", queryParameters: [:])
+    static func getOverviewHistory(range: String, timezone: String, nodeID: String? = nil, source: String? = nil) -> APIOperation<NoRequest, OverviewHistory> {
+        APIOperation(method: "GET", path: "api/v1/overview/history", queryParameters: ["range": range, "timezone": timezone, "node_id": nodeID.map { String($0) }, "source": source.map { String($0) }].compactMapValues { $0 })
+    }
     static let listNodes: APIOperation<NoRequest, [NodeSummary]> = APIOperation<NoRequest, [NodeSummary]>(method: "GET", path: "api/v1/nodes", queryParameters: [:])
     static let createNode: APIOperation<NodeCreateRequest, CreatedEntity> = APIOperation<NodeCreateRequest, CreatedEntity>(method: "POST", path: "api/v1/nodes", queryParameters: [:])
     static func getNode(id: String) -> APIOperation<NoRequest, NodeDetail> {
@@ -448,6 +452,9 @@ enum APIEndpoints {
     static let getAPIVersion: APIOperation<NoRequest, APIVersion> = APIOperation<NoRequest, APIVersion>(method: "GET", path: "api/v1/version", queryParameters: [:])
     static func getJob(id: String) -> APIOperation<NoRequest, JobDetailResponse> {
         APIOperation(method: "GET", path: "api/v1/jobs/\(id)", queryParameters: [:])
+    }
+    static func retryJob(id: String) -> APIOperation<RevisionRequest, JobReceipt> {
+        APIOperation(method: "POST", path: "api/v1/jobs/\(id)/retry", queryParameters: [:])
     }
     static func streamJobEvents(id: String) -> APIOperation<NoRequest, NoResponse> {
         APIOperation(method: "GET", path: "api/v1/jobs/\(id)/events", queryParameters: [:])

@@ -1,0 +1,37 @@
+[
+  {
+    "frames" : 96,
+    "mean_layout_ms" : 4.5284101666666654,
+    "mean_layout_render_ms" : 14.412845458333322,
+    "name" : "overview_after",
+    "p95_layout_render_ms" : 16.439499999999999
+  },
+  {
+    "frames" : 96,
+    "mean_layout_ms" : 4.1819774166666672,
+    "mean_layout_render_ms" : 12.730675750000003,
+    "name" : "traffic_after",
+    "p95_layout_render_ms" : 13.99
+  },
+  {
+    "frames" : 96,
+    "mean_layout_ms" : 5.6915373333333328,
+    "mean_layout_render_ms" : 20.379786010416673,
+    "name" : "quality_after",
+    "p95_layout_render_ms" : 23.504041999999998
+  },
+  {
+    "frames" : 96,
+    "mean_layout_ms" : 5.4704822083333324,
+    "mean_layout_render_ms" : 31.599318947916668,
+    "name" : "jobs_after",
+    "p95_layout_render_ms" : 37.849083
+  },
+  {
+    "frames" : 96,
+    "mean_layout_ms" : 4.4667226250000009,
+    "mean_layout_render_ms" : 14.211084145833334,
+    "name" : "overview_after_repeat",
+    "p95_layout_render_ms" : 15.962541
+  }
+]

@@ -2,6 +2,8 @@ import SwiftUI
 
 struct NodesView: View {
     @Bindable var store: ManagementStore
+    var initialSelection: String? = nil
+    var onInitialSelectionHandled: () -> Void = {}
     @State private var showingAddNode = false
     @State private var configurationNode: NodeSummary?
     @State private var serverConfigurationNode: NodeSummary?
@@ -70,6 +72,12 @@ struct NodesView: View {
                     Text(node.pendingRevocations.map(String.init) ?? "—")
                         .foregroundStyle((node.pendingRevocations ?? 0) > 0 ? Color.orange : Color.gray)
                 }
+            }
+            .task(id: initialSelection) {
+                guard let initialSelection else { return }
+                searchText = ""
+                selection = initialSelection
+                onInitialSelectionHandled()
             }
             .overlay {
                 if store.nodes.isEmpty {

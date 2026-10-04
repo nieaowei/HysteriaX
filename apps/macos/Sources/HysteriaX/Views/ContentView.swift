@@ -45,6 +45,7 @@ private enum MainSection: String, CaseIterable, Identifiable {
 struct ContentView: View {
     @Bindable var store: ManagementStore
     @SceneStorage("selectedSection") private var selectedSection = MainSection.overview.rawValue
+    @State private var overviewDestination: OverviewDestination?
     @Environment(\.openSettings) private var openSettings
 
     private var selection: Binding<String> {
@@ -99,7 +100,7 @@ struct ContentView: View {
                 .navigationSubtitle(currentPageDescription)
                 .toolbar {
                     ToolbarItemGroup {
-                        Button { Task { await store.refresh() } } label: {
+                        Button { Task { await store.refresh(); store.requestOverviewHistoryRefresh() } } label: {
                             Label("刷新", systemImage: "arrow.clockwise")
                         }
                         .disabled(store.isLoading)
@@ -120,10 +121,13 @@ struct ContentView: View {
     @ViewBuilder
     private var detail: some View {
         switch currentSection {
-        case .overview: OverviewView(store: store)
-        case .nodes: NodesView(store: store)
-        case .users: UsersView(store: store)
-        case .jobs: JobsView(store: store)
+        case .overview: OverviewView(store: store) { destination in
+            overviewDestination = destination
+            selectedSection = destination.section
+        }
+        case .nodes: NodesView(store: store, initialSelection: overviewDestination?.section == "nodes" ? overviewDestination?.entityID : nil, onInitialSelectionHandled: { overviewDestination = nil })
+        case .users: UsersView(store: store, initialSelection: overviewDestination?.section == "users" ? overviewDestination?.entityID : nil, onInitialSelectionHandled: { overviewDestination = nil })
+        case .jobs: JobsView(store: store, initialSelection: overviewDestination?.section == "jobs" ? overviewDestination?.entityID : nil, onInitialSelectionHandled: { overviewDestination = nil })
         case .audit: AuditView(store: store)
         }
     }

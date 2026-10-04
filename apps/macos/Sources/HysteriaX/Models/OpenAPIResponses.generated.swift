@@ -258,6 +258,8 @@ struct JobSummary: Codable, Sendable, Identifiable {
     let kind: String
     let nodeID: String?
     let nodeName: String?
+    let retryOfJobId: String?
+    let retryJobId: String?
     let targetRevision: Int?
     let status: String
     let stage: String
@@ -273,6 +275,8 @@ struct JobSummary: Codable, Sendable, Identifiable {
         case kind
         case nodeID = "node_id"
         case nodeName = "node_name"
+        case retryOfJobId = "retry_of_job_id"
+        case retryJobId = "retry_job_id"
         case targetRevision = "target_revision"
         case status
         case stage
@@ -720,5 +724,155 @@ struct ServerMonitoring: Codable, Sendable {
         case memoryTotalBytes = "memory_total_bytes"
         case rootDiskUsedBytes = "root_disk_used_bytes"
         case rootDiskTotalBytes = "root_disk_total_bytes"
+    }
+}
+
+struct OverviewIssue: Codable, Sendable {
+    let id: String
+    let entityType: String
+    let entityID: String
+    let name: String
+    let kind: String
+    let severity: Int64
+    let reason: String
+    let occurredAt: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case entityType = "entity_type"
+        case entityID = "entity_id"
+        case name
+        case kind
+        case severity
+        case reason
+        case occurredAt = "occurred_at"
+    }
+}
+
+struct OverviewNode: Codable, Sendable {
+    let nodeID: String
+    let name: String
+    let deploymentState: String
+    let onlineStatus: String
+    let onlineUsers: Int64?
+    let connections: Int64?
+    let onlineSampledAt: String?
+    let probeStatus: String
+    let inletStatus: String
+    let probeSampledAt: String?
+    let latencyMs: Double?
+    let connectionMs: Double?
+    let externalStatus: String?
+    let reason: String?
+
+    enum CodingKeys: String, CodingKey {
+        case nodeID = "node_id"
+        case name
+        case deploymentState = "deployment_state"
+        case onlineStatus = "online_status"
+        case onlineUsers = "online_users"
+        case connections
+        case onlineSampledAt = "online_sampled_at"
+        case probeStatus = "probe_status"
+        case inletStatus = "inlet_status"
+        case probeSampledAt = "probe_sampled_at"
+        case latencyMs = "latency_ms"
+        case connectionMs = "connection_ms"
+        case externalStatus = "external_status"
+        case reason
+    }
+}
+
+struct OverviewResponse: Codable, Sendable {
+    let generatedAt: String
+    let nodeCount: Int64
+    let nodeStates: [String: JSONValue]
+    let attentionNodes: Int64
+    let riskNodes: Int64
+    let queuedJobs: Int64
+    let runningJobs: Int64
+    let failedJobs24h: Int64
+    let onlineUsers: Int64?
+    let connections: Int64?
+    let eligibleNodes: Int64
+    let coveredNodes: Int64
+    let issues: [OverviewIssue]
+    let nodes: [OverviewNode]
+    let quotaRank: [NodeSummary]
+
+    enum CodingKeys: String, CodingKey {
+        case generatedAt = "generated_at"
+        case nodeCount = "node_count"
+        case nodeStates = "node_states"
+        case attentionNodes = "attention_nodes"
+        case riskNodes = "risk_nodes"
+        case queuedJobs = "queued_jobs"
+        case runningJobs = "running_jobs"
+        case failedJobs24h = "failed_jobs_24h"
+        case onlineUsers = "online_users"
+        case connections
+        case eligibleNodes = "eligible_nodes"
+        case coveredNodes = "covered_nodes"
+        case issues
+        case nodes
+        case quotaRank = "quota_rank"
+    }
+}
+
+struct OverviewBucket: Codable, Sendable {
+    let start: String
+    let end: String
+    let txBytes: Int64?
+    let rxBytes: Int64?
+    let incomplete: Bool
+    let trafficCoveredNodes: Int64
+    let trafficExpectedNodes: Int64
+    let onlineIncomplete: Bool
+    let missingReason: String?
+    let onlineUsersAvg: Double?
+    let onlineUsersPeak: Double?
+    let connectionsAvg: Double?
+    let connectionsPeak: Double?
+    let coveredNodes: Int64
+    let probeAttempts: Int64
+    let probeSuccesses: Int64
+    let latencyP50Ms: Double?
+    let latencyP95Ms: Double?
+
+    enum CodingKeys: String, CodingKey {
+        case start
+        case end
+        case txBytes = "tx_bytes"
+        case rxBytes = "rx_bytes"
+        case incomplete
+        case trafficCoveredNodes = "traffic_covered_nodes"
+        case trafficExpectedNodes = "traffic_expected_nodes"
+        case onlineIncomplete = "online_incomplete"
+        case missingReason = "missing_reason"
+        case onlineUsersAvg = "online_users_avg"
+        case onlineUsersPeak = "online_users_peak"
+        case connectionsAvg = "connections_avg"
+        case connectionsPeak = "connections_peak"
+        case coveredNodes = "covered_nodes"
+        case probeAttempts = "probe_attempts"
+        case probeSuccesses = "probe_successes"
+        case latencyP50Ms = "latency_p50_ms"
+        case latencyP95Ms = "latency_p95_ms"
+    }
+}
+
+struct OverviewHistory: Codable, Sendable {
+    let generatedAt: String
+    let range: String
+    let timezone: String
+    let source: String
+    let buckets: [OverviewBucket]
+
+    enum CodingKeys: String, CodingKey {
+        case generatedAt = "generated_at"
+        case range
+        case timezone
+        case source
+        case buckets
     }
 }

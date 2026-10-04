@@ -382,6 +382,21 @@ pub async fn hy2_auth(
             id: format!("probe-{node_id}"),
         }));
     }
+    let monitor_hash: Option<String> = sqlx::query_scalar(
+        "SELECT token_hash FROM monitoring_probe_tokens WHERE node_id = $1 AND expires_at > now()",
+    )
+    .bind(&node_id)
+    .fetch_optional(&state.pool)
+    .await?;
+    if monitor_hash.is_some_and(|expected| {
+        expected.len() == auth_hash.len()
+            && bool::from(expected.as_bytes().ct_eq(auth_hash.as_bytes()))
+    }) {
+        return Ok(Json(AuthResponse {
+            ok: true,
+            id: format!("monitor-{node_id}"),
+        }));
+    }
     if crate::node_limits::restricted(&state.pool, &node_id)
         .await
         .map_err(|_| ApiError::internal())?

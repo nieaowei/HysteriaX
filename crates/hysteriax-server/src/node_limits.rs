@@ -445,7 +445,7 @@ pub async fn collect(state: AppState) {
     loop {
         tokio::select! {
             _ = tick.tick() => {
-                let ids = sqlx::query_scalar::<_, String>("SELECT n.id FROM nodes n JOIN node_packages p ON n.id = p.node_id WHERE p.config->>'quota_bytes' IS NOT NULL AND n.state NOT IN ('deleting','delete_failed')").fetch_all(&state.pool).await;
+                let ids = sqlx::query_scalar::<_, String>("SELECT n.id FROM nodes n JOIN node_packages p ON n.id = p.node_id WHERE (n.deployed_revision IS NOT NULL OR p.config->>'quota_bytes' IS NOT NULL) AND n.state NOT IN ('deleting','delete_failed')").fetch_all(&state.pool).await;
                 match ids {
                     Ok(ids) => for id in ids {
                         if !inflight.insert(id.clone()) { continue; }
@@ -579,8 +579,8 @@ async fn apply_sample(
         .saturating_add(package.charged(tx_delta, rx_delta));
     sqlx::query("UPDATE node_packages SET usage_bytes=$1, boot_id=$2, interface=$3, tx_total=$4, rx_total=$5, sampled_at=$6, gap_reason=$7 WHERE node_id=$8")
         .bind(usage).bind(sample.boot).bind(sample.interface).bind(sample.tx).bind(sample.rx).bind(now).bind(gap).bind(id).execute(&mut *tx).await?;
-    sqlx::query("INSERT INTO node_network_samples(node_id,period_id,delta_tx,delta_rx,gap_reason,sampled_at) VALUES ($1,$2,$3,$4,$5,$6)")
-        .bind(id).bind(row.get::<String,_>("period_id")).bind(tx_delta).bind(rx_delta).bind(gap).bind(now).execute(&mut *tx).await?;
+    sqlx::query("INSERT INTO node_network_samples(node_id,period_id,delta_tx,delta_rx,gap_reason,sampled_at,baseline_only) VALUES ($1,$2,$3,$4,$5,$6,$7)")
+        .bind(id).bind(row.get::<String,_>("period_id")).bind(tx_delta).bind(rx_delta).bind(gap).bind(now).bind(row.get::<Option<String>,_>("boot_id").is_none()).execute(&mut *tx).await?;
     evaluate(&mut tx, id, now).await?;
     tx.commit().await?;
     Ok(())

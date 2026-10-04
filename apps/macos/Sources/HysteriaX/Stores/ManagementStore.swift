@@ -8,6 +8,7 @@ private struct ClientDisplaySnapshot: Codable {
     let auditRecords: [AuditSummary]
     let updatedAt: Date
     let serverMonitoring: ServerMonitoring?
+    let overview: OverviewResponse?
 }
 
 @MainActor
@@ -22,6 +23,15 @@ final class ManagementStore {
     var currentAdminTokenID: String?
     var serverMonitoring: ServerMonitoring?
     var serverMonitoringError: String?
+    var overview: OverviewResponse?
+    var overviewError: String?
+    var overviewHistoryRefreshToken = UUID()
+    var supportsOverviewMonitoring = false
+    var supportsJobRetryLinks = false
+    private let nodeNotifications: NodeAlertNotifications?
+    private var historyCache: [String: OverviewHistory] = [:]
+    private var serviceGeneration = UUID()
+    private var overviewRequestGeneration = UUID()
     var supportsNodePackages = false
     var isConnected = false
     var isLoading = false
@@ -35,9 +45,13 @@ final class ManagementStore {
         UserDefaults.standard.string(forKey: "lastEventID.\(serviceAddress)")
     }
 
-    init() {
+    init(client: APIClient? = nil, restoreSnapshot: Bool = true, nodeNotifications: NodeAlertNotifications? = nil) {
+        self.nodeNotifications = nodeNotifications
+        api = client
+        guard restoreSnapshot else { return }
         restoreDisplaySnapshot()
         currentAdminTokenID = UserDefaults.standard.string(forKey: adminTokenIDKey)
+        guard client == nil else { return }
         if let token = KeychainStore.readToken(), let url = URL(string: serviceAddress), url.scheme == "https" {
             let client = APIClient(baseURL: url, token: token)
             api = client
@@ -48,13 +62,13 @@ final class ManagementStore {
         }
     }
 
-    func connect(serviceAddress: String, token: String) async throws {
+    func connect(serviceAddress: String, token: String, session: URLSession? = nil) async throws {
         guard let url = URL(string: serviceAddress.trimmingCharacters(in: .whitespacesAndNewlines)),
               url.scheme == "https", url.host != nil else { throw APIClientError.invalidBaseURL }
         let previousToken = KeychainStore.readToken()
         eventTask?.cancel()
         refreshTask?.cancel()
-        let client = APIClient(baseURL: url, token: token)
+        let client = APIClient(baseURL: url, token: token, session: session)
         let _: APIHealth = try await client.get(APIEndpoints.readinessCheck)
         let version: APIVersion = try await client.get(APIEndpoints.getAPIVersion)
         guard version.apiVersion == "1.0.0" else { throw APIClientError.incompatibleAPI(version.apiVersion) }
@@ -62,7 +76,14 @@ final class ManagementStore {
         let serviceChanged = normalizedAddress != self.serviceAddress
         let tokenChanged = previousToken != token
         try KeychainStore.saveToken(token)
+        serviceGeneration = UUID()
+        overviewRequestGeneration = UUID()
         if serviceChanged {
+            historyCache = [:]
+            overview = nil
+            overviewError = nil
+            supportsOverviewMonitoring = false
+            supportsJobRetryLinks = false
             serverMonitoring = nil
             serverMonitoringError = nil
             nodes = []
@@ -82,37 +103,88 @@ final class ManagementStore {
         api = client
         isConnected = false
         restoreDisplaySnapshot()
+        let connectionGeneration = serviceGeneration
         do {
             try await loadData(using: client)
+            guard connectionGeneration == serviceGeneration else { throw CancellationError() }
             isConnected = true
             errorMessage = nil
-            await NodeAlertNotifications.shared.deliver(nodes: nodes, service: serviceAddress)
+            await (nodeNotifications ?? .shared).deliver(nodes: nodes, service: serviceAddress)
         } catch {
+            guard connectionGeneration == serviceGeneration else { throw CancellationError() }
             isConnected = false
             errorMessage = error.localizedDescription
             throw error
         }
         supportsNodePackages = version.features?.contains("node_packages") == true
+        supportsOverviewMonitoring = version.features?.contains("overview_monitoring") == true
+        supportsJobRetryLinks = version.features?.contains("job_retry_links") == true
+        await refreshOverview()
         startEventUpdates(using: client)
     }
 
     func refresh() async {
         guard let api else { isConnected = false; return }
+        let refreshGeneration = serviceGeneration
         isLoading = true
-        defer { isLoading = false }
+        defer { if refreshGeneration == serviceGeneration { isLoading = false } }
         do {
             let version: APIVersion = try await api.get(APIEndpoints.getAPIVersion)
             guard version.apiVersion == "1.0.0" else { throw APIClientError.incompatibleAPI(version.apiVersion) }
             try await loadData(using: api)
+            guard refreshGeneration == serviceGeneration, !Task.isCancelled else { return }
             supportsNodePackages = version.features?.contains("node_packages") == true
+            supportsOverviewMonitoring = version.features?.contains("overview_monitoring") == true
+            supportsJobRetryLinks = version.features?.contains("job_retry_links") == true
             isConnected = true
             errorMessage = nil
-            await NodeAlertNotifications.shared.deliver(nodes: nodes, service: serviceAddress)
+            await (nodeNotifications ?? .shared).deliver(nodes: nodes, service: serviceAddress)
+            await refreshOverview()
         } catch {
+            guard refreshGeneration == serviceGeneration, !Task.isCancelled else { return }
             isConnected = false
             errorMessage = error.localizedDescription
         }
     }
+
+    func refreshOverview() async {
+        guard supportsOverviewMonitoring else { overview = nil; overviewError = nil; return }
+        guard let api else { return }
+        let generation = serviceGeneration
+        let request = UUID()
+        overviewRequestGeneration = request
+        do {
+            let value = try await api.get(APIEndpoints.getOverview)
+            guard generation == serviceGeneration, request == overviewRequestGeneration, !Task.isCancelled else { return }
+            overview = value
+            overviewError = nil
+            let snapshot = ClientDisplaySnapshot(nodes: nodes, users: users, jobs: jobs, auditRecords: auditRecords, updatedAt: lastUpdated ?? Date(), serverMonitoring: serverMonitoring, overview: value)
+            if let data = try? JSONEncoder().encode(snapshot) { UserDefaults.standard.set(data, forKey: displaySnapshotKey) }
+        } catch {
+            guard generation == serviceGeneration, request == overviewRequestGeneration, !Task.isCancelled else { return }
+            overviewError = "概览监控暂不可用：\(error.localizedDescription)"
+        }
+    }
+
+    func overviewHistory(range: String, nodeID: String?, source: String) async throws -> OverviewHistory {
+        let client = try requireConnectedAPI()
+        let generation = serviceGeneration
+        let value = try await client.get(APIEndpoints.getOverviewHistory(range: range, timezone: TimeZone.current.identifier, nodeID: nodeID, source: source))
+        guard generation == serviceGeneration, !Task.isCancelled else { throw CancellationError() }
+        cacheOverviewHistory(value, nodeID: nodeID)
+        return value
+    }
+
+    func cacheOverviewHistory(_ value: OverviewHistory, nodeID: String?) {
+        let key = historyKey(range: value.range, nodeID: nodeID, source: value.source)
+        historyCache[key] = value
+        if historyCache.count > 16, let oldest = historyCache.min(by: { $0.value.generatedAt < $1.value.generatedAt })?.key { historyCache.removeValue(forKey: oldest) }
+        if let data = try? JSONEncoder().encode(historyCache) { UserDefaults.standard.set(data, forKey: "overviewHistory.\(serviceAddress)") }
+    }
+
+    private func historyKey(range: String, nodeID: String?, source: String) -> String { "rolling-v1|\(TimeZone.current.identifier)|\(range)|\(nodeID ?? "all")|\(source)" }
+    func requestOverviewHistoryRefresh() { overviewHistoryRefreshToken = UUID() }
+    func cachedOverviewHistory(range: String, nodeID: String?, source: String) -> OverviewHistory? { historyCache[historyKey(range: range, nodeID: nodeID, source: source)] }
 
     func createNode(_ request: NodeCreateRequest) async throws -> CreatedEntity {
         let api = try requireConnectedAPI()
@@ -150,6 +222,13 @@ final class ManagementStore {
     func nodeDetail(_ nodeID: String) async throws -> NodeDetail {
         let api = try requireConnectedAPI()
         return try await api.get(APIEndpoints.getNode(id: nodeID))
+    }
+
+    func retryJob(_ job: JobSummary, on node: NodeSummary) async throws {
+        let client = try requireConnectedAPI()
+        guard supportsJobRetryLinks else { throw APIClientError.server("请先更新管理服务以支持关联重试。") }
+        let _: JobReceipt = try await client.post(APIEndpoints.retryJob(id: job.id), body: RevisionRequest(expectedRevision: node.revision))
+        await refresh()
     }
 
     func jobDetail(_ jobID: String) async throws -> JobDetailResponse {
@@ -424,7 +503,7 @@ final class ManagementStore {
             try await loadData(using: nextAPI)
             isConnected = true
             errorMessage = nil
-            await NodeAlertNotifications.shared.deliver(nodes: nodes, service: serviceAddress)
+            await (nodeNotifications ?? .shared).deliver(nodes: nodes, service: serviceAddress)
         } catch {
             isConnected = false
             errorMessage = "新令牌已保存并切换，但服务暂不可用：\(error.localizedDescription)"
@@ -446,6 +525,7 @@ final class ManagementStore {
     }
 
     private func loadData(using client: APIClient) async throws {
+        let generation = serviceGeneration
         async let loadedMonitoring = fetchServerMonitoring(using: client)
         async let loadedNodes: [NodeSummary] = client.get(APIEndpoints.listNodes)
         async let loadedUsers: [UserSummary] = client.get(APIEndpoints.listUsers)
@@ -460,8 +540,10 @@ final class ManagementStore {
             jobs: loadedJobs,
             auditRecords: loadedAudit,
             updatedAt: Date(),
-            serverMonitoring: monitoring.value ?? serverMonitoring
+            serverMonitoring: monitoring.value ?? serverMonitoring,
+            overview: overview
         )
+        guard generation == serviceGeneration, !Task.isCancelled else { throw CancellationError() }
         serverMonitoring = snapshot.serverMonitoring
         serverMonitoringError = monitoring.error
         nodes = snapshot.nodes
@@ -487,6 +569,7 @@ final class ManagementStore {
     private var adminTokenIDKey: String { "currentAdminTokenID.\(serviceAddress)" }
 
     private func restoreDisplaySnapshot() {
+        if let data = UserDefaults.standard.data(forKey: "overviewHistory.\(serviceAddress)"), let values = try? JSONDecoder().decode([String: OverviewHistory].self, from: data) { historyCache = values }
         guard let data = UserDefaults.standard.data(forKey: displaySnapshotKey),
               let snapshot = try? JSONDecoder().decode(ClientDisplaySnapshot.self, from: data) else { return }
         nodes = snapshot.nodes
@@ -494,6 +577,8 @@ final class ManagementStore {
         jobs = snapshot.jobs
         auditRecords = snapshot.auditRecords
         serverMonitoring = snapshot.serverMonitoring
+        overview = snapshot.overview
+        supportsOverviewMonitoring = snapshot.overview != nil
         lastUpdated = snapshot.updatedAt
     }
 

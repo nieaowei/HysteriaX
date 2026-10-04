@@ -1,0 +1,52 @@
+[
+  {
+    "active_measurements" : 455,
+    "date_parses" : 170,
+    "frames" : 96,
+    "hidden_measurements" : 775,
+    "mean_layout_ms" : 95.075631020833342,
+    "mean_layout_render_ms" : 105.69723568749998,
+    "name" : "overview_all_tabs",
+    "p95_layout_render_ms" : 139.410459
+  },
+  {
+    "active_measurements" : 443,
+    "date_parses" : 164,
+    "frames" : 96,
+    "hidden_measurements" : 0,
+    "mean_layout_ms" : 51.746050750000002,
+    "mean_layout_render_ms" : 61.392881895833334,
+    "name" : "overview_selected_tab_only",
+    "p95_layout_render_ms" : 76.584083000000007
+  },
+  {
+    "active_measurements" : 0,
+    "date_parses" : 0,
+    "frames" : 96,
+    "hidden_measurements" : 0,
+    "mean_layout_ms" : 5.3268845625000001,
+    "mean_layout_render_ms" : 31.158846354166645,
+    "name" : "jobs",
+    "p95_layout_render_ms" : 37.140208000000001
+  },
+  {
+    "active_measurements" : 443,
+    "date_parses" : 164,
+    "frames" : 96,
+    "hidden_measurements" : 0,
+    "mean_layout_ms" : 52.057226125,
+    "mean_layout_render_ms" : 61.64803646875,
+    "name" : "overview_selected_tab_only_repeat",
+    "p95_layout_render_ms" : 78.838166999999999
+  },
+  {
+    "active_measurements" : 455,
+    "date_parses" : 170,
+    "frames" : 96,
+    "hidden_measurements" : 775,
+    "mean_layout_ms" : 96.909214843749979,
+    "mean_layout_render_ms" : 107.32248129166668,
+    "name" : "overview_all_tabs_repeat",
+    "p95_layout_render_ms" : 138.39462499999999
+  }
+]

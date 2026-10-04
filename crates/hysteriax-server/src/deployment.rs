@@ -859,7 +859,10 @@ async fn run_proxy_probe(
     }))
 }
 
-fn client_ech_config(options: &Value, resource_files: &[ResourceFile]) -> Result<Option<String>> {
+pub(crate) fn client_ech_config(
+    options: &Value,
+    resource_files: &[ResourceFile],
+) -> Result<Option<String>> {
     let Some(key_path) = options.pointer("/ech/keyPath").and_then(Value::as_str) else {
         return Ok(None);
     };
@@ -932,7 +935,7 @@ fn loopback_server_address(listen_addr: &str) -> Result<String> {
     Ok(format!("{host}:{port}"))
 }
 
-fn deployment_probe_server_config(
+pub(crate) fn deployment_probe_server_config(
     options: &Value,
     listen_addr: &str,
 ) -> Result<(String, Option<Value>)> {

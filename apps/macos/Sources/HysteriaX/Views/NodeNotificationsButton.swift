@@ -2,6 +2,7 @@ import SwiftUI
 
 struct NodeNotificationsButton: View {
     @Bindable var store: ManagementStore
+    var navigate: (OverviewDestination) -> Void = { _ in }
     @State private var isPresented = false
 
     private var notificationNodes: [NodeSummary] {
@@ -15,8 +16,10 @@ struct NodeNotificationsButton: View {
         }
     }
 
+    private var monitoringIssues: [OverviewIssue] { store.overview?.issues.filter { $0.kind != "package" } ?? [] }
+
     private var notificationCount: Int {
-        notificationNodes.reduce(0) { $0 + max($1.packageUsage?.alerts.count ?? 0, 1) }
+        notificationNodes.reduce(0) { $0 + max($1.packageUsage?.alerts.count ?? 0, 1) } + monitoringIssues.count
     }
 
     var body: some View {
@@ -61,7 +64,19 @@ struct NodeNotificationsButton: View {
                         .font(.caption).foregroundStyle(.secondary)
                         .padding(.horizontal, 16).padding(.top, 12)
                 }
-                if notificationNodes.isEmpty {
+                if !monitoringIssues.isEmpty {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("监控事项 \(monitoringIssues.count)").font(.subheadline.bold())
+                        ForEach(monitoringIssues.prefix(6)) { issue in
+                            Button {
+                                isPresented = false
+                                navigate(OverviewDestination(section: issue.entityType == "job" ? "jobs" : issue.entityType == "user" ? "users" : "nodes", entityID: issue.entityID))
+                            } label: { Text("\(issue.name)：\(OverviewDisplay.reason(issue))").lineLimit(2) }.buttonStyle(.plain)
+                        }
+                    }.padding(16)
+                    Divider()
+                }
+                if notificationNodes.isEmpty && monitoringIssues.isEmpty {
                     VStack(spacing: 10) {
                         Image(systemName: "bell.slash").font(.title).foregroundStyle(.secondary)
                         Text("暂无提醒").font(.headline)
@@ -70,12 +85,15 @@ struct NodeNotificationsButton: View {
                     }
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 32)
-                } else {
+                } else if !notificationNodes.isEmpty {
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 16) {
                             ForEach(notificationNodes) { node in
                                 VStack(alignment: .leading, spacing: 8) {
-                                    Label(node.name, systemImage: "server.rack").fontWeight(.semibold)
+                                    Button {
+                                        isPresented = false
+                                        navigate(OverviewDestination(section: "nodes", entityID: node.id))
+                                    } label: { Label(node.name, systemImage: "server.rack").fontWeight(.semibold) }.buttonStyle(.plain)
                                     NodePackageStatus(package: node.package, usage: node.packageUsage)
                                 }
                                 .frame(maxWidth: .infinity, alignment: .leading)

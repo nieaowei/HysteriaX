@@ -8,6 +8,7 @@ swiftc -swift-version 6 -parse-as-library \
   "$root/apps/macos/Sources/HysteriaX/Models/OpenAPIRequests.generated.swift" \
   "$root/apps/macos/Sources/HysteriaX/Models/OpenAPIResponses.generated.swift" \
   "$root/apps/macos/Sources/HysteriaX/Models/NodePackageDraft.swift" \
+  "$root/apps/macos/Sources/HysteriaX/Support/DateDisplayParser.swift" \
   "$root/apps/macos/Sources/HysteriaX/Models/ServerConfigurationDraft.swift" \
   "$root/apps/macos/Sources/HysteriaX/Services/APIClient.swift" \
   "$root/apps/macos/Sources/HysteriaX/Services/NodeAlertNotifications.swift" \

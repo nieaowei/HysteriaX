@@ -67,9 +67,32 @@ async fn collect_all(pool: &PgPool, secrets: &SecretBox) -> Result<()> {
     let rows = sqlx::query("SELECT id FROM nodes WHERE deployed_revision IS NOT NULL AND state NOT IN ('deleting', 'delete_failed') ORDER BY id")
         .fetch_all(pool)
         .await?;
+    let cycle = Uuid::new_v4();
+    let cycle_started = chrono::Utc::now();
+    let expected_nodes = rows.len() as i64;
     for row in rows {
         let node_id: String = row.get("id");
-        if let Err(error) = sample_node(pool, secrets, &node_id).await {
+        if let Err(error) = sample_node(
+            pool,
+            secrets,
+            &node_id,
+            cycle,
+            cycle_started,
+            expected_nodes,
+        )
+        .await
+        {
+            tracing::warn!(node_id, %error, "traffic sample failed");
+            crate::overview::record_online(
+                pool,
+                &node_id,
+                cycle,
+                cycle_started,
+                expected_nodes,
+                None,
+            )
+            .await?;
+            crate::overview::finish_traffic_sample(pool, &node_id, cycle, "failed").await;
             record_gap(pool, &node_id, classify_sample_error(&error)).await?;
             sqlx::query("UPDATE nodes SET state = CASE WHEN state IN ('deployed', 'syncing') THEN 'unreachable' ELSE state END, updated_at = $1 WHERE id = $2")
                 .bind(now()).bind(&node_id).execute(pool).await?;
@@ -78,7 +101,14 @@ async fn collect_all(pool: &PgPool, secrets: &SecretBox) -> Result<()> {
     Ok(())
 }
 
-async fn sample_node(pool: &PgPool, secrets: &SecretBox, node_id: &str) -> Result<()> {
+async fn sample_node(
+    pool: &PgPool,
+    secrets: &SecretBox,
+    node_id: &str,
+    cycle: Uuid,
+    cycle_started: chrono::DateTime<chrono::Utc>,
+    expected_nodes: i64,
+) -> Result<()> {
     let node = deployment::load_ssh_node(pool, secrets, node_id).await?;
     let session = match ssh::connect(&node).await? {
         FingerprintResult::Trusted(session) => session,
@@ -98,6 +128,22 @@ async fn sample_node(pool: &PgPool, secrets: &SecretBox, node_id: &str) -> Resul
     let stats_secret = secrets.decrypt(&stats_secret_enc)?;
     let traffic_stats_port =
         deployment::load_deployed_traffic_stats_port(pool, secrets, node_id).await?;
+    // Online failures are isolated from the accounting transaction.
+    let online = session
+        .loopback_http_get(u32::from(traffic_stats_port), "/online", &stats_secret)
+        .await;
+    if let Err(error) = crate::overview::record_online(
+        pool,
+        node_id,
+        cycle,
+        cycle_started,
+        expected_nodes,
+        online.ok().as_deref(),
+    )
+    .await
+    {
+        tracing::warn!(node_id, %error, "online sample could not be saved");
+    }
     let body = session
         .loopback_http_get(u32::from(traffic_stats_port), "/traffic", &stats_secret)
         .await?;
@@ -106,6 +152,7 @@ async fn sample_node(pool: &PgPool, secrets: &SecretBox, node_id: &str) -> Resul
     let after_instance = systemd_instance(&session).await?;
     if before_instance != after_instance {
         record_gap(pool, node_id, "hysteria_restarted_during_sample").await?;
+        crate::overview::finish_traffic_sample(pool, node_id, cycle, "failed").await;
         return Ok(());
     }
     let counters = traffic
@@ -115,6 +162,7 @@ async fn sample_node(pool: &PgPool, secrets: &SecretBox, node_id: &str) -> Resul
     let sampled_at = now();
     sqlx::query("UPDATE nodes SET state = CASE WHEN state = 'unreachable' THEN 'deployed' ELSE state END, last_seen_at = $1, last_sample_at = $2, updated_at = $3 WHERE id = $4")
         .bind(sampled_at).bind(sampled_at).bind(sampled_at).bind(node_id).execute(pool).await?;
+    crate::overview::finish_traffic_sample(pool, node_id, cycle, "ok").await;
     sqlx::query("UPDATE data_gaps SET resolved_at = $1 WHERE node_id = $2 AND resolved_at IS NULL")
         .bind(now())
         .bind(node_id)
@@ -182,8 +230,8 @@ async fn apply_sample(
         let new_usage = old_usage.saturating_add(delta_bytes);
         sqlx::query("INSERT INTO traffic_baselines (node_id, user_id, instance_id, tx_total, rx_total, sampled_at) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT(node_id, user_id) DO UPDATE SET instance_id = excluded.instance_id, tx_total = excluded.tx_total, rx_total = excluded.rx_total, sampled_at = excluded.sampled_at")
             .bind(node_id).bind(&user_id).bind(instance_id).bind(tx_total_i64).bind(rx_total_i64).bind(timestamp).execute(&mut *tx).await?;
-        sqlx::query("INSERT INTO traffic_records (id, node_id, user_id, instance_id, baseline_tx, baseline_rx, delta_tx, delta_rx, gap_reason, sampled_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)")
-            .bind(Uuid::new_v4().to_string()).bind(node_id).bind(&user_id).bind(instance_id).bind(tx_total_i64).bind(rx_total_i64).bind(delta_tx).bind(delta_rx).bind(delta.gap_reason).bind(timestamp).execute(&mut *tx).await?;
+        sqlx::query("INSERT INTO traffic_records (id, node_id, user_id, instance_id, baseline_tx, baseline_rx, delta_tx, delta_rx, gap_reason, sampled_at, baseline_only) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)")
+            .bind(Uuid::new_v4().to_string()).bind(node_id).bind(&user_id).bind(instance_id).bind(tx_total_i64).bind(rx_total_i64).bind(delta_tx).bind(delta_rx).bind(delta.gap_reason).bind(timestamp).bind(previous.is_none()).execute(&mut *tx).await?;
         sqlx::query("UPDATE users SET usage_bytes = $1, updated_at = $2 WHERE id = $3")
             .bind(new_usage)
             .bind(timestamp)

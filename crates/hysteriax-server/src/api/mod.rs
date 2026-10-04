@@ -1,7 +1,8 @@
+pub(crate) mod job_retries;
 pub(crate) mod nodes;
 pub(crate) mod resources;
 pub(crate) mod subscriptions;
-mod users;
+pub(crate) mod users;
 
 use std::{convert::Infallible, time::Duration};
 
@@ -69,8 +70,11 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/users/{id}/quota/reset", post(users::reset_quota))
         .route("/api/v1/jobs", get(list_jobs))
         .route("/api/v1/version", get(api_version))
+        .route("/api/v1/overview", get(crate::overview::get))
+        .route("/api/v1/overview/history", get(crate::overview::history))
         .route("/api/v1/server/monitoring", get(crate::monitoring::get))
         .route("/api/v1/jobs/{id}", get(get_job))
+        .route("/api/v1/jobs/{id}/retry", post(job_retries::retry))
         .route("/api/v1/jobs/{id}/events", get(job_events))
         .route("/api/v1/events", get(events))
         .route("/api/v1/audit", get(list_audit_records))
@@ -164,7 +168,7 @@ async fn healthz() -> Json<Value> {
 async fn api_version() -> Json<Value> {
     Json(json!({
         "api_version": "1.0.0",
-        "features": ["node_packages"],
+        "features": ["node_packages", "overview_monitoring", "job_retry_links"],
         "service_version": env!("CARGO_PKG_VERSION"),
         "hysteria_version": "app/v2.12.3",
         "mihomo_version": "v1.19.31"
@@ -280,20 +284,22 @@ struct JobSummary {
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
     finished_at: Option<DateTime<Utc>>,
+    retry_of_job_id: Option<String>,
+    retry_job_id: Option<String>,
 }
 
 async fn list_jobs(State(state): State<AppState>) -> Result<Json<Vec<JobSummary>>, ApiError> {
-    let rows = sqlx::query("SELECT id, kind, node_id, node_name, target_revision, status, stage, result_json, error_message, attempts, created_at, updated_at, finished_at FROM jobs ORDER BY created_at DESC LIMIT 200")
+    let rows = sqlx::query("SELECT j.*, (SELECT child.id FROM jobs child WHERE child.retry_of_job_id=j.id) retry_job_id FROM jobs j ORDER BY created_at DESC LIMIT 200")
         .fetch_all(&state.pool)
         .await?;
     Ok(Json(rows.iter().map(job_summary).collect()))
 }
 
-async fn get_job(
+pub(crate) async fn get_job(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
-    let row = sqlx::query("SELECT id, kind, node_id, node_name, target_revision, status, stage, result_json, error_message, logs_json, attempts, created_at, updated_at, started_at, finished_at FROM jobs WHERE id = $1")
+    let row = sqlx::query("SELECT j.*, (SELECT child.id FROM jobs child WHERE child.retry_of_job_id=j.id) retry_job_id FROM jobs j WHERE j.id = $1")
         .bind(&id).fetch_optional(&state.pool).await?.ok_or_else(|| ApiError::not_found("job"))?;
     let summary = job_summary(&row);
     let result: Option<Value> = row.get("result_json");
@@ -318,6 +324,8 @@ fn job_summary(row: &sqlx::postgres::PgRow) -> JobSummary {
         created_at: row.get("created_at"),
         updated_at: row.get("updated_at"),
         finished_at: row.get("finished_at"),
+        retry_of_job_id: row.get("retry_of_job_id"),
+        retry_job_id: row.try_get("retry_job_id").unwrap_or(None),
     }
 }
 
