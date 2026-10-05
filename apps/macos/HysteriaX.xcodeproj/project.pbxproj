@@ -51,6 +51,7 @@
 		000000000000000000002800 /* Models/SSHHostFingerprintChange.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001800 /* Models/SSHHostFingerprintChange.swift */; };
 		000000000000000000002801 /* Views/SSHHostFingerprintChangeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001801 /* Views/SSHHostFingerprintChangeView.swift */; };
 		000000000000000000002705 /* Views/CredentialManagedDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001705 /* Views/CredentialManagedDetailView.swift */; };
+		000000000000000000002900 /* Models/PublicPortDraft.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001900 /* Models/PublicPortDraft.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -99,6 +100,7 @@
 		000000000000000000001800 /* Models/SSHHostFingerprintChange.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models/SSHHostFingerprintChange.swift; sourceTree = "<group>"; };
 		000000000000000000001801 /* Views/SSHHostFingerprintChangeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/SSHHostFingerprintChangeView.swift; sourceTree = "<group>"; };
 		000000000000000000001705 /* Views/CredentialManagedDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/CredentialManagedDetailView.swift; sourceTree = "<group>"; };
+		000000000000000000001900 /* Models/PublicPortDraft.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models/PublicPortDraft.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -148,6 +150,7 @@
 				000000000000000000001007 /* Views/JobsView.swift */,
 				000000000000000000001801 /* Views/SSHHostFingerprintChangeView.swift */,
 				000000000000000000001800 /* Models/SSHHostFingerprintChange.swift */,
+				000000000000000000001900 /* Models/PublicPortDraft.swift */,
 				000000000000000000001008 /* Views/NodesView.swift */,
 				000000000000000000001009 /* Views/OverviewView.swift */,
 				00000000000000000000100A /* Views/SettingsView.swift */,
@@ -280,6 +283,7 @@
 				000000000000000000002007 /* Views/JobsView.swift in Sources */,
 				000000000000000000002801 /* Views/SSHHostFingerprintChangeView.swift in Sources */,
 				000000000000000000002800 /* Models/SSHHostFingerprintChange.swift in Sources */,
+				000000000000000000002900 /* Models/PublicPortDraft.swift in Sources */,
 				000000000000000000002008 /* Views/NodesView.swift in Sources */,
 				000000000000000000002009 /* Views/OverviewView.swift in Sources */,
 				00000000000000000000200A /* Views/SettingsView.swift in Sources */,

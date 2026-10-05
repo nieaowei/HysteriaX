@@ -263,6 +263,7 @@ final class ManagementStore {
         _ detail: NodeDetail,
         config: JSONValue,
         listenAddress: String,
+        publicPort: Int,
         trafficStatsPort: Int,
         proxyProbeURL: String,
         tlsSNI: String,
@@ -273,6 +274,7 @@ final class ManagementStore {
             APIEndpoints.updateNode(id: detail.id),
             body: NodePatchRequest(
                 expectedRevision: detail.revision,
+                publicPort: publicPort,
                 listenAddr: listenAddress,
                 trafficStatsPort: trafficStatsPort,
                 proxyProbeUrl: proxyProbeURL,

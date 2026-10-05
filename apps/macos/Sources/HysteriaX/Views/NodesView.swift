@@ -421,6 +421,11 @@ private struct NodeFormView: View {
                             .accessibilityLabel("节点名称")
                             .accessibilityIdentifier("node.create.name")
                         TextField("SSH 地址", text: $sshHost)
+                            .onChange(of: sshHost) { oldValue, newValue in
+                                if publicHost.isEmpty || publicHost == oldValue {
+                                    publicHost = newValue
+                                }
+                            }
                             .accessibilityLabel("SSH 地址")
                             .accessibilityIdentifier("node.create.sshHost")
                         TextField("SSH 端口", text: $sshPort)
@@ -444,7 +449,7 @@ private struct NodeFormView: View {
                         TextField("公开端口", text: $publicPort)
                             .accessibilityLabel("公开端口")
                             .accessibilityIdentifier("node.create.publicPort")
-                        Text("用户客户端通过此地址和 UDP 端口连接节点。创建后请在代理配置页设置 TLS 证书及其他 Hysteria 参数。")
+                        Text("公开地址默认跟随 SSH 地址，可手动修改。公开端口用于初始化监听端口；创建后可在代理配置中设置端口联动、TLS 证书及其他 Hysteria 参数。")
                             .font(.callout).foregroundStyle(.secondary)
                     }
                 }

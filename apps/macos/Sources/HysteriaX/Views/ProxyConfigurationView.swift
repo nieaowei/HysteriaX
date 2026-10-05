@@ -12,6 +12,7 @@ struct ProxyConfigurationView: View {
     @State private var isSaving = false
     @State private var errorMessage: String?
     @State private var listenAddress = ":443"
+    @State private var publicPortDraft = PublicPortDraft()
     @State private var trafficStatsPort = "9780"
     @State private var proxyProbeURL = ""
     @State private var tlsSNI = ""
@@ -112,6 +113,23 @@ struct ProxyConfigurationView: View {
                 Form {
                     Section("监听") {
                         TextField("UDP 监听地址", text: $listenAddress)
+                        Toggle("公开端口跟随监听端口", isOn: Binding(
+                            get: { publicPortDraft.followsListener },
+                            set: { follows in
+                                if !follows {
+                                    publicPortDraft.customPort = publicPortDraft.portText(listenAddress: listenAddress)
+                                }
+                                publicPortDraft.followsListener = follows
+                            }
+                        ))
+                        .accessibilityIdentifier("node.config.followListenPort")
+                        TextField("公开端口", text: Binding(
+                            get: { publicPortDraft.portText(listenAddress: listenAddress) },
+                            set: { publicPortDraft.setCustomPort($0) }
+                        ))
+                        .accessibilityIdentifier("node.config.publicPort")
+                        Text("默认使用首个监听端口；手动修改公开端口后独立保存，用于公网端口映射。")
+                            .font(.callout).foregroundStyle(.secondary)
                         Text("支持端口列表和范围，例如 :443,445-450。端口跳跃节点的公网端口须与首个监听端口相同，远端还须安装 nftables 或 iptables。")
                             .font(.callout).foregroundStyle(.secondary)
                     }
@@ -786,6 +804,7 @@ struct ProxyConfigurationView: View {
         detail = nil
         errorMessage = nil
         listenAddress = ":443"
+        publicPortDraft = PublicPortDraft()
         trafficStatsPort = "9780"
         proxyProbeURL = ""
         tlsSNI = ""
@@ -876,6 +895,7 @@ struct ProxyConfigurationView: View {
             detail = loaded
             resources = loadedResources
             listenAddress = loaded.connection.listenAddress
+            publicPortDraft = PublicPortDraft(port: loaded.connection.port, listenAddress: listenAddress)
             tlsSNI = loaded.connection.tlsSNI ?? ""
             skipCertVerify = loaded.connection.skipCertVerify
             trafficStatsPort = String(loaded.trafficStatsPort ?? 9780)
@@ -1193,6 +1213,11 @@ struct ProxyConfigurationView: View {
     }
 
     private func validateDraft() -> Bool {
+        guard let publicPort = Int(publicPortDraft.portText(listenAddress: listenAddress)),
+              (1...65535).contains(publicPort) else {
+            errorMessage = "公开端口必须是 1 到 65535 的整数；联动时请填写有效的监听端口。"
+            return false
+        }
         if let validationError = ProxyProbeURLValidation.error(proxyProbeURL) {
             errorMessage = validationError
             return false
@@ -1357,7 +1382,8 @@ struct ProxyConfigurationView: View {
 
     private func save() {
         guard let detail, validateDraft(),
-              let trafficStatsPort = Int(self.trafficStatsPort) else { return }
+              let trafficStatsPort = Int(self.trafficStatsPort),
+              let publicPort = Int(publicPortDraft.portText(listenAddress: listenAddress)) else { return }
         let config = draftConfiguration(from: detail.config)
         isSaving = true
         Task {
@@ -1367,6 +1393,7 @@ struct ProxyConfigurationView: View {
                     detail,
                     config: .object(config),
                     listenAddress: listenAddress,
+                    publicPort: publicPort,
                     trafficStatsPort: trafficStatsPort,
                     proxyProbeURL: proxyProbeURL,
                     tlsSNI: tlsSNI,
