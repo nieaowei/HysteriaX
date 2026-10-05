@@ -50,6 +50,7 @@
 		000000000000000000002704 /* Models/CredentialDisplay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001704 /* Models/CredentialDisplay.swift */; };
 		000000000000000000002800 /* Models/SSHHostFingerprintChange.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001800 /* Models/SSHHostFingerprintChange.swift */; };
 		000000000000000000002801 /* Views/SSHHostFingerprintChangeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001801 /* Views/SSHHostFingerprintChangeView.swift */; };
+		000000000000000000002705 /* Views/CredentialManagedDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001705 /* Views/CredentialManagedDetailView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -97,6 +98,7 @@
 		000000000000000000001704 /* Models/CredentialDisplay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models/CredentialDisplay.swift; sourceTree = "<group>"; };
 		000000000000000000001800 /* Models/SSHHostFingerprintChange.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models/SSHHostFingerprintChange.swift; sourceTree = "<group>"; };
 		000000000000000000001801 /* Views/SSHHostFingerprintChangeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/SSHHostFingerprintChangeView.swift; sourceTree = "<group>"; };
+		000000000000000000001705 /* Views/CredentialManagedDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/CredentialManagedDetailView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -117,6 +119,7 @@
 				000000000000000000001701 /* Views/CredentialEditorView.swift */,
 				000000000000000000001702 /* Views/CredentialPickerView.swift */,
 				000000000000000000001703 /* Views/CredentialsView.swift */,
+				000000000000000000001705 /* Views/CredentialManagedDetailView.swift */,
 				000000000000000000001704 /* Models/CredentialDisplay.swift */,
 				000000000000000000001000 /* App/HysteriaXApp.swift */,
 				000000000000000000001402 /* Views/OverviewHistoryView.swift */,
@@ -248,6 +251,7 @@
 				000000000000000000002701 /* Views/CredentialEditorView.swift in Sources */,
 				000000000000000000002702 /* Views/CredentialPickerView.swift in Sources */,
 				000000000000000000002703 /* Views/CredentialsView.swift in Sources */,
+				000000000000000000002705 /* Views/CredentialManagedDetailView.swift in Sources */,
 				000000000000000000002704 /* Models/CredentialDisplay.swift in Sources */,
 				000000000000000000002000 /* App/HysteriaXApp.swift in Sources */,
 				000000000000000000002402 /* Views/OverviewHistoryView.swift in Sources */,

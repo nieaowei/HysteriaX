@@ -6,156 +6,256 @@ struct CredentialsView: View {
     @State private var selection: String?
     @State private var search = ""
     @State private var type = ""
+    @State private var category = CredentialCategory.operations
     @State private var detail: CredentialDetail?
     @State private var creating = false
     @State private var replacing: CredentialDetail?
     @State private var editing: CredentialDetail?
     @State private var error: String?
-    @State private var showAdminCreation = false
-    @State private var adminLabel = ""
-    @State private var createdToken: String?
     @State private var deleting = false
 
-    private var entries: [CredentialSummary] {
-        store.credentials.filter { (type.isEmpty || $0.kind == type) && (search.isEmpty || $0.name.localizedCaseInsensitiveContains(search)) }
+    private var categoryEntries: [CredentialSummary] {
+        store.credentials.filter { category.contains($0) }
     }
-    private var selected: CredentialSummary? { store.credentials.first { $0.id == selection } }
+    private var entries: [CredentialSummary] {
+        let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
+        return categoryEntries.filter {
+            (type.isEmpty || $0.kind == type) && (query.isEmpty || $0.name.localizedCaseInsensitiveContains(query))
+        }
+    }
+    private var selected: CredentialSummary? { entries.first { $0.id == selection } }
+
     var body: some View {
-        GeometryReader { geometry in
-            HStack(spacing: 0) {
-            VStack(spacing: 0) {
-                HStack {
-                    TextField("搜索凭据", text: $search)
-                    Picker("类型", selection: $type) {
-                        Text("全部类型").tag("")
-                        ForEach(Array(Set(store.credentials.map(\.kind))).sorted(), id: \.self) { Text(CredentialDisplay.kind($0)).tag($0) }
-                    }.frame(width: 180)
-                }.padding(12)
-                Table(entries, selection: $selection) {
-                    TableColumn("名称", value: \.name)
-                    TableColumn("类型", value: \.typeTitle)
-                    TableColumn("状态", value: \.statusTitle)
-                    TableColumn("引用") { entry in Text(entry.isManaged ? String(entry.referenceCount ?? 0) : "—") }
-                    TableColumn("到期") { entry in Text(entry.expiresAt.map { DateDisplayText.local($0) } ?? "未知") }
-                }.accessibilityIdentifier("credentials.table")
-            }.frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
-            Divider()
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    if let selected {
-                        Text(selected.name).font(.title2.bold()).lineLimit(3).truncationMode(.tail)
-                        LabeledContent("类型", value: selected.typeTitle)
-                        LabeledContent("状态", value: selected.statusTitle)
-                        if selected.isManaged {
-                            managedDetail
-                        } else {
-                            businessDetail(selected)
-                        }
-                    } else {
-                        ContentUnavailableView("选择凭据", systemImage: "key.horizontal", description: Text("查看引用、版本和更新结果。"))
-                    }
-                    if let error { Text(error).foregroundStyle(.red) }
-                }.padding(20).frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
-            }.frame(width: min(420, max(280, geometry.size.width * 0.4)), height: geometry.size.height)
-                .clipped()
-            }
-            .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
+        credentialContent
+        .searchable(text: $search, placement: .toolbar, prompt: "搜索凭据")
+        .onChange(of: category) { _, _ in
+            type = ""
+            clearSelection()
         }
+        .onChange(of: search) { _, _ in clearSelection() }
+        .onChange(of: type) { _, _ in clearSelection() }
         .toolbar {
-            Button { creating = true } label: { Label("创建凭据", systemImage: "plus") }
-                .disabled(!store.isConnected).keyboardShortcut("n", modifiers: .command)
-                .accessibilityIdentifier("credential.create")
-            Button("创建并切换管理员 Token") { showAdminCreation = true }.disabled(!store.isConnected)
+            ToolbarItem(placement: .principal) {
+                Picker("凭据分类", selection: $category) {
+                    Text("运营凭据").tag(CredentialCategory.operations)
+                    Text("用户凭据").tag(CredentialCategory.user)
+                }
+                .pickerStyle(.segmented)
+                .accessibilityIdentifier("credentials.tabs")
+            }
+            ToolbarItemGroup {
+                Picker("类型", selection: $type) {
+                    Text("全部类型").tag("")
+                    ForEach(Array(Set(categoryEntries.map(\.kind))).sorted(), id: \.self) {
+                        Text(CredentialDisplay.kind($0)).tag($0)
+                    }
+                }
+                .accessibilityIdentifier("credentials.typeFilter")
+                Button { creating = true } label: { Label("创建凭据", systemImage: "plus") }
+                    .disabled(!store.isConnected).keyboardShortcut("n", modifiers: .command)
+                    .accessibilityIdentifier("credential.create")
+            }
         }
-        .sheet(isPresented: $creating) { CredentialEditorView(store: store) }
+        .sheet(isPresented: $creating) {
+            CredentialEditorView(store: store, onCreated: { receipt in
+                if let entry = store.credentials.first(where: { $0.id == receipt.id }) {
+                    category = entry.ownerUserId == nil ? .operations : .user
+                }
+                search = ""
+                type = ""
+                clearSelection()
+            })
+        }
         .sheet(item: $replacing) { CredentialEditorView(store: store, replacing: $0) }
         .sheet(item: $editing) { CredentialMetadataEditor(store: store, detail: $0) }
         .task(id: "\(selection ?? ""): \(store.lastUpdated?.timeIntervalSince1970 ?? 0):\(store.isConnected)") { await load() }
-        .alert("创建并切换管理员 Token", isPresented: $showAdminCreation) {
-            TextField("用途名称", text: $adminLabel)
-            Button("取消", role: .cancel) {}
-            Button("创建") { Task { do { createdToken = try await store.createAndSwitchAdminToken(label: adminLabel).token } catch { self.error = error.localizedDescription } } }
-        }
-        .sheet(isPresented: Binding(get: { createdToken != nil }, set: { if !$0 { createdToken = nil } })) {
-            VStack(alignment: .leading, spacing: 20) {
-                Text("管理员 Token（仅显示一次）").font(.title2.bold())
-                Text(createdToken ?? "").font(.system(.body, design: .monospaced)).textSelection(.enabled)
-                Button("已保存，关闭") { createdToken = nil }.keyboardShortcut(.defaultAction)
-            }.padding(24).frame(width: 600)
-        }
         .confirmationDialog("删除未被引用的凭据？", isPresented: $deleting) {
             Button("删除", role: .destructive) { if let detail { Task { do { try await store.deleteCredential(detail); selection = nil } catch { self.error = error.localizedDescription } } } }
         }
     }
 
-    @ViewBuilder private var managedDetail: some View {
-        if let detail {
-            LabeledContent("最新版本", value: "v\(detail.latestVersion)")
-            if let fingerprint = detail.metadata["fingerprint"]?.stringValue { Text(fingerprint).font(.system(.caption, design: .monospaced)).textSelection(.enabled) }
-            if let certificate = detail.metadata["certificate"]?.stringValue {
-                DisclosureGroup("公开证书") { Text(certificate).font(.system(.caption, design: .monospaced)).textSelection(.enabled) }
+    private var credentialContent: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Table(entries, selection: $selection) {
+                TableColumn("名称", value: \.name)
+                TableColumn("类型", value: \.typeTitle)
+                TableColumn("状态", value: \.statusTitle)
+                TableColumn("引用") { entry in Text(entry.isManaged ? String(entry.referenceCount ?? 0) : "—") }
+                TableColumn("到期") { entry in Text(entry.expiresAt.map { DateDisplayText.local($0) } ?? "未知") }
             }
-            HStack {
-                Button("发布新版本") { replacing = detail }.disabled(detail.archived)
-                Button("编辑信息") { editing = detail }
-                Button("删除", role: .destructive) { deleting = true }.disabled(!detail.references.isEmpty)
-            }.disabled(!store.isConnected)
-            GroupBox("引用与生效版本") {
-                VStack(alignment: .leading, spacing: 8) {
-                    if detail.references.isEmpty { Text("暂无引用").foregroundStyle(.secondary) }
-                    ForEach(Array(detail.references.enumerated()), id: \.offset) { _, reference in
-                        HStack {
-                            if reference.entityType != "batch" { Button(reference.name ?? reference.entityID) { onJump(reference.entityType, reference.entityID) }.buttonStyle(.link) }
-                            else { Text("更新批次") }
-                            Spacer()
-                            Text("\(CredentialDisplay.source(reference.source)) · v\(reference.version ?? 0)").font(.caption).foregroundStyle(.secondary)
-                        }
+            .frame(minHeight: 180)
+            .accessibilityIdentifier("credentials.table")
+            .overlay {
+                if entries.isEmpty {
+                    ContentUnavailableView(
+                        categoryEntries.isEmpty ? "暂无\(category.title)" : "没有匹配的凭据",
+                        systemImage: "key.horizontal",
+                        description: Text(categoryEntries.isEmpty
+                            ? (store.isConnected ? "当前没有\(category.title)。" : "连接服务后可查看\(category.title)。")
+                            : "尝试其他搜索词或类型。")
+                    )
+                }
+            }
+            if let selected {
+                Divider()
+                credentialDetailPane(selected)
+                    .id(selected.id)
+                    .frame(maxHeight: 380)
+                    .accessibilityIdentifier("credentials.detail")
+            }
+            if let error { Text(error).foregroundStyle(.red).padding(12) }
+        }
+    }
+
+    private func clearSelection() {
+        selection = nil
+        detail = nil
+        error = nil
+    }
+
+    private func credentialDetailPane(_ entry: CredentialSummary) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 14) {
+                ViewThatFits(in: .horizontal) {
+                    HStack(alignment: .top, spacing: 16) {
+                        detailTitle(entry)
+                        Spacer(minLength: 20)
+                        detailActions
                     }
-                }.frame(maxWidth: .infinity, alignment: .leading)
+                    VStack(alignment: .leading, spacing: 10) {
+                        detailTitle(entry)
+                        detailActions
+                    }
+                }
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), alignment: .leading)], alignment: .leading, spacing: 12) {
+                    detailMetric("类型", value: entry.typeTitle)
+                    if entry.isManaged {
+                        detailMetric("最新版本", value: "v\(detail?.latestVersion ?? entry.latestVersion)")
+                        detailMetric("引用", value: String(detail?.references.count ?? entry.referenceCount ?? 0))
+                    }
+                    detailMetric("到期时间", value: entry.expiresAt.map { DateDisplayText.local($0) } ?? "未知")
+                    if let userID = entry.ownerUserId {
+                        detailMetric("所属用户", value: store.users.first { $0.id == userID }?.name ?? userID)
+                    }
+                }
             }
-            GroupBox("更新结果") {
-                VStack(alignment: .leading, spacing: 12) {
-                    if detail.batches.isEmpty { Text("暂无更新批次").foregroundStyle(.secondary) }
-                    ForEach(detail.batches) { batch in
-                        Text("v\(batch.version) · \(DateDisplayText.local(batch.createdAt))").font(.headline)
-                        ForEach(Array(batch.items.enumerated()), id: \.offset) { _, item in
-                            VStack(alignment: .leading) {
-                                HStack { Button(item.name ?? item.nodeID) { onJump("node", item.nodeID) }.buttonStyle(.link); Spacer(); Text(JobDisplayText.status(item.status)) }
-                                Button("查看任务") { onJump("job", item.jobId) }.buttonStyle(.link)
-                                if let message = item.errorMessage { Text(message).font(.caption).foregroundStyle(.red) }
+            .padding(16)
+            Divider()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    if entry.isManaged {
+                        if let detail, detail.id == entry.id {
+                            CredentialManagedDetailView(detail: detail, isConnected: store.isConnected, onJump: onJump, onRetry: { id in
+                                Task {
+                                    do { try await store.retryCredentialBatch(id); await load() }
+                                    catch { self.error = error.localizedDescription }
+                                }
+                            })
+                        } else {
+                            HStack(spacing: 8) {
+                                if store.isConnected { ProgressView().controlSize(.small) }
+                                Text(store.isConnected ? "正在读取详情…" : "连接服务后可读取引用与版本详情。")
+                                    .foregroundStyle(.secondary)
                             }
                         }
-                        if batch.items.contains(where: { ["failed", "rolled_back", "cancelled"].contains($0.status) }) {
-                            Button("重试失败项") { Task { do { try await store.retryCredentialBatch(batch.id); await load() } catch { self.error = error.localizedDescription } } }
-                                .disabled(!store.isConnected || detail.archived || batch.version != detail.latestVersion)
-                        }
+                    } else {
+                        businessDetail(entry)
                     }
-                }.frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(16)
             }
-            DisclosureGroup("版本历史（\(detail.versions.count)）") {
-                ForEach(detail.versions, id: \.version) { Text("v\($0.version) · \(DateDisplayText.local($0.createdAt))") }
+        }
+    }
+
+    private func detailTitle(_ entry: CredentialSummary) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Text(entry.name).font(.headline).lineLimit(2).textSelection(.enabled)
+            Text(entry.statusTitle)
+                .font(.caption.weight(.medium))
+                .padding(.horizontal, 8).padding(.vertical, 3)
+                .background(.quaternary, in: Capsule())
+        }
+    }
+
+    @ViewBuilder private var detailActions: some View {
+        if let detail, detail.id == selected?.id {
+            HStack(spacing: 8) {
+                Button("发布新版本") { replacing = detail }
+                    .disabled(detail.archived)
+                Button("编辑信息") { editing = detail }
+                Menu {
+                    Button("删除凭据", role: .destructive) { deleting = true }
+                        .disabled(!detail.references.isEmpty)
+                } label: { Image(systemName: "ellipsis") }
+                .menuIndicator(.hidden)
+                .help("更多操作")
+                .accessibilityLabel("更多凭据操作")
             }
-        } else { Text(store.isConnected ? "正在读取详情…" : "连接服务后可读取引用与版本详情。").foregroundStyle(.secondary) }
+            .fixedSize()
+            .disabled(!store.isConnected)
+        }
+    }
+
+    private func detailMetric(_ title: String, value: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title).font(.caption).foregroundStyle(.secondary)
+            Text(value).font(.callout).textSelection(.enabled)
+        }
     }
 
     @ViewBuilder private func businessDetail(_ entry: CredentialSummary) -> some View {
-        if let user = entry.ownerUserId { Button("管理用户凭据与订阅") { onJump("user", user) } }
+        if let user = entry.ownerUserId {
+            GroupBox("用户凭据管理") {
+                HStack {
+                    Text("在用户页面管理连接凭据、轮换与订阅。")
+                        .font(.callout).foregroundStyle(.secondary)
+                    Spacer()
+                    Button("管理用户") { onJump("user", user) }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.vertical, 4)
+            }
+        }
         if entry.kind == "admin_token", let id = entry.metadata["token_id"]?.stringValue,
            let token = store.adminTokens.first(where: { $0.id == id }) {
-            Text(id == store.currentAdminTokenID ? "本 Mac 当前使用的 Token" : "管理员访问令牌").foregroundStyle(.secondary)
-            if let lastUsed = token.lastUsedAt { LabeledContent("最近使用", value: DateDisplayText.local(lastUsed)) }
-            Button("撤销 Token", role: .destructive) { Task { do { try await store.revokeAdminToken(token) } catch { self.error = error.localizedDescription } } }
-                .disabled(!store.isConnected || token.revokedAt != nil || id == store.currentAdminTokenID)
+            GroupBox("管理员访问") {
+                HStack(alignment: .center, spacing: 16) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(id == store.currentAdminTokenID ? "本 Mac 当前使用的 Token" : "管理员访问令牌").foregroundStyle(.secondary)
+                        if let lastUsed = token.lastUsedAt { detailMetric("最近使用", value: DateDisplayText.local(lastUsed)) }
+                    }
+                    Spacer()
+                    Button("撤销 Token", role: .destructive) { Task { do { try await store.revokeAdminToken(token) } catch { self.error = error.localizedDescription } } }
+                        .disabled(!store.isConnected || token.revokedAt != nil || id == store.currentAdminTokenID)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.vertical, 4)
+            }
         }
     }
 
     private func load() async {
         guard let selected, selected.isManaged, store.isConnected else { detail = nil; return }
+        if detail?.id != selected.id { detail = nil }
         do {
             let loaded = try await store.credentialDetail(selected.id)
             guard selection == loaded.id else { return }
             detail = loaded; error = nil
-        } catch { self.error = error.localizedDescription }
+        } catch {
+            guard selection == selected.id, !Task.isCancelled else { return }
+            self.error = error.localizedDescription
+        }
+    }
+}
+
+private enum CredentialCategory: Hashable {
+    case user, operations
+
+    var title: String { self == .user ? "用户凭据" : "运营凭据" }
+
+    func contains(_ entry: CredentialSummary) -> Bool {
+        (entry.ownerUserId != nil) == (self == .user)
     }
 }
 
