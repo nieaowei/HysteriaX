@@ -12,6 +12,8 @@ struct NodesView: View {
     @State private var sortOrder = [KeyPathComparator(\NodeSummary.name)]
     @State private var actionError: String?
     @State private var showingDeleteConfirmation = false
+    @State private var deletionNode: NodeSummary?
+    @State private var showingRecordRemovalConfirmation = false
 
     private var visibleNodes: [NodeSummary] {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -104,7 +106,7 @@ struct NodesView: View {
                         Button("同步") { run(node, action: "sync") }
                         Button("回滚") { run(node, action: "rollback") }
                             .disabled(node.deployedRevision == nil)
-                        Button("删除节点", role: .destructive) { showingDeleteConfirmation = true }
+                        Button("删除节点", role: .destructive) { deletionNode = node; showingDeleteConfirmation = true }
                     }
                     .disabled(!store.isConnected)
                     .padding(12)
@@ -132,15 +134,32 @@ struct NodesView: View {
             Button("好", role: .cancel) { actionError = nil }
         } message: { Text(actionError ?? "") }
         .confirmationDialog("删除节点？", isPresented: $showingDeleteConfirmation, titleVisibility: .visible) {
-            Button("删除并卸载远端服务", role: .destructive) {
-                guard let node = store.nodes.first(where: { $0.id == selection }) else { return }
+            Button("卸载并删除", role: .destructive) {
+                guard let node = deletionNode else { return }
                 Task {
-                    do { try await store.deleteNode(node) }
+                    do { try await store.deleteNode(node); selection = nil }
                     catch { actionError = error.localizedDescription }
                 }
             }
+            if store.supportsNodeRecordRemoval {
+                Button("仅移除管理记录", role: .destructive) { showingRecordRemovalConfirmation = true }
+                    .accessibilityIdentifier("nodes.remove-record")
+            }
         } message: {
-            Text("已部署节点会先拒绝新认证，再排队停止并移除 HysteriaX 管理的远端文件。")
+            Text("卸载并删除需要 SSH 连接。仅移除管理记录不需要 SSH，远端服务可能继续运行。")
+        }
+        .alert("仅移除管理记录？", isPresented: $showingRecordRemovalConfirmation) {
+            Button("取消", role: .cancel) {}
+            Button("移除记录", role: .destructive) {
+                guard let node = deletionNode else { return }
+                Task {
+                    do { try await store.removeNodeRecord(node); selection = nil }
+                    catch { actionError = error.localizedDescription }
+                }
+            }
+            .accessibilityIdentifier("nodes.confirm-remove-record")
+        } message: {
+            Text("将从管理服务中移除「\(deletionNode?.name ?? "")」及其用户分配和待办，保留任务历史。此操作不会卸载远端服务；失联服务器上的服务可能仍在运行。")
         }
     }
 

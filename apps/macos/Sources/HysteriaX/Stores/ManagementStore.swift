@@ -30,6 +30,7 @@ final class ManagementStore {
     var overviewError: String?
     var overviewHistoryRefreshToken = UUID()
     var supportsOverviewMonitoring = false
+    var supportsNodeRecordRemoval = false
     var supportsJobRetryLinks = false
     private let nodeNotifications: NodeAlertNotifications?
     private var historyCache: [String: OverviewHistory] = [:]
@@ -88,6 +89,7 @@ final class ManagementStore {
             overviewError = nil
             supportsOverviewMonitoring = false
             supportsJobRetryLinks = false
+            supportsNodeRecordRemoval = false
             serverMonitoring = nil
             serverMonitoringError = nil
             nodes = []
@@ -124,6 +126,7 @@ final class ManagementStore {
         supportsNodePackages = version.features?.contains("node_packages") == true
         supportsOverviewMonitoring = version.features?.contains("overview_monitoring") == true
         supportsJobRetryLinks = version.features?.contains("job_retry_links") == true
+        supportsNodeRecordRemoval = version.features?.contains("node_record_removal") == true
         await refreshOverview()
         startEventUpdates(using: client)
     }
@@ -142,6 +145,7 @@ final class ManagementStore {
             supportsNodePackages = version.features?.contains("node_packages") == true
             supportsOverviewMonitoring = version.features?.contains("overview_monitoring") == true
             supportsJobRetryLinks = version.features?.contains("job_retry_links") == true
+            supportsNodeRecordRemoval = version.features?.contains("node_record_removal") == true
             isConnected = true
             errorMessage = nil
             await (nodeNotifications ?? .shared).deliver(nodes: nodes, service: serviceAddress)
@@ -223,6 +227,13 @@ final class ManagementStore {
     func deleteNode(_ node: NodeSummary) async throws {
         let api = try requireConnectedAPI()
         _ = try await api.delete(APIEndpoints.deleteNode(id: node.id, expectedRevision: node.revision))
+        await refresh()
+    }
+
+    func removeNodeRecord(_ node: NodeSummary) async throws {
+        let api = try requireConnectedAPI()
+        guard supportsNodeRecordRemoval else { throw APIClientError.server("请先更新管理服务以支持仅移除节点记录。") }
+        try await api.deleteNoContent(APIEndpoints.removeNodeRecord(id: node.id, expectedRevision: node.revision))
         await refresh()
     }
 

@@ -125,8 +125,53 @@ async fn claim_next(pool: &PgPool) -> Result<Option<JobInput>, sqlx::Error> {
     Ok(job)
 }
 
+async fn job_is_running(pool: &PgPool, id: &str) -> bool {
+    match sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS(SELECT 1 FROM jobs WHERE id=$1 AND status='running')",
+    )
+    .bind(id)
+    .fetch_one(pool)
+    .await
+    {
+        Ok(running) => running,
+        Err(error) => {
+            tracing::error!(job_id=id,%error,"failed to check job cancellation");
+            false
+        }
+    }
+}
+
+async fn wait_for_node_removal(
+    state: &AppState,
+    job: &JobInput,
+    mut receiver: tokio::sync::broadcast::Receiver<String>,
+) {
+    loop {
+        match receiver.recv().await {
+            Ok(node) if job.node_id.as_deref() == Some(node.as_str()) => return,
+            Ok(_) => {}
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                if !job_is_running(&state.pool, &job.id).await {
+                    return;
+                }
+            }
+            Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
+        }
+    }
+}
+
 async fn execute_one(state: AppState, job: JobInput) {
-    let result = deployment::run_job(&state.pool, &state.secrets, &job).await;
+    // Subscribe before the database check: a removal before subscription is
+    // caught by persisted status, and a later removal is caught by the signal.
+    let receiver = state.removed_nodes.subscribe();
+    if !job_is_running(&state.pool, &job.id).await {
+        return;
+    }
+    let result = tokio::select! {
+        biased;
+        _ = wait_for_node_removal(&state,&job,receiver) => return,
+        result = deployment::run_job(&state.pool, &state.secrets, &job) => result,
+    };
     match result {
         Ok(output) => {
             if let Err(error) = succeed(&state.pool, &job, output).await {
@@ -463,6 +508,46 @@ mod tests {
             .execute(pool)
             .await
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn node_removal_interrupts_only_its_worker_and_preserves_cancellation() {
+        let state = crate::kick_requests::tests::fixture().await;
+        let id = crate::kick_requests::tests::enqueue(&state, "user_deleted").await;
+        let job = super::claim_next(&state.pool).await.unwrap().unwrap();
+        let receiver = state.removed_nodes.subscribe();
+        let wait = super::wait_for_node_removal(&state, &job, receiver);
+        tokio::pin!(wait);
+        state.removed_nodes.send("other-node".into()).unwrap();
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(10), &mut wait)
+                .await
+                .is_err()
+        );
+        crate::api::nodes::remove_record(
+            axum::extract::State(state.clone()),
+            axum::extract::Path("node".into()),
+            axum::extract::Query(crate::api::nodes::RevisionQuery {
+                expected_revision: Some(1),
+            }),
+        )
+        .await
+        .unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(1), &mut wait)
+            .await
+            .unwrap();
+        assert!(!super::job_is_running(&state.pool, &id).await);
+        // A stale result/failure cannot overwrite the terminal cancelled history.
+        super::fail(&state.pool, &job, "stale timeout", true, false, false, true)
+            .await
+            .unwrap();
+        let row: (String, String) = sqlx::query_as("SELECT status,stage FROM jobs WHERE id=$1")
+            .bind(&id)
+            .fetch_one(&state.pool)
+            .await
+            .unwrap();
+        assert_eq!(row, ("cancelled".into(), "node_removed".into()));
+        assert!(super::claim_next(&state.pool).await.unwrap().is_none());
     }
 
     #[tokio::test]

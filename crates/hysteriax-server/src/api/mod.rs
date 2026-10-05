@@ -35,6 +35,10 @@ pub fn router(state: AppState) -> Router {
     let admin = Router::new()
         .route("/api/v1/nodes", get(nodes::list).post(nodes::create))
         .route(
+            "/api/v1/nodes/{id}/record",
+            axum::routing::delete(nodes::remove_record),
+        )
+        .route(
             "/api/v1/nodes/{id}",
             get(nodes::get).patch(nodes::patch).delete(nodes::delete),
         )
@@ -208,7 +212,7 @@ async fn healthz() -> Json<Value> {
 async fn api_version(Extension(actor): Extension<AdminActor>) -> Json<Value> {
     Json(json!({
         "api_version": "1.0.0",
-        "features": ["node_packages", "overview_monitoring", "job_retry_links", "credentials"],
+        "features": ["node_packages", "overview_monitoring", "job_retry_links", "credentials", "node_record_removal"],
         "current_admin_token_id": actor.id,
         "service_version": env!("CARGO_PKG_VERSION"),
         "hysteria_version": "app/v2.12.3",

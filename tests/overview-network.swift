@@ -8,6 +8,8 @@ final class OverviewTransport: URLProtocol, @unchecked Sendable {
         var nodes = Data()
         var history = Data()
         var jobs = Data("[]".utf8)
+        var recordRemovalRequests: [URLRequest] = []
+        func recordedRemovals() -> [URLRequest] { lock.lock(); defer { lock.unlock() }; return recordRemovalRequests }
         var retryRequest: URLRequest?
         func recordedRetry() -> URLRequest? { lock.lock(); defer { lock.unlock() }; return retryRequest }
         func setMode(_ value: String) { lock.lock(); defer { lock.unlock() }; mode = value }
@@ -16,7 +18,7 @@ final class OverviewTransport: URLProtocol, @unchecked Sendable {
             let path = url.path
             lock.lock(); defer { lock.unlock() }
             if path.hasSuffix("version") {
-                let features = mode == "legacy" ? "[]" : "[\"overview_monitoring\",\"job_retry_links\"]"
+                let features = mode == "legacy" ? "[]" : "[\"overview_monitoring\",\"job_retry_links\",\"node_record_removal\"]"
                 return (200, Data("{\"api_version\":\"1.0.0\",\"service_version\":\"test\",\"hysteria_version\":\"test\",\"mihomo_version\":\"test\",\"features\":\(features)}".utf8))
             }
             if path.hasSuffix("overview/history") {
@@ -29,6 +31,7 @@ final class OverviewTransport: URLProtocol, @unchecked Sendable {
             if path.hasSuffix("overview") { return (mode == "overview-failure" ? 503 : 200, overview) }
             if path.hasSuffix("server/monitoring") { return (503, Data()) }
             if path.hasSuffix("retry") { retryRequest = request; return (202, Data("{\"job_id\":\"retry-1\",\"status\":\"queued\"}".utf8)) }
+            if path.hasSuffix("/record") { recordRemovalRequests.append(request); return (204, Data()) }
             if path.hasSuffix("jobs") { return (200, jobs) }
             if path.hasSuffix("nodes") { return (200, nodes) }
             return (200, Data("[]".utf8))
@@ -82,7 +85,13 @@ struct OverviewNetworkChecks {
         }
         await store.refresh()
         precondition(store.isConnected && store.supportsOverviewMonitoring && store.overview?.nodeCount == 1)
-        precondition(store.supportsJobRetryLinks)
+        precondition(store.supportsJobRetryLinks && store.supportsNodeRecordRemoval)
+        let removedNode = store.nodes[0]
+        try await store.removeNodeRecord(removedNode)
+        let removalRequest = OverviewTransport.responses.recordedRemovals().last!
+        precondition(removalRequest.httpMethod == "DELETE" && removalRequest.url!.path == "/api/v1/nodes/\(removedNode.id)/record")
+        let removalQuery = URLComponents(url: removalRequest.url!, resolvingAgainstBaseURL: false)!.queryItems!
+        precondition(removalQuery.contains(URLQueryItem(name: "expected_revision", value: String(removedNode.revision))))
         try await store.retryJob(store.jobs[0], on: store.nodes[0])
         let retryRequest = OverviewTransport.responses.recordedRetry()!
         precondition(retryRequest.url!.path == "/api/v1/jobs/job-1/retry" && retryRequest.httpMethod == "POST")
@@ -119,6 +128,10 @@ struct OverviewNetworkChecks {
         OverviewTransport.responses.setMode("legacy")
         await store.refresh()
         precondition(store.isConnected && !store.supportsOverviewMonitoring && !store.supportsJobRetryLinks && store.overview == nil)
+        precondition(!store.supportsNodeRecordRemoval)
+        let removalCount = OverviewTransport.responses.recordedRemovals().count
+        do { try await store.removeNodeRecord(store.nodes[0]); preconditionFailure("Legacy service must not receive a record-removal request") } catch {}
+        precondition(OverviewTransport.responses.recordedRemovals().count == removalCount)
         do { try await store.retryJob(store.jobs[0], on: store.nodes[0]); preconditionFailure("Legacy service should require an update for linked retry") } catch {}
         print("Advanced/legacy services, isolated failure, cached history, cancellation and service-switch checks passed")
     }

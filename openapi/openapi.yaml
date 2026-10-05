@@ -319,6 +319,23 @@ paths:
               schema: { $ref: '#/components/schemas/JobReceipt' }
         '204': { description: Deleted }
         '409': { $ref: '#/components/responses/Error' }
+  /nodes/{id}/record:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    delete:
+      operationId: removeNodeRecord
+      summary: Remove only the management record without SSH or remote uninstall
+      description: Removes node assignments, configuration and pending revocations, cancels queued and cancellable running jobs, and retains job history and audit. The remote service may remain running. Conflicts while a remote deployment, uninstall or credential update is running; wait for that operation to finish. Requires the node_record_removal feature.
+      parameters:
+        - name: expected_revision
+          in: query
+          required: true
+          schema: { type: integer, minimum: 1 }
+      responses:
+        '204': { description: Management record removed; remote uninstall was not performed }
+        '400': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
   /nodes/{id}/usage:
     parameters:
       - $ref: '#/components/parameters/Id'

@@ -38,3 +38,6 @@ The traffic worker samples each deployed node over SSH every ten seconds, update
 ## API contract
 
 `openapi/openapi.yaml` documents the versioned management API. The API returns JSON and UTC RFC 3339 timestamps. Public endpoints are restricted to health checks, subscription downloads, and the Hysteria HTTP auth callback. The subscription endpoint disables caching and returns 404 for an unknown or revoked token, and 403 for a disabled, expired, or over quota user.
+
+
+Node removal has two explicit operations. `DELETE /api/v1/nodes/{id}` performs managed remote uninstall before removing an installed node. `DELETE /api/v1/nodes/{id}/record` removes only the management record without SSH, after checking the optimistic revision and rejecting running remote deployment/uninstall/credential changes. It cancels other active jobs, signals their local workers, removes dependent assignments/configuration/monitoring/revocation requests, and retains historical job identifiers, names, events and an explicit `node.record_removed` audit. Shared credentials and users remain. The remote service may still be running; client capability `node_record_removal` gates the separate operation.

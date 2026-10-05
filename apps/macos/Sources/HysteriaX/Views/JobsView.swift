@@ -62,6 +62,7 @@ enum JobDisplayText {
             "uninstalling_service": "卸载系统服务",
             "remote_uninstalled": "远端卸载完成",
             "node_deleting": "删除节点中",
+            "node_removed": "管理记录已移除",
             "superseded": "已被新任务替代",
             "failed": "失败",
         ]

@@ -477,6 +477,9 @@ enum APIEndpoints {
     static func deleteNode(id: String, expectedRevision: Int) -> APIOperation<NoRequest, JobReceipt> {
         APIOperation(method: "DELETE", path: "api/v1/nodes/\(id)", queryParameters: ["expected_revision": String(expectedRevision)])
     }
+    static func removeNodeRecord(id: String, expectedRevision: Int) -> APIOperation<NoRequest, NoResponse> {
+        APIOperation(method: "DELETE", path: "api/v1/nodes/\(id)/record", queryParameters: ["expected_revision": String(expectedRevision)])
+    }
     static func updateNodeUsage(id: String) -> APIOperation<NodeUsageUpdateRequest, NodeUsageUpdateResponse> {
         APIOperation(method: "PUT", path: "api/v1/nodes/\(id)/usage", queryParameters: [:])
     }

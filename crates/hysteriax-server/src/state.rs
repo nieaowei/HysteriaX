@@ -9,6 +9,7 @@ pub struct AppState {
     pub pool: PgPool,
     pub secrets: Arc<SecretBox>,
     pub monitor: Arc<crate::monitoring::Monitor>,
+    pub removed_nodes: tokio::sync::broadcast::Sender<String>,
 }
 
 impl AppState {
@@ -17,6 +18,7 @@ impl AppState {
             pool,
             secrets: Arc::new(secrets),
             monitor: Arc::new(crate::monitoring::Monitor::new()),
+            removed_nodes: tokio::sync::broadcast::channel(256).0,
         }
     }
 }
