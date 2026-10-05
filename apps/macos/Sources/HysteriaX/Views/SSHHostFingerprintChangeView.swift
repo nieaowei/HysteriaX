@@ -24,7 +24,7 @@ struct SSHHostFingerprintChangeView: View {
                     .foregroundStyle(.secondary)
                 if saved || node?.ssh?.hostFingerprint == change.observed {
                     Label("新指纹已保存", systemImage: "checkmark.circle")
-                    Text(job.kind == "uninstall" ? "请返回节点列表重试删除。" : "可使用下方的重试按钮继续任务；原失败记录会保留。")
+                    Text(job.kind == "uninstall" ? "请返回节点列表重试删除。" : "可使用任务详情顶部的重试按钮继续任务；原失败记录会保留。")
                         .font(.caption).foregroundStyle(.secondary)
                 } else if canConfirm {
                     Button("核对并信任新指纹…") {
