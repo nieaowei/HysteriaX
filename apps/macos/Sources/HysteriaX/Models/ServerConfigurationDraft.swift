@@ -5,10 +5,8 @@ struct ServerConfigurationDraft {
     var sshHost = ""
     var sshPort = "22"
     var sshUsername = "root"
-    var sshAuthType = "password"
-    var sshSecret = ""
-    var sshPassphrase = ""
-    var clearPassphrase = false
+    var sshCredentialId = ""
+    var sshCredentialVersion = 1
 
     init(_ detail: NodeDetail? = nil) {
         guard let detail else { return }
@@ -16,7 +14,8 @@ struct ServerConfigurationDraft {
         sshHost = detail.ssh.host
         sshPort = String(detail.ssh.port)
         sshUsername = detail.ssh.username
-        sshAuthType = detail.ssh.authType
+        sshCredentialId = detail.ssh.credentialId
+        sshCredentialVersion = detail.ssh.credentialVersion
     }
 
     func request(revision: Int, originalAuthType: String) throws -> NodePatchRequest {
@@ -26,15 +25,12 @@ struct ServerConfigurationDraft {
               let port = Int(sshPort), (1...65535).contains(port) else {
             throw APIClientError.server("请填写服务器名称、SSH 地址和用户；端口须在 1 到 65535 之间。")
         }
-        guard originalAuthType == sshAuthType || !sshSecret.isEmpty else {
-            throw APIClientError.server("切换 SSH 认证方式时，请填写新密码或私钥。")
-        }
+        guard !sshCredentialId.isEmpty else { throw APIClientError.server("请选择 SSH 凭据。") }
         return NodePatchRequest(
             expectedRevision: revision, name: name.trimmingCharacters(in: .whitespacesAndNewlines),
             sshHost: sshHost.trimmingCharacters(in: .whitespacesAndNewlines), sshPort: port,
-            sshUsername: sshUsername.trimmingCharacters(in: .whitespacesAndNewlines), sshAuthType: sshAuthType,
-            sshSecret: sshSecret.isEmpty ? nil : sshSecret,
-            sshPassphrase: clearPassphrase ? "" : (sshPassphrase.isEmpty ? nil : sshPassphrase)
+            sshUsername: sshUsername.trimmingCharacters(in: .whitespacesAndNewlines),
+            sshCredentialId: sshCredentialId, sshCredentialVersion: sshCredentialVersion
         )
     }
 }

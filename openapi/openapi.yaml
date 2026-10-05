@@ -14,6 +14,181 @@ servers:
 security:
   - BearerAuth: []
 paths:
+  /credentials:
+    get:
+      operationId: listCredentials
+      responses:
+        '200':
+          description: Credential management result
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/CredentialSummary'
+        '400':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+    post:
+      operationId: createCredential
+      responses:
+        '201':
+          description: Credential management result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CredentialReceipt'
+        '400':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CredentialCreate'
+  /credentials/{id}:
+    get:
+      operationId: getCredential
+      responses:
+        '200':
+          description: Credential management result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CredentialDetail'
+        '400':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+    patch:
+      operationId: updateCredential
+      responses:
+        '200':
+          description: Credential management result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CredentialReceipt'
+        '400':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CredentialPatch'
+    delete:
+      operationId: deleteCredential
+      parameters:
+      - name: expected_revision
+        in: query
+        required: true
+        schema:
+          type: integer
+      responses:
+        '204':
+          description: Deleted
+        '409':
+          $ref: '#/components/responses/Error'
+    parameters:
+    - name: id
+      in: path
+      required: true
+      schema:
+        type: string
+  /credentials/{id}/versions:
+    post:
+      operationId: publishCredentialVersion
+      responses:
+        '202':
+          description: Credential management result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CredentialReceipt'
+        '400':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CredentialPublish'
+    parameters:
+    - name: id
+      in: path
+      required: true
+      schema:
+        type: string
+  /credentials/{id}/references:
+    get:
+      operationId: getCredentialReferences
+      responses:
+        '200':
+          description: Credential management result
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/CredentialReference'
+        '400':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+    parameters:
+    - name: id
+      in: path
+      required: true
+      schema:
+        type: string
+  /credential-batches/{id}:
+    get:
+      operationId: getCredentialBatch
+      responses:
+        '200':
+          description: Credential management result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CredentialBatch'
+        '400':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+    parameters:
+    - name: id
+      in: path
+      required: true
+      schema:
+        type: string
+  /credential-batches/{id}/retry:
+    post:
+      operationId: retryCredentialBatch
+      responses:
+        '202':
+          description: Credential management result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CredentialBatchReceipt'
+        '400':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+    parameters:
+    - name: id
+      in: path
+      required: true
+      schema:
+        type: string
   "/overview":
     get:
       operationId: getOverview
@@ -521,7 +696,7 @@ paths:
     post:
       operationId: retryJob
       summary: Retry a failed job with an explicit link to its prior attempt
-      description: Supports SSH test, deployment/sync and rollback. Active duplicate requests return the same retry. Retry success resolves only the linked failure reminders.
+      description: Supports SSH test, deployment/sync, rollback and pending kick requests. Kick executions are bounded to five attempts; transport failures retain a durable request resumed after trusted SSH recovery, while other exhausted or permanent failures require explicit retry. Active duplicate requests return the same retry. Retry success resolves only the linked failure reminders.
       requestBody:
         required: true
         content:
@@ -800,20 +975,36 @@ components:
         expected_revision: { type: integer, minimum: 1 }
     AssignmentRequest:
       type: object
-      required: [expected_revision, node_id]
+      required:
+      - expected_revision
+      - node_id
       properties:
-        expected_revision: { type: integer, minimum: 1 }
-        node_id: { type: string, format: uuid }
-        client_certificate: { type: string, writeOnly: true, description: PEM client certificate chain required for mTLS nodes. }
-        client_private_key: { type: string, writeOnly: true, description: Matching unencrypted PEM private key required for mTLS nodes. }
+        expected_revision:
+          type: integer
+          minimum: 1
+        node_id:
+          type: string
+          format: uuid
+        mtls_credential_id:
+          type: string
+        mtls_credential_version:
+          type: integer
+          minimum: 1
+      additionalProperties: false
     AssignmentCertificateUpdate:
       allOf:
-        - $ref: '#/components/schemas/Revision'
-        - type: object
-          required: [client_certificate, client_private_key]
-          properties:
-            client_certificate: { type: string, writeOnly: true }
-            client_private_key: { type: string, writeOnly: true }
+      - $ref: '#/components/schemas/Revision'
+      - type: object
+        required:
+        - mtls_credential_id
+        - mtls_credential_version
+        properties:
+          mtls_credential_id:
+            type: string
+          mtls_credential_version:
+            type: integer
+            minimum: 1
+        additionalProperties: false
     NodePackage:
       type: object
       description: Complete package replacement on PATCH; omission preserves the package. Null expiry/quota removes that limit. Usage is changed only through the usage endpoint.
@@ -866,55 +1057,146 @@ components:
         revision: { type: integer }
     NodeCreate:
       type: object
-      required: [name, ssh_host, ssh_port, ssh_username, ssh_auth_type, ssh_secret, public_host, public_port, listen_addr]
+      required:
+      - name
+      - ssh_host
+      - ssh_port
+      - ssh_username
+      - public_host
+      - public_port
+      - listen_addr
+      - ssh_credential_id
+      - ssh_credential_version
       properties:
-        package: { $ref: '#/components/schemas/NodePackage' }
-        initial_usage_bytes: { type: integer, format: int64, minimum: 0, description: Existing provider usage before first network sample. }
-        name: { type: string, maxLength: 100 }
-        ssh_host: { type: string }
-        ssh_port: { type: integer, minimum: 1, maximum: 65535 }
-        ssh_username: { type: string }
-        ssh_auth_type: { type: string, enum: [password, private_key] }
-        ssh_secret: { type: string, writeOnly: true }
-        ssh_passphrase: { type: string, writeOnly: true }
-        ssh_host_fingerprint: { type: string }
-        public_host: { type: string }
-        public_port: { type: integer, minimum: 1, maximum: 65535 }
-        listen_addr: { type: string }
-        traffic_stats_port: { type: integer, minimum: 1, maximum: 65535, default: 9780, description: "Loopback-only Hysteria trafficStats API port" }
-        proxy_probe_url: { type: [string, 'null'], maxLength: 2048, description: "Optional HTTP 200 health target used by the deployment-time proxy probe when routing rules block the built-in loopback target" }
-        tls_sni: { type: string }
-        tls_skip_verify: { type: boolean, default: false }
-        config: { type: object, additionalProperties: true, default: {} }
+        package:
+          $ref: '#/components/schemas/NodePackage'
+        initial_usage_bytes:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Existing provider usage before first network sample.
+        name:
+          type: string
+          maxLength: 100
+        ssh_host:
+          type: string
+        ssh_port:
+          type: integer
+          minimum: 1
+          maximum: 65535
+        ssh_username:
+          type: string
+        ssh_host_fingerprint:
+          type: string
+        public_host:
+          type: string
+        public_port:
+          type: integer
+          minimum: 1
+          maximum: 65535
+        listen_addr:
+          type: string
+        traffic_stats_port:
+          type: integer
+          minimum: 1
+          maximum: 65535
+          default: 9780
+          description: Loopback-only Hysteria trafficStats API port
+        proxy_probe_url:
+          type:
+          - string
+          - 'null'
+          maxLength: 2048
+          description: Optional HTTP 200 health target used by the deployment-time proxy
+            probe when routing rules block the built-in loopback target
+        tls_sni:
+          type: string
+        tls_skip_verify:
+          type: boolean
+          default: false
+        config:
+          type: object
+          additionalProperties: true
+          default: {}
+        ssh_credential_id:
+          type: string
+          format: uuid
+        ssh_credential_version:
+          type: integer
+          minimum: 1
+      additionalProperties: false
     NodePatch:
       allOf:
-        - $ref: '#/components/schemas/Revision'
-        - type: object
-          properties:
-            package: { $ref: '#/components/schemas/NodePackage' }
-            name: { type: string }
-            ssh_host: { type: string }
-            ssh_port: { type: integer, minimum: 1, maximum: 65535 }
-            ssh_username: { type: string }
-            ssh_auth_type: { type: string, enum: [password, private_key] }
-            ssh_secret: { type: string, writeOnly: true }
-            ssh_passphrase: { type: string, writeOnly: true }
-            ssh_host_fingerprint: { type: string }
-            public_host: { type: string }
-            public_port: { type: integer, minimum: 1, maximum: 65535 }
-            listen_addr: { type: string }
-            traffic_stats_port: { type: integer, minimum: 1, maximum: 65535, description: "Loopback-only Hysteria trafficStats API port" }
-            proxy_probe_url: { type: string, maxLength: 2048, description: "HTTP 200 probe URL reachable through this node's ACL/outbound rules; use an empty string to restore the local statistics probe" }
-            tls_sni: { type: string }
-            tls_skip_verify: { type: boolean }
-            config: { type: object, additionalProperties: true }
+      - $ref: '#/components/schemas/Revision'
+      - type: object
+        properties:
+          package:
+            $ref: '#/components/schemas/NodePackage'
+          name:
+            type: string
+          ssh_host:
+            type: string
+          ssh_port:
+            type: integer
+            minimum: 1
+            maximum: 65535
+          ssh_username:
+            type: string
+          ssh_host_fingerprint:
+            type: string
+          public_host:
+            type: string
+          public_port:
+            type: integer
+            minimum: 1
+            maximum: 65535
+          listen_addr:
+            type: string
+          traffic_stats_port:
+            type: integer
+            minimum: 1
+            maximum: 65535
+            description: Loopback-only Hysteria trafficStats API port
+          proxy_probe_url:
+            type: string
+            maxLength: 2048
+            description: HTTP 200 probe URL reachable through this node's ACL/outbound
+              rules; use an empty string to restore the local statistics probe
+          tls_sni:
+            type: string
+          tls_skip_verify:
+            type: boolean
+          config:
+            type: object
+            additionalProperties: true
+          ssh_credential_id:
+            type: string
+            format: uuid
+          ssh_credential_version:
+            type: integer
+            minimum: 1
+        additionalProperties: false
     ResourceCreate:
       type: object
-      required: [name, resource_kind, content_base64]
+      required:
+      - name
+      - resource_kind
+      - content_base64
       properties:
-        name: { type: string, maxLength: 180 }
-        resource_kind: { type: string, enum: [certificate, private_key, ech_key, acl, geoip, geosite] }
-        content_base64: { type: string, format: byte, writeOnly: true, description: "Base64 encoded resource; decoded size is limited to 20 MiB" }
+        name:
+          type: string
+          maxLength: 180
+        resource_kind:
+          type: string
+          enum:
+          - acl
+          - geoip
+          - geosite
+        content_base64:
+          type: string
+          format: byte
+          writeOnly: true
+          description: Base64 encoded resource; decoded size is limited to 20 MiB
     UserCreate:
       type: object
       required: [name]
@@ -951,13 +1233,30 @@ components:
         proxy_probe_url: { type: [string, 'null'], maxLength: 2048 }
     NodeSSHDetail:
       type: object
-      required: [host, port, username, auth_type]
+      required:
+      - host
+      - port
+      - username
+      - auth_type
+      - credential_id
+      - credential_version
       properties:
-        host: { type: string }
-        port: { type: integer }
-        username: { type: string }
-        auth_type: { type: string }
-        host_fingerprint: { type: [string, 'null'] }
+        host:
+          type: string
+        port:
+          type: integer
+        username:
+          type: string
+        auth_type:
+          type: string
+        host_fingerprint:
+          type:
+          - string
+          - 'null'
+        credential_id:
+          type: string
+        credential_version:
+          type: integer
     NodeConnectionDetail:
       type: object
       required: [host, port, listen_addr, skip_cert_verify]
@@ -993,10 +1292,24 @@ components:
         updated_at: { type: string, format: date-time }
     AssignmentInfo:
       type: object
-      required: [node_id, created_at]
+      required:
+      - node_id
+      - created_at
       properties:
-        node_id: { type: string, format: uuid }
-        created_at: { type: string, format: date-time }
+        node_id:
+          type: string
+          format: uuid
+        created_at:
+          type: string
+          format: date-time
+        mtls_credential_id:
+          type:
+          - string
+          - 'null'
+        mtls_credential_version:
+          type:
+          - integer
+          - 'null'
     UserSummary:
       type: object
       required: [id, name, enabled, expires_at, quota_bytes, usage_bytes, revision, quota_reset_at, assignments, created_at, updated_at]
@@ -1282,6 +1595,7 @@ components:
       type: object
       required: [api_version, service_version, hysteria_version, mihomo_version]
       properties:
+        current_admin_token_id: { type: string }
         features: { type: array, items: { type: string }, description: Optional supported features; node_packages enables node package writes. }
         api_version: { type: string }
         service_version: { type: string }
@@ -1585,3 +1899,255 @@ components:
           type: array
           items:
             "$ref": "#/components/schemas/OverviewBucket"
+
+    CredentialCreate:
+      type: object
+      required:
+      - name
+      - kind
+      - payload
+      properties:
+        name:
+          type: string
+        kind:
+          type: string
+          enum:
+          - ssh_private_key
+          - ssh_password
+          - tls_identity
+          - ca_certificate
+          - ech_key
+          - dns
+          - api_token
+        owner_user_id:
+          type: string
+        reminder_at:
+          type:
+          - string
+          - 'null'
+          format: date-time
+        payload:
+          type: object
+          additionalProperties: true
+          writeOnly: true
+    CredentialPatch:
+      type: object
+      required:
+      - expected_revision
+      - name
+      - archived
+      properties:
+        expected_revision:
+          type: integer
+        name:
+          type: string
+        archived:
+          type: boolean
+        reminder_at:
+          type:
+          - string
+          - 'null'
+          format: date-time
+    CredentialPublish:
+      type: object
+      required:
+      - expected_revision
+      - payload
+      properties:
+        expected_revision:
+          type: integer
+        payload:
+          type: object
+          additionalProperties: true
+          writeOnly: true
+    CredentialSummary:
+      type: object
+      required:
+      - id
+      - name
+      - kind
+      - revision
+      - latest_version
+      - archived
+      - status
+      - metadata
+      - created_at
+      properties:
+        reference_count: { type: integer }
+        id:
+          type: string
+        name:
+          type: string
+        kind:
+          type: string
+        owner_user_id:
+          type:
+          - string
+          - 'null'
+        revision:
+          type: integer
+        latest_version:
+          type: integer
+        archived:
+          type: boolean
+        reminder_at:
+          type:
+          - string
+          - 'null'
+          format: date-time
+        expires_at:
+          type:
+          - string
+          - 'null'
+          format: date-time
+        days_remaining:
+          type:
+          - integer
+          - 'null'
+        status:
+          type: string
+        metadata:
+          type: object
+          additionalProperties: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type:
+          - string
+          - 'null'
+          format: date-time
+    CredentialDetail:
+      allOf:
+      - $ref: '#/components/schemas/CredentialSummary'
+      - type: object
+        required:
+        - versions
+        - references
+        - batches
+        properties:
+          versions:
+            type: array
+            items:
+              $ref: '#/components/schemas/CredentialVersion'
+          references:
+            type: array
+            items:
+              $ref: '#/components/schemas/CredentialReference'
+          batches:
+            type: array
+            items:
+              $ref: '#/components/schemas/CredentialBatch'
+    CredentialVersion:
+      type: object
+      required:
+      - version
+      - metadata
+      - created_at
+      properties:
+        version:
+          type: integer
+        metadata:
+          type: object
+          additionalProperties: true
+        created_at:
+          type: string
+          format: date-time
+    CredentialReference:
+      type: object
+      required:
+      - entity_type
+      - entity_id
+      - source
+      properties:
+        entity_type:
+          type: string
+        entity_id:
+          type: string
+        source:
+          type: string
+        name:
+          type: string
+        version:
+          type: integer
+        field:
+          type: string
+        node_id:
+          type: string
+        config_revision:
+          type: integer
+    CredentialReceipt:
+      type: object
+      required:
+      - id
+      - revision
+      properties:
+        id:
+          type: string
+        revision:
+          type: integer
+        version:
+          type: integer
+        batch_id:
+          type: string
+        affected_count:
+          type: integer
+    CredentialBatchReceipt:
+      type: object
+      required:
+      - batch_id
+      - affected_count
+      properties:
+        batch_id:
+          type: string
+        affected_count:
+          type: integer
+    CredentialBatch:
+      type: object
+      required:
+      - id
+      - credential_id
+      - version
+      - created_at
+      - items
+      properties:
+        id:
+          type: string
+        credential_id:
+          type: string
+        version:
+          type: integer
+        created_at:
+          type: string
+          format: date-time
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/CredentialBatchItem'
+    CredentialBatchItem:
+      type: object
+      required:
+      - node_id
+      - user_id
+      - job_id
+      - status
+      - stage
+      properties:
+        node_id:
+          type: string
+        user_id:
+          type: string
+        job_id:
+          type: string
+        status:
+          type: string
+        stage:
+          type: string
+        error_message:
+          type:
+          - string
+          - 'null'
+        name:
+          type:
+          - string
+          - 'null'

@@ -33,27 +33,10 @@ struct ServerConfigurationView: View {
                         TextField("SSH 地址", text: $draft.sshHost)
                         TextField("SSH 端口", text: $draft.sshPort)
                         TextField("SSH 用户", text: $draft.sshUsername)
-                        Picker("认证方式", selection: $draft.sshAuthType) {
-                            Text("密码").tag("password")
-                            Text("私钥").tag("private_key")
-                        }
-                        .onChange(of: draft.sshAuthType) { _, _ in
-                            draft.sshSecret = ""
-                            draft.sshPassphrase = ""
-                            draft.clearPassphrase = false
-                        }
-                        if draft.sshAuthType == "password" {
-                            SecureField("新 SSH 密码（留空保留）", text: $draft.sshSecret)
-                        } else {
-                            Text("新 OpenSSH 私钥（留空保留）").font(.callout)
-                            TextEditor(text: $draft.sshSecret)
-                                .font(.system(.body, design: .monospaced))
-                                .frame(minHeight: 110)
-                                .accessibilityLabel("新 OpenSSH 私钥")
-                            SecureField("新私钥口令（留空保留）", text: $draft.sshPassphrase)
-                                .disabled(draft.clearPassphrase)
-                            Toggle("清除已有私钥口令", isOn: $draft.clearPassphrase)
-                        }
+                        CredentialPickerView(store: store, selection: $draft.sshCredentialId, kinds: ["ssh_private_key", "ssh_password"], title: "SSH 凭据")
+                            .onChange(of: draft.sshCredentialId) { _, id in
+                                draft.sshCredentialVersion = store.credentials.first(where: { $0.id == id })?.latestVersion ?? 1
+                            }
                         LabeledContent("已信任的 SSH 指纹", value: detail.ssh.hostFingerprint ?? "尚未确认")
                             .textSelection(.enabled)
                         Text("已有密码和私钥不会回显。保存连接信息后，可在节点列表执行 SSH 测试；首次连接或指纹变更需在任务详情中确认。")

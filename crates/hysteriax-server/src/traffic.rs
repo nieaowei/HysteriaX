@@ -119,6 +119,7 @@ async fn sample_node(
             bail!("SSH host fingerprint changed from {expected} to {observed}")
         }
     };
+    crate::kick_requests::resume_node(pool, node_id).await?;
     let before_instance = systemd_instance(&session).await?;
     let stats_secret_enc: String =
         sqlx::query_scalar("SELECT traffic_stats_secret_enc FROM nodes WHERE id = $1")
@@ -272,7 +273,7 @@ async fn apply_sample(
                         "kick",
                         Some(&assignment_node),
                         None,
-                        json!({"user_id": user_id}),
+                        json!({"user_id": user_id,"kick_reason":"access_restricted"}),
                     )
                     .await
                     .map_err(|error| anyhow::anyhow!(error.message))?;
@@ -344,7 +345,7 @@ async fn schedule_expirations(pool: &PgPool) -> Result<()> {
                     "kick",
                     Some(&node_id),
                     None,
-                    json!({"user_id": user_id}),
+                    json!({"user_id": user_id,"kick_reason":"access_restricted"}),
                 )
                 .await
                 .map_err(|error| anyhow::anyhow!(error.message))?;

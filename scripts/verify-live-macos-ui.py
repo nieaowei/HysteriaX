@@ -2,6 +2,7 @@
 """Run the macOS UI workflow against the management service in the local .env."""
 
 import json
+import os
 import pathlib
 import shutil
 import subprocess
@@ -16,6 +17,8 @@ UI_TEST_SOURCE = ROOT / "apps/macos/UITests/HysteriaXLiveUITests.swift"
 
 
 def read_env():
+    if os.environ.get("HYSTERIAX_UI_ENV_JSON"):
+        return json.loads(pathlib.Path(os.environ["HYSTERIAX_UI_ENV_JSON"]).read_text())
     values = {}
     for line in (ROOT / ".env").read_text().splitlines():
         if "=" in line and not line.lstrip().startswith("#"):
@@ -82,8 +85,9 @@ def main():
         raise SystemExit(f"Could not read nodes: HTTP {status}")
     if isinstance(nodes, dict):
         nodes = nodes.get("nodes", nodes.get("items", []))
+    allowed_hosts = set(filter(None, os.environ.get("HYSTERIAX_UI_NODE_HOSTS", "").split(",")))
     deployed = sorted(
-        (node for node in nodes if node.get("state") == "deployed"),
+        (node for node in nodes if node.get("state") == "deployed" and (not allowed_hosts or node.get("ssh", {}).get("host") in allowed_hosts)),
         key=lambda node: node.get("name", ""),
     )
     if len(deployed) < 2:
@@ -108,6 +112,8 @@ def main():
                     "nodeOneName": node_one["name"],
                     "nodeTwoID": node_two["id"],
                     "nodeTwoName": node_two["name"],
+                    "privateKeyPEM": (ROOT / "tests/fixtures/credentials-test.key").read_text(),
+                    "certificatePEM": (ROOT / "tests/fixtures/credentials-test.crt").read_text(),
                 }
             )
         )
@@ -193,6 +199,12 @@ schemes:
         ]
         with log_path.open("w") as log:
             result = subprocess.run(command, cwd=ROOT, stdout=log, stderr=subprocess.STDOUT)
+        artifact_directory = os.environ.get("HYSTERIAX_UI_ARTIFACT_DIR")
+        if artifact_directory:
+            destination = pathlib.Path(artifact_directory)
+            destination.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(log_path, destination / "xcodebuild.log")
+            subprocess.run(["xcrun", "xcresulttool", "export", "attachments", "--path", str(temp / "TestResults.xcresult"), "--output-path", str(destination)], capture_output=True)
         lines = log_path.read_text(errors="replace").splitlines()
         markers = (
             "LIVE_UI_WORKFLOW=",
@@ -211,6 +223,13 @@ schemes:
                 print(line.replace(token, "[redacted]"))
 
         cleanup_ok = cleanup_test_user(base, token, user_name)
+        status, entries = request(base, token, "/api/v1/credentials")
+        if status == 200:
+            for entry in entries:
+                if entry.get("name") in {"HX UI Credential " + user_name, "HX UI Credential Inline " + user_name}:
+                    status, _ = request(base, token, f"/api/v1/credentials/{entry['id']}?expected_revision={entry['revision']}", method="DELETE")
+                    cleanup_ok = cleanup_ok and status == 204
+            print("UI_CREDENTIAL_CLEANUP=" + ("passed" if cleanup_ok else "failed"))
         if result.returncode:
             tail = "\n".join(lines[-55:]).replace(token, "[redacted]")
             print("XCODEBUILD_TAIL_BEGIN\n" + tail + "\nXCODEBUILD_TAIL_END")

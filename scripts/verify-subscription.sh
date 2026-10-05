@@ -22,6 +22,11 @@ SERVER = ROOT / "target" / "debug" / "hysteriax-server"
 
 
 def request(base, path, token, method="GET", payload=None):
+    from credential_test_fixtures import request_with_credentials
+    return request_with_credentials(raw_request, base, path, token, method, payload)
+
+
+def raw_request(base, path, token, method="GET", payload=None):
     body = None if payload is None else json.dumps(payload).encode()
     headers = {"Authorization": f"Bearer {token}"}
     if body is not None:
@@ -93,6 +98,8 @@ def main():
                 stderr=subprocess.DEVNULL,
             )
 
+            fixture_identity = json.loads(request(base, "/api/v1/credentials", admin, "POST", {"name":"Parser TLS","kind":"tls_identity","payload":{"certificate":(ROOT / "tests/fixtures/credentials-test.crt").read_text(),"private_key":(ROOT / "tests/fixtures/credentials-test.key").read_text()}})[1])["id"]
+            fixture_ca = json.loads(request(base, "/api/v1/credentials", admin, "POST", {"name":"Parser CA","kind":"ca_certificate","payload":{"content":(ROOT / "tests/fixtures/credentials-test.crt").read_text()}})[1])["id"]
             status, body = request(
                 base,
                 "/api/v1/nodes",
@@ -111,9 +118,9 @@ def main():
                     "tls_sni": "example.com",
                     "config": {
                         "tls": {
-                            "cert": "/etc/hysteriax/server.pem",
-                            "key": "/etc/hysteriax/server-key.pem",
-                            "clientCA": "/etc/hysteriax/client-ca.pem",
+                            "cert": f"credential://{fixture_identity}/1/certificate",
+                            "key": f"credential://{fixture_identity}/1/private_key",
+                            "clientCA": f"credential://{fixture_ca}/1/content",
                         },
                         "obfs": {
                             "type": "gecko",
@@ -187,8 +194,8 @@ def main():
                     "tls_sni": "hy2.example.test",
                     "config": {
                         "tls": {
-                            "cert": "/etc/hysteriax/server.pem",
-                            "key": "/etc/hysteriax/server-key.pem",
+                            "cert": f"credential://{fixture_identity}/1/certificate",
+                            "key": f"credential://{fixture_identity}/1/private_key",
                         },
                         "realm": {
                             "connection": {

@@ -10,6 +10,8 @@ private struct UITestCredentials: Decodable {
     let nodeOneName: String
     let nodeTwoID: String
     let nodeTwoName: String
+    let privateKeyPEM: String
+    let certificatePEM: String
 }
 
 private enum UITestConfiguration {
@@ -32,7 +34,7 @@ final class HysteriaXLiveUITests: XCTestCase {
         app.launch()
         print("FRONTMOST_AFTER_LAUNCH=" + frontmostBundleIdentifier())
 
-        let settingsButton = button(app, "设置")
+        let settingsButton = app.buttons["gearshape"].firstMatch
         XCTAssertTrue(settingsButton.waitForExistence(timeout: 20))
         settingsButton.click()
         print("FRONTMOST_AFTER_HYSTERIAX_SETTINGS=" + frontmostBundleIdentifier())
@@ -57,7 +59,7 @@ final class HysteriaXLiveUITests: XCTestCase {
         try await Task.sleep(for: .seconds(2))
         print("SYSTEM_SETTINGS_AFTER_VERIFY=" + systemSettingsProcessIDs())
         print("FRONTMOST_AFTER_VERIFY=" + frontmostBundleIdentifier())
-        XCTAssertTrue(button(app, "创建并切换").waitForExistence(timeout: 10), "The connected token-management controls should load.")
+        XCTAssertTrue(button(app, "在凭据中心管理 Token、证书和私钥").waitForExistence(timeout: 10))
 
         openSection(app, "节点")
         print("FRONTMOST_AFTER_NODES=" + frontmostBundleIdentifier())
@@ -71,19 +73,119 @@ final class HysteriaXLiveUITests: XCTestCase {
             "node.create.sshUsername",
             "node.create.publicHost",
             "node.create.publicPort",
-            "node.create.listenAddress",
-            "node.create.tlsSNI",
-            "node.create.proxyProbeURL",
-            "node.create.tlsMode",
         ] {
             XCTAssertTrue(
                 identified(app, identifier).waitForExistence(timeout: 10),
                 "The add-node form should expose its field: \(identifier)"
             )
         }
-        XCTAssertTrue(app.secureTextFields["node.create.sshPassword"].waitForExistence(timeout: 10))
+        XCTAssertTrue(identified(app, "credential.picker").waitForExistence(timeout: 10))
         button(app, "取消").click()
         XCTAssertFalse(identified(app, "node.create.name").waitForExistence(timeout: 2))
+        identified(app, "nodes.row.\(credentials.nodeOneID)").click()
+        button(app, "代理配置").click()
+        let tlsMode = app.popUpButtons["proxy.tls.mode"].firstMatch
+        XCTAssertTrue(tlsMode.waitForExistence(timeout: 20))
+        for _ in 0..<8 where !tlsMode.isHittable {
+            app.scrollViews.containing(.popUpButton, identifier: "proxy.tls.mode").firstMatch.scroll(byDeltaX: 0, deltaY: -250)
+        }
+        tlsMode.click()
+        app.menuItems["凭据中心证书"].firstMatch.click()
+        for identifier in ["proxy.credential.identity", "proxy.credential.clientCA", "proxy.credential.ech"] {
+            XCTAssertTrue(app.popUpButtons[identifier].firstMatch.waitForExistence(timeout: 10))
+        }
+        for target in ["identity", "clientCA", "ech"] {
+            XCTAssertTrue(app.buttons["proxy.credential.create.\(target)"].firstMatch.exists)
+        }
+        let createCA = app.buttons["proxy.credential.create.identity"].firstMatch
+        for _ in 0..<8 where !createCA.isHittable {
+            app.scrollViews.containing(.popUpButton, identifier: "proxy.credential.identity").firstMatch.scroll(byDeltaX: 0, deltaY: -250)
+        }
+        createCA.click()
+        let inlineName = "HX UI Credential Inline " + credentials.userName
+        let inlineNameField = app.textFields["credential.editor.name"].firstMatch
+        XCTAssertTrue(inlineNameField.waitForExistence(timeout: 10))
+        inlineNameField.click(); inlineNameField.typeText(inlineName)
+        let inlineContent = app.textViews["credential.editor.content.certificate"].firstMatch
+        XCTAssertTrue(inlineContent.waitForExistence(timeout: 10))
+        inlineContent.click(); inlineContent.typeText("-----BEGIN CERTIFICATE-----\n")
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(String(credentials.certificatePEM.dropFirst("-----BEGIN CERTIFICATE-----\n".count)), forType: .string)
+        app.typeKey("v", modifierFlags: .command)
+        XCTAssertEqual(inlineContent.value as? String, credentials.certificatePEM, "PEM punctuation and newlines must remain unchanged.")
+        let inlineKey = app.textViews["credential.editor.content.private_key"].firstMatch
+        inlineKey.click()
+        NSPasteboard.general.clearContents(); NSPasteboard.general.setString(credentials.privateKeyPEM, forType: .string)
+        app.typeKey("v", modifierFlags: .command)
+        XCTAssertEqual(inlineKey.value as? String, credentials.privateKeyPEM)
+        identified(app, "credential.editor.save").click()
+        XCTAssertTrue(identified(app, "credential.editor.save").waitForNonExistence(timeout: 30))
+        XCTAssertTrue(String(describing: app.popUpButtons["proxy.credential.identity"].firstMatch.value).contains(inlineName), "Inline creation should select the new credential without leaving proxy configuration.")
+        XCTAssertFalse(app.popUpButtons["proxy.credential.certificate"].exists)
+        XCTAssertFalse(app.popUpButtons["proxy.credential.privateKey"].exists)
+        XCTAssertFalse(app.textFields["证书路径或 resource:// 引用"].exists)
+        XCTAssertFalse(app.textFields["私钥路径或 resource:// 引用"].exists)
+        let resourceKind = app.popUpButtons["proxy.resource.kind"].firstMatch
+        XCTAssertTrue(resourceKind.waitForExistence(timeout: 10))
+        for _ in 0..<8 where !resourceKind.isHittable {
+            app.scrollViews.containing(.popUpButton, identifier: "proxy.resource.kind").firstMatch.scroll(byDeltaX: 0, deltaY: -250)
+        }
+        resourceKind.click()
+        for title in ["ACL 规则", "GeoIP 数据", "GeoSite 数据"] { XCTAssertTrue(app.menuItems[title].firstMatch.exists) }
+        for title in ["证书", "私钥", "ECH 密钥"] { XCTAssertFalse(app.menuItems[title].firstMatch.exists) }
+        app.menuItems["ACL 规则"].firstMatch.click()
+        let proxyScreenshot = XCTAttachment(screenshot: app.screenshot())
+        proxyScreenshot.name = "Proxy configuration credential selectors and ordinary resources"
+        proxyScreenshot.lifetime = .keepAlways
+        add(proxyScreenshot)
+        button(app, "取消").click()
+        XCTAssertTrue(tlsMode.waitForNonExistence(timeout: 10))
+        openSection(app, "凭据")
+        XCTAssertTrue(identified(app, "credentials.table").waitForExistence(timeout: 15))
+        XCTAssertTrue(identified(app, "sidebar.jobs").isHittable, "Credential page must keep the outer sidebar visible and clickable.")
+        let credentialPage = XCTAttachment(screenshot: app.screenshot())
+        credentialPage.name = "Credential page before editing"
+        credentialPage.lifetime = .keepAlways
+        add(credentialPage)
+        button(app, "创建凭据").click()
+        XCTAssertTrue(identified(app, "credential.editor.save").waitForExistence(timeout: 10))
+        button(app, "取消").click()
+        let credentialName = "HX UI Credential " + credentials.userName
+        button(app, "创建凭据").click()
+        let credentialNameField = app.textFields["credential.editor.name"].firstMatch
+        XCTAssertTrue(credentialNameField.waitForExistence(timeout: 10))
+        credentialNameField.click(); credentialNameField.typeText(credentialName)
+        let kindPicker = app.popUpButtons["credential.editor.kind"].firstMatch
+        kindPicker.click(); app.menuItems["API Token"].firstMatch.click()
+        let secretField = app.secureTextFields["credential.editor.token"].firstMatch
+        XCTAssertTrue(secretField.waitForExistence(timeout: 10))
+        secretField.click(); secretField.typeText("ui-fixture-initial-value")
+        identified(app, "credential.editor.save").click()
+        XCTAssertTrue(identified(app, "credential.editor.save").waitForNonExistence(timeout: 30), "Credential editor should close after its write and refresh complete.")
+        let credentialRow = app.staticTexts[credentialName].firstMatch
+        XCTAssertTrue(credentialRow.waitForExistence(timeout: 20))
+        credentialRow.click()
+        XCTAssertTrue(button(app, "发布新版本").waitForExistence(timeout: 15))
+        XCTAssertFalse(app.secureTextFields["credential.editor.token"].exists)
+        button(app, "发布新版本").click()
+        let replacementSecret = app.secureTextFields["credential.editor.token"].firstMatch
+        XCTAssertTrue(replacementSecret.waitForExistence(timeout: 10))
+        replacementSecret.click(); replacementSecret.typeText("ui-fixture-replacement-value")
+        identified(app, "credential.editor.save").click()
+        XCTAssertTrue(identified(app, "credential.editor.save").waitForNonExistence(timeout: 30), "Credential editor should close after its write and refresh complete.")
+        try await Task.sleep(for: .seconds(2))
+        let (credentialStatus, credentialData) = try await request(base: credentials.serviceAddress, token: credentials.adminToken, path: "/api/v1/credentials")
+        XCTAssertEqual(credentialStatus, 200)
+        let credentialList = try XCTUnwrap(JSONSerialization.jsonObject(with: credentialData) as? [[String: Any]])
+        let createdCredential = try XCTUnwrap(credentialList.first { $0["name"] as? String == credentialName })
+        XCTAssertEqual(createdCredential["latest_version"] as? Int, 2)
+        let responseText = String(decoding: credentialData, as: UTF8.self)
+        XCTAssertFalse(responseText.contains("ui-fixture-initial-value"))
+        XCTAssertFalse(responseText.contains("ui-fixture-replacement-value"))
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = "Credential center"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
         openSection(app, "任务")
         print("FRONTMOST_AFTER_JOBS=" + frontmostBundleIdentifier())
         XCTAssertTrue(identified(app, "jobs.title").waitForExistence(timeout: 10))
@@ -99,6 +201,7 @@ final class HysteriaXLiveUITests: XCTestCase {
         userNameField.click()
         userNameField.typeText(UITestConfiguration.userName)
         button(app, "创建用户").click()
+        XCTAssertTrue(userNameField.waitForNonExistence(timeout: 30), "User form should close after creation and refresh complete.")
         let userID = try await userID(named: UITestConfiguration.userName, credentials: credentials)
         let userRow = identified(app, "users.row.\(userID)")
         XCTAssertTrue(userRow.waitForExistence(timeout: 15))
@@ -171,6 +274,7 @@ final class HysteriaXLiveUITests: XCTestCase {
         case "概览": sectionID = "overview"
         case "节点": sectionID = "nodes"
         case "用户": sectionID = "users"
+        case "凭据": sectionID = "credentials"
         case "任务": sectionID = "jobs"
         case "审计": sectionID = "audit"
         default: XCTFail("Unknown sidebar section: \(title)"); return
@@ -181,21 +285,19 @@ final class HysteriaXLiveUITests: XCTestCase {
     }
 
     private func assignUser(_ app: XCUIApplication, nodeID: String, nodeName: String) {
-        let assignmentMenu = identified(app, "users.assignNodeMenu")
-        XCTAssertTrue(assignmentMenu.waitForExistence(timeout: 15))
-        assignmentMenu.click()
-        let node = identified(app, "users.assignNode.\(nodeID)")
-        XCTAssertTrue(node.waitForExistence(timeout: 10), "Node assignment menu item should exist.")
+        let assignmentButton = identified(app, "users.assignNodeMenu")
+        XCTAssertTrue(assignmentButton.waitForExistence(timeout: 15))
+        assignmentButton.click()
+        let node = identified(app, "user.assignments.node.\(nodeID)")
+        XCTAssertTrue(node.waitForExistence(timeout: 15), "The node assignment checkbox should exist.")
         node.click()
-
-        XCTAssertTrue(identified(app, "user.assignment.summary").waitForExistence(timeout: 10))
-        let submitButtons = app.buttons.matching(NSPredicate(format: "label == %@", "分配节点"))
-            .allElementsBoundByIndex
-        guard let submit = submitButtons.last(where: { $0.isHittable }) else {
-            XCTFail("The assignment form's submit button should be hittable.")
-            return
-        }
-        submit.click()
+        identified(app, "user.assignments.save").click()
+        let complete = button(app, "完成")
+        XCTAssertTrue(complete.waitForExistence(timeout: 30))
+        let enabled = XCTNSPredicateExpectation(predicate: NSPredicate(format: "enabled == true"), object: complete)
+        XCTAssertEqual(XCTWaiter.wait(for: [enabled], timeout: 30), .completed)
+        complete.click()
+        XCTAssertTrue(node.waitForNonExistence(timeout: 15))
     }
 
     private func chooseMenuAction(_ app: XCUIApplication, menu: String, action: String) {

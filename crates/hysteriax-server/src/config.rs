@@ -421,7 +421,7 @@ fn realm_listen_uri(connection: &RealmConnection, listen_addr: &str) -> Result<S
     Ok(format!("{}?lport={port}", realm_client_uri(connection)?))
 }
 
-fn validate_acme(value: &Value) -> Result<()> {
+pub(crate) fn validate_acme(value: &Value) -> Result<()> {
     let acme = value.as_object().context("acme must be an object")?;
     allow_fields(
         acme,
@@ -1224,7 +1224,7 @@ pub fn render_server_yaml_preview_with_traffic_stats_port(
     {
         *token = Value::String("REDACTED_TOKEN".to_owned());
     }
-    render_server_yaml_with_traffic_stats_port(
+    let rendered = render_server_yaml_with_traffic_stats_port(
         &preview,
         listen_addr,
         node_id,
@@ -1232,7 +1232,20 @@ pub fn render_server_yaml_preview_with_traffic_stats_port(
         stats_secret,
         management_base_url,
         traffic_stats_port,
-    )
+    )?;
+    // Redact the parsed document after validation: replacing Namecheap IP or
+    // endpoint fields before validation would reject otherwise valid configs.
+    // Working on values also handles quoted and multiline YAML secrets.
+    let mut document: Value = serde_yaml::from_str(&rendered)?;
+    if let Some(fields) = document
+        .pointer_mut("/acme/dns/config")
+        .and_then(Value::as_object_mut)
+    {
+        for value in fields.values_mut() {
+            *value = json!("[redacted]");
+        }
+    }
+    serde_yaml::to_string(&document).context("serialize redacted configuration preview")
 }
 
 pub fn listener_hop_ports(listen_addr: &str) -> Option<&str> {

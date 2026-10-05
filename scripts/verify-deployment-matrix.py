@@ -91,6 +91,11 @@ def wait_for_systemd(container, timeout=30):
 
 
 def request(base, path, token=None, method="GET", payload=None):
+    from credential_test_fixtures import request_with_credentials
+    return request_with_credentials(raw_request, base, path, token, method, payload)
+
+
+def raw_request(base, path, token=None, method="GET", payload=None):
     body = None if payload is None else json.dumps(payload).encode()
     headers = {}
     if token is not None:

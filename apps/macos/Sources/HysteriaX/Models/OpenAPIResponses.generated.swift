@@ -1,6 +1,180 @@
 // Generated from openapi/openapi.yaml by scripts/generate-swift-api-models.rb. Do not edit.
 import Foundation
 
+struct CredentialSummary: Codable, Sendable, Identifiable {
+    let referenceCount: Int?
+    let id: String
+    let name: String
+    let kind: String
+    let ownerUserId: String?
+    let revision: Int
+    let latestVersion: Int
+    let archived: Bool
+    let reminderAt: String?
+    let expiresAt: String?
+    let daysRemaining: Int?
+    let status: String
+    let metadata: [String: JSONValue]
+    let createdAt: String
+    let updatedAt: String?
+
+    enum CodingKeys: String, CodingKey {
+        case referenceCount = "reference_count"
+        case id
+        case name
+        case kind
+        case ownerUserId = "owner_user_id"
+        case revision
+        case latestVersion = "latest_version"
+        case archived
+        case reminderAt = "reminder_at"
+        case expiresAt = "expires_at"
+        case daysRemaining = "days_remaining"
+        case status
+        case metadata
+        case createdAt = "created_at"
+        case updatedAt = "updated_at"
+    }
+}
+
+struct CredentialDetail: Codable, Sendable, Identifiable {
+    let referenceCount: Int?
+    let id: String
+    let name: String
+    let kind: String
+    let ownerUserId: String?
+    let revision: Int
+    let latestVersion: Int
+    let archived: Bool
+    let reminderAt: String?
+    let expiresAt: String?
+    let daysRemaining: Int?
+    let status: String
+    let metadata: [String: JSONValue]
+    let createdAt: String
+    let updatedAt: String?
+    let versions: [CredentialVersion]
+    let references: [CredentialReference]
+    let batches: [CredentialBatch]
+
+    enum CodingKeys: String, CodingKey {
+        case referenceCount = "reference_count"
+        case id
+        case name
+        case kind
+        case ownerUserId = "owner_user_id"
+        case revision
+        case latestVersion = "latest_version"
+        case archived
+        case reminderAt = "reminder_at"
+        case expiresAt = "expires_at"
+        case daysRemaining = "days_remaining"
+        case status
+        case metadata
+        case createdAt = "created_at"
+        case updatedAt = "updated_at"
+        case versions
+        case references
+        case batches
+    }
+}
+
+struct CredentialVersion: Codable, Sendable {
+    let version: Int
+    let metadata: [String: JSONValue]
+    let createdAt: String
+
+    enum CodingKeys: String, CodingKey {
+        case version
+        case metadata
+        case createdAt = "created_at"
+    }
+}
+
+struct CredentialReference: Codable, Sendable {
+    let entityType: String
+    let entityID: String
+    let source: String
+    let name: String?
+    let version: Int?
+    let field: String?
+    let nodeID: String?
+    let configRevision: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case entityType = "entity_type"
+        case entityID = "entity_id"
+        case source
+        case name
+        case version
+        case field
+        case nodeID = "node_id"
+        case configRevision = "config_revision"
+    }
+}
+
+struct CredentialReceipt: Codable, Sendable {
+    let id: String
+    let revision: Int
+    let version: Int?
+    let batchId: String?
+    let affectedCount: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case revision
+        case version
+        case batchId = "batch_id"
+        case affectedCount = "affected_count"
+    }
+}
+
+struct CredentialBatch: Codable, Sendable, Identifiable {
+    let id: String
+    let credentialId: String
+    let version: Int
+    let createdAt: String
+    let items: [CredentialBatchItem]
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case credentialId = "credential_id"
+        case version
+        case createdAt = "created_at"
+        case items
+    }
+}
+
+struct CredentialBatchItem: Codable, Sendable {
+    let nodeID: String
+    let userId: String
+    let jobId: String
+    let status: String
+    let stage: String
+    let errorMessage: String?
+    let name: String?
+
+    enum CodingKeys: String, CodingKey {
+        case nodeID = "node_id"
+        case userId = "user_id"
+        case jobId = "job_id"
+        case status
+        case stage
+        case errorMessage = "error_message"
+        case name
+    }
+}
+
+struct CredentialBatchReceipt: Codable, Sendable {
+    let batchId: String
+    let affectedCount: Int
+
+    enum CodingKeys: String, CodingKey {
+        case batchId = "batch_id"
+        case affectedCount = "affected_count"
+    }
+}
+
 struct NodePackage: Codable, Sendable {
     let expiresAt: String?
     let quotaBytes: Int64?
@@ -113,6 +287,8 @@ struct NodeSSHDetail: Codable, Sendable {
     let username: String
     let authType: String
     let hostFingerprint: String?
+    let credentialId: String
+    let credentialVersion: Int
 
     enum CodingKeys: String, CodingKey {
         case host
@@ -120,6 +296,8 @@ struct NodeSSHDetail: Codable, Sendable {
         case username
         case authType = "auth_type"
         case hostFingerprint = "host_fingerprint"
+        case credentialId = "credential_id"
+        case credentialVersion = "credential_version"
     }
 }
 
@@ -188,10 +366,14 @@ struct NodeDetail: Codable, Sendable, Identifiable {
 struct AssignmentInfo: Codable, Sendable {
     let nodeID: String
     let createdAt: String
+    let mtlsCredentialId: String?
+    let mtlsCredentialVersion: Int?
 
     enum CodingKeys: String, CodingKey {
         case nodeID = "node_id"
         case createdAt = "created_at"
+        case mtlsCredentialId = "mtls_credential_id"
+        case mtlsCredentialVersion = "mtls_credential_version"
     }
 }
 
@@ -634,6 +816,7 @@ struct APIHealth: Codable, Sendable {
 }
 
 struct APIVersion: Codable, Sendable {
+    let currentAdminTokenId: String?
     let features: [String]?
     let apiVersion: String
     let serviceVersion: String
@@ -641,6 +824,7 @@ struct APIVersion: Codable, Sendable {
     let mihomoVersion: String
 
     enum CodingKeys: String, CodingKey {
+        case currentAdminTokenId = "current_admin_token_id"
         case features
         case apiVersion = "api_version"
         case serviceVersion = "service_version"

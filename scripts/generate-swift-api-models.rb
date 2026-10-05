@@ -18,6 +18,9 @@ end.parse!
 spec = YAML.load_file(spec_path)
 schemas = spec.fetch("components").fetch("schemas")
 models = {
+  "CredentialCreate" => "CredentialCreateRequest",
+  "CredentialPatch" => "CredentialPatchRequest",
+  "CredentialPublish" => "CredentialPublishRequest",
   "NodeUsageUpdate" => "NodeUsageUpdateRequest",
   "NodeCreate" => "NodeCreateRequest",
   "NodePatch" => "NodePatchRequest",
@@ -29,6 +32,8 @@ models = {
   "AssignmentCertificateUpdate" => "AssignmentCertificateUpdateRequest",
 }
 response_models = %w[
+  CredentialSummary CredentialDetail CredentialVersion CredentialReference CredentialReceipt
+  CredentialBatch CredentialBatchItem CredentialBatchReceipt
   NodePackage NodePackageUsage NodeAlert NodeUsageUpdateResponse
   NodeSummary NodeSSHDetail NodeConnectionDetail NodeDetail
   AssignmentInfo UserSummary JobOutcome JobResult JobSummary AuditSummary
@@ -42,7 +47,7 @@ response_models = %w[
   AdminTokenSummary AdminTokenReceipt ServerMonitoring
   OverviewIssue OverviewNode OverviewResponse OverviewBucket OverviewHistory
 ]
-identifiable_models = %w[NodeSummary NodeDetail UserSummary JobSummary AuditSummary NodeResource AdminTokenSummary]
+identifiable_models = %w[CredentialSummary CredentialDetail CredentialBatch NodeSummary NodeDetail UserSummary JobSummary AuditSummary NodeResource AdminTokenSummary]
 
 def resolve_schema(schema, schemas, stack = [])
   if schema.key?("$ref")

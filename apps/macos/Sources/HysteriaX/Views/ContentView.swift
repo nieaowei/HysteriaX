@@ -1,7 +1,7 @@
 import SwiftUI
 
 private enum MainSection: String, CaseIterable, Identifiable {
-    case overview, nodes, users, jobs, audit
+    case overview, nodes, users, credentials, jobs, audit
 
     var id: String { rawValue }
     var title: String {
@@ -9,6 +9,7 @@ private enum MainSection: String, CaseIterable, Identifiable {
         case .overview: "概览"
         case .nodes: "节点"
         case .users: "用户"
+        case .credentials: "凭据"
         case .jobs: "任务"
         case .audit: "审计"
         }
@@ -18,6 +19,7 @@ private enum MainSection: String, CaseIterable, Identifiable {
         case .overview: "HysteriaX 管理中心"
         case .nodes: "节点"
         case .users: "用户"
+        case .credentials: "凭据"
         case .jobs: "任务"
         case .audit: "审计"
         }
@@ -27,6 +29,7 @@ private enum MainSection: String, CaseIterable, Identifiable {
         case .overview: "overview.page"
         case .nodes: "nodes.title"
         case .users: "users.title"
+        case .credentials: "credentials.page"
         case .jobs: "jobs.title"
         case .audit: "audit.title"
         }
@@ -36,6 +39,7 @@ private enum MainSection: String, CaseIterable, Identifiable {
         case .overview: "square.grid.2x2"
         case .nodes: "server.rack"
         case .users: "person.2"
+        case .credentials: "key.horizontal"
         case .jobs: "list.bullet.rectangle"
         case .audit: "clock.arrow.circlepath"
         }
@@ -62,6 +66,8 @@ struct ContentView: View {
             "管理 SSH 连接、Hysteria 配置和部署状态。"
         case .users:
             "管理启停、到期、流量额度和节点分配。"
+        case .credentials:
+            "集中管理凭据、引用、到期时间和更新结果。"
         case .jobs:
             "部署、同步和撤权任务的阶段与结果。"
         case .audit:
@@ -108,6 +114,9 @@ struct ContentView: View {
                 }
         }
         .task { await store.refresh() }
+        .onChange(of: store.requestedSection) { _, section in
+            if let section { selectedSection = section; store.requestedSection = nil }
+        }
         .alert("无法连接管理服务", isPresented: Binding(
             get: { store.errorMessage != nil },
             set: { if !$0 { store.errorMessage = nil } }
@@ -128,6 +137,10 @@ struct ContentView: View {
         case .nodes: NodesView(store: store, initialSelection: overviewDestination?.section == "nodes" ? overviewDestination?.entityID : nil, onInitialSelectionHandled: { overviewDestination = nil })
         case .users: UsersView(store: store, initialSelection: overviewDestination?.section == "users" ? overviewDestination?.entityID : nil, onInitialSelectionHandled: { overviewDestination = nil })
         case .jobs: JobsView(store: store, initialSelection: overviewDestination?.section == "jobs" ? overviewDestination?.entityID : nil, onInitialSelectionHandled: { overviewDestination = nil })
+        case .credentials: CredentialsView(store: store) { type, id in
+            overviewDestination = OverviewDestination(section: type == "user" ? "users" : type == "job" ? "jobs" : "nodes", entityID: id)
+            selectedSection = type == "user" ? "users" : type == "job" ? "jobs" : "nodes"
+        }
         case .audit: AuditView(store: store)
         }
     }

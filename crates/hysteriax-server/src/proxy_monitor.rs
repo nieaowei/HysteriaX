@@ -227,7 +227,7 @@ async fn probe_using(
         .and_then(Value::as_str)
         .is_some_and(|v| !v.is_empty())
     {
-        let cert=sqlx::query("SELECT client_certificate_enc,client_private_key_enc FROM node_assignments WHERE node_id=$1 AND client_certificate_enc IS NOT NULL AND client_private_key_enc IS NOT NULL ORDER BY created_at LIMIT 1").bind(id).fetch_optional(&state.pool).await?;
+        let cert=sqlx::query("SELECT user_id,mtls_credential_id,mtls_credential_version FROM node_assignments WHERE node_id=$1 AND mtls_credential_id IS NOT NULL ORDER BY created_at LIMIT 1").bind(id).fetch_optional(&state.pool).await?;
         let Some(cert) = cert else {
             return Ok(ProbeResult {
                 status: "unconfigured".into(),
@@ -237,18 +237,12 @@ async fn probe_using(
         };
         let cp = dir.0.join("client.crt");
         let kp = dir.0.join("client.key");
-        std::fs::write(
-            &cp,
-            state
-                .secrets
-                .decrypt(&cert.get::<String, _>("client_certificate_enc"))?,
-        )?;
-        std::fs::write(
-            &kp,
-            state
-                .secrets
-                .decrypt(&cert.get::<String, _>("client_private_key_enc"))?,
-        )?;
+        let (certificate, private_key) =
+            crate::credentials::assignment_identity(&state.pool, &state.secrets, &cert)
+                .await?
+                .context("mTLS identity missing")?;
+        std::fs::write(&cp, certificate)?;
+        std::fs::write(&kp, private_key)?;
         tls["clientCertificate"] = json!(cp);
         tls["clientKey"] = json!(kp);
     }
@@ -403,7 +397,7 @@ mod tests {
         let pool = crate::db::test_pool_with_max_connections(3).await;
         let key = base64::engine::general_purpose::STANDARD_NO_PAD.encode([8_u8; 32]);
         let state = AppState::new(pool, crate::security::SecretBox::from_base64(&key).unwrap());
-        let (_,axum::Json(created))=crate::api::nodes::create(axum::extract::State(state.clone()),axum::Json(serde_json::from_value(json!({"name":"Probe test","ssh_host":"127.0.0.1","ssh_port":22,"ssh_username":"root","ssh_auth_type":"password","ssh_secret":"unused","public_host":"example.test","public_port":443,"listen_addr":":443"})).unwrap())).await.unwrap();
+        let (_,axum::Json(created))=crate::api::nodes::create(axum::extract::State(state.clone()),axum::Json(crate::credentials::test_node_request(&state,json!({"name":"Probe test","ssh_host":"127.0.0.1","ssh_port":22,"ssh_username":"root","ssh_auth_type":"password","ssh_secret":"unused","public_host":"example.test","public_port":443,"listen_addr":":443"})).await)).await.unwrap();
         (state, created["node"]["id"].as_str().unwrap().into())
     }
     #[tokio::test]

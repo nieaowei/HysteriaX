@@ -1,3 +1,4 @@
+pub(crate) mod credentials;
 pub(crate) mod job_retries;
 pub(crate) mod nodes;
 pub(crate) mod resources;
@@ -10,7 +11,7 @@ use async_stream::stream;
 use axum::{
     Json, Router,
     body::Body,
-    extract::{DefaultBodyLimit, Path, Query, State},
+    extract::{DefaultBodyLimit, Extension, Path, Query, State},
     http::{HeaderMap, StatusCode, header},
     middleware::{self, Next},
     response::{IntoResponse, Response, Sse, sse::Event},
@@ -23,7 +24,12 @@ use sqlx::{PgPool, Postgres, Row, Transaction};
 use subtle::ConstantTimeEq;
 use uuid::Uuid;
 
-use crate::{error::ApiError, security::token_digest, state::AppState};
+use crate::{db, error::ApiError, security::token_digest, state::AppState};
+
+#[derive(Clone)]
+pub(crate) struct AdminActor {
+    pub id: String,
+}
 
 pub fn router(state: AppState) -> Router {
     let admin = Router::new()
@@ -83,6 +89,29 @@ pub fn router(state: AppState) -> Router {
             get(list_admin_tokens).post(create_admin_token),
         )
         .route("/api/v1/admin/tokens/{id}", delete(revoke_admin_token))
+        .route(
+            "/api/v1/credentials",
+            get(credentials::list).post(credentials::create),
+        )
+        .route(
+            "/api/v1/credentials/{id}",
+            get(credentials::get)
+                .patch(credentials::patch)
+                .delete(credentials::delete),
+        )
+        .route(
+            "/api/v1/credentials/{id}/versions",
+            post(credentials::publish),
+        )
+        .route(
+            "/api/v1/credentials/{id}/references",
+            get(credentials::references),
+        )
+        .route("/api/v1/credential-batches/{id}", get(credentials::batch))
+        .route(
+            "/api/v1/credential-batches/{id}/retry",
+            post(credentials::retry),
+        )
         .layer(DefaultBodyLimit::max(30 * 1024 * 1024))
         .route_layer(middleware::from_fn_with_state(state.clone(), require_admin));
 
@@ -117,7 +146,7 @@ pub fn router(state: AppState) -> Router {
 
 async fn require_admin(
     State(state): State<AppState>,
-    request: axum::extract::Request,
+    mut request: axum::extract::Request,
     next: Next,
 ) -> Response {
     let Some(token) = request
@@ -135,29 +164,40 @@ async fn require_admin(
     };
 
     let digest = token_digest(token);
-    let hashes = match sqlx::query_scalar::<_, String>(
-        "SELECT token_hash FROM admin_tokens WHERE revoked_at IS NULL",
-    )
-    .fetch_all(&state.pool)
-    .await
-    {
-        Ok(hashes) => hashes,
-        Err(error) => {
-            tracing::error!(%error, "failed to verify administrator token");
-            return ApiError::internal().into_response();
-        }
-    };
-    let authorized = hashes.iter().any(|known| {
+    let hashes =
+        match sqlx::query("SELECT id, token_hash FROM admin_tokens WHERE revoked_at IS NULL")
+            .fetch_all(&state.pool)
+            .await
+        {
+            Ok(hashes) => hashes,
+            Err(error) => {
+                tracing::error!(%error, "failed to verify administrator token");
+                return ApiError::internal().into_response();
+            }
+        };
+    let actor = hashes.iter().find(|row| {
+        let known: String = row.get("token_hash");
         known.len() == digest.len() && bool::from(known.as_bytes().ct_eq(digest.as_bytes()))
     });
-    if !authorized {
+    let Some(actor) = actor else {
         return ApiError::new(
             StatusCode::UNAUTHORIZED,
             "unauthorized",
             "administrator token is invalid",
         )
         .into_response();
+    };
+    let id: String = actor.get("id");
+    if sqlx::query("UPDATE admin_tokens SET last_used_at=$1 WHERE id=$2 AND revoked_at IS NULL")
+        .bind(now())
+        .bind(&id)
+        .execute(&state.pool)
+        .await
+        .is_err()
+    {
+        return ApiError::internal().into_response();
     }
+    request.extensions_mut().insert(AdminActor { id });
     next.run(request).await
 }
 
@@ -165,10 +205,11 @@ async fn healthz() -> Json<Value> {
     Json(json!({"status": "ok"}))
 }
 
-async fn api_version() -> Json<Value> {
+async fn api_version(Extension(actor): Extension<AdminActor>) -> Json<Value> {
     Json(json!({
         "api_version": "1.0.0",
-        "features": ["node_packages", "overview_monitoring", "job_retry_links"],
+        "features": ["node_packages", "overview_monitoring", "job_retry_links", "credentials"],
+        "current_admin_token_id": actor.id,
         "service_version": env!("CARGO_PKG_VERSION"),
         "hysteria_version": "app/v2.12.3",
         "mihomo_version": "v1.19.31"
@@ -398,25 +439,35 @@ fn validate_admin_token_label(label: &str) -> Result<&str, ApiError> {
 
 async fn revoke_admin_token(
     State(state): State<AppState>,
+    Extension(actor): Extension<AdminActor>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
+    if actor.id == id {
+        return Err(ApiError::conflict(
+            "cannot revoke the token used by this request",
+        ));
+    }
+    let mut tx = db::begin_write(&state.pool).await?;
+    let count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM admin_tokens WHERE revoked_at IS NULL")
+            .fetch_one(&mut *tx)
+            .await?;
+    if count <= 1 {
+        return Err(ApiError::conflict(
+            "cannot revoke the last active administrator token",
+        ));
+    }
     let result =
-        sqlx::query("UPDATE admin_tokens SET revoked_at = $1 WHERE id = $2 AND revoked_at IS NULL")
+        sqlx::query("UPDATE admin_tokens SET revoked_at=$1 WHERE id=$2 AND revoked_at IS NULL")
             .bind(now())
             .bind(&id)
-            .execute(&state.pool)
+            .execute(&mut *tx)
             .await?;
-    if result.rows_affected() == 0 {
+    if result.rows_affected() != 1 {
         return Err(ApiError::not_found("active administrator token"));
     }
-    audit(
-        &state.pool,
-        "admin_token.revoked",
-        "admin_token",
-        &id,
-        json!({}),
-    )
-    .await?;
+    sqlx::query("INSERT INTO audit_records(id,actor,action,entity_type,entity_id,detail_json,created_at) VALUES($1,$2,'admin_token.revoked','admin_token',$3,'{}',$4)").bind(Uuid::new_v4().to_string()).bind(actor.id).bind(&id).bind(now()).execute(&mut *tx).await?;
+    tx.commit().await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -449,6 +500,16 @@ pub(crate) async fn enqueue_job_with_payload_in_tx(
     revision: Option<i64>,
     job_payload: Value,
 ) -> Result<String, ApiError> {
+    let job_payload = if kind == "kick" {
+        let node = node_id.ok_or_else(|| ApiError::bad_request("kick requires node_id"))?;
+        let (existing, payload) = crate::kick_requests::prepare(tx, node, &job_payload).await?;
+        if let Some(id) = existing {
+            return Ok(id);
+        }
+        payload
+    } else {
+        job_payload
+    };
     let id = Uuid::new_v4().to_string();
     let timestamp = now();
     let node_name: Option<String> = if let Some(node_id) = node_id {
@@ -464,9 +525,18 @@ pub(crate) async fn enqueue_job_with_payload_in_tx(
     };
     let payload = json!({"id": id, "kind": kind, "node_id": node_id, "node_name": node_name, "target_revision": revision, "status": "queued", "stage": "queued"});
     sqlx::query("INSERT INTO jobs (id, kind, node_id, node_name, target_revision, payload_json, status, stage, available_at, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, 'queued', 'queued', $7, $8, $9)")
-        .bind(&id).bind(kind).bind(node_id).bind(node_name).bind(revision).bind(job_payload).bind(timestamp).bind(timestamp).bind(timestamp).execute(&mut **tx).await?;
+        .bind(&id).bind(kind).bind(node_id).bind(node_name).bind(revision).bind(&job_payload).bind(timestamp).bind(timestamp).bind(timestamp).execute(&mut **tx).await?;
     sqlx::query("INSERT INTO job_events (job_id, event_type, payload_json, created_at) VALUES ($1, 'job.queued', $2, $3)")
         .bind(&id).bind(payload).bind(timestamp).execute(&mut **tx).await?;
+    if kind == "kick" {
+        crate::kick_requests::attach(
+            tx,
+            node_id.unwrap(),
+            job_payload["user_id"].as_str().unwrap(),
+            &id,
+        )
+        .await?;
+    }
     Ok(id)
 }
 

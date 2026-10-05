@@ -75,6 +75,28 @@ final class NodeAlertNotifications: NSObject, UNUserNotificationCenterDelegate {
         }
     }
 
+    func deliver(credentials: [CredentialSummary], service: String) async {
+        guard defaults.bool(forKey: Self.preferenceKey), !delivering else { return }
+        delivering = true
+        defer { delivering = false }
+        guard await transport.isAuthorized() else { return }
+        let key = "credentialExpiryNotified.\(service)"
+        var seen = Set(defaults.stringArray(forKey: key) ?? [])
+        for entry in credentials where entry.isManaged && !entry.archived {
+            guard let days = entry.daysRemaining, days <= 30 else { continue }
+            let threshold = days < 0 ? 0 : days <= 7 ? 7 : days <= 14 ? 14 : 30
+            let identifier = "\(entry.id):\(entry.latestVersion):\(entry.expiresAt ?? ""):\(threshold)"
+            guard !seen.contains(identifier) else { continue }
+            do {
+                try await transport.send(id: "credential-\(identifier)",
+                    title: "\(entry.name)：\(days < 0 ? "已到期" : "即将到期")",
+                    body: "\(entry.typeTitle) · \(DateDisplayParser.shared.parse(entry.expiresAt)?.formatted(date: .abbreviated, time: .shortened) ?? "未知")。请准备新凭据并发布新版本。")
+                seen.insert(identifier)
+                defaults.set(Array(seen), forKey: key)
+            } catch { /* Retry on the next refresh without marking delivery. */ }
+        }
+    }
+
     nonisolated func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         willPresent notification: UNNotification

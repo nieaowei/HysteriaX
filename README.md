@@ -6,7 +6,8 @@ HysteriaX is a self hosted Hysteria 2 node and user manager. The repository cont
 
 - Rust workspace and Axum API backed by PostgreSQL 18.
 - Encrypted at rest SSH secrets, Hysteria node tokens, user credentials, subscription tokens, configuration snapshots, and uploaded config resources.
-- Bearer token authentication with one time token creation and revocation.
+- Unified credential center with encrypted SSH authentication, versioned TLS identities/CA/ECH/DNS/API secrets, cross-node reuse, automatic application batches, expiry reminders, and business-token lifecycle views.
+- Bearer token authentication with one time token creation and revocation; the server protects the current and last active administrator token.
 - Revision guarded node and user updates; configuration updates and sync job creation share a database transaction.
 - Node and user CRUD, assignments, credential rotation, quota reset, Hysteria HTTP authentication, Mihomo YAML subscription generation, persisted job records, resumable SSE events, SSH job execution, and periodic quota sampling.
 - Docker Compose and Caddy deployment files.
@@ -93,4 +94,4 @@ ruby scripts/generate-swift-api-models.rb
 
 `openapi/openapi.yaml` is the API contract source. The macOS request/response DTOs and typed operation definitions, including request/response types, HTTP methods, paths, and required query parameters, are generated from its schemas and operations; the API client enforces those operation bindings at compile time. CI runs `ruby scripts/generate-swift-api-models.rb --check` to detect drift. The dynamic JSON value codec and generic HTTP transport are shared handwritten components. The app is available as both an Xcode project and a Swift package. Run `./script/build_and_run.sh --verify` for the local app build and launch check. Pushing a `vX.Y.Z` tag builds an unsigned universal DMG for direct distribution through the GitHub release; this does not require Apple signing or notarization credentials and does not publish to the Mac App Store. See the [release guide](docs/release.md) for the Gatekeeper tradeoff.
 
-See [architecture](docs/architecture.md), [installation](docs/installation.md), [field coverage](docs/field-coverage.md), [compatibility profile](docs/compatibility.md), [deployment testing](docs/deployment-testing.md), [backup and recovery](docs/backup-restore.md), and [troubleshooting](docs/troubleshooting.md).
+See [credential management](docs/credentials.md), [architecture](docs/architecture.md), [installation](docs/installation.md), [field coverage](docs/field-coverage.md), [compatibility profile](docs/compatibility.md), [deployment testing](docs/deployment-testing.md), [backup and recovery](docs/backup-restore.md), and [troubleshooting](docs/troubleshooting.md).

@@ -86,6 +86,11 @@ def main():
         )
         try:
             wait_ready(base, process)
+            credential_request = urllib.request.Request(base + "/api/v1/credentials", method="POST",
+                headers={"Authorization": f"Bearer {admin_token}", "Content-Type": "application/json"},
+                data=json.dumps({"name":"Recovery fixture SSH","kind":"ssh_password","payload":{"secret":"unused-password"}}).encode())
+            with urllib.request.urlopen(credential_request) as response:
+                credential_id = json.loads(response.read())["id"]
             stop(process)
             process = None
 
@@ -93,13 +98,13 @@ def main():
             timestamp = datetime(2026, 1, 1, tzinfo=timezone.utc)
             with database.connect() as connection:
                 connection.execute(
-                    "INSERT INTO nodes (id, name, ssh_host, ssh_port, ssh_username, ssh_auth_type, "
-                    "ssh_secret_enc, public_host, public_port, listen_addr, node_token_hash, node_token_enc, "
+                    "INSERT INTO nodes (id, name, ssh_host, ssh_port, ssh_username, ssh_credential_id, "
+                    "ssh_credential_version, public_host, public_port, listen_addr, node_token_hash, node_token_enc, "
                     "traffic_stats_secret_enc, desired_config_enc, created_at, updated_at) "
-                    "VALUES ('recovery-node', 'Recovery node', '127.0.0.1', 22, 'root', 'private_key', "
-                    "'encrypted-ssh', 'node.example.test', 443, ':443', 'node-hash', 'encrypted-token', "
+                    "VALUES ('recovery-node', 'Recovery node', '127.0.0.1', 22, 'root', %s, "
+                    "1, 'node.example.test', 443, ':443', 'node-hash', 'encrypted-token', "
                     "'encrypted-stats', 'encrypted-config', %s, %s)",
-                    (timestamp, timestamp),
+                    (credential_id, timestamp, timestamp),
                 )
                 connection.execute(
                     "INSERT INTO jobs (id, kind, node_id, target_revision, status, stage, payload_json, attempts, "

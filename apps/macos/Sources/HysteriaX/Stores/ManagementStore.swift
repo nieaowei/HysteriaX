@@ -2,6 +2,7 @@ import Foundation
 import Observation
 
 private struct ClientDisplaySnapshot: Codable {
+    let credentials: [CredentialSummary]?
     let nodes: [NodeSummary]
     let users: [UserSummary]
     let jobs: [JobSummary]
@@ -15,6 +16,8 @@ private struct ClientDisplaySnapshot: Codable {
 @Observable
 final class ManagementStore {
     var serviceAddress = UserDefaults.standard.string(forKey: "serviceAddress") ?? ""
+    var requestedSection: String?
+    var credentials: [CredentialSummary] = []
     var nodes: [NodeSummary] = []
     var users: [UserSummary] = []
     var jobs: [JobSummary] = []
@@ -71,6 +74,7 @@ final class ManagementStore {
         let client = APIClient(baseURL: url, token: token, session: session)
         let _: APIHealth = try await client.get(APIEndpoints.readinessCheck)
         let version: APIVersion = try await client.get(APIEndpoints.getAPIVersion)
+        currentAdminTokenID = version.currentAdminTokenId
         guard version.apiVersion == "1.0.0" else { throw APIClientError.incompatibleAPI(version.apiVersion) }
         let normalizedAddress = url.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         let serviceChanged = normalizedAddress != self.serviceAddress
@@ -92,10 +96,10 @@ final class ManagementStore {
             auditRecords = []
             adminTokens = []
             lastUpdated = nil
-            currentAdminTokenID = UserDefaults.standard.string(forKey: "currentAdminTokenID.\(normalizedAddress)")
+            currentAdminTokenID = version.currentAdminTokenId
         }
         if tokenChanged {
-            currentAdminTokenID = nil
+            currentAdminTokenID = version.currentAdminTokenId
             UserDefaults.standard.removeObject(forKey: "currentAdminTokenID.\(normalizedAddress)")
         }
         self.serviceAddress = normalizedAddress
@@ -110,6 +114,7 @@ final class ManagementStore {
             isConnected = true
             errorMessage = nil
             await (nodeNotifications ?? .shared).deliver(nodes: nodes, service: serviceAddress)
+            await (nodeNotifications ?? .shared).deliver(credentials: credentials, service: serviceAddress)
         } catch {
             guard connectionGeneration == serviceGeneration else { throw CancellationError() }
             isConnected = false
@@ -130,6 +135,7 @@ final class ManagementStore {
         defer { if refreshGeneration == serviceGeneration { isLoading = false } }
         do {
             let version: APIVersion = try await api.get(APIEndpoints.getAPIVersion)
+            currentAdminTokenID = version.currentAdminTokenId
             guard version.apiVersion == "1.0.0" else { throw APIClientError.incompatibleAPI(version.apiVersion) }
             try await loadData(using: api)
             guard refreshGeneration == serviceGeneration, !Task.isCancelled else { return }
@@ -139,6 +145,7 @@ final class ManagementStore {
             isConnected = true
             errorMessage = nil
             await (nodeNotifications ?? .shared).deliver(nodes: nodes, service: serviceAddress)
+            await (nodeNotifications ?? .shared).deliver(credentials: credentials, service: serviceAddress)
             await refreshOverview()
         } catch {
             guard refreshGeneration == serviceGeneration, !Task.isCancelled else { return }
@@ -158,7 +165,7 @@ final class ManagementStore {
             guard generation == serviceGeneration, request == overviewRequestGeneration, !Task.isCancelled else { return }
             overview = value
             overviewError = nil
-            let snapshot = ClientDisplaySnapshot(nodes: nodes, users: users, jobs: jobs, auditRecords: auditRecords, updatedAt: lastUpdated ?? Date(), serverMonitoring: serverMonitoring, overview: value)
+            let snapshot = ClientDisplaySnapshot(credentials: credentials, nodes: nodes, users: users, jobs: jobs, auditRecords: auditRecords, updatedAt: lastUpdated ?? Date(), serverMonitoring: serverMonitoring, overview: value)
             if let data = try? JSONEncoder().encode(snapshot) { UserDefaults.standard.set(data, forKey: displaySnapshotKey) }
         } catch {
             guard generation == serviceGeneration, request == overviewRequestGeneration, !Task.isCancelled else { return }
@@ -296,6 +303,9 @@ final class ManagementStore {
     }
 
     func uploadResource(nodeID: String, name: String, kind: String, data: Data) async throws -> ResourceReceipt {
+        guard ["acl", "geoip", "geosite"].contains(kind) else {
+            throw APIClientError.server("配置资源仅支持 ACL、GeoIP 和 GeoSite；证书和密钥请在凭据中心导入。")
+        }
         let api = try requireConnectedAPI()
         let request = ResourceUploadRequest(name: name, resourceKind: kind, contentBase64: data.base64EncodedString())
         return try await api.post(APIEndpoints.uploadNodeResource(id: nodeID), body: request)
@@ -317,16 +327,18 @@ final class ManagementStore {
         _ user: UserSummary,
         to node: NodeSummary,
         clientCertificate: String? = nil,
-        clientPrivateKey: String? = nil
+        clientPrivateKey: String? = nil,
+        mtlsCredentialID: String? = nil
     ) async throws -> String {
         let api = try requireConnectedAPI()
+        let mtls = try await resolveMTLSCredential(userID: user.id, nodeID: node.id, certificate: clientCertificate, privateKey: clientPrivateKey, selected: mtlsCredentialID)
         let response: AssignmentReceipt = try await api.post(
             APIEndpoints.assignUserToNode(id: user.id),
             body: AssignmentRequest(
                 expectedRevision: user.revision,
                 nodeID: node.id,
-                clientCertificate: clientCertificate,
-                clientPrivateKey: clientPrivateKey
+                mtlsCredentialId: mtls?.id,
+                mtlsCredentialVersion: mtls?.version
             )
         )
         await refresh()
@@ -335,14 +347,15 @@ final class ManagementStore {
 
     func setNodeAssignment(
         userID: String, nodeID: String, expectedRevision: Int, assigned: Bool,
-        clientCertificate: String? = nil, clientPrivateKey: String? = nil
+        clientCertificate: String? = nil, clientPrivateKey: String? = nil, mtlsCredentialID: String? = nil
     ) async throws -> (revision: Int, credential: String?) {
         let api = try requireConnectedAPI()
         if assigned {
+            let mtls = try await resolveMTLSCredential(userID: userID, nodeID: nodeID, certificate: clientCertificate, privateKey: clientPrivateKey, selected: mtlsCredentialID)
             let response: AssignmentReceipt = try await api.post(
                 APIEndpoints.assignUserToNode(id: userID),
                 body: AssignmentRequest(expectedRevision: expectedRevision, nodeID: nodeID,
-                                        clientCertificate: clientCertificate, clientPrivateKey: clientPrivateKey)
+                                        mtlsCredentialId: mtls?.id, mtlsCredentialVersion: mtls?.version)
             )
             return (response.revision, response.hy2Credential)
         }
@@ -357,15 +370,17 @@ final class ManagementStore {
         _ user: UserSummary,
         for node: NodeSummary,
         clientCertificate: String,
-        clientPrivateKey: String
+        clientPrivateKey: String,
+        mtlsCredentialID: String? = nil
     ) async throws {
         let api = try requireConnectedAPI()
+        let mtls = try await resolveMTLSCredential(userID: user.id, nodeID: node.id, certificate: clientCertificate, privateKey: clientPrivateKey, selected: mtlsCredentialID)
         let _: AssignmentMutationResponse = try await api.put(
             APIEndpoints.updateAssignmentClientCertificate(id: user.id, nodeID: node.id),
             body: AssignmentCertificateUpdateRequest(
                 expectedRevision: user.revision,
-                clientCertificate: clientCertificate,
-                clientPrivateKey: clientPrivateKey
+                mtlsCredentialId: mtls!.id,
+                mtlsCredentialVersion: mtls!.version
             )
         )
         await refresh()
@@ -497,6 +512,7 @@ final class ManagementStore {
         do {
             let _: APIHealth = try await nextAPI.get(APIEndpoints.readinessCheck)
             let version: APIVersion = try await nextAPI.get(APIEndpoints.getAPIVersion)
+            currentAdminTokenID = version.currentAdminTokenId
             guard version.apiVersion == "1.0.0" else {
                 throw APIClientError.incompatibleAPI(version.apiVersion)
             }
@@ -504,6 +520,7 @@ final class ManagementStore {
             isConnected = true
             errorMessage = nil
             await (nodeNotifications ?? .shared).deliver(nodes: nodes, service: serviceAddress)
+            await (nodeNotifications ?? .shared).deliver(credentials: credentials, service: serviceAddress)
         } catch {
             isConnected = false
             errorMessage = "新令牌已保存并切换，但服务暂不可用：\(error.localizedDescription)"
@@ -527,6 +544,7 @@ final class ManagementStore {
     private func loadData(using client: APIClient) async throws {
         let generation = serviceGeneration
         async let loadedMonitoring = fetchServerMonitoring(using: client)
+        async let loadedCredentials: [CredentialSummary] = client.get(APIEndpoints.listCredentials)
         async let loadedNodes: [NodeSummary] = client.get(APIEndpoints.listNodes)
         async let loadedUsers: [UserSummary] = client.get(APIEndpoints.listUsers)
         async let loadedJobs: [JobSummary] = client.get(APIEndpoints.listJobs)
@@ -535,6 +553,7 @@ final class ManagementStore {
         let tokens = try await loadedAdminTokens
         let monitoring = await loadedMonitoring
         let snapshot = try await ClientDisplaySnapshot(
+            credentials: loadedCredentials,
             nodes: loadedNodes,
             users: loadedUsers,
             jobs: loadedJobs,
@@ -546,6 +565,7 @@ final class ManagementStore {
         guard generation == serviceGeneration, !Task.isCancelled else { throw CancellationError() }
         serverMonitoring = snapshot.serverMonitoring
         serverMonitoringError = monitoring.error
+        credentials = snapshot.credentials ?? []
         nodes = snapshot.nodes
         users = snapshot.users
         jobs = snapshot.jobs
@@ -572,6 +592,7 @@ final class ManagementStore {
         if let data = UserDefaults.standard.data(forKey: "overviewHistory.\(serviceAddress)"), let values = try? JSONDecoder().decode([String: OverviewHistory].self, from: data) { historyCache = values }
         guard let data = UserDefaults.standard.data(forKey: displaySnapshotKey),
               let snapshot = try? JSONDecoder().decode(ClientDisplaySnapshot.self, from: data) else { return }
+        credentials = snapshot.credentials ?? []
         nodes = snapshot.nodes
         users = snapshot.users
         jobs = snapshot.jobs
@@ -582,7 +603,7 @@ final class ManagementStore {
         lastUpdated = snapshot.updatedAt
     }
 
-    private func requireConnectedAPI() throws -> APIClient {
+    func requireConnectedAPI() throws -> APIClient {
         guard isConnected, let api else {
             throw APIClientError.server("管理服务当前不可用；恢复连接后才能读取详情或提交写操作。")
         }

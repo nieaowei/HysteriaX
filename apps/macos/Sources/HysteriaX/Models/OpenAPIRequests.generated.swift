@@ -1,6 +1,80 @@
 // Generated from openapi/openapi.yaml by scripts/generate-swift-api-models.rb. Do not edit.
 import Foundation
 
+struct CredentialCreateRequest: Encodable, Sendable {
+    let name: String
+    let kind: String
+    let ownerUserId: String?
+    let reminderAt: String?
+    let payload: [String: JSONValue]
+
+    init(
+        name: String,
+        kind: String,
+        ownerUserId: String? = nil,
+        reminderAt: String? = nil,
+        payload: [String: JSONValue]
+    ) {
+        self.name = name
+        self.kind = kind
+        self.ownerUserId = ownerUserId
+        self.reminderAt = reminderAt
+        self.payload = payload
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case name
+        case kind
+        case ownerUserId = "owner_user_id"
+        case reminderAt = "reminder_at"
+        case payload
+    }
+}
+
+struct CredentialPatchRequest: Encodable, Sendable {
+    let expectedRevision: Int
+    let name: String
+    let archived: Bool
+    let reminderAt: String?
+
+    init(
+        expectedRevision: Int,
+        name: String,
+        archived: Bool,
+        reminderAt: String? = nil
+    ) {
+        self.expectedRevision = expectedRevision
+        self.name = name
+        self.archived = archived
+        self.reminderAt = reminderAt
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case expectedRevision = "expected_revision"
+        case name
+        case archived
+        case reminderAt = "reminder_at"
+    }
+}
+
+struct CredentialPublishRequest: Encodable, Sendable {
+    let expectedRevision: Int
+    let payload: [String: JSONValue]
+
+    init(
+        expectedRevision: Int,
+        payload: [String: JSONValue]
+    ) {
+        self.expectedRevision = expectedRevision
+        self.payload = payload
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case expectedRevision = "expected_revision"
+        case payload
+    }
+}
+
 struct NodeUsageUpdateRequest: Encodable, Sendable {
     let expectedRevision: Int
     let usageBytes: Int64
@@ -30,9 +104,6 @@ struct NodeCreateRequest: Encodable, Sendable {
     let sshHost: String
     let sshPort: Int
     let sshUsername: String
-    let sshAuthType: String
-    let sshSecret: String
-    let sshPassphrase: String?
     let sshHostFingerprint: String?
     let publicHost: String
     let publicPort: Int
@@ -42,6 +113,8 @@ struct NodeCreateRequest: Encodable, Sendable {
     let tlsSNI: String?
     let tlsSkipVerify: Bool
     let config: [String: JSONValue]
+    let sshCredentialId: String
+    let sshCredentialVersion: Int
 
     init(
         package: NodePackage? = nil,
@@ -50,9 +123,6 @@ struct NodeCreateRequest: Encodable, Sendable {
         sshHost: String,
         sshPort: Int,
         sshUsername: String,
-        sshAuthType: String,
-        sshSecret: String,
-        sshPassphrase: String? = nil,
         sshHostFingerprint: String? = nil,
         publicHost: String,
         publicPort: Int,
@@ -61,7 +131,9 @@ struct NodeCreateRequest: Encodable, Sendable {
         proxyProbeUrl: String? = nil,
         tlsSNI: String? = nil,
         tlsSkipVerify: Bool = false,
-        config: [String: JSONValue] = [:]
+        config: [String: JSONValue] = [:],
+        sshCredentialId: String,
+        sshCredentialVersion: Int
     ) {
         self.package = package
         self.initialUsageBytes = initialUsageBytes
@@ -69,9 +141,6 @@ struct NodeCreateRequest: Encodable, Sendable {
         self.sshHost = sshHost
         self.sshPort = sshPort
         self.sshUsername = sshUsername
-        self.sshAuthType = sshAuthType
-        self.sshSecret = sshSecret
-        self.sshPassphrase = sshPassphrase
         self.sshHostFingerprint = sshHostFingerprint
         self.publicHost = publicHost
         self.publicPort = publicPort
@@ -81,6 +150,8 @@ struct NodeCreateRequest: Encodable, Sendable {
         self.tlsSNI = tlsSNI
         self.tlsSkipVerify = tlsSkipVerify
         self.config = config
+        self.sshCredentialId = sshCredentialId
+        self.sshCredentialVersion = sshCredentialVersion
     }
 
     enum CodingKeys: String, CodingKey {
@@ -90,9 +161,6 @@ struct NodeCreateRequest: Encodable, Sendable {
         case sshHost = "ssh_host"
         case sshPort = "ssh_port"
         case sshUsername = "ssh_username"
-        case sshAuthType = "ssh_auth_type"
-        case sshSecret = "ssh_secret"
-        case sshPassphrase = "ssh_passphrase"
         case sshHostFingerprint = "ssh_host_fingerprint"
         case publicHost = "public_host"
         case publicPort = "public_port"
@@ -102,6 +170,8 @@ struct NodeCreateRequest: Encodable, Sendable {
         case tlsSNI = "tls_sni"
         case tlsSkipVerify = "tls_skip_verify"
         case config
+        case sshCredentialId = "ssh_credential_id"
+        case sshCredentialVersion = "ssh_credential_version"
     }
 }
 
@@ -112,9 +182,6 @@ struct NodePatchRequest: Encodable, Sendable {
     let sshHost: String?
     let sshPort: Int?
     let sshUsername: String?
-    let sshAuthType: String?
-    let sshSecret: String?
-    let sshPassphrase: String?
     let sshHostFingerprint: String?
     let publicHost: String?
     let publicPort: Int?
@@ -124,6 +191,8 @@ struct NodePatchRequest: Encodable, Sendable {
     let tlsSNI: String?
     let tlsSkipVerify: Bool?
     let config: [String: JSONValue]?
+    let sshCredentialId: String?
+    let sshCredentialVersion: Int?
 
     init(
         expectedRevision: Int,
@@ -132,9 +201,6 @@ struct NodePatchRequest: Encodable, Sendable {
         sshHost: String? = nil,
         sshPort: Int? = nil,
         sshUsername: String? = nil,
-        sshAuthType: String? = nil,
-        sshSecret: String? = nil,
-        sshPassphrase: String? = nil,
         sshHostFingerprint: String? = nil,
         publicHost: String? = nil,
         publicPort: Int? = nil,
@@ -143,7 +209,9 @@ struct NodePatchRequest: Encodable, Sendable {
         proxyProbeUrl: String? = nil,
         tlsSNI: String? = nil,
         tlsSkipVerify: Bool? = nil,
-        config: [String: JSONValue]? = nil
+        config: [String: JSONValue]? = nil,
+        sshCredentialId: String? = nil,
+        sshCredentialVersion: Int? = nil
     ) {
         self.expectedRevision = expectedRevision
         self.package = package
@@ -151,9 +219,6 @@ struct NodePatchRequest: Encodable, Sendable {
         self.sshHost = sshHost
         self.sshPort = sshPort
         self.sshUsername = sshUsername
-        self.sshAuthType = sshAuthType
-        self.sshSecret = sshSecret
-        self.sshPassphrase = sshPassphrase
         self.sshHostFingerprint = sshHostFingerprint
         self.publicHost = publicHost
         self.publicPort = publicPort
@@ -163,6 +228,8 @@ struct NodePatchRequest: Encodable, Sendable {
         self.tlsSNI = tlsSNI
         self.tlsSkipVerify = tlsSkipVerify
         self.config = config
+        self.sshCredentialId = sshCredentialId
+        self.sshCredentialVersion = sshCredentialVersion
     }
 
     enum CodingKeys: String, CodingKey {
@@ -172,9 +239,6 @@ struct NodePatchRequest: Encodable, Sendable {
         case sshHost = "ssh_host"
         case sshPort = "ssh_port"
         case sshUsername = "ssh_username"
-        case sshAuthType = "ssh_auth_type"
-        case sshSecret = "ssh_secret"
-        case sshPassphrase = "ssh_passphrase"
         case sshHostFingerprint = "ssh_host_fingerprint"
         case publicHost = "public_host"
         case publicPort = "public_port"
@@ -184,6 +248,8 @@ struct NodePatchRequest: Encodable, Sendable {
         case tlsSNI = "tls_sni"
         case tlsSkipVerify = "tls_skip_verify"
         case config
+        case sshCredentialId = "ssh_credential_id"
+        case sshCredentialVersion = "ssh_credential_version"
     }
 }
 
@@ -282,48 +348,48 @@ struct RevisionRequest: Encodable, Sendable {
 struct AssignmentRequest: Encodable, Sendable {
     let expectedRevision: Int
     let nodeID: String
-    let clientCertificate: String?
-    let clientPrivateKey: String?
+    let mtlsCredentialId: String?
+    let mtlsCredentialVersion: Int?
 
     init(
         expectedRevision: Int,
         nodeID: String,
-        clientCertificate: String? = nil,
-        clientPrivateKey: String? = nil
+        mtlsCredentialId: String? = nil,
+        mtlsCredentialVersion: Int? = nil
     ) {
         self.expectedRevision = expectedRevision
         self.nodeID = nodeID
-        self.clientCertificate = clientCertificate
-        self.clientPrivateKey = clientPrivateKey
+        self.mtlsCredentialId = mtlsCredentialId
+        self.mtlsCredentialVersion = mtlsCredentialVersion
     }
 
     enum CodingKeys: String, CodingKey {
         case expectedRevision = "expected_revision"
         case nodeID = "node_id"
-        case clientCertificate = "client_certificate"
-        case clientPrivateKey = "client_private_key"
+        case mtlsCredentialId = "mtls_credential_id"
+        case mtlsCredentialVersion = "mtls_credential_version"
     }
 }
 
 struct AssignmentCertificateUpdateRequest: Encodable, Sendable {
     let expectedRevision: Int
-    let clientCertificate: String
-    let clientPrivateKey: String
+    let mtlsCredentialId: String
+    let mtlsCredentialVersion: Int
 
     init(
         expectedRevision: Int,
-        clientCertificate: String,
-        clientPrivateKey: String
+        mtlsCredentialId: String,
+        mtlsCredentialVersion: Int
     ) {
         self.expectedRevision = expectedRevision
-        self.clientCertificate = clientCertificate
-        self.clientPrivateKey = clientPrivateKey
+        self.mtlsCredentialId = mtlsCredentialId
+        self.mtlsCredentialVersion = mtlsCredentialVersion
     }
 
     enum CodingKeys: String, CodingKey {
         case expectedRevision = "expected_revision"
-        case clientCertificate = "client_certificate"
-        case clientPrivateKey = "client_private_key"
+        case mtlsCredentialId = "mtls_credential_id"
+        case mtlsCredentialVersion = "mtls_credential_version"
     }
 }
 
@@ -373,6 +439,29 @@ struct APIOperation<Request: Sendable, Response: Sendable>: Sendable {
 }
 
 enum APIEndpoints {
+    static let listCredentials: APIOperation<NoRequest, [CredentialSummary]> = APIOperation<NoRequest, [CredentialSummary]>(method: "GET", path: "api/v1/credentials", queryParameters: [:])
+    static let createCredential: APIOperation<CredentialCreateRequest, CredentialReceipt> = APIOperation<CredentialCreateRequest, CredentialReceipt>(method: "POST", path: "api/v1/credentials", queryParameters: [:])
+    static func getCredential(id: String) -> APIOperation<NoRequest, CredentialDetail> {
+        APIOperation(method: "GET", path: "api/v1/credentials/\(id)", queryParameters: [:])
+    }
+    static func updateCredential(id: String) -> APIOperation<CredentialPatchRequest, CredentialReceipt> {
+        APIOperation(method: "PATCH", path: "api/v1/credentials/\(id)", queryParameters: [:])
+    }
+    static func deleteCredential(id: String, expectedRevision: Int) -> APIOperation<NoRequest, NoResponse> {
+        APIOperation(method: "DELETE", path: "api/v1/credentials/\(id)", queryParameters: ["expected_revision": String(expectedRevision)])
+    }
+    static func publishCredentialVersion(id: String) -> APIOperation<CredentialPublishRequest, CredentialReceipt> {
+        APIOperation(method: "POST", path: "api/v1/credentials/\(id)/versions", queryParameters: [:])
+    }
+    static func getCredentialReferences(id: String) -> APIOperation<NoRequest, [CredentialReference]> {
+        APIOperation(method: "GET", path: "api/v1/credentials/\(id)/references", queryParameters: [:])
+    }
+    static func getCredentialBatch(id: String) -> APIOperation<NoRequest, CredentialBatch> {
+        APIOperation(method: "GET", path: "api/v1/credential-batches/\(id)", queryParameters: [:])
+    }
+    static func retryCredentialBatch(id: String) -> APIOperation<NoRequest, CredentialBatchReceipt> {
+        APIOperation(method: "POST", path: "api/v1/credential-batches/\(id)/retry", queryParameters: [:])
+    }
     static let getOverview: APIOperation<NoRequest, OverviewResponse> = APIOperation<NoRequest, OverviewResponse>(method: "GET", path: "api/v1/overview", queryParameters: [:])
     static func getOverviewHistory(range: String, timezone: String, nodeID: String? = nil, source: String? = nil) -> APIOperation<NoRequest, OverviewHistory> {
         APIOperation(method: "GET", path: "api/v1/overview/history", queryParameters: ["range": range, "timezone": timezone, "node_id": nodeID.map { String($0) }, "source": source.map { String($0) }].compactMapValues { $0 })

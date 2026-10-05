@@ -34,3 +34,7 @@ scripts/verify-backup-restore-compose.py
 ```
 
 The integration restores a real PostgreSQL dump, verifies a stored row, checks API readiness, and exercises staging before promotion. `.dockerignore` excludes `.env*`, backups, and production data from image build context.
+
+## Credential version recovery
+
+Backups include encrypted credential versions, batch items, application completion markers and pinned configuration snapshots. Keep the matching master key outside the database. The credentials upgrade removes legacy secret columns after transactional conversion; downgrade recovery requires the pre-upgrade database backup and original image together. The migration-only mode is suitable for validating a restored copy without starting SSH, quota or deployment workers. Unfinished application jobs recover after restart; already committed applications acknowledge their completion marker instead of changing bindings again.

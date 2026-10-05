@@ -43,6 +43,11 @@
 		000000000000000000002507 /* Views/OverviewNodeInspector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001507 /* Views/OverviewNodeInspector.swift */; };
 		000000000000000000002600 /* Models/ACMEDNSDraft.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001600 /* Models/ACMEDNSDraft.swift */; };
 		000000000000000000002601 /* Views/ACMEDNSFields.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001601 /* Views/ACMEDNSFields.swift */; };
+		000000000000000000002700 /* Stores/CredentialStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001700 /* Stores/CredentialStore.swift */; };
+		000000000000000000002701 /* Views/CredentialEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001701 /* Views/CredentialEditorView.swift */; };
+		000000000000000000002702 /* Views/CredentialPickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001702 /* Views/CredentialPickerView.swift */; };
+		000000000000000000002703 /* Views/CredentialsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001703 /* Views/CredentialsView.swift */; };
+		000000000000000000002704 /* Models/CredentialDisplay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001704 /* Models/CredentialDisplay.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -83,6 +88,11 @@
 		000000000000000000001507 /* Views/OverviewNodeInspector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/OverviewNodeInspector.swift; sourceTree = "<group>"; };
 		000000000000000000001600 /* Models/ACMEDNSDraft.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models/ACMEDNSDraft.swift; sourceTree = "<group>"; };
 		000000000000000000001601 /* Views/ACMEDNSFields.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/ACMEDNSFields.swift; sourceTree = "<group>"; };
+		000000000000000000001700 /* Stores/CredentialStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Stores/CredentialStore.swift; sourceTree = "<group>"; };
+		000000000000000000001701 /* Views/CredentialEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/CredentialEditorView.swift; sourceTree = "<group>"; };
+		000000000000000000001702 /* Views/CredentialPickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/CredentialPickerView.swift; sourceTree = "<group>"; };
+		000000000000000000001703 /* Views/CredentialsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/CredentialsView.swift; sourceTree = "<group>"; };
+		000000000000000000001704 /* Models/CredentialDisplay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models/CredentialDisplay.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -99,6 +109,11 @@
 		000000000000000000003001 /* Sources/HysteriaX */ = {
 			isa = PBXGroup;
 			children = (
+				000000000000000000001700 /* Stores/CredentialStore.swift */,
+				000000000000000000001701 /* Views/CredentialEditorView.swift */,
+				000000000000000000001702 /* Views/CredentialPickerView.swift */,
+				000000000000000000001703 /* Views/CredentialsView.swift */,
+				000000000000000000001704 /* Models/CredentialDisplay.swift */,
 				000000000000000000001000 /* App/HysteriaXApp.swift */,
 				000000000000000000001402 /* Views/OverviewHistoryView.swift */,
 				000000000000000000001507 /* Views/OverviewNodeInspector.swift */,
@@ -223,6 +238,11 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				000000000000000000002700 /* Stores/CredentialStore.swift in Sources */,
+				000000000000000000002701 /* Views/CredentialEditorView.swift in Sources */,
+				000000000000000000002702 /* Views/CredentialPickerView.swift in Sources */,
+				000000000000000000002703 /* Views/CredentialsView.swift in Sources */,
+				000000000000000000002704 /* Models/CredentialDisplay.swift in Sources */,
 				000000000000000000002000 /* App/HysteriaXApp.swift in Sources */,
 				000000000000000000002402 /* Views/OverviewHistoryView.swift in Sources */,
 				000000000000000000002507 /* Views/OverviewNodeInspector.swift in Sources */,

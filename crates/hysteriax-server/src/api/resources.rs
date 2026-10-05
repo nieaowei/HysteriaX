@@ -32,56 +32,62 @@ pub(crate) async fn resolve_config_resources(
     node_id: &str,
     config: &Value,
 ) -> Result<(Value, Vec<ResourceFile>), ApiError> {
-    if let Some(key_path) = config
-        .get("ech")
-        .and_then(Value::as_object)
-        .and_then(|ech| ech.get("keyPath"))
-        .and_then(Value::as_str)
-        && !key_path
-            .strip_prefix("resource://")
-            .is_some_and(|id| !id.is_empty() && !id.contains('/'))
-    {
-        return Err(ApiError::bad_request(
-            "ech.keyPath must reference an uploaded ech_key resource",
-        ));
+    let (mut resolved, mut resources) =
+        crate::credentials::resolve_config(pool, secrets, config, false)
+            .await
+            .map_err(|_| {
+                ApiError::bad_request("invalid or unavailable configuration credential")
+            })?;
+    let ids = collect_resource_ids(&resolved);
+    if !ids.is_empty() {
+        let rows = sqlx::query(
+            "SELECT id, resource_kind, content_enc FROM config_resources WHERE node_id=$1",
+        )
+        .bind(node_id)
+        .fetch_all(pool)
+        .await?;
+        let mut kinds = BTreeMap::new();
+        for row in rows {
+            let id: String = row.get("id");
+            if ids.contains(&id) {
+                kinds.insert(id.clone(), row.get::<String, _>("resource_kind"));
+                resources.push(ResourceFile {
+                    id,
+                    content: secrets.decrypt_bytes(&row.get::<String, _>("content_enc"))?,
+                });
+            }
+        }
+        if ids.iter().any(|id| !kinds.contains_key(id)) {
+            return Err(ApiError::bad_request(
+                "configuration references a missing resource for this node",
+            ));
+        }
+        validate_resource_kinds(&resolved, &kinds)?;
+        validate_server_tls_resource_pair(&resolved, &resources)?;
+        rewrite_resource_paths(&mut resolved);
     }
-    let ids = collect_resource_ids(config);
-    if ids.is_empty() {
-        return Ok((config.clone(), Vec::new()));
-    }
-    let rows = sqlx::query(
-        "SELECT id, resource_kind, content_enc FROM config_resources WHERE node_id = $1",
-    )
-    .bind(node_id)
-    .fetch_all(pool)
-    .await?;
-    let mut resources = Vec::new();
-    let mut kinds = BTreeMap::new();
-    for row in rows {
-        let id: String = row.get("id");
-        if ids.contains(&id) {
-            let encrypted: String = row.get("content_enc");
-            let kind: String = row.get("resource_kind");
-            kinds.insert(id.clone(), kind.clone());
-            resources.push(ResourceFile {
-                id,
-                content: secrets.decrypt_bytes(&encrypted)?,
-            });
+    if let Some(tls) = resolved.get("tls").and_then(Value::as_object) {
+        let file = |field: &str| {
+            tls.get(field)
+                .and_then(Value::as_str)
+                .and_then(|p| p.strip_prefix("/etc/hysteriax/resources/"))
+                .and_then(|id| resources.iter().find(|r| r.id == id))
+        };
+        if let (Some(cert), Some(key)) = (file("cert"), file("key")) {
+            let certs = rustls_pemfile::certs(&mut Cursor::new(&cert.content))
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|_| ApiError::bad_request("invalid TLS certificate"))?;
+            let key = rustls_pemfile::private_key(&mut Cursor::new(&key.content))
+                .map_err(|_| ApiError::bad_request("invalid TLS key"))?
+                .ok_or_else(|| ApiError::bad_request("TLS key is missing"))?;
+            rustls::sign::CertifiedKey::from_der(
+                certs,
+                key,
+                &rustls::crypto::ring::default_provider(),
+            )
+            .map_err(|_| ApiError::bad_request("TLS certificate and private key do not match"))?;
         }
     }
-    let found: BTreeSet<String> = resources
-        .iter()
-        .map(|resource| resource.id.clone())
-        .collect();
-    if ids.iter().any(|id| !found.contains(id)) {
-        return Err(ApiError::bad_request(
-            "configuration references a missing resource for this node",
-        ));
-    }
-    validate_resource_kinds(config, &kinds)?;
-    validate_server_tls_resource_pair(config, &resources)?;
-    let mut resolved = config.clone();
-    rewrite_resource_paths(&mut resolved);
     Ok((resolved, resources))
 }
 
@@ -259,10 +265,7 @@ pub async fn create(
             "a resource with this name already exists on the node",
         ));
     }
-    if !matches!(
-        input.resource_kind.as_str(),
-        "certificate" | "private_key" | "ech_key" | "acl" | "geoip" | "geosite"
-    ) {
+    if !matches!(input.resource_kind.as_str(), "acl" | "geoip" | "geosite") {
         return Err(ApiError::bad_request("unsupported config resource kind"));
     }
     let content = STANDARD
@@ -387,7 +390,7 @@ fn safe_name(value: &str) -> bool {
         && !trimmed.chars().any(char::is_control)
 }
 
-fn validate_text_resource(kind: &str, content: &[u8]) -> Result<(), ApiError> {
+pub(crate) fn validate_text_resource(kind: &str, content: &[u8]) -> Result<(), ApiError> {
     if matches!(kind, "geoip" | "geosite") {
         return Ok(());
     }

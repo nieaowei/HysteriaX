@@ -29,6 +29,11 @@ def free_port():
 
 
 def request(base, path, token=None, method="GET", payload=None):
+    from credential_test_fixtures import request_with_credentials
+    return request_with_credentials(raw_request, base, path, token, method, payload)
+
+
+def raw_request(base, path, token=None, method="GET", payload=None):
     body = None if payload is None else json.dumps(payload).encode()
     headers = {}
     if token is not None:
@@ -94,7 +99,7 @@ def main():
                     "ssh_host": "127.0.0.1",
                     "ssh_port": ssh_port,
                     "ssh_username": "root",
-                    "ssh_auth_type": "private_key",
+                    "ssh_auth_type": "password",
                     "ssh_secret": "not-used-by-refused-connection",
                     "public_host": "sampling.example.test",
                     "public_port": 443,

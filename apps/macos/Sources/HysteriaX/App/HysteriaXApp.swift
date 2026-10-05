@@ -5,7 +5,7 @@ struct HysteriaXApp: App {
     @State private var store = ManagementStore()
 
     var body: some Scene {
-        WindowGroup("HysteriaX") {
+        WindowGroup("HysteriaX", id: "main") {
             ContentView(store: store)
                 .frame(minWidth: 920, minHeight: 600)
         }

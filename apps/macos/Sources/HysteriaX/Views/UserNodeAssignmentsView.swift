@@ -10,12 +10,7 @@ struct UserNodeAssignmentsView: View {
     @State private var applied: Set<String>
     @State private var revision: Int
     @State private var searchText = ""
-    @State private var certificates: [String: String] = [:]
-    @State private var privateKeys: [String: String] = [:]
-    @State private var fileNames: [String: String] = [:]
-    @State private var importNodeID = ""
-    @State private var importingPrivateKey = false
-    @State private var showingImporter = false
+    @State private var mtlsSelections: [String: String] = [:]
     @State private var isSaving = false
     @State private var errorMessage: String?
     @State private var credentials: [String: String] = [:]
@@ -99,9 +94,7 @@ struct UserNodeAssignmentsView: View {
         } message: {
             Text("\(user.name) 将无法继续使用这些节点，现有连接会被排队断开。")
         }
-        .fileImporter(isPresented: $showingImporter, allowedContentTypes: [.data]) { result in
-            importFile(result)
-        }
+
     }
 
     private func nodeRow(_ node: NodeSummary) -> some View {
@@ -124,8 +117,7 @@ struct UserNodeAssignmentsView: View {
             if additions.contains(node.id) {
                 DisclosureGroup("mTLS 客户端证书（普通节点可留空）") {
                     VStack(alignment: .leading, spacing: 8) {
-                        certificatePicker(node, privateKey: false)
-                        certificatePicker(node, privateKey: true)
+                        CredentialPickerView(store: store, selection: Binding(get: { mtlsSelections[node.id] ?? "" }, set: { mtlsSelections[node.id] = $0 }), kinds: ["tls_identity"], ownerUserID: user.id, title: "mTLS 凭据")
                         Text("启用 mTLS 的节点需选择匹配的证书和私钥。")
                             .font(.caption).foregroundStyle(.secondary)
                     }
@@ -136,55 +128,11 @@ struct UserNodeAssignmentsView: View {
         }
     }
 
-    private func certificatePicker(_ node: NodeSummary, privateKey: Bool) -> some View {
-        HStack {
-            Text(privateKey ? "私钥" : "证书")
-            Text(fileNames["\(node.id):\(privateKey)"] ?? "未选择")
-                .lineLimit(1).foregroundStyle(.secondary)
-            Spacer()
-            Button("选择…") {
-                importNodeID = node.id
-                importingPrivateKey = privateKey
-                showingImporter = true
-            }
-            if fileNames["\(node.id):\(privateKey)"] != nil {
-                Button("清除") {
-                    fileNames.removeValue(forKey: "\(node.id):\(privateKey)")
-                    if privateKey { privateKeys.removeValue(forKey: node.id) }
-                    else { certificates.removeValue(forKey: node.id) }
-                }
-            }
-        }
-    }
-
-    private func importFile(_ result: Result<URL, Error>) {
-        do {
-            let url = try result.get()
-            let hasAccess = url.startAccessingSecurityScopedResource()
-            defer { if hasAccess { url.stopAccessingSecurityScopedResource() } }
-            let data = try Data(contentsOf: url, options: .mappedIfSafe)
-            guard !data.isEmpty, data.count <= 1_048_576, let pem = String(data: data, encoding: .utf8) else {
-                errorMessage = "请选择小于 1 MiB 的 UTF-8 PEM 文件。"
-                return
-            }
-            if importingPrivateKey { privateKeys[importNodeID] = pem }
-            else { certificates[importNodeID] = pem }
-            fileNames["\(importNodeID):\(importingPrivateKey)"] = url.lastPathComponent
-            errorMessage = nil
-        } catch { errorMessage = error.localizedDescription }
-    }
-
     private func nodeName(_ id: String) -> String {
         store.nodes.first { $0.id == id }?.name ?? String(id.prefix(8))
     }
 
     private func save() {
-        for id in additions {
-            guard (certificates[id] == nil) == (privateKeys[id] == nil) else {
-                errorMessage = "\(nodeName(id))：请同时选择客户端证书和私钥。"
-                return
-            }
-        }
         // Apply additions first, so a failed assignment does not revoke existing access.
         let operations = additions.sorted().map { ($0, true) } + removals.sorted().map { ($0, false) }
         isSaving = true
@@ -197,7 +145,7 @@ struct UserNodeAssignmentsView: View {
                     currentNodeID = id
                     let result = try await store.setNodeAssignment(
                         userID: user.id, nodeID: id, expectedRevision: revision, assigned: assigned,
-                        clientCertificate: certificates[id], clientPrivateKey: privateKeys[id]
+                        mtlsCredentialID: mtlsSelections[id]
                     )
                     revision = result.revision
                     if assigned { applied.insert(id) }

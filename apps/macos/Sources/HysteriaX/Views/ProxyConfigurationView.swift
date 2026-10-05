@@ -88,8 +88,9 @@ struct ProxyConfigurationView: View {
     @State private var masqueradeForceHTTPS = false
     @State private var resources: [NodeResource] = []
     @State private var showingResourceImporter = false
-    @State private var resourceKind = "certificate"
+    @State private var resourceKind = "acl"
     @State private var resourceMessage: String?
+    @State private var creatingCredential: ConfigurationCredentialTarget?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -136,8 +137,9 @@ struct ProxyConfigurationView: View {
                         Picker("证书来源", selection: $tlsMode) {
                             Text("未设置").tag("none")
                             Text("ACME 自动申请").tag("acme")
-                            Text("服务器已有证书或资源引用").tag("tls")
+                            Text("凭据中心证书").tag("tls")
                         }
+                        .accessibilityIdentifier("proxy.tls.mode")
                         if tlsMode == "acme" {
                             Text("ACME 域名")
                             StringListEditor(entries: $acmeDomains, prompt: "域名")
@@ -166,13 +168,12 @@ struct ProxyConfigurationView: View {
                                 } else if acmeType == "tls" {
                                     TextField("TLS-ALPN-01 备用端口", text: $acmeTLSAltPort)
                                 } else {
-                                    ACMEDNSFields(draft: $acmeDNS)
+                                    ManagedDNSCredentialFields(store: store, draft: $acmeDNS)
                                 }
                             }
                         } else if tlsMode == "tls" {
-                            TextField("证书路径或 resource:// 引用", text: $certificatePath)
-                            TextField("私钥路径或 resource:// 引用", text: $privateKeyPath)
-                            TextField("mTLS 客户端 CA（可选）", text: $tlsClientCAPath)
+                            credentialReferencePicker("TLS 证书对", target: .identity, selection: tlsIdentitySelection)
+                            credentialReferencePicker("mTLS 客户端 CA", target: .clientCA, selection: $tlsClientCAPath, optional: true)
                             Picker("SNI 检查", selection: $tlsSNIGuard) {
                                 Text("严格").tag("strict")
                                 Text("DNS SAN").tag("dns-san")
@@ -181,34 +182,29 @@ struct ProxyConfigurationView: View {
                             Text("填写客户端 CA 后，分配用户时必须提供匹配的客户端证书和私钥。至少分配一位用户后再部署；健康检查会用该证书完成真实 Hysteria 连接，并在订阅中提供证书内容。")
                                 .font(.callout).foregroundStyle(.secondary)
                         }
-                        Picker("ECH 密钥资源", selection: $echKeyPath) {
-                            Text("关闭 ECH").tag("")
-                            ForEach(resources.filter { $0.resourceKind == "ech_key" }) { resource in
-                                Text(resource.name).tag(resource.reference)
-                            }
-                        }
-                        Text("ECH 需要 TLS 或 ACME 证书。上传 Hysteria 生成的 ech.pem，订阅会从中提取客户端配置列表。")
+                        credentialReferencePicker("ECH 凭据", target: .ech, selection: $echKeyPath, optional: true)
+                        Text("TLS 证书对、CA 和 ECH 密钥可在此创建，或选择凭据中心已有凭据。ECH 需要 TLS 或 ACME 证书；导入 Hysteria 生成的 ech.pem 后，订阅会包含客户端 ECH 配置。")
                             .font(.callout).foregroundStyle(.secondary)
                     }
                     Section("配置资源") {
                         Picker("资源类型", selection: $resourceKind) {
-                            Text("证书").tag("certificate")
-                            Text("私钥").tag("private_key")
-                            Text("ECH 密钥").tag("ech_key")
                             Text("ACL 规则").tag("acl")
                             Text("GeoIP 数据").tag("geoip")
                             Text("GeoSite 数据").tag("geosite")
                         }
+                        .accessibilityIdentifier("proxy.resource.kind")
+                        Text("仅用于 ACL 规则、GeoIP 和 GeoSite 数据文件。")
+                            .font(.callout).foregroundStyle(.secondary)
                         HStack {
                             Spacer()
-                            Button("上传文件…") { showingResourceImporter = true }
+                            Button("上传配置文件…") { showingResourceImporter = true }
                                 .disabled(!store.isConnected)
                         }
                         if let resourceMessage {
                             Text(resourceMessage).font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
                         }
                         if resources.isEmpty {
-                            Text("没有已上传资源。上传后复制 resource:// 引用到证书、私钥或 ACL 路径字段。")
+                            Text("没有已上传配置资源。上传后复制引用到对应的 ACL、GeoIP 或 GeoSite 字段。")
                                 .font(.callout).foregroundStyle(.secondary)
                         } else {
                             ForEach(resources) { resource in
@@ -408,7 +404,7 @@ struct ProxyConfigurationView: View {
                         Toggle("强制 HTTPS", isOn: $masqueradeForceHTTPS)
                     }
                     Section("兼容限制") {
-                        Text("Realm 可使用固定版 Mihomo；生成的订阅会为 STUN 打洞设置 30 秒握手期限，服务端使用监听端口作为本地 UDP 端口。Realm 不能与端口跳跃组合。启用 Mimic 仍受兼容限制；ECH 需要使用已上传的 ech_key 资源。")
+                        Text("Realm 可使用固定版 Mihomo；生成的订阅会为 STUN 打洞设置 30 秒握手期限，服务端使用监听端口作为本地 UDP 端口。Realm 不能与端口跳跃组合。启用 Mimic 仍受兼容限制；ECH 需要在凭据中心导入并选择 ECH 密钥。")
                             .font(.callout).foregroundStyle(.secondary)
                     }
                 }
@@ -431,6 +427,18 @@ struct ProxyConfigurationView: View {
         .padding(20)
         .frame(minWidth: 820, idealWidth: 1080, minHeight: 760)
         .task(id: nodeID) { await load() }
+        .sheet(item: $creatingCredential) { target in
+            CredentialEditorView(store: store, initialKind: target.kind, allowedKinds: [target.kind], allowsUserOwnership: false) { receipt in
+                let prefix = "credential://\(receipt.id)/\(receipt.version ?? 1)/"
+                switch target {
+                case .identity:
+                    certificatePath = prefix + "certificate"
+                    privateKeyPath = prefix + "private_key"
+                case .clientCA: tlsClientCAPath = prefix + "content"
+                case .ech: echKeyPath = prefix + "content"
+                }
+            }
+        }
         .fileImporter(isPresented: $showingResourceImporter, allowedContentTypes: [.data], allowsMultipleSelection: false) { result in
             handleResourceImport(result)
         }
@@ -738,6 +746,8 @@ struct ProxyConfigurationView: View {
         switch value {
         case .string(let path) where path.hasPrefix("resource://"):
             return .string("/etc/hysteriax/resources/\(path.dropFirst("resource://".count))")
+        case .string(let path) where path.hasPrefix("credential://"):
+            return .string("<managed-credential>")
         case .array(let values):
             return .array(values.map(resolveResourcePaths(in:)))
         case .object(let values):
@@ -852,7 +862,7 @@ struct ProxyConfigurationView: View {
         masqueradeForceHTTPS = false
         resources = []
         showingResourceImporter = false
-        resourceKind = "certificate"
+        resourceKind = "acl"
         resourceMessage = nil
     }
 
@@ -979,6 +989,34 @@ struct ProxyConfigurationView: View {
                 }
             }
         } catch { errorMessage = error.localizedDescription }
+    }
+
+    private var tlsIdentitySelection: Binding<String> {
+        Binding(get: { certificatePath }, set: { reference in
+            certificatePath = reference
+            privateKeyPath = reference.isEmpty ? "" : String(reference.dropLast("certificate".count)) + "private_key"
+        })
+    }
+
+    private func credentialReferencePicker(_ title: String, target: ConfigurationCredentialTarget, selection: Binding<String>, optional: Bool = false) -> some View {
+        let entries = CredentialResources.catalog(store.credentials, configuration: detail?.config ?? [:])
+            .filter { $0.resourceKind == target.kind }
+        return HStack {
+            Picker(title, selection: selection) {
+                Text(optional ? "不启用" : "选择凭据").tag("")
+                ForEach(entries) { entry in
+                    Text(entry.name).tag(entry.reference)
+                }
+                if !selection.wrappedValue.isEmpty && !entries.contains(where: { $0.reference == selection.wrappedValue }) {
+                    Text(selection.wrappedValue.hasPrefix("credential://") ? "当前凭据（不可用）" : "当前远端文件")
+                        .tag(selection.wrappedValue)
+                }
+            }
+            .accessibilityIdentifier("proxy.credential.\(target.rawValue)")
+            Button("创建…") { creatingCredential = target }
+                .disabled(!store.isConnected)
+                .accessibilityIdentifier("proxy.credential.create.\(target.rawValue)")
+        }
     }
 
     private func handleResourceImport(_ result: Result<[URL], Error>) {
@@ -1194,7 +1232,7 @@ struct ProxyConfigurationView: View {
                 }
             }
         } else if tlsMode == "tls", (certificatePath.isEmpty || privateKeyPath.isEmpty) {
-            errorMessage = "请填写证书和私钥路径或资源引用。"
+            errorMessage = "请选择 TLS 证书和私钥凭据。"
             return false
         }
 
@@ -1589,6 +1627,18 @@ private enum NodeConfigurationYAML {
         case .array: return "[]"
         case .object: return "{}"
         case .null: return "null"
+        }
+    }
+}
+
+private enum ConfigurationCredentialTarget: String, Identifiable {
+    case identity, clientCA, ech
+    var id: String { rawValue }
+    var kind: String {
+        switch self {
+        case .identity: "tls_identity"
+        case .clientCA: "ca_certificate"
+        case .ech: "ech_key"
         }
     }
 }

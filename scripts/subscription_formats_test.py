@@ -82,11 +82,13 @@ def run(base, admin, database, temp, advanced_token, revoked_token, advanced_use
     subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", str(key),
                     "-out", str(cert), "-days", "2", "-subj", "/CN=localhost"], check=True,
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    ssh = api("/api/v1/credentials", {"name":"Basic subscription SSH","kind":"ssh_password","payload":{"secret":"fixture-only"}}, expected=201)
+    identity = api("/api/v1/credentials", {"name":"Basic subscription TLS","kind":"tls_identity","payload":{"certificate":cert.read_text(),"private_key":key.read_text()}}, expected=201)
     node = api("/api/v1/nodes", {
         "name": "東京: edge #&", "ssh_host": "127.0.0.1", "ssh_port": 22, "ssh_username": "root",
-        "ssh_auth_type": "password", "ssh_secret": "fixture-only", "public_host": "127.0.0.1",
+        "ssh_credential_id": ssh["id"], "ssh_credential_version": 1, "public_host": "127.0.0.1",
         "public_port": node_port, "listen_addr": f":{node_port}", "tls_sni": "localhost", "tls_skip_verify": True,
-        "config": {"tls": {"cert": str(cert), "key": str(key)}},
+        "config": {"tls": {"cert": f"credential://{identity['id']}/1/certificate", "key": f"credential://{identity['id']}/1/private_key"}},
     }, expected=201)["node"]["id"]
     user = api("/api/v1/users", {"name": "Basic subscription fixture"}, expected=201)["id"]
     credential = api(f"/api/v1/users/{user}/assignments", {"expected_revision": 1, "node_id": node}, expected=201)["hy2_credential"]

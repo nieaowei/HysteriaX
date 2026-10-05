@@ -406,6 +406,7 @@ private struct UserAssignmentFormView: View {
     let isUpdating: Bool
     let onComplete: (String?) -> Void
 
+    @State private var mtlsCredentialID = ""
     @State private var certificateData: Data?
     @State private var privateKeyData: Data?
     @State private var certificateName = ""
@@ -427,6 +428,7 @@ private struct UserAssignmentFormView: View {
                 .font(.callout)
                 .foregroundStyle(.secondary)
             Form {
+                CredentialPickerView(store: store, selection: $mtlsCredentialID, kinds: ["tls_identity"], ownerUserID: user.id, title: "已有 mTLS 凭据")
                 LabeledContent("客户端证书") {
                     HStack {
                         Text(certificateName.isEmpty ? "未选择" : certificateName)
@@ -463,6 +465,7 @@ private struct UserAssignmentFormView: View {
     }
 
     private func choose(_ purpose: String) {
+        mtlsCredentialID = ""
         importPurpose = purpose
         showingImporter = true
     }
@@ -491,7 +494,7 @@ private struct UserAssignmentFormView: View {
     }
 
     private func save() {
-        if (certificateData == nil) != (privateKeyData == nil) || (isUpdating && certificateData == nil) {
+        if mtlsCredentialID.isEmpty && ((certificateData == nil) != (privateKeyData == nil) || (isUpdating && certificateData == nil)) {
             errorMessage = "请同时选择客户端证书和私钥。"
             return
         }
@@ -502,12 +505,12 @@ private struct UserAssignmentFormView: View {
             defer { isSaving = false }
             do {
                 if isUpdating {
-                    guard let certificate, let privateKey else { return }
                     try await store.updateAssignmentClientCertificate(
                         user,
                         for: node,
-                        clientCertificate: certificate,
-                        clientPrivateKey: privateKey
+                        clientCertificate: certificate ?? "",
+                        clientPrivateKey: privateKey ?? "",
+                        mtlsCredentialID: mtlsCredentialID.isEmpty ? nil : mtlsCredentialID
                     )
                     onComplete(nil)
                 } else {
@@ -515,7 +518,8 @@ private struct UserAssignmentFormView: View {
                         user,
                         to: node,
                         clientCertificate: certificate,
-                        clientPrivateKey: privateKey
+                        clientPrivateKey: privateKey,
+                        mtlsCredentialID: mtlsCredentialID.isEmpty ? nil : mtlsCredentialID
                     )
                     onComplete(credential)
                 }

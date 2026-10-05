@@ -103,11 +103,11 @@ struct ACMEDNSDraft {
         }
         if provider == "namecheap" {
             let ip = values["namecheap_client_ip", default: ""]
-            if !ip.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, !Self.isIPv4Address(ip) {
+            if !ip.hasPrefix("credential://"), !ip.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, !Self.isIPv4Address(ip) {
                 return "Namecheap Client IP 必须是有效的 IPv4 地址。"
             }
             let endpoint = values["namecheap_api_endpoint", default: ""]
-            if !endpoint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            if !endpoint.hasPrefix("credential://"), !endpoint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 guard let url = URLComponents(string: endpoint),
                       ["http", "https"].contains(url.scheme?.lowercased() ?? ""),
                       let host = url.host, !host.isEmpty,

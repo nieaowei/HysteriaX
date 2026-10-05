@@ -20,6 +20,7 @@ pub async fn run(state: AppState) {
     }
 
     let mut tasks = JoinSet::new();
+    let mut reconciliation = tokio::time::interval(Duration::from_secs(10));
     loop {
         while tasks.len() < MAX_PARALLEL_NODES {
             match claim_next(&state.pool).await {
@@ -41,21 +42,52 @@ pub async fn run(state: AppState) {
                     tracing::error!(%error, "background job task panicked");
                 }
             }
+            _ = reconciliation.tick() => {
+                if let Err(error) = reconcile_kicks(&state.pool).await {
+                    tracing::error!(%error, "failed to reconcile durable kick requests");
+                }
+            }
             _ = tokio::time::sleep(Duration::from_secs(1)) => {}
         }
     }
 }
 
+async fn reconcile_kicks(pool: &PgPool) -> anyhow::Result<()> {
+    let mut tx = db::begin_write(pool).await?;
+    crate::kick_requests::schedule(&mut tx, None, false)
+        .await
+        .map_err(|e| anyhow::anyhow!(e.message))?;
+    tx.commit().await?;
+    Ok(())
+}
+
 async fn recover_interrupted(pool: &PgPool) -> Result<(), sqlx::Error> {
     let mut tx = db::begin_write(pool).await?;
-    let rows = sqlx::query("SELECT id, kind, node_id FROM jobs WHERE status = 'running'")
-        .fetch_all(&mut *tx)
-        .await?;
+    let rows = sqlx::query(
+        "SELECT id, kind, node_id, attempts, payload_json FROM jobs WHERE status = 'running'",
+    )
+    .fetch_all(&mut *tx)
+    .await?;
     for row in rows {
         let id: String = row.get("id");
         let kind: String = row.get("kind");
         let node_id: Option<String> = row.get("node_id");
         let timestamp = now();
+        if kind == "kick" && row.get::<i64, _>("attempts") >= 5 {
+            let job = JobInput {
+                id: id.clone(),
+                kind: kind.clone(),
+                node_id: node_id.clone(),
+                target_revision: None,
+                payload: row.get("payload_json"),
+                attempts: row.get("attempts"),
+            };
+            sqlx::query("UPDATE jobs SET status='failed',stage='needs_attention',error_message='Kick interrupted after exhausting its execution budget',finished_at=now(),updated_at=now() WHERE id=$1")
+                .bind(&id).execute(&mut *tx).await?;
+            crate::kick_requests::finish(&mut tx, &job, "needs_attention").await?;
+            crate::kick_requests::event(&mut tx,&id,"job.failed",json!({"id":id,"kind":kind,"node_id":node_id,"status":"failed","stage":"needs_attention"})).await?;
+            continue;
+        }
         sqlx::query("UPDATE jobs SET status = 'queued', stage = 'recovered', available_at = $1, updated_at = $2, finished_at = NULL WHERE id = $3 AND status = 'running'")
             .bind(timestamp).bind(timestamp).bind(&id).execute(&mut *tx).await?;
         sqlx::query("INSERT INTO job_events (job_id, event_type, payload_json, created_at) VALUES ($1, 'job.recovered', $2, $3)")
@@ -71,7 +103,7 @@ async fn recover_interrupted(pool: &PgPool) -> Result<(), sqlx::Error> {
 async fn claim_next(pool: &PgPool) -> Result<Option<JobInput>, sqlx::Error> {
     let timestamp = now();
     let mut tx = db::begin_write(pool).await?;
-    let row = sqlx::query("UPDATE jobs SET status = 'running', stage = 'starting', attempts = attempts + 1, started_at = COALESCE(started_at, $1), updated_at = $2 WHERE id = (SELECT candidate.id FROM jobs AS candidate WHERE candidate.status = 'queued' AND candidate.available_at <= $3 AND (candidate.node_id IS NULL OR NOT EXISTS (SELECT 1 FROM jobs AS active WHERE active.node_id = candidate.node_id AND active.status = 'running')) ORDER BY candidate.created_at LIMIT 1) RETURNING id, kind, node_id, target_revision, payload_json, attempts")
+    let row = sqlx::query("UPDATE jobs SET status = 'running', stage = 'starting', attempts = attempts + 1, started_at = COALESCE(started_at, $1), updated_at = $2 WHERE id = (SELECT candidate.id FROM jobs AS candidate WHERE candidate.status = 'queued' AND candidate.available_at <= $3 AND (candidate.node_id IS NULL OR NOT EXISTS (SELECT 1 FROM jobs AS active WHERE active.node_id = candidate.node_id AND active.status = 'running')) ORDER BY candidate.available_at, candidate.created_at, candidate.id LIMIT 1) RETURNING id, kind, node_id, target_revision, payload_json, attempts")
         .bind(timestamp).bind(timestamp).bind(timestamp).fetch_optional(&mut *tx).await?;
     let job = if let Some(row) = row {
         let job = JobInput {
@@ -103,10 +135,14 @@ async fn execute_one(state: AppState, job: JobInput) {
         }
         Err(error) => {
             let message = safe_error(&state.pool, &state.secrets, &job, &error).await;
-            let retry = (job.kind == "kick"
-                && job.payload.get("node_limit").and_then(Value::as_bool) == Some(true))
-                || (deployment::retryable(&error)
-                    && (job.kind == "kick" || job.attempts < MAX_ATTEMPTS));
+            let retry = deployment::retryable(&error)
+                && if job.kind == "kick" {
+                    crate::kick_requests::retry_delay(job.attempts).is_some()
+                } else {
+                    job.attempts < MAX_ATTEMPTS
+                };
+            let waiting_recovery =
+                job.kind == "kick" && crate::kick_requests::transport_error(&error);
             let rolled_back = was_rolled_back(&error);
             let rollback_failed = was_rollback_failed(&error);
             if let Err(persist_error) = fail(
@@ -116,6 +152,7 @@ async fn execute_one(state: AppState, job: JobInput) {
                 retry,
                 rolled_back,
                 rollback_failed,
+                waiting_recovery,
             )
             .await
             {
@@ -129,8 +166,22 @@ async fn succeed(pool: &PgPool, job: &JobInput, output: JobOutput) -> Result<(),
     let timestamp = now();
     let result = json!({"stage": output.stage, "result": output.result});
     let mut tx = db::begin_write(pool).await?;
-    sqlx::query("UPDATE jobs SET status = 'succeeded', stage = $1, result_json = $2, error_message = NULL, updated_at = $3, finished_at = $4 WHERE id = $5 AND status = 'running'")
+    let changed = sqlx::query("UPDATE jobs SET status = 'succeeded', stage = $1, result_json = $2, error_message = NULL, updated_at = $3, finished_at = $4 WHERE id = $5 AND status = 'running'")
         .bind(&output.stage).bind(result).bind(timestamp).bind(timestamp).bind(&job.id).execute(&mut *tx).await?;
+    if changed.rows_affected() == 0 {
+        tx.commit().await?;
+        return Ok(());
+    }
+    crate::kick_requests::finish(
+        &mut tx,
+        job,
+        if output.stage == "restriction_cleared" {
+            "cancelled"
+        } else {
+            "completed"
+        },
+    )
+    .await?;
     if !output.delete_node
         && let (Some(node_id), Some(state)) = (&job.node_id, &output.node_state)
     {
@@ -163,6 +214,15 @@ async fn succeed(pool: &PgPool, job: &JobInput, output: JobOutput) -> Result<(),
             .execute(&mut *tx)
             .await?;
     }
+    if job.kind != "kick"
+        && !output.delete_node
+        && output.stage != "fingerprint_confirmation_required"
+        && let Some(node) = &job.node_id
+    {
+        crate::kick_requests::schedule(&mut tx, Some(node), true)
+            .await
+            .map_err(|e| sqlx::Error::Protocol(e.message))?;
+    }
     tx.commit().await?;
     Ok(())
 }
@@ -174,11 +234,29 @@ async fn fail(
     retry: bool,
     rolled_back: bool,
     rollback_failed: bool,
+    waiting_recovery: bool,
 ) -> Result<(), sqlx::Error> {
     let timestamp = now();
     let (status, stage, available_at, finished_at, event_name) = if retry {
-        let later = now() + chrono::Duration::seconds(30);
+        let delay = if job.kind == "kick" {
+            crate::kick_requests::retry_delay(job.attempts).unwrap_or(300)
+        } else {
+            30
+        };
+        let later = now() + chrono::Duration::seconds(delay);
         ("queued", "retry_wait", later, None, "job.retrying")
+    } else if job.kind == "kick" {
+        (
+            "failed",
+            if waiting_recovery {
+                "waiting_recovery"
+            } else {
+                "needs_attention"
+            },
+            timestamp,
+            Some(timestamp),
+            "job.failed",
+        )
     } else if rolled_back {
         (
             "rolled_back",
@@ -199,8 +277,12 @@ async fn fail(
         ("failed", "failed", timestamp, Some(timestamp), "job.failed")
     };
     let mut tx = db::begin_write(pool).await?;
-    sqlx::query("UPDATE jobs SET status = $1, stage = $2, error_message = $3, available_at = $4, updated_at = $5, finished_at = $6 WHERE id = $7 AND status = 'running'")
+    let changed = sqlx::query("UPDATE jobs SET status = $1, stage = $2, error_message = $3, available_at = $4, updated_at = $5, finished_at = $6 WHERE id = $7 AND status = 'running'")
         .bind(status).bind(stage).bind(message).bind(available_at).bind(timestamp).bind(finished_at).bind(&job.id).execute(&mut *tx).await?;
+    if changed.rows_affected() == 0 {
+        tx.commit().await?;
+        return Ok(());
+    }
     if let Some(node_id) = &job.node_id {
         let state = if rolled_back {
             Some("rolled_back")
@@ -214,7 +296,7 @@ async fn fail(
             Some("fingerprint_changed")
         } else if message.contains("changed outside HysteriaX") {
             Some("drift")
-        } else if !retry && job.kind != "ssh-test" {
+        } else if !retry && job.kind != "ssh-test" && job.kind != "kick" {
             Some("sync_failed")
         } else {
             None
@@ -228,6 +310,9 @@ async fn fail(
                 .execute(&mut *tx)
                 .await?;
         }
+    }
+    if !retry {
+        crate::kick_requests::finish(&mut tx, job, stage).await?;
     }
     let payload = json!({"id": job.id, "kind": job.kind, "node_id": job.node_id, "status": status, "stage": stage, "error": message, "attempts": job.attempts});
     sqlx::query(
@@ -256,9 +341,9 @@ async fn safe_error(
         .join(": ");
     let mut secret_values = Vec::new();
     if let Some(node_id) = &job.node_id
-        && let Ok(Some(row)) = sqlx::query("SELECT ssh_secret_enc, ssh_passphrase_enc, node_token_enc, traffic_stats_secret_enc, desired_config_enc FROM nodes WHERE id = $1")
+        && let Ok(Some(row)) = sqlx::query("SELECT node_token_enc, traffic_stats_secret_enc, desired_config_enc FROM nodes WHERE id = $1")
             .bind(node_id).fetch_optional(pool).await {
-                for field in ["ssh_secret_enc", "ssh_passphrase_enc", "node_token_enc", "traffic_stats_secret_enc"] {
+                for field in ["node_token_enc", "traffic_stats_secret_enc"] {
                     if let Ok(Some(encrypted)) = row.try_get::<Option<String>, _>(field)
                         && let Ok(secret) = secrets.decrypt(&encrypted)
                     {
@@ -284,14 +369,14 @@ async fn safe_error(
                     redact_config_secrets(&mut message, &snapshot);
                 }
                 if let Ok(assignments) = sqlx::query(
-                    "SELECT credential_enc, client_certificate_enc, client_private_key_enc FROM node_assignments WHERE node_id = $1",
+                    "SELECT credential_enc FROM node_assignments WHERE node_id = $1",
                 )
                 .bind(node_id)
                 .fetch_all(pool)
                 .await
                 {
                     for assignment in assignments {
-                        for field in ["credential_enc", "client_certificate_enc", "client_private_key_enc"] {
+                        for field in ["credential_enc"] {
                             if let Ok(Some(encrypted)) = assignment.try_get::<Option<String>, _>(field)
                                 && let Ok(secret) = secrets.decrypt(&encrypted)
                             {
@@ -301,12 +386,44 @@ async fn safe_error(
                     }
                 }
     }
+    if let Ok(versions) =
+        sqlx::query_scalar::<_, String>("SELECT payload_enc FROM credential_versions")
+            .fetch_all(pool)
+            .await
+    {
+        for cipher in versions {
+            if let Ok(plain) = secrets.decrypt(&cipher)
+                && let Ok(payload) = serde_json::from_str::<Value>(&plain)
+            {
+                collect_credential_secrets(&payload, &mut secret_values);
+            }
+        }
+    } else {
+        return "Job failed; credential redaction could not be completed".into();
+    }
     redact_secret_values(&mut message, secret_values);
     message
         .chars()
         .filter(|character| !character.is_control() || *character == '\n' || *character == '\t')
         .take(2_000)
         .collect()
+}
+
+fn collect_credential_secrets(value: &Value, out: &mut Vec<String>) {
+    match value {
+        Value::String(s) if !s.is_empty() => out.push(s.clone()),
+        Value::Object(map) => {
+            for v in map.values() {
+                collect_credential_secrets(v, out);
+            }
+        }
+        Value::Array(items) => {
+            for v in items {
+                collect_credential_secrets(v, out);
+            }
+        }
+        _ => (),
+    }
 }
 
 fn was_rolled_back(error: &anyhow::Error) -> bool {
@@ -346,6 +463,162 @@ mod tests {
             .execute(pool)
             .await
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn successful_kick_commits_result_and_completes_durable_request() {
+        let state = crate::kick_requests::tests::fixture().await;
+        let id = crate::kick_requests::tests::enqueue(&state, "user_deleted").await;
+        let job = super::claim_next(&state.pool).await.unwrap().unwrap();
+        let output = crate::deployment::JobOutput {
+            stage: "clients_offline".into(),
+            result: json!({"remaining_connections":0}),
+            node_state: None,
+            deployed_revision: None,
+            deployed_config: None,
+            deployed_sha256: None,
+            delete_node: false,
+        };
+        super::succeed(&state.pool, &job, output).await.unwrap();
+        let result: (String, serde_json::Value) =
+            sqlx::query_as("SELECT status,result_json FROM jobs WHERE id=$1")
+                .bind(&id)
+                .fetch_one(&state.pool)
+                .await
+                .unwrap();
+        assert_eq!(result.0, "succeeded");
+        assert_eq!(result.1["result"]["remaining_connections"], 0);
+        let request: String = sqlx::query_scalar("SELECT state FROM kick_requests")
+            .fetch_one(&state.pool)
+            .await
+            .unwrap();
+        assert_eq!(request, "completed");
+        super::reconcile_kicks(&state.pool).await.unwrap();
+        assert!(super::claim_next(&state.pool).await.unwrap().is_none());
+        let events: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM job_events WHERE job_id=$1 AND event_type='job.succeeded'",
+        )
+        .bind(&id)
+        .fetch_one(&state.pool)
+        .await
+        .unwrap();
+        assert_eq!(events, 1);
+    }
+
+    #[tokio::test]
+    async fn bounded_kicks_release_queue_and_keep_the_obligation() {
+        let state = crate::kick_requests::tests::fixture().await;
+        let id = crate::kick_requests::tests::enqueue(&state, "user_deleted").await;
+        let mut job = super::claim_next(&state.pool).await.unwrap().unwrap();
+        assert_eq!(job.id, id);
+        super::fail(&state.pool, &job, "timeout", true, false, false, true)
+            .await
+            .unwrap();
+        let seconds: i64 = sqlx::query_scalar("SELECT round(extract(epoch FROM available_at-updated_at))::bigint FROM jobs WHERE id=$1").bind(&id).fetch_one(&state.pool).await.unwrap();
+        assert_eq!(seconds, 30);
+        sqlx::query("UPDATE jobs SET status='running',attempts=5 WHERE id=$1")
+            .bind(&id)
+            .execute(&state.pool)
+            .await
+            .unwrap();
+        job.attempts = 5;
+        super::fail(&state.pool, &job, "timeout", false, false, false, true)
+            .await
+            .unwrap();
+        let status: (String, String) = sqlx::query_as("SELECT status,stage FROM jobs WHERE id=$1")
+            .bind(&id)
+            .fetch_one(&state.pool)
+            .await
+            .unwrap();
+        assert_eq!(status, ("failed".into(), "waiting_recovery".into()));
+        let request: String = sqlx::query_scalar("SELECT state FROM kick_requests")
+            .fetch_one(&state.pool)
+            .await
+            .unwrap();
+        assert_eq!(request, "waiting_recovery");
+        let mut tx = crate::db::begin_write(&state.pool).await.unwrap();
+        let ssh = crate::api::enqueue_job_in_tx(&mut tx, "ssh-test", Some("node"), None)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        assert_eq!(
+            super::claim_next(&state.pool).await.unwrap().unwrap().id,
+            ssh
+        );
+    }
+
+    #[tokio::test]
+    async fn fifth_interrupted_kick_is_not_executed_again_after_restart() {
+        let state = crate::kick_requests::tests::fixture().await;
+        let id = crate::kick_requests::tests::enqueue(&state, "user_deleted").await;
+        sqlx::query("UPDATE jobs SET status='running',attempts=5 WHERE id=$1")
+            .bind(&id)
+            .execute(&state.pool)
+            .await
+            .unwrap();
+        super::recover_interrupted(&state.pool).await.unwrap();
+        let status: String = sqlx::query_scalar("SELECT status FROM jobs WHERE id=$1")
+            .bind(&id)
+            .fetch_one(&state.pool)
+            .await
+            .unwrap();
+        assert_eq!(status, "failed");
+        assert!(super::claim_next(&state.pool).await.unwrap().is_none());
+        let state: String = sqlx::query_scalar("SELECT state FROM kick_requests")
+            .fetch_one(&state.pool)
+            .await
+            .unwrap();
+        assert_eq!(state, "needs_attention");
+    }
+
+    #[tokio::test]
+    async fn failed_event_persistence_does_not_acknowledge_or_suspend_request() {
+        let state = crate::kick_requests::tests::fixture().await;
+        let id = crate::kick_requests::tests::enqueue(&state, "user_deleted").await;
+        let job = super::claim_next(&state.pool).await.unwrap().unwrap();
+        sqlx::raw_sql("CREATE FUNCTION reject_kick_event() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.event_type='job.failed' THEN RAISE EXCEPTION 'injected failure'; END IF; RETURN NEW; END $$; CREATE TRIGGER reject_kick_event BEFORE INSERT ON job_events FOR EACH ROW EXECUTE FUNCTION reject_kick_event();")
+            .execute(&state.pool).await.unwrap();
+        assert!(
+            super::fail(&state.pool, &job, "timeout", false, false, false, true)
+                .await
+                .is_err()
+        );
+        let status: String = sqlx::query_scalar("SELECT status FROM jobs WHERE id=$1")
+            .bind(&id)
+            .fetch_one(&state.pool)
+            .await
+            .unwrap();
+        assert_eq!(status, "running");
+        let request: String = sqlx::query_scalar("SELECT state FROM kick_requests")
+            .fetch_one(&state.pool)
+            .await
+            .unwrap();
+        assert_eq!(request, "active");
+    }
+
+    #[tokio::test]
+    async fn fair_queue_orders_by_availability_instead_of_old_creation_time() {
+        let state = crate::kick_requests::tests::fixture().await;
+        let id = crate::kick_requests::tests::enqueue(&state, "user_deleted").await;
+        let mut tx = crate::db::begin_write(&state.pool).await.unwrap();
+        let ssh = crate::api::enqueue_job_in_tx(&mut tx, "ssh-test", Some("node"), None)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        sqlx::query("UPDATE jobs SET available_at=now()-interval '1 second' WHERE id=$1")
+            .bind(&id)
+            .execute(&state.pool)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE jobs SET available_at=now()-interval '2 seconds' WHERE id=$1")
+            .bind(&ssh)
+            .execute(&state.pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            super::claim_next(&state.pool).await.unwrap().unwrap().id,
+            ssh
+        );
     }
 
     #[tokio::test]
@@ -468,6 +741,33 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
+
+        let mut tx = crate::db::begin_write(&pool).await.unwrap();
+        crate::credentials::insert(
+            &mut tx,
+            &secrets,
+            "SSH redaction fixture",
+            "ssh_private_key",
+            None,
+            &json!({"secret":values[0],"passphrase":values[1]}),
+            &json!({}),
+            &json!({}),
+        )
+        .await
+        .unwrap();
+        crate::credentials::insert(
+            &mut tx,
+            &secrets,
+            "mTLS redaction fixture",
+            "tls_identity",
+            Some("redaction-user"),
+            &json!({"certificate":values[10],"private_key":values[11]}),
+            &json!({}),
+            &json!({}),
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
 
         let job = JobInput {
             id: "redaction-job".to_owned(),

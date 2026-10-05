@@ -1,5 +1,4 @@
 use crate::db;
-use std::io::Cursor;
 
 use axum::{
     Json,
@@ -45,18 +44,20 @@ pub struct RevisionRequest {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AssignRequest {
     expected_revision: i64,
     node_id: String,
-    client_certificate: Option<String>,
-    client_private_key: Option<String>,
+    mtls_credential_id: Option<String>,
+    mtls_credential_version: Option<i64>,
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AssignmentCertificateUpdate {
     expected_revision: i64,
-    client_certificate: String,
-    client_private_key: String,
+    mtls_credential_id: String,
+    mtls_credential_version: i64,
 }
 
 pub async fn list(State(state): State<AppState>) -> Result<Json<Vec<Value>>, ApiError> {
@@ -180,10 +181,13 @@ pub async fn patch(
                 "kick",
                 Some(&node_id),
                 None,
-                json!({"user_id": id}),
+                json!({"user_id": id,"kick_reason":"access_restricted"}),
             )
             .await?;
         }
+    }
+    if enabled && !expired_now && !over_quota {
+        crate::kick_requests::clear_reason(&mut tx, None, Some(&id), "access_restricted").await?;
     }
     sqlx::query("INSERT INTO audit_records (id, actor, action, entity_type, entity_id, detail_json, created_at) VALUES ($1, 'admin', 'user.updated', 'user', $2, $3, $4)")
         .bind(Uuid::new_v4().to_string()).bind(&id).bind(json!({"revision": next_revision, "enabled": enabled})).bind(timestamp).execute(&mut *tx).await?;
@@ -224,10 +228,11 @@ pub async fn delete(
             "kick",
             Some(&node_id),
             None,
-            json!({"user_id": id}),
+            json!({"user_id": id,"kick_reason":"user_deleted"}),
         )
         .await?;
     }
+    sqlx::query("UPDATE credentials SET archived=TRUE,revision=revision+1,updated_at=$1 WHERE owner_user_id=$2 AND archived=FALSE").bind(now()).bind(&id).execute(&mut *tx).await?;
     sqlx::query("DELETE FROM users WHERE id = $1")
         .bind(&id)
         .execute(&mut *tx)
@@ -270,21 +275,12 @@ pub async fn assign(
         .and_then(|tls| tls.get("clientCA"))
         .and_then(Value::as_str)
         .is_some_and(|value| !value.trim().is_empty());
-    let client_certificate = input.client_certificate.as_deref();
-    let client_private_key = input.client_private_key.as_deref();
-    match (client_certificate, client_private_key) {
-        (Some(certificate), Some(private_key)) => {
-            validate_client_certificate_pair(certificate, private_key)?;
-        }
-        (None, None) if !mtls_required => {}
-        (None, None) => {
-            return Err(ApiError::bad_request(
-                "this node requires a matching client certificate and private key",
-            ));
-        }
+    match (&input.mtls_credential_id, input.mtls_credential_version) {
+        (Some(id), Some(version)) => validate_mtls_binding(&mut tx, id, version, &user_id).await?,
+        (None, None) if !mtls_required => (),
         _ => {
             return Err(ApiError::bad_request(
-                "client certificate and private key must be provided together",
+                "matching user-owned mTLS credential ID and version required",
             ));
         }
     }
@@ -305,16 +301,10 @@ pub async fn assign(
     let credential = generate_token();
     let credential_hash = token_digest(&credential);
     let credential_enc = state.secrets.encrypt(&credential)?;
-    let client_certificate_enc = client_certificate
-        .map(|certificate| state.secrets.encrypt(certificate))
-        .transpose()?;
-    let client_private_key_enc = client_private_key
-        .map(|private_key| state.secrets.encrypt(private_key))
-        .transpose()?;
     let timestamp = now();
-    sqlx::query("INSERT INTO node_assignments (user_id, node_id, credential_hash, credential_enc, client_certificate_enc, client_private_key_enc, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7)")
+    sqlx::query("INSERT INTO node_assignments (user_id, node_id, credential_hash, credential_enc, mtls_credential_id, mtls_credential_version, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7)")
         .bind(&user_id).bind(&input.node_id).bind(credential_hash).bind(credential_enc)
-        .bind(client_certificate_enc).bind(client_private_key_enc).bind(timestamp).execute(&mut *tx).await?;
+        .bind(&input.mtls_credential_id).bind(input.mtls_credential_version).bind(timestamp).execute(&mut *tx).await?;
     let next_revision = revision + 1;
     sqlx::query("UPDATE users SET revision = $1, updated_at = $2 WHERE id = $3 AND revision = $4")
         .bind(next_revision)
@@ -342,8 +332,14 @@ pub async fn update_assignment_client_certificate(
     if input.expected_revision < 1 {
         return Err(ApiError::bad_request("expected_revision must be positive"));
     }
-    validate_client_certificate_pair(&input.client_certificate, &input.client_private_key)?;
     let mut tx = db::begin_write(&state.pool).await?;
+    validate_mtls_binding(
+        &mut tx,
+        &input.mtls_credential_id,
+        input.mtls_credential_version,
+        &user_id,
+    )
+    .await?;
     let user = sqlx::query("SELECT revision FROM users WHERE id = $1")
         .bind(&user_id)
         .fetch_optional(&mut *tx)
@@ -356,9 +352,9 @@ pub async fn update_assignment_client_certificate(
         )));
     }
     let updated_at = now();
-    let update = sqlx::query("UPDATE node_assignments SET client_certificate_enc = $1, client_private_key_enc = $2 WHERE user_id = $3 AND node_id = $4")
-        .bind(state.secrets.encrypt(&input.client_certificate)?)
-        .bind(state.secrets.encrypt(&input.client_private_key)?)
+    let update = sqlx::query("UPDATE node_assignments SET mtls_credential_id = $1, mtls_credential_version = $2 WHERE user_id = $3 AND node_id = $4")
+        .bind(&input.mtls_credential_id)
+        .bind(input.mtls_credential_version)
         .bind(&user_id)
         .bind(&node_id)
         .execute(&mut *tx)
@@ -433,7 +429,7 @@ pub async fn unassign(
         "kick",
         Some(&node_id),
         None,
-        json!({"user_id": user_id}),
+        json!({"user_id": user_id,"kick_reason":"unassigned"}),
     )
     .await?;
     sqlx::query("INSERT INTO audit_records (id, actor, action, entity_type, entity_id, detail_json, created_at) VALUES ($1, 'admin', 'user.unassigned', 'user', $2, $3, $4)")
@@ -621,6 +617,12 @@ pub async fn reset_quota(
             ))
         };
     }
+    let unrestricted: bool = sqlx::query_scalar("SELECT enabled AND (expires_at IS NULL OR expires_at>now()) AND (quota_bytes IS NULL OR usage_bytes<quota_bytes) FROM users WHERE id=$1")
+        .bind(&user_id).fetch_one(&mut *tx).await?;
+    if unrestricted {
+        crate::kick_requests::clear_reason(&mut tx, None, Some(&user_id), "access_restricted")
+            .await?;
+    }
     sqlx::query("INSERT INTO audit_records (id, actor, action, entity_type, entity_id, detail_json, created_at) VALUES ($1, 'admin', 'user.quota_reset', 'user', $2, $3, $4)")
         .bind(Uuid::new_v4().to_string()).bind(&user_id).bind(json!({"quota_reset_at": timestamp})).bind(timestamp).execute(&mut *tx).await?;
     tx.commit().await?;
@@ -632,12 +634,12 @@ pub async fn reset_quota(
 async fn user_json(state: &AppState, row: &sqlx::postgres::PgRow) -> Result<Value, ApiError> {
     let id: String = row.get("id");
     let assignments = sqlx::query(
-        "SELECT node_id, created_at FROM node_assignments WHERE user_id = $1 ORDER BY node_id",
+        "SELECT node_id, mtls_credential_id, mtls_credential_version, created_at FROM node_assignments WHERE user_id = $1 ORDER BY node_id",
     )
     .bind(&id)
     .fetch_all(&state.pool)
     .await?;
-    let assigned: Vec<Value> = assignments.iter().map(|assignment| json!({"node_id": assignment.get::<String, _>("node_id"), "created_at": assignment.get::<chrono::DateTime<chrono::Utc>, _>("created_at")})).collect();
+    let assigned: Vec<Value> = assignments.iter().map(|assignment| json!({"node_id": assignment.get::<String, _>("node_id"), "created_at": assignment.get::<chrono::DateTime<chrono::Utc>, _>("created_at"), "mtls_credential_id": assignment.get::<Option<String>,_>("mtls_credential_id"), "mtls_credential_version": assignment.get::<Option<i64>,_>("mtls_credential_version")})).collect();
     Ok(json!({
         "id": id, "name": row.get::<String, _>("name"), "enabled": row.get::<bool, _>("enabled"),
         "expires_at": row.get::<Option<chrono::DateTime<chrono::Utc>>, _>("expires_at"), "quota_bytes": row.get::<Option<i64>, _>("quota_bytes"),
@@ -660,32 +662,6 @@ fn validate_name(value: &str) -> Result<(), ApiError> {
             "name must contain 1 to 100 printable characters",
         ));
     }
-    Ok(())
-}
-
-fn validate_client_certificate_pair(certificate: &str, private_key: &str) -> Result<(), ApiError> {
-    if certificate.len() > 1_048_576 || private_key.len() > 1_048_576 {
-        return Err(ApiError::bad_request(
-            "client certificate and private key must each be at most 1 MiB",
-        ));
-    }
-    let certificates = rustls_pemfile::certs(&mut Cursor::new(certificate.as_bytes()))
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|_| ApiError::bad_request("client certificate is not valid PEM"))?;
-    if certificates.is_empty() {
-        return Err(ApiError::bad_request(
-            "client certificate must contain at least one PEM certificate",
-        ));
-    }
-    let private_key = rustls_pemfile::private_key(&mut Cursor::new(private_key.as_bytes()))
-        .map_err(|_| ApiError::bad_request("client private key is not valid PEM"))?
-        .ok_or_else(|| ApiError::bad_request("client private key PEM block was not found"))?;
-    rustls::sign::CertifiedKey::from_der(
-        certificates,
-        private_key,
-        &rustls::crypto::ring::default_provider(),
-    )
-    .map_err(|_| ApiError::bad_request("client certificate and private key do not match"))?;
     Ok(())
 }
 
@@ -721,6 +697,21 @@ where
     T: serde::Deserialize<'de>,
 {
     Option::<T>::deserialize(deserializer).map(Some)
+}
+
+async fn validate_mtls_binding(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    id: &str,
+    version: i64,
+    user: &str,
+) -> Result<(), ApiError> {
+    let valid:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM credentials c JOIN credential_versions v ON v.credential_id=c.id WHERE c.id=$1 AND v.version=$2 AND c.kind='tls_identity' AND c.owner_user_id=$3 AND c.archived=FALSE)").bind(id).bind(version).bind(user).fetch_one(&mut **tx).await?;
+    if !valid {
+        return Err(ApiError::bad_request(
+            "invalid, archived, or incorrectly owned mTLS credential",
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]

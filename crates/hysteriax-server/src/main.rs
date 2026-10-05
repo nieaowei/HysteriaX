@@ -1,9 +1,11 @@
 mod api;
 mod config;
+mod credentials;
 mod db;
 mod deployment;
 mod error;
 mod jobs;
+mod kick_requests;
 mod monitoring;
 mod node_limits;
 mod overview;
@@ -23,6 +25,11 @@ use crate::{security::SecretBox, state::AppState};
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    let migrate_only = match env::args().skip(1).collect::<Vec<_>>().as_slice() {
+        [] => false,
+        [arg] if arg == "--migrate-only" => true,
+        _ => bail!("usage: hysteriax-server [--migrate-only]"),
+    };
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
@@ -45,6 +52,11 @@ async fn main() -> Result<()> {
     let master_key = env::var("HYSTERIAX_MASTER_KEY")
         .context("HYSTERIAX_MASTER_KEY must be a base64 encoded 32-byte key")?;
     let secret_box = SecretBox::from_base64(&master_key)?;
+    credentials::migration::migrate(&pool, &secret_box).await?;
+    if migrate_only {
+        tracing::info!("database and credential migration completed; workers were not started");
+        return Ok(());
+    }
     let state = AppState::new(pool, secret_box);
     let jobs = tokio::spawn(jobs::run(state.clone()));
     let traffic = tokio::spawn(traffic::run(state.clone()));

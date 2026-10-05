@@ -4,6 +4,7 @@ enum JobDisplayText {
     static func kind(_ value: String) -> String {
         switch value {
         case "ssh-test": "SSH 测试"
+        case "credential-apply": "应用凭据"
         case "deploy": "部署"
         case "sync": "同步"
         case "rollback": "回滚"
@@ -27,11 +28,16 @@ enum JobDisplayText {
 
     static func stage(_ value: String) -> String {
         let labels = [
+            "credential_applied": "凭据已应用",
+            "credential_deployment_queued": "凭据部署已排队",
+            "credential_revocation_queued": "连接撤销已排队",
             "queued": "排队中",
             "running": "执行中",
             "starting": "准备中",
             "retry_wait": "等待重试",
-            "restriction_cleared": "节点限制已解除，跳过断开",
+            "waiting_recovery": "等待节点 SSH 恢复",
+            "needs_attention": "需要人工处理",
+            "restriction_cleared": "限制已解除，跳过断开",
             "recovered": "重启后恢复",
             "loading_connection": "读取 SSH 连接",
             "connecting": "连接节点",
@@ -296,6 +302,7 @@ struct JobsView: View {
         case "ssh-test": return "ssh-test"
         case "deploy", "sync": return "sync"
         case "rollback": return "rollback"
+        case "kick": return "kick"
         default: return nil
         }
     }
@@ -304,6 +311,7 @@ struct JobsView: View {
         switch action {
         case "ssh-test": "SSH 测试"
         case "rollback": "回滚"
+        case "kick": "踢下线"
         default: "同步"
         }
     }

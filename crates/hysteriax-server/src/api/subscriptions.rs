@@ -283,7 +283,7 @@ async fn load_subscription_nodes(
     state: &AppState,
     user_id: &str,
 ) -> Result<Vec<SubscriptionNode>, ApiError> {
-    let rows = sqlx::query("SELECT n.id, n.name, n.public_host, n.public_port, n.listen_addr, n.tls_sni, n.tls_skip_verify, n.state, n.deployed_config_enc, a.credential_enc, a.client_certificate_enc, a.client_private_key_enc FROM node_assignments a JOIN nodes n ON n.id = a.node_id WHERE a.user_id = $1 AND n.state NOT IN ('deleting', 'delete_failed') AND n.deployed_revision IS NOT NULL AND n.deployed_config_enc IS NOT NULL ORDER BY lower(n.name) COLLATE \"C\", n.name COLLATE \"C\", n.id")
+    let rows = sqlx::query("SELECT n.id, n.name, n.public_host, n.public_port, n.listen_addr, n.tls_sni, n.tls_skip_verify, n.state, n.deployed_config_enc, a.credential_enc, a.user_id, a.mtls_credential_id, a.mtls_credential_version FROM node_assignments a JOIN nodes n ON n.id = a.node_id WHERE a.user_id = $1 AND n.state NOT IN ('deleting', 'delete_failed') AND n.deployed_revision IS NOT NULL AND n.deployed_config_enc IS NOT NULL ORDER BY lower(n.name) COLLATE \"C\", n.name COLLATE \"C\", n.id")
         .bind(user_id).fetch_all(&state.pool).await?;
     let mut nodes = Vec::new();
     for row in rows {
@@ -300,8 +300,11 @@ async fn load_subscription_nodes(
         let ech_config = subscription_ech_config(state, &node_id, &config).await?;
         let realm_opts = subscription_realm_options(&config)?;
         let password_enc: String = row.get("credential_enc");
-        let client_certificate_enc: Option<String> = row.get("client_certificate_enc");
-        let client_private_key_enc: Option<String> = row.get("client_private_key_enc");
+        let identity =
+            crate::credentials::assignment_identity(&state.pool, &state.secrets, &row).await?;
+        let (client_certificate, client_private_key) = identity
+            .map(|(c, k)| (Some(c), Some(k)))
+            .unwrap_or((None, None));
         let name: String = row.get("name");
         nodes.push(build_node(
             &name,
@@ -313,14 +316,8 @@ async fn load_subscription_nodes(
             row.get("tls_sni"),
             row.get::<bool, _>("tls_skip_verify"),
             &state.secrets.decrypt(&password_enc)?,
-            client_certificate_enc
-                .as_deref()
-                .map(|value| state.secrets.decrypt(value))
-                .transpose()?,
-            client_private_key_enc
-                .as_deref()
-                .map(|value| state.secrets.decrypt(value))
-                .transpose()?,
+            client_certificate,
+            client_private_key,
             ech_config,
             realm_opts,
             &config,
@@ -538,21 +535,22 @@ async fn subscription_ech_config(
     else {
         return Ok(None);
     };
-    let resource_id = key_path
-        .strip_prefix("resource://")
-        .filter(|id| !id.is_empty() && !id.contains('/'))
-        .ok_or_else(|| ApiError::bad_request("ECH key must use an uploaded resource"))?;
-    let encrypted: String = sqlx::query_scalar(
-        "SELECT content_enc FROM config_resources WHERE node_id = $1 AND id = $2 AND resource_kind = 'ech_key'",
+    let reference = crate::credentials::Reference::parse(key_path)
+        .map_err(|_| ApiError::bad_request("ECH key must reference a managed credential"))?;
+    let (kind, owner, _, payload, _) = crate::credentials::load(
+        &state.pool,
+        &state.secrets,
+        &reference.id,
+        reference.version,
     )
-    .bind(node_id)
-    .bind(resource_id)
-    .fetch_optional(&state.pool)
-    .await?
-    .ok_or_else(|| ApiError::bad_request("ECH key resource is missing from this node"))?;
-    let content = state.secrets.decrypt_bytes(&encrypted)?;
-    let text = std::str::from_utf8(&content).map_err(|_| ApiError::internal())?;
-    Ok(Some(extract_ech_config_list(text)?))
+    .await?;
+    if kind != "ech_key" || owner.is_some() || reference.field != "content" {
+        return Err(ApiError::bad_request("invalid ECH credential"));
+    }
+    let _ = node_id;
+    Ok(Some(extract_ech_config_list(
+        payload["content"].as_str().ok_or_else(ApiError::internal)?,
+    )?))
 }
 
 pub(crate) fn extract_ech_config_list(pem: &str) -> Result<String, ApiError> {

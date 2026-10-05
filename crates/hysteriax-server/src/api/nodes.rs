@@ -26,6 +26,7 @@ use crate::{
 };
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CreateNode {
     package: Option<crate::node_limits::Package>,
     initial_usage_bytes: Option<i64>,
@@ -33,9 +34,8 @@ pub struct CreateNode {
     ssh_host: String,
     ssh_port: u16,
     ssh_username: String,
-    ssh_auth_type: String,
-    ssh_secret: String,
-    ssh_passphrase: Option<String>,
+    ssh_credential_id: String,
+    ssh_credential_version: i64,
     ssh_host_fingerprint: Option<String>,
     public_host: String,
     public_port: u16,
@@ -51,6 +51,7 @@ pub struct CreateNode {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PatchNode {
     package: Option<crate::node_limits::Package>,
     expected_revision: i64,
@@ -58,9 +59,8 @@ pub struct PatchNode {
     ssh_host: Option<String>,
     ssh_port: Option<u16>,
     ssh_username: Option<String>,
-    ssh_auth_type: Option<String>,
-    ssh_secret: Option<String>,
-    ssh_passphrase: Option<String>,
+    ssh_credential_id: Option<String>,
+    ssh_credential_version: Option<i64>,
     ssh_host_fingerprint: Option<String>,
     public_host: Option<String>,
     public_port: Option<u16>,
@@ -126,15 +126,24 @@ pub async fn create(
     let proxy_probe_url = normalize_proxy_probe_url(input.proxy_probe_url.as_deref())?;
     let (first_listen_port, hopping) = validate_listen_addr(&input.listen_addr)?;
     validate_hop_public_port(input.public_port, first_listen_port, hopping)?;
-    validate_auth_type(&input.ssh_auth_type)?;
-    if input.ssh_secret.is_empty() {
-        return Err(ApiError::bad_request("ssh_secret cannot be empty"));
-    }
-    validate_server_options(&input.config)
-        .map_err(|error| ApiError::bad_request(error.to_string()))?;
+    validate_ssh_credential(
+        &state,
+        &input.ssh_credential_id,
+        input.ssh_credential_version,
+        false,
+    )
+    .await?;
+    let id = Uuid::new_v4().to_string();
+    crate::credentials::require_managed_config(&input.config)
+        .map_err(|e| ApiError::bad_request(e.to_string()))?;
+    let (resolved, _) =
+        super::resources::resolve_config_resources(&state.pool, &state.secrets, &id, &input.config)
+            .await
+            .map_err(|_| ApiError::bad_request("invalid configuration credential"))?;
+    validate_server_options(&resolved)
+        .map_err(|_| ApiError::bad_request("invalid node configuration"))?;
     validate_listener_features(&input.config, &input.listen_addr)?;
 
-    let id = Uuid::new_v4().to_string();
     let token = generate_token();
     let stats_secret = generate_token();
     let now = now();
@@ -149,20 +158,26 @@ pub async fn create(
     });
     let deployment_snapshot_json = deployment_snapshot.to_string();
     let config_enc = state.secrets.encrypt(&config_json)?;
-    let ssh_secret_enc = state.secrets.encrypt(&input.ssh_secret)?;
-    let ssh_passphrase_enc = input
-        .ssh_passphrase
-        .as_deref()
-        .map(|value| state.secrets.encrypt(value))
-        .transpose()?;
     let node_token_enc = state.secrets.encrypt(&token)?;
     let stats_secret_enc = state.secrets.encrypt(&stats_secret)?;
     let digest = hex::encode(Sha256::digest(deployment_snapshot_json.as_bytes()));
 
     let mut tx = db::begin_write(&state.pool).await?;
-    sqlx::query("INSERT INTO nodes (id, name, ssh_host, ssh_port, ssh_username, ssh_auth_type, ssh_secret_enc, ssh_passphrase_enc, ssh_host_fingerprint, public_host, public_port, listen_addr, traffic_stats_port, proxy_probe_url, tls_sni, tls_skip_verify, node_token_hash, node_token_enc, traffic_stats_secret_enc, desired_config_enc, desired_revision, state, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, 1, 'new', $21, $22)")
+    crate::credentials::check_bindings(
+        &mut tx,
+        &input.config,
+        None,
+        Some((
+            &input.ssh_credential_id,
+            input.ssh_credential_version,
+            false,
+        )),
+    )
+    .await
+    .map_err(|e| ApiError::conflict(e.to_string()))?;
+    sqlx::query("INSERT INTO nodes (id, name, ssh_host, ssh_port, ssh_username, ssh_credential_id, ssh_credential_version, ssh_host_fingerprint, public_host, public_port, listen_addr, traffic_stats_port, proxy_probe_url, tls_sni, tls_skip_verify, node_token_hash, node_token_enc, traffic_stats_secret_enc, desired_config_enc, desired_revision, state, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, 1, 'new', $20, $21)")
         .bind(&id).bind(input.name.trim()).bind(input.ssh_host.trim()).bind(i32::from(input.ssh_port))
-        .bind(input.ssh_username.trim()).bind(&input.ssh_auth_type).bind(ssh_secret_enc).bind(ssh_passphrase_enc)
+        .bind(input.ssh_username.trim()).bind(&input.ssh_credential_id).bind(input.ssh_credential_version)
         .bind(input.ssh_host_fingerprint).bind(input.public_host.trim()).bind(i32::from(input.public_port))
         .bind(input.listen_addr.trim()).bind(i32::from(input.traffic_stats_port)).bind(&proxy_probe_url).bind(input.tls_sni).bind(input.tls_skip_verify).bind(token_digest(&token)).bind(node_token_enc)
         .bind(stats_secret_enc).bind(config_enc).bind(now).bind(now).execute(&mut *tx).await?;
@@ -227,9 +242,26 @@ pub async fn patch(
     let ssh_username: String = input
         .ssh_username
         .unwrap_or_else(|| current.get("ssh_username"));
-    let ssh_auth_type: String = input
-        .ssh_auth_type
-        .unwrap_or_else(|| current.get("ssh_auth_type"));
+    if input.ssh_credential_id.is_some() != input.ssh_credential_version.is_some() {
+        return Err(ApiError::bad_request(
+            "SSH credential ID and version must be supplied together",
+        ));
+    }
+    let ssh_credential_id: String = input
+        .ssh_credential_id
+        .unwrap_or_else(|| current.get("ssh_credential_id"));
+    let ssh_credential_version: i64 = input
+        .ssh_credential_version
+        .unwrap_or_else(|| current.get("ssh_credential_version"));
+    let ssh_changed = ssh_credential_id != current.get::<String, _>("ssh_credential_id")
+        || ssh_credential_version != current.get::<i64, _>("ssh_credential_version");
+    validate_ssh_credential(
+        &state,
+        &ssh_credential_id,
+        ssh_credential_version,
+        !ssh_changed,
+    )
+    .await?;
     let public_host: String = input
         .public_host
         .unwrap_or_else(|| current.get("public_host"));
@@ -259,6 +291,48 @@ pub async fn patch(
     let host_fingerprint = input
         .ssh_host_fingerprint
         .or_else(|| current.get("ssh_host_fingerprint"));
+    if ssh_changed {
+        let (kind, _, _, payload, _) = crate::credentials::load(
+            &state.pool,
+            &state.secrets,
+            &ssh_credential_id,
+            ssh_credential_version,
+        )
+        .await?;
+        let candidate = crate::ssh::SshNode {
+            host: ssh_host.clone(),
+            port: ssh_port,
+            username: ssh_username.clone(),
+            auth_type: if kind == "ssh_password" {
+                "password"
+            } else {
+                "private_key"
+            }
+            .into(),
+            secret: payload["secret"]
+                .as_str()
+                .ok_or_else(ApiError::internal)?
+                .into(),
+            passphrase: payload["passphrase"].as_str().map(str::to_owned),
+            host_fingerprint: host_fingerprint.clone(),
+        };
+        match crate::ssh::connect(&candidate).await.map_err(|_| {
+            ApiError::bad_request("SSH credential verification failed; previous binding remains")
+        })? {
+            crate::ssh::FingerprintResult::Trusted(session) => {
+                crate::ssh::inspect_connected(&session).await.map_err(|_| {
+                    ApiError::bad_request(
+                        "SSH privilege verification failed; previous binding remains",
+                    )
+                })?;
+            }
+            _ => {
+                return Err(ApiError::conflict(
+                    "SSH host fingerprint must be confirmed before changing credentials",
+                ));
+            }
+        }
+    }
     let old_config_enc: String = current.get("desired_config_enc");
     let config_changed = input.config.is_some();
     let config: Value = if let Some(config) = input.config {
@@ -275,20 +349,17 @@ pub async fn patch(
     validate_traffic_stats_port(traffic_stats_port)?;
     let (first_listen_port, hopping) = validate_listen_addr(&listen_addr)?;
     validate_hop_public_port(public_port, first_listen_port, hopping)?;
-    validate_auth_type(&ssh_auth_type)?;
-    validate_server_options(&config).map_err(|error| ApiError::bad_request(error.to_string()))?;
+    crate::credentials::require_managed_config(&config)
+        .map_err(|e| ApiError::bad_request(e.to_string()))?;
+    let (resolved, _) =
+        crate::credentials::resolve_config(&state.pool, &state.secrets, &config, false)
+            .await
+            .map_err(|_| ApiError::bad_request("invalid configuration credential"))?;
+    validate_server_options(&resolved)
+        .map_err(|_| ApiError::bad_request("invalid node configuration"))?;
     validate_listener_features(&config, &listen_addr)?;
     super::resources::resolve_config_resources(&state.pool, &state.secrets, &id, &config).await?;
 
-    let secret_enc = match input.ssh_secret {
-        Some(secret) if !secret.is_empty() => state.secrets.encrypt(&secret)?,
-        Some(_) => return Err(ApiError::bad_request("ssh_secret cannot be empty")),
-        None => current.get("ssh_secret_enc"),
-    };
-    let passphrase_enc = match input.ssh_passphrase {
-        Some(passphrase) => Some(state.secrets.encrypt(&passphrase)?),
-        None => current.get("ssh_passphrase_enc"),
-    };
     let config_json = config.to_string();
     let deployment_snapshot = json!({
         "server_config": config.clone(),
@@ -302,7 +373,17 @@ pub async fn patch(
     let config_enc = state.secrets.encrypt(&config_json)?;
     let updated_at = now();
     let next_revision = revision + 1;
+    let old_config: Value = serde_json::from_str(&state.secrets.decrypt(&old_config_enc)?)
+        .map_err(|_| ApiError::internal())?;
     let mut tx = db::begin_write(&state.pool).await?;
+    crate::credentials::check_bindings(
+        &mut tx,
+        &config,
+        Some(&old_config),
+        Some((&ssh_credential_id, ssh_credential_version, !ssh_changed)),
+    )
+    .await
+    .map_err(|e| ApiError::conflict(e.to_string()))?;
     let m_tls_enabled = config
         .get("tls")
         .and_then(Value::as_object)
@@ -311,7 +392,7 @@ pub async fn patch(
         .is_some_and(|value| !value.trim().is_empty());
     if m_tls_enabled {
         let missing_client_credentials: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM node_assignments WHERE node_id = $1 AND (client_certificate_enc IS NULL OR client_private_key_enc IS NULL)",
+            "SELECT COUNT(*) FROM node_assignments WHERE node_id = $1 AND (mtls_credential_id IS NULL OR mtls_credential_version IS NULL)",
         )
         .bind(&id)
         .fetch_one(&mut *tx)
@@ -322,9 +403,9 @@ pub async fn patch(
             ));
         }
     }
-    let updated = sqlx::query("UPDATE nodes SET name = $1, ssh_host = $2, ssh_port = $3, ssh_username = $4, ssh_auth_type = $5, ssh_secret_enc = $6, ssh_passphrase_enc = $7, ssh_host_fingerprint = $8, public_host = $9, public_port = $10, listen_addr = $11, traffic_stats_port = $12, proxy_probe_url = $13, tls_sni = $14, tls_skip_verify = $15, desired_config_enc = $16, desired_revision = $17, state = CASE WHEN $18 = TRUE AND state IN ('needs_fingerprint', 'fingerprint_changed') THEN 'ready' ELSE state END, updated_at = $19 WHERE id = $20 AND desired_revision = $21")
-        .bind(name.trim()).bind(ssh_host.trim()).bind(i32::from(ssh_port)).bind(ssh_username.trim()).bind(ssh_auth_type)
-        .bind(secret_enc).bind(passphrase_enc).bind(host_fingerprint).bind(public_host.trim()).bind(i32::from(public_port)).bind(listen_addr.trim())
+    let updated = sqlx::query("UPDATE nodes SET name = $1, ssh_host = $2, ssh_port = $3, ssh_username = $4, ssh_credential_id = $5, ssh_credential_version = $6, ssh_host_fingerprint = $7, public_host = $8, public_port = $9, listen_addr = $10, traffic_stats_port = $11, proxy_probe_url = $12, tls_sni = $13, tls_skip_verify = $14, desired_config_enc = $15, desired_revision = $16, state = CASE WHEN $17 = TRUE AND state IN ('needs_fingerprint', 'fingerprint_changed') THEN 'ready' ELSE state END, updated_at = $18 WHERE id = $19 AND desired_revision = $20")
+        .bind(name.trim()).bind(ssh_host.trim()).bind(i32::from(ssh_port)).bind(ssh_username.trim()).bind(&ssh_credential_id)
+        .bind(ssh_credential_version).bind(host_fingerprint).bind(public_host.trim()).bind(i32::from(public_port)).bind(listen_addr.trim())
         .bind(i32::from(traffic_stats_port)).bind(&proxy_probe_url).bind(tls_sni).bind(tls_skip_verify).bind(&config_enc).bind(next_revision).bind(fingerprint_supplied).bind(updated_at).bind(&id).bind(revision)
         .execute(&mut *tx).await?;
     if updated.rows_affected() == 0 {
@@ -605,10 +686,14 @@ async fn node_json(state: &AppState, row: &sqlx::postgres::PgRow) -> Result<Valu
     let (package, package_usage) = crate::node_limits::snapshot(&state.pool, &node_id)
         .await
         .map_err(|_| ApiError::internal())?;
+    let credential_kind: String = sqlx::query_scalar("SELECT kind FROM credentials WHERE id=$1")
+        .bind(row.get::<String, _>("ssh_credential_id"))
+        .fetch_one(&state.pool)
+        .await?;
     Ok(json!({
         "package": package, "package_usage": package_usage,
         "id": node_id, "name": row.get::<String, _>("name"),
-        "ssh": {"host": row.get::<String, _>("ssh_host"), "port": row.get::<i32, _>("ssh_port"), "username": row.get::<String, _>("ssh_username"), "auth_type": row.get::<String, _>("ssh_auth_type"), "secret_configured": true, "host_fingerprint": row.get::<Option<String>, _>("ssh_host_fingerprint")},
+        "ssh": {"host": row.get::<String, _>("ssh_host"), "port": row.get::<i32, _>("ssh_port"), "username": row.get::<String, _>("ssh_username"), "auth_type": if credential_kind == "ssh_password" { "password" } else { "private_key" }, "credential_id": row.get::<String,_>("ssh_credential_id"), "credential_version": row.get::<i64,_>("ssh_credential_version"), "secret_configured": true, "host_fingerprint": row.get::<Option<String>, _>("ssh_host_fingerprint")},
         "public": {"host": row.get::<String, _>("public_host"), "port": row.get::<i32, _>("public_port"), "listen_addr": row.get::<String, _>("listen_addr"), "tls_sni": row.get::<Option<String>, _>("tls_sni"), "skip_cert_verify": row.get::<bool, _>("tls_skip_verify")},
         "traffic_stats_port": traffic_stats_port,
         "config": config, "yaml_preview": yaml_preview,
@@ -622,14 +707,23 @@ async fn node_json(state: &AppState, row: &sqlx::postgres::PgRow) -> Result<Valu
     }))
 }
 
-fn validate_auth_type(value: &str) -> Result<(), ApiError> {
-    if matches!(value, "password" | "private_key") {
-        Ok(())
-    } else {
-        Err(ApiError::bad_request(
-            "ssh_auth_type must be password or private_key",
-        ))
+async fn validate_ssh_credential(
+    state: &AppState,
+    id: &str,
+    version: i64,
+    allow_archived: bool,
+) -> Result<(), ApiError> {
+    let (kind, owner, archived, _, _) =
+        crate::credentials::load(&state.pool, &state.secrets, id, version)
+            .await
+            .map_err(|_| ApiError::bad_request("SSH credential not found"))?;
+    if owner.is_some()
+        || (archived && !allow_archived)
+        || !matches!(kind.as_str(), "ssh_private_key" | "ssh_password")
+    {
+        return Err(ApiError::bad_request("invalid or archived SSH credential"));
     }
+    Ok(())
 }
 
 fn normalize_proxy_probe_url(value: Option<&str>) -> Result<Option<String>, ApiError> {

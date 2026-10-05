@@ -38,3 +38,18 @@ The PostgreSQL release starts with a new, empty database and does not import SQL
 ## First administrator connection
 
 Use the initial token from `.env` as the Bearer token. In macOS Settings, create and switch to a new administrator token; the app saves it in Keychain and shows the plaintext once. Confirm that it is marked as this Mac's current token, then revoke the initial token if desired. The API is also available through `POST /api/v1/admin/tokens` and `DELETE /api/v1/admin/tokens/{id}`. The server never returns a token digest as a usable credential.
+
+## Credential center upgrade (API 1.0.0)
+
+Upgrade the service and macOS client together. The credential changes modify `/api/v1` directly and break its previous request/response contract. No v2 management routes are exposed. Existing subscription URLs and authentication callbacks remain valid. Back up PostgreSQL and the matching master key before upgrading. Startup converts stored SSH material, certificate/ECH resources, DNS configuration and user mTLS material atomically before workers start. It preserves existing token values, revisions, counters and historical deployment references. Invalid ciphertext or missing resources aborts conversion and keeps the API unready.
+
+To preflight a database copy, run `hysteriax-server --migrate-only` with that copy's `DATABASE_URL` and the matching `HYSTERIAX_MASTER_KEY`. This mode does not start workers or contact nodes. `scripts/verify-credentials-migration.py` compares an untouched copy against the migrated copy; provide its two database URLs and master key through environment variables. Restore the pre-upgrade backup with the old image when reverting; merely selecting the old image against the upgraded schema is unsupported.
+
+## TLS certificate-pair consolidation (0008)
+
+Upgrade macOS and the service together. TLS uses `tls_identity`; independent CA
+certificates use `ca_certificate`. v1 no longer supports standalone
+`certificate`/`private_key` creation. Back up the database before startup:
+split configured material is merged, old standalone objects are removed, and
+current/deployed/historical configuration retains its runtime content and file
+names. No node deployment is scheduled by this migration.

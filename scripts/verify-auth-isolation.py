@@ -26,6 +26,11 @@ SERVER = ROOT / "target" / "debug" / "hysteriax-server"
 
 
 def request(base, path, token=None, method="GET", payload=None):
+    from credential_test_fixtures import request_with_credentials
+    return request_with_credentials(raw_request, base, path, token, method, payload)
+
+
+def raw_request(base, path, token=None, method="GET", payload=None):
     body = None if payload is None else json.dumps(payload).encode()
     headers = {}
     if token is not None:
@@ -84,8 +89,8 @@ def main():
                         "ssh_host": "127.0.0.1",
                         "ssh_port": 22,
                         "ssh_username": "root",
-                        "ssh_auth_type": "private_key",
-                        "ssh_secret": "unconnected-test-key",
+                        "ssh_auth_type": "password",
+                        "ssh_secret": "unconnected-test-password",
                         "public_host": "node.example.test",
                         "public_port": 443,
                         "listen_addr": ":443",
@@ -242,8 +247,8 @@ def main():
                 )
                 valid_tls_config = {
                     "tls": {
-                        "cert": f"resource://{certificate_id}",
-                        "key": f"resource://{private_key_id}",
+                        "cert": f"credential://{certificate_id}/1/content",
+                        "key": f"credential://{private_key_id}/1/content",
                     }
                 }
                 valid_tls_status, _ = request(
@@ -257,8 +262,8 @@ def main():
                     raise RuntimeError("a matching uploaded server certificate/key pair was rejected")
                 mismatched_tls_config = {
                     "tls": {
-                        "cert": f"resource://{certificate_id}",
-                        "key": f"resource://{mismatched_key_id}",
+                        "cert": f"credential://{certificate_id}/1/content",
+                        "key": f"credential://{mismatched_key_id}/1/content",
                     }
                 }
                 mismatched_tls_status, _ = request(
@@ -273,9 +278,9 @@ def main():
 
                 mtls_config = {
                     "tls": {
-                        "cert": "/etc/hysteriax/server.pem",
-                        "key": "/etc/hysteriax/server-key.pem",
-                        "clientCA": "/etc/hysteriax/client-ca.pem",
+                        "cert": f"credential://{certificate_id}/1/content",
+                        "key": f"credential://{private_key_id}/1/content",
+                        "clientCA": f"credential://{certificate_id}/1/content",
                     }
                 }
                 node1, token1 = create_node("Isolation node one", mtls_config)
@@ -324,9 +329,9 @@ def main():
                         "expected_revision": 1,
                         "config": {
                             "tls": {
-                                "cert": "/etc/hysteriax/server.pem",
-                                "key": "/etc/hysteriax/server-key.pem",
-                                "clientCA": "/etc/hysteriax/client-ca.pem",
+                                "cert": f"credential://{certificate_id}/1/content",
+                                "key": f"credential://{private_key_id}/1/content",
+                                "clientCA": f"credential://{certificate_id}/1/content",
                             }
                         },
                     },
@@ -358,9 +363,9 @@ def main():
                         "expected_revision": 1,
                         "config": {
                             "tls": {
-                                "cert": "/etc/hysteriax/server.pem",
-                                "key": "/etc/hysteriax/server-key.pem",
-                                "clientCA": "/etc/hysteriax/client-ca.pem",
+                                "cert": f"credential://{certificate_id}/1/content",
+                                "key": f"credential://{private_key_id}/1/content",
+                                "clientCA": f"credential://{certificate_id}/1/content",
                             }
                         },
                     },

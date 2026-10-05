@@ -43,7 +43,23 @@ pub struct JobOutput {
 }
 
 pub async fn run_job(pool: &PgPool, secrets: &SecretBox, job: &JobInput) -> Result<JobOutput> {
+    if let (Some(id), Some(version)) = (
+        job.payload.get("credential_id").and_then(Value::as_str),
+        job.payload
+            .get("credential_version")
+            .and_then(Value::as_i64),
+    ) {
+        let latest: Option<i64> =
+            sqlx::query_scalar("SELECT latest_version FROM credentials WHERE id=$1")
+                .bind(id)
+                .fetch_optional(pool)
+                .await?;
+        if latest != Some(version) {
+            bail!("credential deployment superseded; retry the latest credential batch");
+        }
+    }
     match job.kind.as_str() {
+        "credential-apply" => crate::credentials::worker::apply(pool, secrets, job).await,
         "ssh-test" => ssh_test(pool, secrets, job).await,
         "deploy" | "sync" | "rollback" => deploy(pool, secrets, job).await,
         "kick" => kick(pool, secrets, job).await,
@@ -270,7 +286,7 @@ async fn deploy_with_probe(
         .map(str::to_owned);
     let traffic_stats_port = snapshot_traffic_stats_port(&snapshot)?;
     let name: String = row.get("name");
-    let ssh_node = ssh_node_from_row(secrets, &row)?;
+    let ssh_node = crate::credentials::ssh_node(pool, secrets, &row).await?;
 
     report_progress(
         pool,
@@ -646,13 +662,15 @@ async fn run_proxy_probe(
         .and_then(Value::as_str)
         .is_some_and(|path| !path.trim().is_empty());
     let client_certificate = if needs_client_certificate {
-        let row = sqlx::query("SELECT client_certificate_enc, client_private_key_enc FROM node_assignments WHERE node_id = $1 AND client_certificate_enc IS NOT NULL AND client_private_key_enc IS NOT NULL ORDER BY created_at LIMIT 1")
+        let row = sqlx::query("SELECT user_id, mtls_credential_id, mtls_credential_version FROM node_assignments WHERE node_id = $1 AND mtls_credential_id IS NOT NULL ORDER BY created_at LIMIT 1")
             .bind(node_id)
             .fetch_optional(pool)
             .await?
             .context("mTLS deployment probe requires an assigned client certificate and private key")?;
-        let certificate = secrets.decrypt(&row.get::<String, _>("client_certificate_enc"))?;
-        let private_key = secrets.decrypt(&row.get::<String, _>("client_private_key_enc"))?;
+        let (certificate, private_key) =
+            crate::credentials::assignment_identity(pool, secrets, &row)
+                .await?
+                .context("mTLS identity missing")?;
         tls["clientCertificate"] = Value::String(client_certificate_path.clone());
         tls["clientKey"] = Value::String(client_key_path.clone());
         Some((certificate, private_key))
@@ -974,9 +992,12 @@ pub(crate) async fn load_ssh_node(
     secrets: &SecretBox,
     node_id: &str,
 ) -> Result<SshNode> {
-    let row = sqlx::query("SELECT id, ssh_host, ssh_port, ssh_username, ssh_auth_type, ssh_secret_enc, ssh_passphrase_enc, ssh_host_fingerprint FROM nodes WHERE id = $1")
-        .bind(node_id).fetch_optional(pool).await?.context("node not found")?;
-    ssh_node_from_row(secrets, &row)
+    let row = sqlx::query("SELECT * FROM nodes WHERE id = $1")
+        .bind(node_id)
+        .fetch_optional(pool)
+        .await?
+        .context("node not found")?;
+    crate::credentials::ssh_node(pool, secrets, &row).await
 }
 
 pub(crate) async fn load_deployed_traffic_stats_port(
@@ -1072,21 +1093,6 @@ async fn uninstall(pool: &PgPool, secrets: &SecretBox, job: &JobInput) -> Result
         deployed_config: None,
         deployed_sha256: None,
         delete_node: true,
-    })
-}
-
-fn ssh_node_from_row(secrets: &SecretBox, row: &sqlx::postgres::PgRow) -> Result<SshNode> {
-    let passphrase_enc: Option<String> = row.get("ssh_passphrase_enc");
-    Ok(SshNode {
-        host: row.get("ssh_host"),
-        port: row.get::<i32, _>("ssh_port") as u16,
-        username: row.get("ssh_username"),
-        auth_type: row.get("ssh_auth_type"),
-        secret: secrets.decrypt(&row.get::<String, _>("ssh_secret_enc"))?,
-        passphrase: passphrase_enc
-            .map(|value| secrets.decrypt(&value))
-            .transpose()?,
-        host_fingerprint: row.get("ssh_host_fingerprint"),
     })
 }
 
@@ -1315,9 +1321,7 @@ async fn kick(pool: &PgPool, secrets: &SecretBox, job: &JobInput) -> Result<JobO
         .get("user_id")
         .and_then(Value::as_str)
         .context("kick job is missing user_id")?;
-    if job.payload.get("node_limit").and_then(Value::as_bool) == Some(true)
-        && !crate::node_limits::restricted(pool, node_id).await?
-    {
+    if !crate::kick_requests::still_required(pool, job).await? {
         return Ok(restriction_cleared_output(node_id, user_id));
     }
     let node = load_ssh_node(pool, secrets, node_id).await?;
@@ -1347,9 +1351,7 @@ async fn kick(pool: &PgPool, secrets: &SecretBox, job: &JobInput) -> Result<JobO
     .await?;
     let mut remaining = 0_u64;
     for attempt in 0..6 {
-        if job.payload.get("node_limit").and_then(Value::as_bool) == Some(true)
-            && !crate::node_limits::restricted(pool, node_id).await?
-        {
+        if !crate::kick_requests::still_required(pool, job).await? {
             return Ok(restriction_cleared_output(node_id, user_id));
         }
         // Hysteria stores kick IDs until the next traffic callback. Check online first
@@ -1374,9 +1376,7 @@ async fn kick(pool: &PgPool, secrets: &SecretBox, job: &JobInput) -> Result<JobO
             return Ok(clients_offline_output(node_id, user_id));
         }
         // The online query can block while a renewal or billing reset commits.
-        if job.payload.get("node_limit").and_then(Value::as_bool) == Some(true)
-            && !crate::node_limits::restricted(pool, node_id).await?
-        {
+        if !crate::kick_requests::still_required(pool, job).await? {
             return Ok(restriction_cleared_output(node_id, user_id));
         }
         session
@@ -1423,7 +1423,7 @@ async fn kick(pool: &PgPool, secrets: &SecretBox, job: &JobInput) -> Result<JobO
 fn restriction_cleared_output(node_id: &str, user_id: &str) -> JobOutput {
     let mut output = clients_offline_output(node_id, user_id);
     output.stage = "restriction_cleared".into();
-    output.result = json!({"node_id": node_id, "user_id": user_id, "skipped": true, "reason": "node_limit_cleared"});
+    output.result = json!({"node_id": node_id, "user_id": user_id, "skipped": true, "reason": "restriction_cleared"});
     output
 }
 

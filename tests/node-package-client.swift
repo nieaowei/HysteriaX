@@ -48,17 +48,18 @@ import Foundation
         var server = ServerConfigurationDraft()
         server.name = "Server"
         server.sshHost = "node.example.test"
+        server.sshCredentialId = "fixture-credential"
         let unchanged = try server.request(revision: 7, originalAuthType: "password")
         let sshJSON = try JSONSerialization.jsonObject(with: JSONEncoder().encode(unchanged)) as! [String: Any]
         precondition(sshJSON["ssh_secret"] == nil && sshJSON["ssh_passphrase"] == nil)
         precondition(sshJSON["config"] == nil && sshJSON["package"] == nil)
         precondition(sshJSON["expected_revision"] as! Int == 7)
-        server.sshAuthType = "private_key"
-        do { _ = try server.request(revision: 7, originalAuthType: "password"); preconditionFailure("credential required when switching auth") } catch { }
-        server.sshSecret = "new private key"
-        server.clearPassphrase = true
+        server.sshCredentialId = ""
+        do { _ = try server.request(revision: 7, originalAuthType: "password"); preconditionFailure("credential reference required") } catch { }
+        server.sshCredentialId = "replacement-credential"
+        server.sshCredentialVersion = 2
         let replacement = try server.request(revision: 7, originalAuthType: "password")
-        precondition(replacement.sshSecret == "new private key" && replacement.sshPassphrase == "")
+        precondition(replacement.sshCredentialId == "replacement-credential" && replacement.sshCredentialVersion == 2)
         server.sshPort = "65536"
         do { _ = try server.request(revision: 7, originalAuthType: "password"); preconditionFailure("invalid port accepted") } catch { }
         let usageOperation = APIEndpoints.updateNodeUsage(id: "node")
@@ -86,6 +87,25 @@ import Foundation
         precondition(transport.sent.count == 1)
         await restarted.deliver(nodes: [modern], service: "server2")
         precondition(transport.sent.count == 2)
+        let credential = try decoder.decode(CredentialSummary.self, from: Data(#"{"id":"credential-one","name":"TLS Identity","kind":"tls_identity","revision":1,"latest_version":1,"archived":false,"status":"expiring","metadata":{},"created_at":"2026-10-05T00:00:00Z","expires_at":"2026-10-11T00:00:00Z","days_remaining":6}"#.utf8))
+        transport.fail = true
+        await restarted.deliver(credentials: [credential], service: "server1")
+        precondition(transport.sent.count == 2)
+        transport.fail = false
+        await restarted.deliver(credentials: [credential], service: "server1")
+        await restarted.deliver(credentials: [credential], service: "server1")
+        let again = NodeAlertNotifications(transport: transport, defaults: defaults)
+        await again.deliver(credentials: [credential], service: "server1")
+        precondition(transport.sent.count == 3)
+        await again.deliver(credentials: [credential], service: "server2")
+        precondition(transport.sent.count == 4)
+        let archivedCredential = try decoder.decode(CredentialSummary.self, from: Data(#"{"id":"archived-cert","name":"Archived certificate","kind":"ca_certificate","revision":3,"latest_version":2,"archived":true,"status":"archived","metadata":{},"created_at":"2026-10-05T00:00:00Z"}"#.utf8))
+        let activeCredential = try decoder.decode(CredentialSummary.self, from: Data(#"{"id":"active-cert","name":"Active certificate","kind":"ca_certificate","revision":2,"latest_version":2,"archived":false,"status":"active","metadata":{},"created_at":"2026-10-05T00:00:00Z"}"#.utf8))
+        let pinned: [String: JSONValue] = ["tls": .object(["cert": .string("credential://archived-cert/1/content")])]
+        let catalog = CredentialResources.catalog([archivedCredential, activeCredential], configuration: pinned)
+        precondition(catalog.contains { $0.reference == "credential://archived-cert/1/content" })
+        precondition(!catalog.contains { $0.reference == "credential://archived-cert/2/content" })
+        precondition(catalog.contains { $0.reference == "credential://active-cert/2/content" })
         print("Node package client tests passed: cache, drafts, API, denied permission, delivery retry and persistent deduplication.")
     }
 }

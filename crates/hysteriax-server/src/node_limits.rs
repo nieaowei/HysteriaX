@@ -344,8 +344,7 @@ async fn evaluate(tx: &mut Transaction<'_, Postgres>, id: &str, now: DateTime<Ut
         )
         .await?;
         if !blocked {
-            sqlx::query("UPDATE jobs SET status = 'cancelled', stage = 'cancelled', finished_at = $1, updated_at = $1 WHERE node_id = $2 AND kind = 'kick' AND payload_json->>'node_limit' = 'true' AND status = 'queued'")
-                .bind(now).bind(id).execute(&mut **tx).await?;
+            crate::kick_requests::clear_reason(tx, Some(id), None, "node_limit").await?;
         }
     }
     Ok(())
@@ -520,6 +519,7 @@ async fn sample(state: &AppState, id: &str) -> Result<()> {
     let FingerprintResult::Trusted(session) = ssh::connect(&node).await? else {
         bail!("untrusted SSH fingerprint");
     };
+    crate::kick_requests::resume_node(&state.pool, id).await?;
     let select = match &package.interface {
         Some(name) => { if !valid_interface(name) { bail!("invalid interface"); } format!("iface='{name}'") },
         None => r#"iface=$(awk 'NR>1 && $2=="00000000" && $1!="lo" {if(!found || $7<metric) {found=1; metric=$7; iface=$1}} END {print iface}' /proc/net/route); [ -n "$iface" ] || iface=$(awk '$1=="00000000000000000000000000000000" && $2=="00" && $NF!="lo" {if(!found || ("x" $6)<("x" metric)) {found=1; metric=$6; iface=$NF}} END {print iface}' /proc/net/ipv6_route)"#.into(),
@@ -606,10 +606,10 @@ mod tests {
         let pool = db::test_pool_with_max_connections(3).await;
         let key = base64::engine::general_purpose::STANDARD_NO_PAD.encode([3_u8; 32]);
         let state = AppState::new(pool, crate::security::SecretBox::from_base64(&key).unwrap());
-        let (_, Json(created)) = crate::api::nodes::create(State(state.clone()), Json(serde_json::from_value(json!({
+        let (_, Json(created)) = crate::api::nodes::create(State(state.clone()), Json(crate::credentials::test_node_request(&state,json!({
             "name":"Package node", "ssh_host":"127.0.0.1", "ssh_port":22, "ssh_username":"root",
             "ssh_auth_type":"password", "ssh_secret":"unused", "public_host":"node.example.test", "public_port":443, "listen_addr":":443"
-        })).unwrap())).await.unwrap();
+        })).await)).await.unwrap();
         (
             state,
             created["node"]["id"].as_str().unwrap().into(),
@@ -965,9 +965,9 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(serde_json::to_value(auth.0).unwrap()["ok"], false);
-        let (_,Json(other))=crate::api::nodes::create(State(state.clone()),Json(serde_json::from_value(json!({
+        let (_,Json(other))=crate::api::nodes::create(State(state.clone()),Json(crate::credentials::test_node_request(&state,json!({
             "name":"Unlimited node","ssh_host":"127.0.0.1","ssh_port":22,"ssh_username":"root","ssh_auth_type":"password","ssh_secret":"unused","public_host":"other.example.test","public_port":443,"listen_addr":":443"
-        })).unwrap())).await.unwrap();
+        })).await)).await.unwrap();
         let other_id = other["node"]["id"].as_str().unwrap();
         sqlx::query("INSERT INTO node_assignments(user_id,node_id,credential_hash,credential_enc,created_at) SELECT user_id,$1,credential_hash,credential_enc,created_at FROM node_assignments WHERE node_id=$2")
             .bind(other_id).bind(&id).execute(&state.pool).await.unwrap();

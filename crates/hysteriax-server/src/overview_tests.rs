@@ -7,7 +7,7 @@ async fn fixture() -> (AppState, Vec<String>, String) {
     let state = AppState::new(pool, crate::security::SecretBox::from_base64(&key).unwrap());
     let mut nodes = Vec::new();
     for name in ["One", "Two"] {
-        let (_,Json(created))=crate::api::nodes::create(State(state.clone()),Json(serde_json::from_value(json!({"name":name,"ssh_host":"127.0.0.1","ssh_port":22,"ssh_username":"root","ssh_auth_type":"password","ssh_secret":"unused","public_host":"example.test","public_port":443,"listen_addr":":443"})).unwrap())).await.unwrap();
+        let (_,Json(created))=crate::api::nodes::create(State(state.clone()),Json(crate::credentials::test_node_request(&state,json!({"name":name,"ssh_host":"127.0.0.1","ssh_port":22,"ssh_username":"root","ssh_auth_type":"password","ssh_secret":"unused","public_host":"example.test","public_port":443,"listen_addr":":443"})).await)).await.unwrap();
         let id = created["node"]["id"].as_str().unwrap().to_string();
         sqlx::query("UPDATE nodes SET deployed_revision=1,state='deployed',last_sample_at=now() WHERE id=$1").bind(&id).execute(&state.pool).await.unwrap();
         nodes.push(id);
@@ -580,7 +580,7 @@ async fn retry_validation_cancellation_and_expiry_keep_failures_honest() {
             .any(|i| i["kind"] == "job_failed")
     );
 
-    let unsupported = failed_job(&state, &nodes[0], "kick", "kick failure").await;
+    let unsupported = failed_job(&state, &nodes[0], "uninstall", "uninstall failure").await;
     assert_eq!(
         retry_job(&state, &unsupported).await.unwrap_err().status,
         axum::http::StatusCode::BAD_REQUEST

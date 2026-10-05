@@ -203,9 +203,7 @@ private struct NodeFormView: View {
     @State private var sshHost = ""
     @State private var sshPort = "22"
     @State private var sshUsername = "root"
-    @State private var sshAuthType = "password"
-    @State private var sshSecret = ""
-    @State private var sshPassphrase = ""
+    @State private var sshCredentialId = ""
     @State private var publicHost = ""
     @State private var publicPort = "443"
     @State private var errorMessage: String?
@@ -235,29 +233,7 @@ private struct NodeFormView: View {
                         TextField("SSH 用户", text: $sshUsername)
                             .accessibilityLabel("SSH 用户")
                             .accessibilityIdentifier("node.create.sshUsername")
-                        Picker("认证方式", selection: $sshAuthType) {
-                            Text("密码").tag("password")
-                            Text("私钥").tag("private_key")
-                        }
-                        .accessibilityLabel("认证方式")
-                        .accessibilityIdentifier("node.create.sshAuthType")
-                        if sshAuthType == "password" {
-                            SecureField("SSH 密码", text: $sshSecret)
-                                .accessibilityLabel("SSH 密码")
-                                .accessibilityIdentifier("node.create.sshPassword")
-                        } else {
-                            TextEditor(text: $sshSecret)
-                                .font(.system(.body, design: .monospaced))
-                                .frame(minHeight: 100)
-                                .accessibilityLabel("OpenSSH 私钥")
-                                .accessibilityIdentifier("node.create.sshPrivateKey")
-                                .overlay(alignment: .topLeading) {
-                                    if sshSecret.isEmpty { Text("粘贴 OpenSSH 私钥").foregroundStyle(.tertiary).padding(.top, 8).padding(.leading, 5) }
-                                }
-                            SecureField("私钥口令（可选）", text: $sshPassphrase)
-                                .accessibilityLabel("私钥口令（可选）")
-                                .accessibilityIdentifier("node.create.sshPassphrase")
-                        }
+                        CredentialPickerView(store: store, selection: $sshCredentialId, kinds: ["ssh_private_key", "ssh_password"], title: "SSH 凭据")
                     }
                     Section("有效期与流量套餐") {
                         if store.supportsNodePackages {
@@ -305,9 +281,8 @@ private struct NodeFormView: View {
                     package: store.supportsNodePackages ? packageDraft.package() : nil,
                     initialUsageBytes: store.supportsNodePackages ? NodePackageDraft.bytes(initialUsageGB) : nil,
                     name: name, sshHost: sshHost, sshPort: sshPort, sshUsername: sshUsername,
-                    sshAuthType: sshAuthType, sshSecret: sshSecret,
-                    sshPassphrase: sshPassphrase.isEmpty ? nil : sshPassphrase,
-                    publicHost: publicHost, publicPort: publicPort, listenAddr: ":\(publicPort)"
+                    publicHost: publicHost, publicPort: publicPort, listenAddr: ":\(publicPort)",
+                    sshCredentialId: sshCredentialId, sshCredentialVersion: store.credentials.first(where: { $0.id == sshCredentialId })?.latestVersion ?? 1
                 ))
                 createdToken = response.nodeAuthToken
             } catch { errorMessage = error.localizedDescription }

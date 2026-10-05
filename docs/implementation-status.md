@@ -13,3 +13,38 @@
 The disposable Debian 13 arm64 systemd acceptance covered TCP, UDP, mTLS, two-node/three-user isolation, active revocation for expiry/disable/over-quota, credential rotation, aggregate quota enforcement, deployment retry/rollback failures, and quota-sampling outage recovery with real clients. The arm64 systemd-container matrix passed for Debian 12/13 and Ubuntu 22.04/24.04 with root/key, sudo/key, and sudo/password SSH access on all four images. Native GitHub-hosted amd64 and arm64 runner acceptance passed for all supported distro images. Independent Debian 12/13 x86_64 cloud VMs also passed deployment, three-user isolation, two-node subscription parsing, real TCP transfers, per-node sampling, expiry/disable/over-quota kicks, credential rotation, and wrong-host-fingerprint rejection. On 2026-10-01, Server1 clean first install passed service health and a real TCP-forwarding probe; the unmanaged-directory guard refused before install. The temporary node was uninstalled, original service paths/UID/GID were restored and verified active, and the API remained ready with 2 original nodes and zero users. The initial-install UDP occupancy rejection/retry passed on Server1; occupied-port preflight, managed-listener rollback, and forced rollback failure pass on Server2.
 
 The deployment probe's custom-route handling is acceptance-tested with `direct(all)` and an explicit loopback-reject ACL: it transfers TCP when the test destination is permitted, and reports an authenticated session when the configured policy blocks that destination. Custom policies that require a data-transfer probe still need a configurable reachable target.
+
+
+## Credential center (0006)
+
+API contract 1.0.0 is deployed at https://hysteriax.cc from the locally built and pushed `nieaowei/hysteriax-server:credentials-v1-20261005` image, digest `sha256:c09287852319795bf4b3cc307f655c4a103796e91380c49cfd5cec1757194cac`. The upgrade preserves 4 nodes, 4 users, 16 assignments and 30 historical snapshots, and creates 9 managed credential objects. A migration-only image preflight compared credential bytes, tokens, quotas, counters, jobs and history against an untouched database copy before rollout.
+
+Immutable encrypted versions, automatic application batches, SSH verification before binding changes, fixed-version rollback, failed-target retry and crash-after-commit idempotency are implemented. The macOS credential center, nearby selectors, public metadata, metadata-only offline cache and deduplicated expiry notifications build successfully. Rust tests (106), Clippy, generated-model checks, client notification/catalog checks, live two-node credential application and existing subscription parsing/traffic checks pass. The deployed image also passed temporary credential CRUD/version/archive/no-secret-echo checks and existing subscriptions remained usable.
+
+Final native UI acceptance passed after fixing a real credential-page layout overflow that clipped the outer sidebar. The bounded layout preserves navigation and wraps long titles. The XCTest workflow verifies credential creation/publication/no-secret-echo, selectors, navigation and existing user/subscription lifecycle; temporary records were removed. See [0006](plans/0006_credentials_management_plan.md) and [credential management](credentials.md).
+
+
+The credential-center completion audit now passes. A real HSplitView layout overflow was corrected with bounded GeometryReader/HStack sizing; the outer sidebar stays visible and clickable, and long titles wrap. The complete native UI workflow passes with zero failures, including credential create/publish, selectors/navigation and user assignment/subscription/revocation. The normal client was rebuilt and its startup verified through the project script. The Universal Release bundle verifies arm64/x86_64 and macOS 26 minimum support. Temporary users, unused credential records, test PostgreSQL container/volume and credential-bearing temporary files were removed; protected rollback backups remain available.
+
+The v1 correction keeps management routes at `/api/v1` and API identity `1.0.0`, changing the contract directly as requested. `/api/v2` returns 404. The replacement image passed 106 Rust tests, client network checks and the complete native UI workflow (1 test, 0 failures); inventory and revisions matched before/after deployment.
+
+## TLS identity consolidation (0008)
+
+TLS uses one `tls_identity` certificate-pair version; CA uses `ca_certificate`.
+Standalone leaf-certificate/private-key types are removed from creation,
+publication, runtime validation and the final database constraint. The locally
+built/pushed `nieaowei/hysteriax-server:tls-pairs-20261005` image is deployed.
+Migration preflight preserved 4 nodes, 32 historical runtime snapshots and
+business data; 109 Rust tests and live two-node credential application passed.
+See [0008](plans/0008_tls_identity_consolidation_plan.md).
+
+The final native UI workflow passed (1 test, 0 failures), including inline
+certificate-pair creation and automatic selection. Temporary records and private
+test configuration were removed; the normal client was rebuilt and launched.
+
+
+## Durable kick requests (2026-10-05)
+
+Kick jobs now deduplicate by node/user and persist their merged reasons separately from execution history. Executions are limited to five attempts with 30/60/120/300-second delays; exhausted transport failures wait for actual trusted SSH recovery, and permanent or other exhausted errors require explicit retry. Conditional restriction reasons are removed on renewal/reset without clearing deletion or credential revocation obligations. Recovery attempts link to their failed predecessor, and availability-based scheduling prevents old retries from continually blocking node work. The macOS jobs view labels waiting/manual states and supports explicit kick retry.
+
+Migration 0008 preserves original job IDs, backfills durable requests from jobs/audit information, cancels duplicate active executions and suspends exhausted jobs. Service tests (120), Clippy with warnings denied, API generation consistency, macOS build/launch, database-copy migration fingerprints and live recovery/offline-completion acceptance passed. The local linux/amd64 Dockerfile build was pushed and deployed as `nieaowei/hysteriax-server:kick-requests-20261005` (`sha256:aff768d190aac83dd76cd2ec39e966cff6e009c4edfc186bdb26c52ba40af876`). On the test server, the three AWS Singapore kick jobs are now one durable waiting request plus two cancelled duplicates; the target SSH connection remains unavailable. Backups are under `/home/nieaowei/HysteriaX/backups/kick-requests-20261005/`.
