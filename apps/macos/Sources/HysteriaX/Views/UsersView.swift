@@ -51,6 +51,7 @@ struct UsersView: View {
                 TableColumn("节点") { user in Text("\(user.assignments.count)") }
                 TableColumn("到期") { user in Text(user.expiresAt.map { DateDisplayText.local($0) } ?? "不限") }
             }
+            .frame(minHeight: 180)
             .task(id: initialSelection) {
                 guard let initialSelection else { return }
                 searchText = ""
@@ -64,84 +65,12 @@ struct UsersView: View {
                     ContentUnavailableView("没有匹配的用户", systemImage: "magnifyingglass")
                 }
             }
-            .safeAreaInset(edge: .bottom) {
-                if let user = store.users.first(where: { $0.id == selectedUserID }) {
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack(spacing: 10) {
-                            Text("\(user.name) · \(user.assignments.count) 个节点")
-                                .foregroundStyle(.secondary)
-                                .accessibilityLabel("\(user.name) · \(user.assignments.count) 个节点")
-                                .accessibilityIdentifier("user.selected.summary")
-                            Spacer()
-                            Button("分配节点…") { assignmentUser = user }
-                                .accessibilityLabel("分配节点")
-                                .accessibilityIdentifier("users.assignNodeMenu")
-                            Menu("mTLS 证书") {
-                                ForEach(user.assignments, id: \.nodeID) { assignment in
-                                    if let node = store.nodes.first(where: { $0.id == assignment.nodeID }) {
-                                        Button(node.name) {
-                                            assignmentTarget = AssignmentTarget(user: user, node: node, isUpdating: true)
-                                        }
-                                        .accessibilityLabel(node.name)
-                                        .accessibilityIdentifier("users.mtlsNode.\(node.id)")
-                                    }
-                                }
-                            }
-                            .accessibilityLabel("mTLS 证书")
-                            .accessibilityIdentifier("users.mtlsMenu")
-                            .disabled(user.assignments.isEmpty)
-                            Menu("订阅") {
-                                Button("复制当前订阅地址") { copyCurrentSubscription(user) }
-                                    .accessibilityLabel("复制当前订阅地址")
-                                    .accessibilityIdentifier("users.subscription.copy")
-                                Button("生成/轮换订阅地址") { rotateSubscription(user) }
-                                    .accessibilityLabel("生成/轮换订阅地址")
-                                    .accessibilityIdentifier("users.subscription.rotate")
-                                Menu("复制指定格式地址") {
-                                    ForEach(SubscriptionFileFormat.allCases, id: \.rawValue) { format in
-                                        Button(format.title) { copyCurrentSubscription(user, format: format) }
-                                            .accessibilityIdentifier("users.subscription.copy.\(format.rawValue)")
-                                    }
-                                }
-                                Button("导出 Mihomo YAML…") { exportSubscription(user, format: .mihomo) }
-                                    .accessibilityLabel("导出 Mihomo YAML")
-                                    .accessibilityIdentifier("users.subscription.export")
-                                Menu("导出其他格式") {
-                                    ForEach(SubscriptionFileFormat.allCases.filter { $0 != .mihomo }, id: \.rawValue) { format in
-                                        Button("\(format.title)…") { exportSubscription(user, format: format) }
-                                            .accessibilityIdentifier("users.subscription.export.\(format.rawValue)")
-                                    }
-                                }
-                            }
-                            .accessibilityLabel("订阅")
-                            .accessibilityIdentifier("users.subscriptionMenu")
-                            Menu("用户") {
-                                Button("编辑用户…") { showingEditUser = true }
-                                    .accessibilityLabel("编辑用户")
-                                    .accessibilityIdentifier("users.actions.edit")
-                                Button("轮换连接密码") { rotateCredentials(user) }
-                                    .accessibilityLabel("轮换连接密码")
-                                    .accessibilityIdentifier("users.actions.rotateCredentials")
-                                Button("重置额度") { resetQuota(user) }
-                                    .accessibilityLabel("重置额度")
-                                    .accessibilityIdentifier("users.actions.resetQuota")
-                                Button(user.enabled ? "停用" : "启用") { setEnabled(!user.enabled, for: user) }
-                                    .accessibilityLabel(user.enabled ? "停用" : "启用")
-                                    .accessibilityIdentifier("users.actions.toggleEnabled")
-                                Divider()
-                                Button("删除用户…", role: .destructive) { showingDeleteConfirmation = true }
-                                    .accessibilityLabel("删除用户")
-                                    .accessibilityIdentifier("users.actions.delete")
-                            }
-                            .accessibilityLabel("用户操作")
-                            .accessibilityIdentifier("users.actionsMenu")
-                        }
-                        .disabled(!store.isConnected)
-                        usageStatus(for: user)
-                    }
-                    .padding(12)
-                    .background(.bar)
-                }
+            if let user = store.users.first(where: { $0.id == selectedUserID }) {
+                Divider()
+                userDetailPane(user)
+                    .id(user.id)
+                    .frame(maxHeight: 400)
+                    .accessibilityIdentifier("users.detail")
             }
         }
         .toolbar {
@@ -199,6 +128,226 @@ struct UsersView: View {
         .alert(alertTitle, isPresented: Binding(get: { alertMessage != nil }, set: { if !$0 { alertMessage = nil } })) {
             Button("好", role: .cancel) { alertMessage = nil }
         } message: { Text(alertMessage ?? "") }
+    }
+
+    private func userDetailPane(_ user: UserSummary) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 14) {
+                ViewThatFits(in: .horizontal) {
+                    HStack(alignment: .top, spacing: 16) {
+                        userDetailTitle(user)
+                        Spacer(minLength: 20)
+                        userDetailActions(user)
+                    }
+                    VStack(alignment: .leading, spacing: 10) {
+                        userDetailTitle(user)
+                        userDetailActions(user)
+                    }
+                }
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), alignment: .leading)], alignment: .leading, spacing: 12) {
+                    userMetric("已用流量", value: formatBytes(user.usageBytes))
+                    userMetric("流量额度", value: user.quotaBytes.map(formatBytes) ?? "不限")
+                    userMetric("到期时间", value: user.expiresAt.map { DateDisplayText.local($0) } ?? "不限")
+                    userMetric("分配节点", value: "\(user.assignments.count) 个")
+                }
+            }
+            .padding(16)
+            Divider()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    ViewThatFits(in: .horizontal) {
+                        HStack(alignment: .top, spacing: 16) {
+                            userQuota(user).frame(minWidth: 280, maxWidth: .infinity)
+                            userAssignments(user).frame(minWidth: 280, maxWidth: .infinity)
+                        }
+                        VStack(alignment: .leading, spacing: 16) {
+                            userQuota(user)
+                            userAssignments(user)
+                        }
+                    }
+                    if store.isConnected, let usage = selectedUsage, usage.userId == user.id,
+                       let pending = usage.pendingRevocations, !pending.isEmpty {
+                        GroupBox {
+                            VStack(alignment: .leading, spacing: 10) {
+                                ForEach(pending, id: \.jobId) { item in
+                                    HStack(alignment: .top, spacing: 12) {
+                                        VStack(alignment: .leading, spacing: 4) {
+                                            Text(nodeDisplayName(item.nodeID)).font(.callout.weight(.medium))
+                                            Text(pendingRevocationLabel(item))
+                                                .font(.caption)
+                                                .foregroundStyle(item.status == "failed" ? Color.red : Color.orange)
+                                        }
+                                        Spacer(minLength: 8)
+                                        Text(DateDisplayText.local(item.updatedAt)).font(.caption).foregroundStyle(.secondary)
+                                    }
+                                }
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.vertical, 4)
+                        } label: {
+                            Label("待撤权任务（\(pending.count)）", systemImage: "hourglass")
+                        }
+                    }
+                    DisclosureGroup("用户记录") {
+                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 200), alignment: .leading)], alignment: .leading, spacing: 12) {
+                            userMetric("用户 ID", value: user.id)
+                            userMetric("创建时间", value: DateDisplayText.local(user.createdAt))
+                            userMetric("更新时间", value: DateDisplayText.local(user.updatedAt))
+                        }
+                        .padding(.top, 8)
+                    }
+                }
+                .padding(16)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+
+    private func userDetailTitle(_ user: UserSummary) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                Text(user.name).font(.headline).lineLimit(2).textSelection(.enabled)
+                Text(user.enabled ? "启用" : "已停用")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(user.enabled ? Color.green : Color.secondary)
+                    .padding(.horizontal, 8).padding(.vertical, 3)
+                    .background(.quaternary, in: Capsule())
+            }
+            Text("\(user.assignments.count) 个节点")
+                .font(.caption).foregroundStyle(.secondary)
+                .accessibilityLabel("\(user.name) · \(user.assignments.count) 个节点")
+                .accessibilityIdentifier("user.selected.summary")
+        }
+    }
+
+    private func userDetailActions(_ user: UserSummary) -> some View {
+        HStack(spacing: 8) {
+            Button("分配节点…") { assignmentUser = user }
+                .accessibilityLabel("分配节点")
+                .accessibilityIdentifier("users.assignNodeMenu")
+            Menu("mTLS 证书") {
+                ForEach(user.assignments, id: \.nodeID) { assignment in
+                    if let node = store.nodes.first(where: { $0.id == assignment.nodeID }) {
+                        Button(node.name) {
+                            assignmentTarget = AssignmentTarget(user: user, node: node, isUpdating: true)
+                        }
+                        .accessibilityLabel(node.name)
+                        .accessibilityIdentifier("users.mtlsNode.\(node.id)")
+                    }
+                }
+            }
+            .accessibilityLabel("mTLS 证书")
+            .accessibilityIdentifier("users.mtlsMenu")
+            .disabled(user.assignments.isEmpty)
+            Menu("订阅") {
+                Button("复制当前订阅地址") { copyCurrentSubscription(user) }
+                    .accessibilityLabel("复制当前订阅地址")
+                    .accessibilityIdentifier("users.subscription.copy")
+                Button("生成/轮换订阅地址") { rotateSubscription(user) }
+                    .accessibilityLabel("生成/轮换订阅地址")
+                    .accessibilityIdentifier("users.subscription.rotate")
+                Menu("复制指定格式地址") {
+                    ForEach(SubscriptionFileFormat.allCases, id: \.rawValue) { format in
+                        Button(format.title) { copyCurrentSubscription(user, format: format) }
+                            .accessibilityIdentifier("users.subscription.copy.\(format.rawValue)")
+                    }
+                }
+                Button("导出 Mihomo YAML…") { exportSubscription(user, format: .mihomo) }
+                    .accessibilityLabel("导出 Mihomo YAML")
+                    .accessibilityIdentifier("users.subscription.export")
+                Menu("导出其他格式") {
+                    ForEach(SubscriptionFileFormat.allCases.filter { $0 != .mihomo }, id: \.rawValue) { format in
+                        Button("\(format.title)…") { exportSubscription(user, format: format) }
+                            .accessibilityIdentifier("users.subscription.export.\(format.rawValue)")
+                    }
+                }
+            }
+            .accessibilityLabel("订阅")
+            .accessibilityIdentifier("users.subscriptionMenu")
+            Menu("用户") {
+                Button("编辑用户…") { showingEditUser = true }
+                    .accessibilityLabel("编辑用户")
+                    .accessibilityIdentifier("users.actions.edit")
+                Button("轮换连接密码") { rotateCredentials(user) }
+                    .accessibilityLabel("轮换连接密码")
+                    .accessibilityIdentifier("users.actions.rotateCredentials")
+                Button("重置额度") { resetQuota(user) }
+                    .accessibilityLabel("重置额度")
+                    .accessibilityIdentifier("users.actions.resetQuota")
+                Button(user.enabled ? "停用" : "启用") { setEnabled(!user.enabled, for: user) }
+                    .accessibilityLabel(user.enabled ? "停用" : "启用")
+                    .accessibilityIdentifier("users.actions.toggleEnabled")
+                Divider()
+                Button("删除用户…", role: .destructive) { showingDeleteConfirmation = true }
+                    .accessibilityLabel("删除用户")
+                    .accessibilityIdentifier("users.actions.delete")
+            }
+            .accessibilityLabel("用户操作")
+            .accessibilityIdentifier("users.actionsMenu")
+        }
+        .fixedSize()
+        .disabled(!store.isConnected)
+    }
+
+    private func userQuota(_ user: UserSummary) -> some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 14) {
+                QuotaProgressView(usageBytes: user.usageBytes, quotaBytes: user.quotaBytes)
+                userMetric("额度周期开始", value: DateDisplayText.local(user.quotaResetAt))
+                Divider()
+                usageStatus(for: user)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 4)
+        } label: {
+            Label("额度与采样", systemImage: "chart.bar")
+        }
+    }
+
+    private func userAssignments(_ user: UserSummary) -> some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 0) {
+                if user.assignments.isEmpty {
+                    Text("尚未分配节点").foregroundStyle(.secondary).padding(.vertical, 8)
+                }
+                ForEach(Array(user.assignments.enumerated()), id: \.element.nodeID) { index, assignment in
+                    if index > 0 { Divider() }
+                    HStack(alignment: .top, spacing: 12) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(nodeDisplayName(assignment.nodeID)).font(.callout.weight(.medium))
+                            Text(assignment.mtlsCredentialId == nil ? "连接密码" : "mTLS · v\(assignment.mtlsCredentialVersion ?? 1)")
+                                .font(.caption).foregroundStyle(.secondary)
+                            Text("分配于 \(DateDisplayText.local(assignment.createdAt))")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                        Spacer(minLength: 8)
+                        if let node = store.nodes.first(where: { $0.id == assignment.nodeID }) {
+                            Button("证书…") {
+                                assignmentTarget = AssignmentTarget(user: user, node: node, isUpdating: true)
+                            }
+                            .disabled(!store.isConnected)
+                            .help("管理该节点的 mTLS 证书")
+                            .accessibilityIdentifier("users.assignmentCertificate.\(node.id)")
+                        }
+                    }
+                    .padding(.vertical, 8)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        } label: {
+            Label("已分配节点（\(user.assignments.count)）", systemImage: "server.rack")
+        }
+    }
+
+    private func userMetric(_ title: String, value: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title).font(.caption).foregroundStyle(.secondary)
+            Text(value).font(.callout).textSelection(.enabled)
+        }
+    }
+
+    private func formatBytes(_ bytes: Int64) -> String {
+        ByteCountFormatter.string(fromByteCount: bytes, countStyle: .binary)
     }
 
     private func copyCurrentSubscription(_ user: UserSummary, format: SubscriptionFileFormat? = nil) {
@@ -282,46 +431,40 @@ struct UsersView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
         } else if let usage = selectedUsage, usage.userId == user.id {
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 12) {
-                    Label(
-                        freshnessLabel(usage.dataFreshness.status),
-                        systemImage: usage.dataFreshness.status == "fresh" ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
-                    )
-                    .foregroundStyle(freshnessColor(usage.dataFreshness.status))
-                    Text("最近采样：\(DateDisplayText.local(usage.dataFreshness.lastSampleAt))")
-                        .foregroundStyle(.secondary)
-                    if usage.dataFreshness.openGaps > 0 {
-                        Label("未解决统计缺口 \(usage.dataFreshness.openGaps)", systemImage: "chart.bar.fill")
-                            .foregroundStyle(.orange)
-                    } else {
-                        Text("无未解决统计缺口").foregroundStyle(.secondary)
-                    }
+            VStack(alignment: .leading, spacing: 12) {
+                Label(
+                    freshnessLabel(usage.dataFreshness.status),
+                    systemImage: usage.dataFreshness.status == "fresh" ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
+                )
+                .font(.callout).foregroundStyle(freshnessColor(usage.dataFreshness.status))
+                userMetric("最近采样", value: DateDisplayText.local(usage.dataFreshness.lastSampleAt))
+                if usage.dataFreshness.openGaps > 0 {
+                    Label("未解决统计缺口 \(usage.dataFreshness.openGaps)", systemImage: "chart.bar.fill")
+                        .font(.caption).foregroundStyle(.orange)
+                } else {
+                    Text("无未解决统计缺口").font(.caption).foregroundStyle(.secondary)
                 }
                 if !usage.byNode.isEmpty {
-                    Text("各节点采样：" + usage.byNode.map { item in
-                        let assignment = item.assigned.map { $0 ? "当前" : "历史" } ?? "节点"
-                        return "\(nodeDisplayName(item.nodeID))（\(assignment)）\(DateDisplayText.local(item.sampledAt))"
-                    }.joined(separator: " · "))
-                        .foregroundStyle(.secondary)
-                } else if usage.dataFreshness.status == "not_collected" {
-                    Text("各节点尚无流量采样记录。")
-                        .foregroundStyle(.secondary)
-                }
-                if let pendingRevocations = usage.pendingRevocations,
-                   !pendingRevocations.isEmpty {
-                    VStack(alignment: .leading, spacing: 2) {
-                        ForEach(pendingRevocations, id: \.jobId) { pending in
-                            Label(
-                                "\(nodeDisplayName(pending.nodeID)) · \(pendingRevocationLabel(pending))",
-                                systemImage: pending.status == "failed" ? "exclamationmark.circle.fill" : "hourglass"
-                            )
-                            .foregroundStyle(pending.status == "failed" ? .red : .orange)
+                    DisclosureGroup("各节点采样（\(usage.byNode.count)）") {
+                        VStack(alignment: .leading, spacing: 10) {
+                            ForEach(usage.byNode, id: \.nodeID) { item in
+                                VStack(alignment: .leading, spacing: 4) {
+                                    HStack {
+                                        Text(nodeDisplayName(item.nodeID)).font(.callout)
+                                        Spacer()
+                                        Text(item.assigned.map { $0 ? "当前" : "历史" } ?? "节点")
+                                            .font(.caption).foregroundStyle(.secondary)
+                                    }
+                                    Text(DateDisplayText.local(item.sampledAt)).font(.caption).foregroundStyle(.secondary)
+                                }
+                            }
                         }
+                        .padding(.top, 8)
                     }
+                } else if usage.dataFreshness.status == "not_collected" {
+                    Text("各节点尚无流量采样记录。").font(.caption).foregroundStyle(.secondary)
                 }
             }
-            .font(.caption)
         } else if let usageErrorMessage {
             Label("无法读取流量统计状态：\(usageErrorMessage)", systemImage: "exclamationmark.triangle.fill")
                 .font(.caption)
