@@ -48,6 +48,8 @@
 		000000000000000000002702 /* Views/CredentialPickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001702 /* Views/CredentialPickerView.swift */; };
 		000000000000000000002703 /* Views/CredentialsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001703 /* Views/CredentialsView.swift */; };
 		000000000000000000002704 /* Models/CredentialDisplay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001704 /* Models/CredentialDisplay.swift */; };
+		000000000000000000002800 /* Models/SSHHostFingerprintChange.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001800 /* Models/SSHHostFingerprintChange.swift */; };
+		000000000000000000002801 /* Views/SSHHostFingerprintChangeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001801 /* Views/SSHHostFingerprintChangeView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -93,6 +95,8 @@
 		000000000000000000001702 /* Views/CredentialPickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/CredentialPickerView.swift; sourceTree = "<group>"; };
 		000000000000000000001703 /* Views/CredentialsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/CredentialsView.swift; sourceTree = "<group>"; };
 		000000000000000000001704 /* Models/CredentialDisplay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models/CredentialDisplay.swift; sourceTree = "<group>"; };
+		000000000000000000001800 /* Models/SSHHostFingerprintChange.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models/SSHHostFingerprintChange.swift; sourceTree = "<group>"; };
+		000000000000000000001801 /* Views/SSHHostFingerprintChangeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/SSHHostFingerprintChangeView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -139,6 +143,8 @@
 				000000000000000000001005 /* Views/AuditView.swift */,
 				000000000000000000001006 /* Views/ContentView.swift */,
 				000000000000000000001007 /* Views/JobsView.swift */,
+				000000000000000000001801 /* Views/SSHHostFingerprintChangeView.swift */,
+				000000000000000000001800 /* Models/SSHHostFingerprintChange.swift */,
 				000000000000000000001008 /* Views/NodesView.swift */,
 				000000000000000000001009 /* Views/OverviewView.swift */,
 				00000000000000000000100A /* Views/SettingsView.swift */,
@@ -268,6 +274,8 @@
 				000000000000000000002005 /* Views/AuditView.swift in Sources */,
 				000000000000000000002006 /* Views/ContentView.swift in Sources */,
 				000000000000000000002007 /* Views/JobsView.swift in Sources */,
+				000000000000000000002801 /* Views/SSHHostFingerprintChangeView.swift in Sources */,
+				000000000000000000002800 /* Models/SSHHostFingerprintChange.swift in Sources */,
 				000000000000000000002008 /* Views/NodesView.swift in Sources */,
 				000000000000000000002009 /* Views/OverviewView.swift in Sources */,
 				00000000000000000000200A /* Views/SettingsView.swift in Sources */,

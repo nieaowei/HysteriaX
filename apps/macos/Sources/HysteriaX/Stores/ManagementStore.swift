@@ -322,6 +322,29 @@ final class ManagementStore {
         return try await api.post(APIEndpoints.uploadNodeResource(id: nodeID), body: request)
     }
 
+    func confirmChangedHostFingerprint(_ job: JobSummary) async throws {
+        guard let change = SSHHostFingerprintChange(job: job), let nodeID = job.nodeID else {
+            throw APIClientError.server("此任务没有可确认的 SSH 指纹变更。")
+        }
+        let client = try requireConnectedAPI()
+        let generation = serviceGeneration
+        let latestJob: JobDetailResponse = try await client.get(APIEndpoints.getJob(id: job.id))
+        let node: NodeDetail = try await client.get(APIEndpoints.getNode(id: nodeID))
+        guard generation == serviceGeneration, !Task.isCancelled else { throw CancellationError() }
+        guard latestJob.job.nodeID == nodeID,
+              latestJob.job.retryJobId == nil,
+              SSHHostFingerprintChange(job: latestJob.job) == change,
+              change.canConfirm(state: node.state, savedFingerprint: node.ssh.hostFingerprint) else {
+            throw APIClientError.server("节点指纹或任务状态已变化，请刷新并重新运行 SSH 测试后再确认。")
+        }
+        let _: NodeUpdateResponse = try await client.patch(
+            APIEndpoints.updateNode(id: nodeID),
+            body: NodePatchRequest(expectedRevision: node.revision, sshHostFingerprint: change.observed)
+        )
+        guard generation == serviceGeneration else { throw CancellationError() }
+        await refresh()
+    }
+
     func confirmHostFingerprint(nodeID: String, fingerprint: String) async throws {
         guard let node = nodes.first(where: { $0.id == nodeID }) else {
             throw APIClientError.server("找不到对应节点。")

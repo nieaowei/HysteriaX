@@ -188,6 +188,10 @@ struct JobsView: View {
                         if let startedAt = selectedJobDetail?.startedAt {
                             LabeledContent("开始时间", value: DateDisplayText.local(startedAt))
                         }
+                        if let change = SSHHostFingerprintChange(job: job) {
+                            SSHHostFingerprintChangeView(store: store, job: job, change: change)
+                                .id("\(store.serviceAddress):\(job.id)")
+                        }
                         if let fingerprint = job.result?.result?.fingerprint {
                             LabeledContent("SSH 主机指纹", value: fingerprint)
                                 .textSelection(.enabled)
@@ -205,6 +209,7 @@ struct JobsView: View {
                                         } catch { actionError = error.localizedDescription }
                                     }
                                 }
+                                .disabled(!store.isConnected)
                             }
                         }
                         if job.retryOfJobId != nil { Text("此任务为关联重试，成功后会移除原失败提醒。").font(.caption).foregroundStyle(.secondary) }
@@ -218,7 +223,7 @@ struct JobsView: View {
                                 retry(job, on: node, action: action)
                             }
                             .accessibilityIdentifier("jobs.retry.\(job.id)")
-                            .disabled(!store.isConnected || !store.supportsJobRetryLinks)
+                            .disabled(!store.isConnected || !store.supportsJobRetryLinks || ["needs_fingerprint", "fingerprint_changed"].contains(node.state))
                             .help(store.supportsJobRetryLinks ? "创建关联重试，成功后自动移除失败提醒" : "管理服务需更新后才能关联重试")
                         }
                     }
