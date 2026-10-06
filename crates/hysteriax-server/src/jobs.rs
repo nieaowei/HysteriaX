@@ -252,6 +252,23 @@ async fn succeed(pool: &PgPool, job: &JobInput, output: JobOutput) -> Result<(),
     if output.delete_node
         && let Some(node_id) = &job.node_id
     {
+        let pending = sqlx::query("UPDATE jobs SET status = 'cancelled', stage = 'node_removed', updated_at = $1, finished_at = $1 WHERE node_id = $2 AND id <> $3 AND status IN ('queued', 'running') RETURNING id, kind")
+            .bind(timestamp)
+            .bind(node_id)
+            .bind(&job.id)
+            .fetch_all(&mut *tx)
+            .await?;
+        for row in pending {
+            let id: String = row.get("id");
+            let kind: String = row.get("kind");
+            let payload = json!({"id": id, "kind": kind, "node_id": node_id, "status": "cancelled", "stage": "node_removed"});
+            sqlx::query("INSERT INTO job_events (job_id, event_type, payload_json, created_at) VALUES ($1, 'job.cancelled', $2, $3)")
+                .bind(&id)
+                .bind(payload)
+                .bind(timestamp)
+                .execute(&mut *tx)
+                .await?;
+        }
         sqlx::query("INSERT INTO audit_records (id, actor, action, entity_type, entity_id, detail_json, created_at) VALUES ($1, 'admin', 'node.deleted', 'node', $2, $3, $4)")
                 .bind(uuid::Uuid::new_v4().to_string()).bind(node_id).bind(json!({"job_id": job.id, "remote_uninstall": true})).bind(timestamp).execute(&mut *tx).await?;
         sqlx::query("DELETE FROM nodes WHERE id = $1 AND state = 'deleting'")

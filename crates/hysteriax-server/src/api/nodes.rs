@@ -526,7 +526,7 @@ pub async fn delete(
             ));
         }
     }
-    let active_deployment: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM jobs WHERE node_id = $1 AND status = 'running' AND kind IN ('deploy', 'sync', 'rollback', 'uninstall')")
+    let active_deployment: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM jobs WHERE node_id = $1 AND status = 'running' AND kind IN ('deploy', 'sync', 'rollback', 'uninstall', 'credential-apply')")
         .bind(&id).fetch_one(&mut *tx).await?;
     let never_installed = deployed_revision.is_none()
         && active_deployment == 0
@@ -536,6 +536,7 @@ pub async fn delete(
         );
     if never_installed {
         cancel_queued_node_jobs_in_tx(&mut tx, &id).await?;
+        cancel_running_node_jobs_in_tx(&mut tx, &id).await?;
         sqlx::query("DELETE FROM nodes WHERE id = $1 AND desired_revision = $2")
             .bind(&id)
             .bind(expected)
@@ -544,6 +545,7 @@ pub async fn delete(
         sqlx::query("INSERT INTO audit_records (id, actor, action, entity_type, entity_id, detail_json, created_at) VALUES ($1, 'admin', 'node.deleted', 'node', $2, $3, $4)")
             .bind(Uuid::new_v4().to_string()).bind(&id).bind(json!({"expected_revision": expected, "remote_install": false})).bind(now()).execute(&mut *tx).await?;
         tx.commit().await?;
+        let _ = state.removed_nodes.send(id);
         return Ok((StatusCode::NO_CONTENT, Json(Value::Null)));
     }
     if node_state != "deleting" {
@@ -573,6 +575,29 @@ pub async fn delete(
         StatusCode::ACCEPTED,
         Json(json!({"job_id": job_id, "status": "queued"})),
     ))
+}
+
+async fn cancel_running_node_jobs_in_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    node_id: &str,
+) -> Result<(), ApiError> {
+    let rows = sqlx::query("UPDATE jobs SET status = 'cancelled', stage = 'node_removed', updated_at = $1, finished_at = $1 WHERE node_id = $2 AND status = 'running' RETURNING id, kind")
+        .bind(now())
+        .bind(node_id)
+        .fetch_all(&mut **tx)
+        .await?;
+    for row in rows {
+        let id: String = row.get("id");
+        let kind: String = row.get("kind");
+        let payload = json!({"id": id, "kind": kind, "node_id": node_id, "status": "cancelled", "stage": "node_removed"});
+        sqlx::query("INSERT INTO job_events (job_id, event_type, payload_json, created_at) VALUES ($1, 'job.cancelled', $2, $3)")
+            .bind(&id)
+            .bind(payload)
+            .bind(now())
+            .execute(&mut **tx)
+            .await?;
+    }
+    Ok(())
 }
 
 pub async fn deploy(

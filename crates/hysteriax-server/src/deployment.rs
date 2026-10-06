@@ -457,45 +457,41 @@ async fn deploy_with_probe(
         return Err(error);
     }
 
-    let mut healthy = false;
-    let mut health_failure = None;
+    let startup_timeout = startup_health_timeout(&resolved_options);
     report_progress(
         pool,
         job,
         "checking_health",
-        "Waiting for the traffic and online statistics APIs to become healthy.",
+        &format!("Waiting up to {} seconds for the traffic and online statistics APIs, including certificate provisioning.", startup_timeout.as_secs()),
     )
     .await?;
-    for _ in 0..20 {
-        let health_check = async {
-            let traffic_body = session
-                .loopback_http_get(u32::from(traffic_stats_port), "/traffic", &stats_secret)
-                .await?;
-            let traffic: Value = serde_json::from_slice(&traffic_body)
-                .context("Hysteria traffic API returned invalid JSON")?;
-            if !traffic.is_object() {
-                bail!("Hysteria traffic API returned an invalid response shape")
-            }
-            let online_body = session
-                .loopback_http_get(u32::from(traffic_stats_port), "/online", &stats_secret)
-                .await?;
-            let online: Value = serde_json::from_slice(&online_body)
-                .context("Hysteria online API returned invalid JSON")?;
-            if !online.is_object() {
-                bail!("Hysteria online API returned an invalid response shape")
+    let health_check = wait_for_startup(startup_timeout, || async {
+        let status = session.execute_checked(
+            "systemctl show hysteriax.service --property=ActiveState --property=SubState --property=ExecMainStatus --property=NRestarts",
+        ).await?;
+        if let Some(reason) = startup_service_failure(&status) {
+            return Ok(StartupCheck::Failed(reason));
+        }
+        let health = async {
+            for path in ["/traffic", "/online"] {
+                let body = session
+                    .loopback_http_get(u32::from(traffic_stats_port), path, &stats_secret)
+                    .await?;
+                let value: Value = serde_json::from_slice(&body)
+                    .with_context(|| format!("Hysteria {path} API returned invalid JSON"))?;
+                if !value.is_object() {
+                    bail!("Hysteria {path} API returned an invalid response shape")
+                }
             }
             Ok::<(), anyhow::Error>(())
-        }
-        .await;
-        match health_check {
-            Ok(()) => {
-                healthy = true;
-                break;
-            }
-            Err(error) => health_failure = Some(error.to_string()),
-        }
-        tokio::time::sleep(Duration::from_millis(500)).await;
-    }
+        }.await;
+        Ok(match health {
+            Ok(()) => StartupCheck::Ready,
+            Err(error) => StartupCheck::Pending(error.to_string()),
+        })
+    }).await;
+    let mut healthy = health_check.is_ok();
+    let mut health_failure = health_check.err().map(|error| error.to_string());
     let mut proxy_probe_result = None;
     if healthy {
         let public_host: String = row.get("public_host");
@@ -553,19 +549,29 @@ async fn deploy_with_probe(
         let diagnostics: String = diagnostics
             .chars()
             .rev()
-            .take(1_200)
+            .take(4_000)
             .collect::<String>()
             .chars()
             .rev()
             .collect();
         let health_detail = format!("{health_failure}; remote diagnostics: {diagnostics}");
-        report_progress(
-            pool,
-            job,
-            "rolling_back",
-            "The new service did not become healthy; restoring the previous successful configuration.",
-        )
-        .await?;
+        let has_previous = session
+            .execute_checked(
+                "if [ -f /opt/hysteriax/config.previous ]; then printf yes; else printf no; fi",
+            )
+            .await
+            .map(|output| output.trim() == "yes")
+            .ok();
+        let rollback_message = match has_previous {
+            Some(true) => {
+                "The new service did not become healthy; restoring the previous configuration."
+            }
+            Some(false) => {
+                "The new service did not become healthy; cleaning up the failed first installation."
+            }
+            None => "The new service did not become healthy; rolling back the installation.",
+        };
+        report_progress(pool, job, "rolling_back", rollback_message).await?;
         if rollback_managed_node(&session, &environment).await.is_err() {
             let _ = session.execute(&format!("rm -rf {remote_staging}")).await;
             return Err(ssh::SshError::Command {
@@ -577,12 +583,18 @@ async fn deploy_with_probe(
             .into());
         }
         let _ = session.execute(&format!("rm -rf {remote_staging}")).await;
+        let rollback_result = match has_previous {
+            Some(true) => "previous configuration was restored",
+            Some(false) => "failed first installation was cleaned up",
+            None => "installation was rolled back",
+        };
         return Err(ssh::SshError::Command {
             code: 53,
             stderr: format!(
-                "post-deployment health check failed ({health_detail}); previous successful configuration was restored"
+                "post-deployment health check failed ({health_detail}); {rollback_result}"
             ),
-        }.into());
+        }
+        .into());
     }
 
     let deployed_config = secrets.encrypt(&options.to_string())?;
@@ -602,6 +614,85 @@ async fn deploy_with_probe(
         deployed_sha256: Some(deployed_sha256),
         delete_node: false,
     })
+}
+
+fn startup_health_timeout(options: &Value) -> Duration {
+    Duration::from_secs(if options.get("acme").is_some_and(Value::is_object) {
+        180
+    } else {
+        30
+    })
+}
+
+enum StartupCheck {
+    Ready,
+    Pending(String),
+    Failed(String),
+}
+
+fn startup_service_failure(status: &str) -> Option<String> {
+    let properties: std::collections::HashMap<_, _> = status
+        .lines()
+        .filter_map(|line| line.split_once('='))
+        .collect();
+    let active = properties.get("ActiveState").copied().unwrap_or("unknown");
+    let sub = properties.get("SubState").copied().unwrap_or("unknown");
+    let exit = properties
+        .get("ExecMainStatus")
+        .and_then(|value| value.parse::<u32>().ok())
+        .unwrap_or(0);
+    let restarts = properties
+        .get("NRestarts")
+        .and_then(|value| value.parse::<u32>().ok())
+        .unwrap_or(0);
+    if matches!(active, "failed" | "inactive" | "deactivating") || exit != 0 || restarts >= 3 {
+        Some(format!(
+            "Hysteria service failed during startup: ActiveState={active}, SubState={sub}, ExecMainStatus={exit}, NRestarts={restarts}"
+        ))
+    } else {
+        None
+    }
+}
+
+async fn wait_for_startup<F, Fut>(timeout: Duration, mut check: F) -> Result<()>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<StartupCheck>>,
+{
+    let started = tokio::time::Instant::now();
+    let deadline = started + timeout;
+    let mut last_error = "statistics APIs have not become ready".to_owned();
+    loop {
+        if tokio::time::Instant::now() >= deadline {
+            bail!(
+                "startup health check timed out after {:.1}s (budget {}s); last error: {last_error}",
+                started.elapsed().as_secs_f64(),
+                timeout.as_secs()
+            );
+        }
+        // Bound each attempt as well as the entire wait, including SSH status requests.
+        let attempt_deadline = deadline.min(tokio::time::Instant::now() + Duration::from_secs(12));
+        match tokio::time::timeout_at(attempt_deadline, check()).await {
+            Ok(Ok(StartupCheck::Ready)) => return Ok(()),
+            Ok(Ok(StartupCheck::Failed(reason))) => {
+                bail!("{reason}; waited {:.1}s", started.elapsed().as_secs_f64())
+            }
+            Ok(Ok(StartupCheck::Pending(reason))) => last_error = reason,
+            Ok(Err(error)) => last_error = error.to_string(),
+            Err(_) => last_error = format!("startup check timed out; last error: {last_error}"),
+        }
+        if tokio::time::Instant::now() >= deadline {
+            bail!(
+                "startup health check timed out after {:.1}s (budget {}s); last error: {last_error}",
+                started.elapsed().as_secs_f64(),
+                timeout.as_secs()
+            );
+        }
+        tokio::time::sleep_until(
+            deadline.min(tokio::time::Instant::now() + Duration::from_secs(1)),
+        )
+        .await;
+    }
 }
 
 struct ProxyProbe<'a> {
@@ -1185,6 +1276,7 @@ if [ -f "$ROOT/.hysteriax-managed" ]; then
   [ ! -f "$ROOT/hysteriax.service.previous" ] || cp -a "$ROOT/hysteriax.service.previous" /etc/systemd/system/hysteriax.service
   systemctl daemon-reload
   systemctl restart hysteriax.service || true
+  echo 'Hysteria service did not become active; previous configuration was restored' >&2
 else
   systemctl stop hysteriax.service || true
   systemctl disable hysteriax.service || true
@@ -1192,8 +1284,8 @@ else
   userdel hysteriax || true
   groupdel hysteriax || true
   rm -rf "$ROOT" "$ETC" /var/lib/hysteriax
+  echo 'Hysteria service did not become active; failed first installation was cleaned up' >&2
 fi
-echo 'Hysteria service did not become active; previous configuration was restored' >&2
 exit 53
 "#
     );
@@ -1449,6 +1541,93 @@ mod tests {
         JobInput, deployment_probe_server_config, parse_http_probe_target, primary_listener_port,
         report_progress, systemd_unit, verify_hysteria_asset,
     };
+
+    #[test]
+    fn startup_budget_and_service_failures() {
+        assert_eq!(
+            super::startup_health_timeout(&json!({"acme": {"domains": ["sg1.conn.lol"]}}))
+                .as_secs(),
+            180
+        );
+        assert_eq!(
+            super::startup_health_timeout(&json!({"tls": {"cert": "cert.pem", "key": "key.pem"}}))
+                .as_secs(),
+            30
+        );
+        for status in [
+            "ActiveState=failed\nSubState=failed\nExecMainStatus=1\nNRestarts=0",
+            "ActiveState=activating\nSubState=auto-restart\nExecMainStatus=1\nNRestarts=0",
+            "ActiveState=active\nSubState=running\nExecMainStatus=0\nNRestarts=3",
+            "ActiveState=inactive\nSubState=dead\nExecMainStatus=0\nNRestarts=0",
+        ] {
+            assert!(super::startup_service_failure(status).is_some());
+        }
+        assert!(
+            super::startup_service_failure(
+                "ActiveState=active\nSubState=running\nExecMainStatus=0\nNRestarts=0"
+            )
+            .is_none()
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn startup_wait_accepts_delayed_acme_readiness() {
+        let started = tokio::time::Instant::now();
+        super::wait_for_startup(
+            super::startup_health_timeout(&json!({"acme": {}})),
+            || async {
+                Ok(if started.elapsed() >= std::time::Duration::from_secs(30) {
+                    super::StartupCheck::Ready
+                } else {
+                    super::StartupCheck::Pending("ConnectFailed".to_owned())
+                })
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(started.elapsed(), std::time::Duration::from_secs(30));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn startup_wait_fails_early_when_service_exits() {
+        let started = tokio::time::Instant::now();
+        let error = super::wait_for_startup(std::time::Duration::from_secs(180), || async {
+            Ok(if started.elapsed() >= std::time::Duration::from_secs(2) {
+                super::StartupCheck::Failed("ExecMainStatus=1".to_owned())
+            } else {
+                super::StartupCheck::Pending("ConnectFailed".to_owned())
+            })
+        })
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains("ExecMainStatus=1"));
+        assert_eq!(started.elapsed(), std::time::Duration::from_secs(2));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn startup_wait_expires_with_last_error() {
+        let started = tokio::time::Instant::now();
+        let error = super::wait_for_startup(std::time::Duration::from_secs(180), || async {
+            Ok(super::StartupCheck::Pending("ConnectFailed".to_owned()))
+        })
+        .await
+        .unwrap_err();
+        assert_eq!(started.elapsed(), std::time::Duration::from_secs(180));
+        assert!(error.to_string().contains("budget 180s"));
+        assert!(error.to_string().contains("ConnectFailed"));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn startup_wait_bounds_hung_ssh_checks() {
+        let started = tokio::time::Instant::now();
+        let error = super::wait_for_startup(std::time::Duration::from_secs(30), || async {
+            std::future::pending::<anyhow::Result<super::StartupCheck>>().await
+        })
+        .await
+        .unwrap_err();
+        assert_eq!(started.elapsed(), std::time::Duration::from_secs(30));
+        assert!(error.to_string().contains("startup check timed out"));
+    }
 
     #[test]
     fn realm_deployment_probe_uses_realm_uri_and_client_tuning() {
