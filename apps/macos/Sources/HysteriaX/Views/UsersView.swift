@@ -132,16 +132,9 @@ struct UsersView: View {
     private func userDetailPane(_ user: UserSummary) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 14) {
-                ViewThatFits(in: .horizontal) {
-                    HStack(alignment: .top, spacing: 16) {
-                        userDetailTitle(user)
-                        Spacer(minLength: 20)
-                        userDetailActions(user)
-                    }
-                    VStack(alignment: .leading, spacing: 10) {
-                        userDetailTitle(user)
-                        userDetailActions(user)
-                    }
+                DetailHeaderLayout {
+                    userDetailTitle(user)
+                    userDetailActions(user)
                 }
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), alignment: .leading)], alignment: .leading, spacing: 12) {
                     userMetric("已用流量", value: formatBytes(user.usageBytes))
@@ -154,15 +147,9 @@ struct UsersView: View {
             Divider()
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    ViewThatFits(in: .horizontal) {
-                        HStack(alignment: .top, spacing: 16) {
-                            userQuota(user).frame(minWidth: 280, maxWidth: .infinity)
-                            userAssignments(user).frame(minWidth: 280, maxWidth: .infinity)
-                        }
-                        VStack(alignment: .leading, spacing: 16) {
-                            userQuota(user)
-                            userAssignments(user)
-                        }
+                    OverviewColumnsLayout(wideColumns: 2, wideMinimum: 576, narrowColumns: 1) {
+                        userQuota(user)
+                        userAssignments(user)
                     }
                     if store.isConnected, let usage = selectedUsage, usage.userId == user.id,
                        let pending = usage.pendingRevocations, !pending.isEmpty {

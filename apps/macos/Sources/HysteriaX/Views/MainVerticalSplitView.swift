@@ -8,18 +8,16 @@ struct MainVerticalSplitView<Content: View, Detail: View>: View {
 
     var body: some View {
         if hasDetail {
-            GeometryReader { geometry in
-                VSplitView {
-                    VStack(spacing: 0) {
-                        content()
-                    }
-                    .frame(maxWidth: .infinity, minHeight: 180, idealHeight: geometry.size.height / 2, maxHeight: .infinity)
-                    // Keep the split pane's identity stable when the selected detail's ID changes.
-                    VStack(spacing: 0) {
-                        detail()
-                    }
-                    .frame(maxWidth: .infinity, minHeight: 180, idealHeight: geometry.size.height / 2, maxHeight: .infinity)
+            VSplitView {
+                VStack(spacing: 0) {
+                    content()
                 }
+                .frame(maxWidth: .infinity, minHeight: 180, maxHeight: .infinity)
+                // Keep the split pane's identity stable when the selected detail's ID changes.
+                VStack(spacing: 0) {
+                    detail()
+                }
+                .frame(maxWidth: .infinity, minHeight: 180, maxHeight: .infinity)
             }
         } else {
             content()

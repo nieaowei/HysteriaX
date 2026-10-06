@@ -204,16 +204,9 @@ struct JobsView: View {
     private func jobDetailPane(_ job: JobSummary) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 14) {
-                ViewThatFits(in: .horizontal) {
-                    HStack(alignment: .top, spacing: 16) {
-                        jobTitle(job)
-                        Spacer(minLength: 20)
-                        jobActions(job)
-                    }
-                    VStack(alignment: .leading, spacing: 10) {
-                        jobTitle(job)
-                        jobActions(job)
-                    }
+                DetailHeaderLayout {
+                    jobTitle(job)
+                    jobActions(job)
                 }
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), alignment: .leading)], alignment: .leading, spacing: 12) {
                     jobMetric("当前阶段", value: JobDisplayText.stage(job.result?.stage ?? job.stage))

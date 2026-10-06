@@ -1,0 +1,37 @@
+[
+  {
+    "frames": 48,
+    "mean_layout_ms": 208.8212577708334,
+    "mean_layout_render_ms": 250.10234977083334,
+    "name": "nodes_list",
+    "p95_layout_ms": 288.366666
+  },
+  {
+    "frames": 48,
+    "mean_layout_ms": 53.598641541666666,
+    "mean_layout_render_ms": 139.53354083333335,
+    "name": "nodes_detail",
+    "p95_layout_ms": 59.932208
+  },
+  {
+    "frames": 48,
+    "mean_layout_ms": 38.14753133333333,
+    "mean_layout_render_ms": 122.90753814583331,
+    "name": "users_detail",
+    "p95_layout_ms": 42.719125
+  },
+  {
+    "frames": 48,
+    "mean_layout_ms": 16.20117454166667,
+    "mean_layout_render_ms": 39.589096354166664,
+    "name": "jobs_detail",
+    "p95_layout_ms": 18.36525
+  },
+  {
+    "frames": 48,
+    "mean_layout_ms": 21.285081645833333,
+    "mean_layout_render_ms": 88.86718495833333,
+    "name": "dns_detail",
+    "p95_layout_ms": 24.632834
+  }
+]

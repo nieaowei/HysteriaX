@@ -188,16 +188,9 @@ struct NodesView: View {
     private func nodeDetailPane(_ node: NodeSummary) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 14) {
-                ViewThatFits(in: .horizontal) {
-                    HStack(alignment: .top, spacing: 16) {
-                        nodeTitle(node)
-                        Spacer(minLength: 20)
-                        nodeActions(node)
-                    }
-                    VStack(alignment: .leading, spacing: 10) {
-                        nodeTitle(node)
-                        nodeActions(node)
-                    }
+                DetailHeaderLayout {
+                    nodeTitle(node)
+                    nodeActions(node)
                 }
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), alignment: .leading)], alignment: .leading, spacing: 12) {
                     nodeMetric("目标配置", value: "v\(node.revision)")
@@ -222,15 +215,9 @@ struct NodesView: View {
             Divider()
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    ViewThatFits(in: .horizontal) {
-                        HStack(alignment: .top, spacing: 16) {
-                            nodeConnections(node).frame(minWidth: 280, maxWidth: .infinity)
-                            nodeTasksAndPackage(node).frame(minWidth: 280, maxWidth: .infinity)
-                        }
-                        VStack(alignment: .leading, spacing: 16) {
-                            nodeConnections(node)
-                            nodeTasksAndPackage(node)
-                        }
+                    OverviewColumnsLayout(wideColumns: 2, wideMinimum: 576, narrowColumns: 1) {
+                        nodeConnections(node)
+                        nodeTasksAndPackage(node)
                     }
                     GroupBox {
                         LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), alignment: .leading)], alignment: .leading, spacing: 12) {

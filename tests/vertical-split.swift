@@ -62,5 +62,18 @@ struct CheckView: View {
         settle()
         let after = measure("After switching")
         precondition(abs(dragged[0] - after[0]) < 2, "Selection reset dragged divider")
+        host.frame.size.width = 700
+        settle()
+        let narrow = measure("After narrowing")
+        precondition(abs(narrow[0] - dragged[0]) < 2, "Width resize reset divider")
+        host.frame.size.width = 1100
+        settle()
+        let wide = measure("After widening")
+        precondition(abs(wide[0] - dragged[0]) < 2, "Width resize reset divider")
+        host.frame.size.height = 950
+        settle()
+        let taller = measure("After growing height")
+        precondition(taller.count == 2 && taller.allSatisfy { $0 >= 180 }, "Resize violated pane minimums")
+        precondition(abs(taller[0] - taller[1]) > 2, "Height resize reset user divider to 1:1")
     }
 }

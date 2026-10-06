@@ -117,16 +117,9 @@ struct CredentialsView: View {
     private func credentialDetailPane(_ entry: CredentialSummary) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 14) {
-                ViewThatFits(in: .horizontal) {
-                    HStack(alignment: .top, spacing: 16) {
-                        detailTitle(entry)
-                        Spacer(minLength: 20)
-                        detailActions
-                    }
-                    VStack(alignment: .leading, spacing: 10) {
-                        detailTitle(entry)
-                        detailActions
-                    }
+                DetailHeaderLayout {
+                    detailTitle(entry)
+                    detailActions
                 }
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), alignment: .leading)], alignment: .leading, spacing: 12) {
                     detailMetric("类型", value: entry.typeTitle)
