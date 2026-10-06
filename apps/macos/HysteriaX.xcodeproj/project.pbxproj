@@ -7,6 +7,13 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		0000000000000000000F2000 /* Models/DNSAllocationDraft.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000F1000 /* Models/DNSAllocationDraft.swift */; };
+		0000000000000000000F2001 /* Stores/DNSStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000F1001 /* Stores/DNSStore.swift */; };
+		0000000000000000000F2002 /* Views/DNSAllocationFields.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000F1002 /* Views/DNSAllocationFields.swift */; };
+		0000000000000000000F2003 /* Views/DNSRecordEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000F1003 /* Views/DNSRecordEditorView.swift */; };
+		0000000000000000000F2004 /* Views/DNSConnectionsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000F1004 /* Views/DNSConnectionsView.swift */; };
+		0000000000000000000F2005 /* Views/DNSRecordsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000F1005 /* Views/DNSRecordsView.swift */; };
+		0000000000000000000F2006 /* Views/DNSBindingEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000F1006 /* Views/DNSBindingEditorView.swift */; };
 		000000000000000000002000 /* App/HysteriaXApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001000 /* App/HysteriaXApp.swift */; };
 		000000000000000000002001 /* Models/APIModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001001 /* Models/APIModels.swift */; };
 		000000000000000000002002 /* Services/APIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001002 /* Services/APIClient.swift */; };
@@ -55,6 +62,13 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		0000000000000000000F1000 /* Models/DNSAllocationDraft.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models/DNSAllocationDraft.swift; sourceTree = "<group>"; };
+		0000000000000000000F1001 /* Stores/DNSStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Stores/DNSStore.swift; sourceTree = "<group>"; };
+		0000000000000000000F1002 /* Views/DNSAllocationFields.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/DNSAllocationFields.swift; sourceTree = "<group>"; };
+		0000000000000000000F1003 /* Views/DNSRecordEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/DNSRecordEditorView.swift; sourceTree = "<group>"; };
+		0000000000000000000F1004 /* Views/DNSConnectionsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/DNSConnectionsView.swift; sourceTree = "<group>"; };
+		0000000000000000000F1005 /* Views/DNSRecordsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/DNSRecordsView.swift; sourceTree = "<group>"; };
+		0000000000000000000F1006 /* Views/DNSBindingEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/DNSBindingEditorView.swift; sourceTree = "<group>"; };
 		000000000000000000001000 /* App/HysteriaXApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = App/HysteriaXApp.swift; sourceTree = "<group>"; };
 		000000000000000000001001 /* Models/APIModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models/APIModels.swift; sourceTree = "<group>"; };
 		000000000000000000001002 /* Services/APIClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Services/APIClient.swift; sourceTree = "<group>"; };
@@ -117,6 +131,13 @@
 		000000000000000000003001 /* Sources/HysteriaX */ = {
 			isa = PBXGroup;
 			children = (
+				0000000000000000000F1000 /* Models/DNSAllocationDraft.swift */,
+				0000000000000000000F1001 /* Stores/DNSStore.swift */,
+				0000000000000000000F1002 /* Views/DNSAllocationFields.swift */,
+				0000000000000000000F1003 /* Views/DNSRecordEditorView.swift */,
+				0000000000000000000F1004 /* Views/DNSConnectionsView.swift */,
+				0000000000000000000F1005 /* Views/DNSRecordsView.swift */,
+				0000000000000000000F1006 /* Views/DNSBindingEditorView.swift */,
 				000000000000000000001700 /* Stores/CredentialStore.swift */,
 				000000000000000000001701 /* Views/CredentialEditorView.swift */,
 				000000000000000000001702 /* Views/CredentialPickerView.swift */,
@@ -250,6 +271,13 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				0000000000000000000F2000 /* Models/DNSAllocationDraft.swift in Sources */,
+				0000000000000000000F2001 /* Stores/DNSStore.swift in Sources */,
+				0000000000000000000F2002 /* Views/DNSAllocationFields.swift in Sources */,
+				0000000000000000000F2003 /* Views/DNSRecordEditorView.swift in Sources */,
+				0000000000000000000F2004 /* Views/DNSConnectionsView.swift in Sources */,
+				0000000000000000000F2005 /* Views/DNSRecordsView.swift in Sources */,
+				0000000000000000000F2006 /* Views/DNSBindingEditorView.swift in Sources */,
 				000000000000000000002700 /* Stores/CredentialStore.swift in Sources */,
 				000000000000000000002701 /* Views/CredentialEditorView.swift in Sources */,
 				000000000000000000002702 /* Views/CredentialPickerView.swift in Sources */,

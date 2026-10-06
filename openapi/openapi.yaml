@@ -967,6 +967,416 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/HysteriaAuthResponse' }
+  /dns/connections:
+    get:
+      operationId: listDNSConnections
+      tags:
+      - DNS
+      summary: listDNSConnections
+      responses:
+        '200':
+          description: Successful operation
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/DNSConnection'
+    post:
+      operationId: createDNSConnection
+      tags:
+      - DNS
+      summary: createDNSConnection
+      responses:
+        '201':
+          description: Successful operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DNSConnection'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DNSConnectionCreate'
+  /dns/connections/{id}:
+    get:
+      operationId: getDNSConnection
+      tags:
+      - DNS
+      summary: getDNSConnection
+      responses:
+        '200':
+          description: Successful operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DNSConnection'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    patch:
+      operationId: updateDNSConnection
+      tags:
+      - DNS
+      summary: updateDNSConnection
+      responses:
+        '200':
+          description: Successful operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DNSConnection'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DNSConnectionPatch'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    delete:
+      operationId: deleteDNSConnection
+      tags:
+      - DNS
+      summary: deleteDNSConnection
+      responses:
+        '204':
+          description: Successful operation
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: expected_revision
+        in: query
+        required: true
+        schema:
+          type: integer
+  /dns/connections/{id}/verify:
+    post:
+      operationId: verifyDNSConnection
+      tags:
+      - DNS
+      summary: verifyDNSConnection
+      responses:
+        '202':
+          description: Successful operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DNSActionReceipt'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DNSAction'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+  /dns/connections/{id}/refresh:
+    post:
+      operationId: refreshDNSConnection
+      tags:
+      - DNS
+      summary: refreshDNSConnection
+      responses:
+        '202':
+          description: Successful operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DNSActionReceipt'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DNSAction'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+  /dns/zones:
+    get:
+      operationId: listDNSZones
+      tags:
+      - DNS
+      summary: listDNSZones
+      responses:
+        '200':
+          description: Successful operation
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/DNSZone'
+  /dns/zones/{id}:
+    patch:
+      operationId: updateDNSZone
+      tags:
+      - DNS
+      summary: updateDNSZone
+      responses:
+        '200':
+          description: Successful operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DNSZone'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DNSZonePatch'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+  /dns/zones/{id}/refresh:
+    post:
+      operationId: refreshDNSZone
+      tags:
+      - DNS
+      summary: refreshDNSZone
+      responses:
+        '202':
+          description: Successful operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DNSActionReceipt'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DNSAction'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+  /dns/records:
+    get:
+      operationId: listDNSRecords
+      tags:
+      - DNS
+      summary: listDNSRecords
+      responses:
+        '200':
+          description: Successful operation
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/DNSRecord'
+      parameters:
+      - name: zone_id
+        in: query
+        required: false
+        schema:
+          type: string
+      x-swift-include-optional-query: true
+    post:
+      operationId: createDNSRecord
+      tags:
+      - DNS
+      summary: createDNSRecord
+      responses:
+        '202':
+          description: Successful operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DNSActionReceipt'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DNSRecordCreate'
+  /dns/records/{id}:
+    get:
+      operationId: getDNSRecord
+      tags:
+      - DNS
+      summary: getDNSRecord
+      responses:
+        '200':
+          description: Successful operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DNSRecord'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    patch:
+      operationId: updateDNSRecord
+      tags:
+      - DNS
+      summary: updateDNSRecord
+      responses:
+        '202':
+          description: Successful operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DNSActionReceipt'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DNSRecordUpdate'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    delete:
+      operationId: deleteDNSRecord
+      tags:
+      - DNS
+      summary: deleteDNSRecord
+      responses:
+        '202':
+          description: Successful operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DNSActionReceipt'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DNSAction'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+  /dns/records/{id}/check:
+    post:
+      operationId: checkDNSRecord
+      tags:
+      - DNS
+      summary: checkDNSRecord
+      responses:
+        '202':
+          description: Successful operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DNSActionReceipt'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DNSAction'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+  /nodes/{id}/dns-binding:
+    get:
+      operationId: getDNSBinding
+      tags:
+      - DNS
+      summary: getDNSBinding
+      responses:
+        '200':
+          description: Successful operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DNSBindingResponse'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    put:
+      operationId: setDNSBinding
+      tags:
+      - DNS
+      summary: setDNSBinding
+      responses:
+        '202':
+          description: Successful operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DNSActionReceipt'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DNSBindingSet'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    delete:
+      operationId: removeDNSBinding
+      tags:
+      - DNS
+      summary: removeDNSBinding
+      responses:
+        '200':
+          description: Successful operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DNSActionReceipt'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DNSBindingRemove'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+
 components:
   securitySchemes:
     BearerAuth:
@@ -1079,12 +1489,13 @@ components:
       - ssh_host
       - ssh_port
       - ssh_username
-      - public_host
       - public_port
       - listen_addr
       - ssh_credential_id
       - ssh_credential_version
       properties:
+        dns_allocation:
+          $ref: '#/components/schemas/DNSAllocation'
         package:
           $ref: '#/components/schemas/NodePackage'
         initial_usage_bytes:
@@ -1235,6 +1646,16 @@ components:
       type: object
       required: [id, name, revision, state]
       properties:
+        published_connection:
+          $ref: '#/components/schemas/PublishedConnection'
+          type:
+          - object
+          - 'null'
+        dns_binding:
+          $ref: '#/components/schemas/DNSBinding'
+          type:
+          - object
+          - 'null'
         package: { $ref: '#/components/schemas/NodePackage' }
         package_usage: { $ref: '#/components/schemas/NodePackageUsage' }
         id: { type: string, format: uuid }
@@ -1287,6 +1708,16 @@ components:
       type: object
       required: [id, name, revision, config, yaml_preview, ssh, public, state, created_at, updated_at]
       properties:
+        published_connection:
+          $ref: '#/components/schemas/PublishedConnection'
+          type:
+          - object
+          - 'null'
+        dns_binding:
+          $ref: '#/components/schemas/DNSBinding'
+          type:
+          - object
+          - 'null'
         package: { $ref: '#/components/schemas/NodePackage' }
         package_usage: { $ref: '#/components/schemas/NodePackageUsage' }
         id: { type: string, format: uuid }
@@ -1371,6 +1802,18 @@ components:
       type: object
       required: [id, kind, status, stage, attempts, created_at, updated_at]
       properties:
+        resource_type:
+          type:
+          - string
+          - 'null'
+        resource_id:
+          type:
+          - string
+          - 'null'
+        resource_name:
+          type:
+          - string
+          - 'null'
         id: { type: string, format: uuid }
         kind: { type: string }
         node_id: { type: [string, 'null'], format: uuid }
@@ -1571,6 +2014,11 @@ components:
     CreatedEntity:
       type: object
       properties:
+        dns_allocation:
+          $ref: '#/components/schemas/DNSActionReceipt'
+          type:
+          - object
+          - 'null'
         id: { type: string, format: uuid }
         revision: { type: integer }
         node_auth_token: { type: string, description: One-time node authentication token. }
@@ -2128,6 +2576,10 @@ components:
       - created_at
       - items
       properties:
+        dns_items:
+          type: array
+          items:
+            $ref: '#/components/schemas/DNSCredentialBatchItem'
         id:
           type: string
         credential_id:
@@ -2165,6 +2617,388 @@ components:
           - string
           - 'null'
         name:
+          type:
+          - string
+          - 'null'
+    DNSConnectionCreate:
+      type: object
+      required:
+      - name
+      - credential_id
+      - credential_version
+      properties:
+        name:
+          type: string
+        credential_id:
+          type: string
+        credential_version:
+          type: integer
+    DNSConnectionPatch:
+      type: object
+      required:
+      - expected_revision
+      - name
+      properties:
+        expected_revision:
+          type: integer
+        name:
+          type: string
+    DNSAction:
+      type: object
+      required:
+      - expected_revision
+      - idempotency_key
+      properties:
+        expected_revision:
+          type: integer
+        idempotency_key:
+          type: string
+    DNSZonePatch:
+      type: object
+      required:
+      - expected_revision
+      - enabled
+      properties:
+        expected_revision:
+          type: integer
+        enabled:
+          type: boolean
+    DNSRecordInput:
+      type: object
+      required:
+      - name
+      - record_type
+      - content
+      properties:
+        name:
+          type: string
+        record_type:
+          type: string
+          enum:
+          - A
+          - AAAA
+          - CNAME
+        content:
+          type: string
+        ttl:
+          type: integer
+          default: 1
+        proxied:
+          type: boolean
+          default: false
+    DNSRecordCreate:
+      type: object
+      required:
+      - zone_id
+      - idempotency_key
+      - record
+      properties:
+        zone_id:
+          type: string
+        idempotency_key:
+          type: string
+        record:
+          $ref: '#/components/schemas/DNSRecordInput'
+    DNSRecordUpdate:
+      type: object
+      required:
+      - expected_revision
+      - idempotency_key
+      - record
+      properties:
+        expected_revision:
+          type: integer
+        idempotency_key:
+          type: string
+        record:
+          $ref: '#/components/schemas/DNSRecordInput'
+    DNSAllocation:
+      type: object
+      required:
+      - idempotency_key
+      - zone_id
+      - mode
+      properties:
+        idempotency_key:
+          type: string
+        zone_id:
+          type: string
+        mode:
+          type: string
+          enum:
+          - auto
+          - manual
+          - existing
+        prefix:
+          type: string
+        hostname:
+          type: string
+        ipv4:
+          type: string
+        ipv6:
+          type: string
+        record_ids:
+          type: array
+          items:
+            type: string
+    DNSBindingSet:
+      type: object
+      required:
+      - expected_revision
+      - allocation
+      properties:
+        expected_revision:
+          type: integer
+        allocation:
+          $ref: '#/components/schemas/DNSAllocation'
+    DNSBindingRemove:
+      type: object
+      required:
+      - expected_revision
+      - idempotency_key
+      - public_host
+      properties:
+        expected_revision:
+          type: integer
+        idempotency_key:
+          type: string
+        public_host:
+          type: string
+    DNSConnection:
+      type: object
+      required:
+      - id
+      - name
+      - provider
+      - credential_id
+      - credential_version
+      - revision
+      - status
+      - created_at
+      - updated_at
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        provider:
+          type: string
+        credential_id:
+          type: string
+        credential_version:
+          type: integer
+        revision:
+          type: integer
+        status:
+          type: string
+        verified_at:
+          type:
+          - string
+          - 'null'
+        created_at:
+          type: string
+        updated_at:
+          type: string
+    DNSZone:
+      type: object
+      required:
+      - id
+      - connection_id
+      - provider_zone_id
+      - name
+      - enabled
+      - revision
+      properties:
+        id:
+          type: string
+        connection_id:
+          type: string
+        provider_zone_id:
+          type: string
+        name:
+          type: string
+        enabled:
+          type: boolean
+        revision:
+          type: integer
+        synced_at:
+          type:
+          - string
+          - 'null'
+    DNSRecord:
+      type: object
+      required:
+      - id
+      - zone_id
+      - name
+      - record_type
+      - content
+      - ttl
+      - proxied
+      - origin
+      - revision
+      - state
+      - resolution_status
+      - updated_at
+      properties:
+        id:
+          type: string
+        zone_id:
+          type: string
+        provider_record_id:
+          type:
+          - string
+          - 'null'
+        name:
+          type: string
+        record_type:
+          type: string
+        content:
+          type: string
+        ttl:
+          type: integer
+        proxied:
+          type: boolean
+        origin:
+          type: string
+        revision:
+          type: integer
+        remote_snapshot:
+          type:
+          - object
+          - 'null'
+          additionalProperties: true
+        desired:
+          type:
+          - object
+          - 'null'
+          additionalProperties: true
+        state:
+          type: string
+        resolution_status:
+          type: string
+        resolution_detail:
+          type:
+          - object
+          - 'null'
+          additionalProperties: true
+        bound_node_id:
+          type:
+          - string
+          - 'null'
+        checked_at:
+          type:
+          - string
+          - 'null'
+        updated_at:
+          type: string
+    PublishedConnection:
+      type: object
+      required:
+      - public_host
+      - public_port
+      - listen_addr
+      - tls_skip_verify
+      properties:
+        public_host:
+          type: string
+        public_port:
+          type: integer
+        listen_addr:
+          type: string
+        tls_sni:
+          type:
+          - string
+          - 'null'
+        tls_skip_verify:
+          type: boolean
+    DNSBinding:
+      type: object
+      required:
+      - node_id
+      - zone_id
+      - hostname
+      - record_ids
+      - records
+      - revision
+      properties:
+        node_id:
+          type: string
+        zone_id:
+          type: string
+        hostname:
+          type: string
+        record_ids:
+          type: array
+          items:
+            type: string
+        records:
+          type: array
+          items:
+            $ref: '#/components/schemas/DNSRecord'
+        revision:
+          type: integer
+        published_connection:
+          $ref: '#/components/schemas/PublishedConnection'
+          type:
+          - object
+          - 'null'
+    DNSBindingResponse:
+      type: object
+      required:
+      - binding
+      properties:
+        binding:
+          $ref: '#/components/schemas/DNSBinding'
+          type:
+          - object
+          - 'null'
+    DNSActionReceipt:
+      type: object
+      required: []
+      properties:
+        operation_id:
+          type: string
+        job_id:
+          type:
+          - string
+          - 'null'
+        resource_id:
+          type: string
+        node_id:
+          type: string
+        hostname:
+          type: string
+        record_ids:
+          type: array
+          items:
+            type: string
+        job_ids:
+          type: array
+          items:
+            type: string
+        records_retained:
+          type: boolean
+    DNSCredentialBatchItem:
+      type: object
+      required:
+      - connection_id
+      - job_id
+      - name
+      - status
+      - stage
+      properties:
+        connection_id:
+          type: string
+        job_id:
+          type: string
+        name:
+          type: string
+        status:
+          type: string
+        stage:
+          type: string
+        error_message:
           type:
           - string
           - 'null'

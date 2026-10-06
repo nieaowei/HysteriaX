@@ -18,6 +18,16 @@ end.parse!
 spec = YAML.load_file(spec_path)
 schemas = spec.fetch("components").fetch("schemas")
 models = {
+  "DNSConnectionCreate" => "DNSConnectionCreateRequest",
+  "DNSConnectionPatch" => "DNSConnectionPatchRequest",
+  "DNSAction" => "DNSActionRequest",
+  "DNSZonePatch" => "DNSZonePatchRequest",
+  "DNSRecordCreate" => "DNSRecordCreateRequest",
+  "DNSRecordUpdate" => "DNSRecordUpdateRequest",
+  "DNSBindingSet" => "DNSBindingSetRequest",
+  "DNSBindingRemove" => "DNSBindingRemoveRequest",
+  "DNSRecordInput" => "DNSRecordInput",
+  "DNSAllocation" => "DNSAllocation",
   "CredentialCreate" => "CredentialCreateRequest",
   "CredentialPatch" => "CredentialPatchRequest",
   "CredentialPublish" => "CredentialPublishRequest",
@@ -32,6 +42,7 @@ models = {
   "AssignmentCertificateUpdate" => "AssignmentCertificateUpdateRequest",
 }
 response_models = %w[
+  DNSConnection DNSZone DNSRecord PublishedConnection DNSBinding DNSBindingResponse DNSActionReceipt DNSCredentialBatchItem
   CredentialSummary CredentialDetail CredentialVersion CredentialReference CredentialReceipt
   CredentialBatch CredentialBatchItem CredentialBatchReceipt
   NodePackage NodePackageUsage NodeAlert NodeUsageUpdateResponse
@@ -47,7 +58,7 @@ response_models = %w[
   AdminTokenSummary AdminTokenReceipt ServerMonitoring
   OverviewIssue OverviewNode OverviewResponse OverviewBucket OverviewHistory
 ]
-identifiable_models = %w[CredentialSummary CredentialDetail CredentialBatch NodeSummary NodeDetail UserSummary JobSummary AuditSummary NodeResource AdminTokenSummary]
+identifiable_models = %w[DNSConnection DNSZone DNSRecord CredentialSummary CredentialDetail CredentialBatch NodeSummary NodeDetail UserSummary JobSummary AuditSummary NodeResource AdminTokenSummary]
 
 def resolve_schema(schema, schemas, stack = [])
   if schema.key?("$ref")

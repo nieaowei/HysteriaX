@@ -3,6 +3,7 @@ mod config;
 mod credentials;
 mod db;
 mod deployment;
+mod dns;
 mod error;
 mod jobs;
 mod kick_requests;

@@ -269,6 +269,7 @@ fn output(stage: &str, result: Value) -> JobOutput {
         deployed_revision: None,
         deployed_config: None,
         deployed_sha256: None,
+        published_connection: None,
         delete_node: false,
     }
 }

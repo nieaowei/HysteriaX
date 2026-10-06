@@ -283,7 +283,7 @@ async fn load_subscription_nodes(
     state: &AppState,
     user_id: &str,
 ) -> Result<Vec<SubscriptionNode>, ApiError> {
-    let rows = sqlx::query("SELECT n.id, n.name, n.public_host, n.public_port, n.listen_addr, n.tls_sni, n.tls_skip_verify, n.state, n.deployed_config_enc, a.credential_enc, a.user_id, a.mtls_credential_id, a.mtls_credential_version FROM node_assignments a JOIN nodes n ON n.id = a.node_id WHERE a.user_id = $1 AND n.state NOT IN ('deleting', 'delete_failed') AND n.deployed_revision IS NOT NULL AND n.deployed_config_enc IS NOT NULL ORDER BY lower(n.name) COLLATE \"C\", n.name COLLATE \"C\", n.id")
+    let rows = sqlx::query("SELECT n.id, n.name, n.public_host, n.public_port, n.listen_addr, n.tls_sni, n.tls_skip_verify, n.state, n.deployed_config_enc, n.published_connection, a.credential_enc, a.user_id, a.mtls_credential_id, a.mtls_credential_version FROM node_assignments a JOIN nodes n ON n.id = a.node_id WHERE a.user_id = $1 AND n.state NOT IN ('deleting', 'delete_failed') AND n.deployed_revision IS NOT NULL AND n.deployed_config_enc IS NOT NULL ORDER BY lower(n.name) COLLATE \"C\", n.name COLLATE \"C\", n.id")
         .bind(user_id).fetch_all(&state.pool).await?;
     let mut nodes = Vec::new();
     for row in rows {
@@ -306,15 +306,29 @@ async fn load_subscription_nodes(
             .map(|(c, k)| (Some(c), Some(k)))
             .unwrap_or((None, None));
         let name: String = row.get("name");
+        // Legacy/test rows without a snapshot retain their existing connection values.
+        let connection: Value = row.get::<Option<Value>, _>("published_connection").unwrap_or_else(|| json!({
+            "public_host": row.get::<String,_>("public_host"), "public_port": row.get::<i32,_>("public_port"),
+            "listen_addr": row.get::<String,_>("listen_addr"), "tls_sni": row.get::<Option<String>,_>("tls_sni"),
+            "tls_skip_verify": row.get::<bool,_>("tls_skip_verify")}));
+        let host = connection["public_host"]
+            .as_str()
+            .ok_or_else(ApiError::internal)?;
+        let port = connection["public_port"]
+            .as_u64()
+            .filter(|p| (1..=65535).contains(p))
+            .ok_or_else(ApiError::internal)? as u16;
+        let listen = connection["listen_addr"]
+            .as_str()
+            .ok_or_else(ApiError::internal)?;
         nodes.push(build_node(
             &name,
             &node_id,
-            &row.get::<String, _>("public_host"),
-            row.get::<i32, _>("public_port") as u16,
-            crate::config::listener_hop_ports(&row.get::<String, _>("listen_addr"))
-                .map(str::to_owned),
-            row.get("tls_sni"),
-            row.get::<bool, _>("tls_skip_verify"),
+            host,
+            port,
+            crate::config::listener_hop_ports(listen).map(str::to_owned),
+            connection["tls_sni"].as_str().map(str::to_owned),
+            connection["tls_skip_verify"].as_bool().unwrap_or(false),
             &state.secrets.decrypt(&password_enc)?,
             client_certificate,
             client_private_key,

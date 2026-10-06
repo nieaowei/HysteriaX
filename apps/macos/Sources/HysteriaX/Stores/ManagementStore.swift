@@ -17,6 +17,15 @@ private struct ClientDisplaySnapshot: Codable {
 final class ManagementStore {
     var serviceAddress = UserDefaults.standard.string(forKey: "serviceAddress") ?? ""
     var requestedSection: String?
+    var supportsDNSManagement = false
+    var dnsConnections: [DNSConnection] = []
+    var dnsZones: [DNSZone] = []
+    var dnsRecords: [DNSRecord] = []
+    var dnsUpdatedAt: Date?
+    var dnsError: String?
+    var dnsIsLoading = false
+    var dnsRequestGeneration = UUID()
+    var requestedDNSRecordID: String?
     var credentials: [CredentialSummary] = []
     var nodes: [NodeSummary] = []
     var users: [UserSummary] = []
@@ -54,6 +63,7 @@ final class ManagementStore {
         api = client
         guard restoreSnapshot else { return }
         restoreDisplaySnapshot()
+        restoreDNSSnapshot()
         currentAdminTokenID = UserDefaults.standard.string(forKey: adminTokenIDKey)
         guard client == nil else { return }
         if let token = KeychainStore.readToken(), let url = URL(string: serviceAddress), url.scheme == "https" {
@@ -89,6 +99,14 @@ final class ManagementStore {
             overviewError = nil
             supportsOverviewMonitoring = false
             supportsJobRetryLinks = false
+            supportsDNSManagement = false
+            dnsRequestGeneration = UUID()
+            dnsConnections = []
+            dnsZones = []
+            dnsRecords = []
+            dnsUpdatedAt = nil
+            dnsError = nil
+            requestedDNSRecordID = nil
             supportsNodeRecordRemoval = false
             serverMonitoring = nil
             serverMonitoringError = nil
@@ -109,6 +127,7 @@ final class ManagementStore {
         api = client
         isConnected = false
         restoreDisplaySnapshot()
+        restoreDNSSnapshot()
         let connectionGeneration = serviceGeneration
         do {
             try await loadData(using: client)
@@ -123,11 +142,13 @@ final class ManagementStore {
             errorMessage = error.localizedDescription
             throw error
         }
+        supportsDNSManagement = version.features?.contains("dns_management") == true
         supportsNodePackages = version.features?.contains("node_packages") == true
         supportsOverviewMonitoring = version.features?.contains("overview_monitoring") == true
         supportsJobRetryLinks = version.features?.contains("job_retry_links") == true
         supportsNodeRecordRemoval = version.features?.contains("node_record_removal") == true
         await refreshOverview()
+        await refreshDNS()
         startEventUpdates(using: client)
     }
 
@@ -142,6 +163,7 @@ final class ManagementStore {
             guard version.apiVersion == "1.0.0" else { throw APIClientError.incompatibleAPI(version.apiVersion) }
             try await loadData(using: api)
             guard refreshGeneration == serviceGeneration, !Task.isCancelled else { return }
+            supportsDNSManagement = version.features?.contains("dns_management") == true
             supportsNodePackages = version.features?.contains("node_packages") == true
             supportsOverviewMonitoring = version.features?.contains("overview_monitoring") == true
             supportsJobRetryLinks = version.features?.contains("job_retry_links") == true
@@ -151,6 +173,7 @@ final class ManagementStore {
             await (nodeNotifications ?? .shared).deliver(nodes: nodes, service: serviceAddress)
             await (nodeNotifications ?? .shared).deliver(credentials: credentials, service: serviceAddress)
             await refreshOverview()
+            await refreshDNS()
         } catch {
             guard refreshGeneration == serviceGeneration, !Task.isCancelled else { return }
             isConnected = false

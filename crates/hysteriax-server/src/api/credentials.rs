@@ -102,6 +102,18 @@ pub async fn list(State(state): State<AppState>) -> Result<Json<Vec<Value>>, Api
         }
     }
     for row in sqlx::query("SELECT user_id,node_id,mtls_credential_id FROM node_assignments WHERE mtls_credential_id IS NOT NULL").fetch_all(&state.pool).await? { counts.entry(row.get("mtls_credential_id")).or_default().insert(format!("assignment:{}:{}",row.get::<String,_>("user_id"),row.get::<String,_>("node_id"))); }
+    for connection in sqlx::query("SELECT id,credential_id FROM dns_connections")
+        .fetch_all(&state.pool)
+        .await?
+    {
+        counts
+            .entry(connection.get("credential_id"))
+            .or_default()
+            .insert(format!(
+                "dns_connection:{}",
+                connection.get::<String, _>("id")
+            ));
+    }
     let mut entries: Vec<Value> = rows
         .iter()
         .map(|row| {
@@ -342,6 +354,15 @@ pub async fn publish(
             count += 1;
         }
     }
+    let dns_connections = sqlx::query("SELECT id FROM dns_connections WHERE credential_id=$1")
+        .bind(&id)
+        .fetch_all(&mut *tx)
+        .await?;
+    for connection in dns_connections {
+        crate::dns::rotation::enqueue(&mut tx, &connection.get::<String, _>("id"), version, &batch)
+            .await?;
+        count += 1;
+    }
     let assignments = sqlx::query("SELECT a.node_id,a.user_id,u.revision FROM node_assignments a JOIN users u ON u.id=a.user_id WHERE a.mtls_credential_id=$1 ORDER BY a.user_id,a.node_id").bind(&id).fetch_all(&mut *tx).await?;
     for a in assignments {
         let node: String = a.get("node_id");
@@ -385,6 +406,14 @@ async fn find_references_on(
     id: &str,
 ) -> Result<Vec<Value>, ApiError> {
     let mut out = Vec::new();
+    for row in
+        sqlx::query("SELECT id,name,credential_version FROM dns_connections WHERE credential_id=$1")
+            .bind(id)
+            .fetch_all(&mut *connection)
+            .await?
+    {
+        out.push(json!({"entity_type":"dns_connection","entity_id":row.get::<String,_>("id"),"name":row.get::<String,_>("name"),"source":"dns","version":row.get::<i64,_>("credential_version")}));
+    }
     for row in sqlx::query("SELECT id,name,desired_config_enc,deployed_config_enc,ssh_credential_id,ssh_credential_version FROM nodes").fetch_all(&mut *connection).await? {
         let node:String = row.get("id"); let name:String = row.get("name");
         if row.get::<Option<String>,_>("ssh_credential_id").as_deref()==Some(id) { out.push(json!({"entity_type":"node","entity_id":node,"name":name,"source":"ssh","version":row.get::<Option<i64>,_>("ssh_credential_version")})); }
@@ -469,7 +498,7 @@ async fn batch_value(state: &AppState, id: &str) -> Result<Value, ApiError> {
         .ok_or_else(|| ApiError::not_found("credential batch"))?;
     let items=sqlx::query("SELECT i.node_id,i.user_id,i.job_id,j.status,j.stage,j.error_message,j.result_json,n.name FROM credential_batch_items i JOIN jobs j ON j.id=i.job_id LEFT JOIN nodes n ON n.id=i.node_id WHERE i.batch_id=$1 ORDER BY i.node_id,i.user_id").bind(id).fetch_all(&state.pool).await?;
     Ok(
-        json!({"id":id,"credential_id":batch.get::<String,_>("credential_id"),"version":batch.get::<i64,_>("version"),"created_at":batch.get::<DateTime<Utc>,_>("created_at"),"items":items.iter().map(|i|json!({"node_id":i.get::<String,_>("node_id"),"user_id":i.get::<String,_>("user_id"),"job_id":i.get::<String,_>("job_id"),"status":i.get::<String,_>("status"),"stage":i.get::<String,_>("stage"),"error_message":i.get::<Option<String>,_>("error_message"),"name":i.get::<Option<String>,_>("name")})).collect::<Vec<_>>()}),
+        json!({"id":id,"credential_id":batch.get::<String,_>("credential_id"),"version":batch.get::<i64,_>("version"),"created_at":batch.get::<DateTime<Utc>,_>("created_at"),"dns_items":crate::dns::rotation::batch_items(&state.pool,id).await?,"items":items.iter().map(|i|json!({"node_id":i.get::<String,_>("node_id"),"user_id":i.get::<String,_>("user_id"),"job_id":i.get::<String,_>("job_id"),"status":i.get::<String,_>("status"),"stage":i.get::<String,_>("stage"),"error_message":i.get::<Option<String>,_>("error_message"),"name":i.get::<Option<String>,_>("name")})).collect::<Vec<_>>()}),
     )
 }
 pub async fn batch(
@@ -524,6 +553,17 @@ pub async fn retry(
             enqueue_job_with_payload_in_tx(&mut tx, "credential-apply", Some(&node), None, payload)
                 .await?;
         sqlx::query("UPDATE credential_batch_items SET expected_revision=$1,job_id=$2,applied_at=NULL,apply_stage=NULL WHERE batch_id=$3 AND node_id=$4 AND user_id=$5").bind(revision).bind(job).bind(&id).bind(node).bind(user).execute(&mut *tx).await?;
+        count += 1;
+    }
+    let dns_items=sqlx::query("SELECT i.connection_id FROM dns_credential_batch_items i JOIN jobs j ON j.id=i.job_id WHERE i.batch_id=$1 AND j.status IN ('failed','cancelled')").bind(&id).fetch_all(&mut *tx).await?;
+    for item in dns_items {
+        crate::dns::rotation::enqueue(
+            &mut tx,
+            &item.get::<String, _>("connection_id"),
+            batch.get("version"),
+            &id,
+        )
+        .await?;
         count += 1;
     }
     record(

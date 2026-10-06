@@ -1,4 +1,5 @@
 pub(crate) mod credentials;
+pub(crate) mod dns;
 pub(crate) mod job_retries;
 pub(crate) mod nodes;
 pub(crate) mod resources;
@@ -33,6 +34,47 @@ pub(crate) struct AdminActor {
 
 pub fn router(state: AppState) -> Router {
     let admin = Router::new()
+        .route(
+            "/api/v1/dns/connections",
+            get(dns::list_connections).post(dns::create_connection),
+        )
+        .route(
+            "/api/v1/dns/connections/{id}",
+            get(dns::get_connection)
+                .patch(dns::patch_connection)
+                .delete(dns::delete_connection),
+        )
+        .route(
+            "/api/v1/dns/connections/{id}/verify",
+            post(dns::verify_connection),
+        )
+        .route(
+            "/api/v1/dns/connections/{id}/refresh",
+            post(dns::refresh_connection),
+        )
+        .route("/api/v1/dns/zones", get(dns::list_zones))
+        .route(
+            "/api/v1/dns/zones/{id}",
+            axum::routing::patch(dns::patch_zone),
+        )
+        .route("/api/v1/dns/zones/{id}/refresh", post(dns::refresh_zone))
+        .route(
+            "/api/v1/dns/records",
+            get(dns::list_records).post(dns::create_record),
+        )
+        .route(
+            "/api/v1/dns/records/{id}",
+            get(dns::get_record)
+                .patch(dns::update_record)
+                .delete(dns::delete_record),
+        )
+        .route("/api/v1/dns/records/{id}/check", post(dns::check_record))
+        .route(
+            "/api/v1/nodes/{id}/dns-binding",
+            get(dns::get_binding)
+                .put(dns::set_binding)
+                .delete(dns::unbind),
+        )
         .route("/api/v1/nodes", get(nodes::list).post(nodes::create))
         .route(
             "/api/v1/nodes/{id}/record",
@@ -212,7 +254,7 @@ async fn healthz() -> Json<Value> {
 async fn api_version(Extension(actor): Extension<AdminActor>) -> Json<Value> {
     Json(json!({
         "api_version": "1.0.0",
-        "features": ["node_packages", "overview_monitoring", "job_retry_links", "credentials", "node_record_removal"],
+        "features": ["node_packages", "overview_monitoring", "job_retry_links", "credentials", "node_record_removal", "dns_management"],
         "current_admin_token_id": actor.id,
         "service_version": env!("CARGO_PKG_VERSION"),
         "hysteria_version": "app/v2.12.3",
@@ -320,6 +362,9 @@ struct JobSummary {
     kind: String,
     node_id: Option<String>,
     node_name: Option<String>,
+    resource_type: Option<String>,
+    resource_id: Option<String>,
+    resource_name: Option<String>,
     target_revision: Option<i64>,
     status: String,
     stage: String,
@@ -360,6 +405,9 @@ fn job_summary(row: &sqlx::postgres::PgRow) -> JobSummary {
         kind: row.get("kind"),
         node_id: row.get("node_id"),
         node_name: row.get("node_name"),
+        resource_type: row.get("resource_type"),
+        resource_id: row.get("resource_id"),
+        resource_name: row.get("resource_name"),
         target_revision: row.get("target_revision"),
         status: row.get("status"),
         stage: row.get("stage"),

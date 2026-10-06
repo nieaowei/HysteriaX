@@ -122,7 +122,16 @@ struct CredentialManagedDetailView: View {
                                 }
                             }
                         }
-                        if batch.items.contains(where: { ["failed", "rolled_back", "cancelled"].contains($0.status) }) {
+                        ForEach(Array((batch.dnsItems ?? []).enumerated()), id: \.offset) { _, item in
+                            HStack {
+                                Button(item.name) { onJump("dns_connection", item.connectionId) }.buttonStyle(.link)
+                                Spacer()
+                                Text(JobDisplayText.status(item.status)).font(.caption)
+                                Button("查看任务") { onJump("job", item.jobId) }.buttonStyle(.link)
+                            }
+                            if let error = item.errorMessage { Text(error).font(.caption).foregroundStyle(.red) }
+                        }
+                        if batch.items.contains(where: { ["failed", "rolled_back", "cancelled"].contains($0.status) }) || (batch.dnsItems ?? []).contains(where: { ["failed", "cancelled"].contains($0.status) }) {
                             Button("重试失败项") { onRetry(batch.id) }
                                 .disabled(!isConnected || detail.archived || batch.version != detail.latestVersion)
                         }

@@ -1,6 +1,238 @@
 // Generated from openapi/openapi.yaml by scripts/generate-swift-api-models.rb. Do not edit.
 import Foundation
 
+struct DNSConnectionCreateRequest: Encodable, Sendable {
+    let name: String
+    let credentialId: String
+    let credentialVersion: Int
+
+    init(
+        name: String,
+        credentialId: String,
+        credentialVersion: Int
+    ) {
+        self.name = name
+        self.credentialId = credentialId
+        self.credentialVersion = credentialVersion
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case name
+        case credentialId = "credential_id"
+        case credentialVersion = "credential_version"
+    }
+}
+
+struct DNSConnectionPatchRequest: Encodable, Sendable {
+    let expectedRevision: Int
+    let name: String
+
+    init(
+        expectedRevision: Int,
+        name: String
+    ) {
+        self.expectedRevision = expectedRevision
+        self.name = name
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case expectedRevision = "expected_revision"
+        case name
+    }
+}
+
+struct DNSActionRequest: Encodable, Sendable {
+    let expectedRevision: Int
+    let idempotencyKey: String
+
+    init(
+        expectedRevision: Int,
+        idempotencyKey: String
+    ) {
+        self.expectedRevision = expectedRevision
+        self.idempotencyKey = idempotencyKey
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case expectedRevision = "expected_revision"
+        case idempotencyKey = "idempotency_key"
+    }
+}
+
+struct DNSZonePatchRequest: Encodable, Sendable {
+    let expectedRevision: Int
+    let enabled: Bool
+
+    init(
+        expectedRevision: Int,
+        enabled: Bool
+    ) {
+        self.expectedRevision = expectedRevision
+        self.enabled = enabled
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case expectedRevision = "expected_revision"
+        case enabled
+    }
+}
+
+struct DNSRecordCreateRequest: Encodable, Sendable {
+    let zoneId: String
+    let idempotencyKey: String
+    let record: DNSRecordInput
+
+    init(
+        zoneId: String,
+        idempotencyKey: String,
+        record: DNSRecordInput
+    ) {
+        self.zoneId = zoneId
+        self.idempotencyKey = idempotencyKey
+        self.record = record
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case zoneId = "zone_id"
+        case idempotencyKey = "idempotency_key"
+        case record
+    }
+}
+
+struct DNSRecordUpdateRequest: Encodable, Sendable {
+    let expectedRevision: Int
+    let idempotencyKey: String
+    let record: DNSRecordInput
+
+    init(
+        expectedRevision: Int,
+        idempotencyKey: String,
+        record: DNSRecordInput
+    ) {
+        self.expectedRevision = expectedRevision
+        self.idempotencyKey = idempotencyKey
+        self.record = record
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case expectedRevision = "expected_revision"
+        case idempotencyKey = "idempotency_key"
+        case record
+    }
+}
+
+struct DNSBindingSetRequest: Encodable, Sendable {
+    let expectedRevision: Int
+    let allocation: DNSAllocation
+
+    init(
+        expectedRevision: Int,
+        allocation: DNSAllocation
+    ) {
+        self.expectedRevision = expectedRevision
+        self.allocation = allocation
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case expectedRevision = "expected_revision"
+        case allocation
+    }
+}
+
+struct DNSBindingRemoveRequest: Encodable, Sendable {
+    let expectedRevision: Int
+    let idempotencyKey: String
+    let publicHost: String
+
+    init(
+        expectedRevision: Int,
+        idempotencyKey: String,
+        publicHost: String
+    ) {
+        self.expectedRevision = expectedRevision
+        self.idempotencyKey = idempotencyKey
+        self.publicHost = publicHost
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case expectedRevision = "expected_revision"
+        case idempotencyKey = "idempotency_key"
+        case publicHost = "public_host"
+    }
+}
+
+struct DNSRecordInput: Encodable, Sendable {
+    let name: String
+    let recordType: String
+    let content: String
+    let ttl: Int
+    let proxied: Bool
+
+    init(
+        name: String,
+        recordType: String,
+        content: String,
+        ttl: Int = 1,
+        proxied: Bool = false
+    ) {
+        self.name = name
+        self.recordType = recordType
+        self.content = content
+        self.ttl = ttl
+        self.proxied = proxied
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case name
+        case recordType = "record_type"
+        case content
+        case ttl
+        case proxied
+    }
+}
+
+struct DNSAllocation: Encodable, Sendable {
+    let idempotencyKey: String
+    let zoneId: String
+    let mode: String
+    let prefix: String?
+    let hostname: String?
+    let ipv4: String?
+    let ipv6: String?
+    let recordIds: [String]?
+
+    init(
+        idempotencyKey: String,
+        zoneId: String,
+        mode: String,
+        prefix: String? = nil,
+        hostname: String? = nil,
+        ipv4: String? = nil,
+        ipv6: String? = nil,
+        recordIds: [String]? = nil
+    ) {
+        self.idempotencyKey = idempotencyKey
+        self.zoneId = zoneId
+        self.mode = mode
+        self.prefix = prefix
+        self.hostname = hostname
+        self.ipv4 = ipv4
+        self.ipv6 = ipv6
+        self.recordIds = recordIds
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case idempotencyKey = "idempotency_key"
+        case zoneId = "zone_id"
+        case mode
+        case prefix
+        case hostname
+        case ipv4
+        case ipv6
+        case recordIds = "record_ids"
+    }
+}
+
 struct CredentialCreateRequest: Encodable, Sendable {
     let name: String
     let kind: String
@@ -98,6 +330,7 @@ struct NodeUsageUpdateRequest: Encodable, Sendable {
 }
 
 struct NodeCreateRequest: Encodable, Sendable {
+    let dnsAllocation: DNSAllocation?
     let package: NodePackage?
     let initialUsageBytes: Int64?
     let name: String
@@ -105,7 +338,7 @@ struct NodeCreateRequest: Encodable, Sendable {
     let sshPort: Int
     let sshUsername: String
     let sshHostFingerprint: String?
-    let publicHost: String
+    let publicHost: String?
     let publicPort: Int
     let listenAddr: String
     let trafficStatsPort: Int
@@ -117,6 +350,7 @@ struct NodeCreateRequest: Encodable, Sendable {
     let sshCredentialVersion: Int
 
     init(
+        dnsAllocation: DNSAllocation? = nil,
         package: NodePackage? = nil,
         initialUsageBytes: Int64? = nil,
         name: String,
@@ -124,7 +358,7 @@ struct NodeCreateRequest: Encodable, Sendable {
         sshPort: Int,
         sshUsername: String,
         sshHostFingerprint: String? = nil,
-        publicHost: String,
+        publicHost: String? = nil,
         publicPort: Int,
         listenAddr: String,
         trafficStatsPort: Int = 9780,
@@ -135,6 +369,7 @@ struct NodeCreateRequest: Encodable, Sendable {
         sshCredentialId: String,
         sshCredentialVersion: Int
     ) {
+        self.dnsAllocation = dnsAllocation
         self.package = package
         self.initialUsageBytes = initialUsageBytes
         self.name = name
@@ -155,6 +390,7 @@ struct NodeCreateRequest: Encodable, Sendable {
     }
 
     enum CodingKeys: String, CodingKey {
+        case dnsAllocation = "dns_allocation"
         case package
         case initialUsageBytes = "initial_usage_bytes"
         case name
@@ -569,5 +805,54 @@ enum APIEndpoints {
     }
     static func authenticateHysteriaUser(nodeID: String, nodeToken: String) -> APIOperation<AuthenticateHysteriaUserRequest, HysteriaAuthResponse> {
         APIOperation(method: "POST", path: "hy2/auth/\(nodeID)/\(nodeToken)", queryParameters: [:])
+    }
+    static let listDNSConnections: APIOperation<NoRequest, [DNSConnection]> = APIOperation<NoRequest, [DNSConnection]>(method: "GET", path: "api/v1/dns/connections", queryParameters: [:])
+    static let createDNSConnection: APIOperation<DNSConnectionCreateRequest, DNSConnection> = APIOperation<DNSConnectionCreateRequest, DNSConnection>(method: "POST", path: "api/v1/dns/connections", queryParameters: [:])
+    static func getDNSConnection(id: String) -> APIOperation<NoRequest, DNSConnection> {
+        APIOperation(method: "GET", path: "api/v1/dns/connections/\(id)", queryParameters: [:])
+    }
+    static func updateDNSConnection(id: String) -> APIOperation<DNSConnectionPatchRequest, DNSConnection> {
+        APIOperation(method: "PATCH", path: "api/v1/dns/connections/\(id)", queryParameters: [:])
+    }
+    static func deleteDNSConnection(id: String, expectedRevision: Int) -> APIOperation<NoRequest, NoResponse> {
+        APIOperation(method: "DELETE", path: "api/v1/dns/connections/\(id)", queryParameters: ["expected_revision": String(expectedRevision)])
+    }
+    static func verifyDNSConnection(id: String) -> APIOperation<DNSActionRequest, DNSActionReceipt> {
+        APIOperation(method: "POST", path: "api/v1/dns/connections/\(id)/verify", queryParameters: [:])
+    }
+    static func refreshDNSConnection(id: String) -> APIOperation<DNSActionRequest, DNSActionReceipt> {
+        APIOperation(method: "POST", path: "api/v1/dns/connections/\(id)/refresh", queryParameters: [:])
+    }
+    static let listDNSZones: APIOperation<NoRequest, [DNSZone]> = APIOperation<NoRequest, [DNSZone]>(method: "GET", path: "api/v1/dns/zones", queryParameters: [:])
+    static func updateDNSZone(id: String) -> APIOperation<DNSZonePatchRequest, DNSZone> {
+        APIOperation(method: "PATCH", path: "api/v1/dns/zones/\(id)", queryParameters: [:])
+    }
+    static func refreshDNSZone(id: String) -> APIOperation<DNSActionRequest, DNSActionReceipt> {
+        APIOperation(method: "POST", path: "api/v1/dns/zones/\(id)/refresh", queryParameters: [:])
+    }
+    static func listDNSRecords(zoneId: String? = nil) -> APIOperation<NoRequest, [DNSRecord]> {
+        APIOperation(method: "GET", path: "api/v1/dns/records", queryParameters: ["zone_id": zoneId.map { String($0) }].compactMapValues { $0 })
+    }
+    static let createDNSRecord: APIOperation<DNSRecordCreateRequest, DNSActionReceipt> = APIOperation<DNSRecordCreateRequest, DNSActionReceipt>(method: "POST", path: "api/v1/dns/records", queryParameters: [:])
+    static func getDNSRecord(id: String) -> APIOperation<NoRequest, DNSRecord> {
+        APIOperation(method: "GET", path: "api/v1/dns/records/\(id)", queryParameters: [:])
+    }
+    static func updateDNSRecord(id: String) -> APIOperation<DNSRecordUpdateRequest, DNSActionReceipt> {
+        APIOperation(method: "PATCH", path: "api/v1/dns/records/\(id)", queryParameters: [:])
+    }
+    static func deleteDNSRecord(id: String) -> APIOperation<DNSActionRequest, DNSActionReceipt> {
+        APIOperation(method: "DELETE", path: "api/v1/dns/records/\(id)", queryParameters: [:])
+    }
+    static func checkDNSRecord(id: String) -> APIOperation<DNSActionRequest, DNSActionReceipt> {
+        APIOperation(method: "POST", path: "api/v1/dns/records/\(id)/check", queryParameters: [:])
+    }
+    static func getDNSBinding(id: String) -> APIOperation<NoRequest, DNSBindingResponse> {
+        APIOperation(method: "GET", path: "api/v1/nodes/\(id)/dns-binding", queryParameters: [:])
+    }
+    static func setDNSBinding(id: String) -> APIOperation<DNSBindingSetRequest, DNSActionReceipt> {
+        APIOperation(method: "PUT", path: "api/v1/nodes/\(id)/dns-binding", queryParameters: [:])
+    }
+    static func removeDNSBinding(id: String) -> APIOperation<DNSBindingRemoveRequest, DNSActionReceipt> {
+        APIOperation(method: "DELETE", path: "api/v1/nodes/\(id)/dns-binding", queryParameters: [:])
     }
 }

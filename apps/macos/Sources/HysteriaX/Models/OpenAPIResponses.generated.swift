@@ -1,6 +1,178 @@
 // Generated from openapi/openapi.yaml by scripts/generate-swift-api-models.rb. Do not edit.
 import Foundation
 
+struct DNSConnection: Codable, Sendable, Identifiable {
+    let id: String
+    let name: String
+    let provider: String
+    let credentialId: String
+    let credentialVersion: Int
+    let revision: Int
+    let status: String
+    let verifiedAt: String?
+    let createdAt: String
+    let updatedAt: String
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case provider
+        case credentialId = "credential_id"
+        case credentialVersion = "credential_version"
+        case revision
+        case status
+        case verifiedAt = "verified_at"
+        case createdAt = "created_at"
+        case updatedAt = "updated_at"
+    }
+}
+
+struct DNSZone: Codable, Sendable, Identifiable {
+    let id: String
+    let connectionId: String
+    let providerZoneId: String
+    let name: String
+    let enabled: Bool
+    let revision: Int
+    let syncedAt: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case connectionId = "connection_id"
+        case providerZoneId = "provider_zone_id"
+        case name
+        case enabled
+        case revision
+        case syncedAt = "synced_at"
+    }
+}
+
+struct DNSRecord: Codable, Sendable, Identifiable {
+    let id: String
+    let zoneId: String
+    let providerRecordId: String?
+    let name: String
+    let recordType: String
+    let content: String
+    let ttl: Int
+    let proxied: Bool
+    let origin: String
+    let revision: Int
+    let remoteSnapshot: [String: JSONValue]?
+    let desired: [String: JSONValue]?
+    let state: String
+    let resolutionStatus: String
+    let resolutionDetail: [String: JSONValue]?
+    let boundNodeId: String?
+    let checkedAt: String?
+    let updatedAt: String
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case zoneId = "zone_id"
+        case providerRecordId = "provider_record_id"
+        case name
+        case recordType = "record_type"
+        case content
+        case ttl
+        case proxied
+        case origin
+        case revision
+        case remoteSnapshot = "remote_snapshot"
+        case desired
+        case state
+        case resolutionStatus = "resolution_status"
+        case resolutionDetail = "resolution_detail"
+        case boundNodeId = "bound_node_id"
+        case checkedAt = "checked_at"
+        case updatedAt = "updated_at"
+    }
+}
+
+struct PublishedConnection: Codable, Sendable {
+    let publicHost: String
+    let publicPort: Int
+    let listenAddress: String
+    let tlsSNI: String?
+    let tlsSkipVerify: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case publicHost = "public_host"
+        case publicPort = "public_port"
+        case listenAddress = "listen_addr"
+        case tlsSNI = "tls_sni"
+        case tlsSkipVerify = "tls_skip_verify"
+    }
+}
+
+struct DNSBinding: Codable, Sendable {
+    let nodeID: String
+    let zoneId: String
+    let hostname: String
+    let recordIds: [String]
+    let records: [DNSRecord]
+    let revision: Int
+    let publishedConnection: PublishedConnection?
+
+    enum CodingKeys: String, CodingKey {
+        case nodeID = "node_id"
+        case zoneId = "zone_id"
+        case hostname
+        case recordIds = "record_ids"
+        case records
+        case revision
+        case publishedConnection = "published_connection"
+    }
+}
+
+struct DNSBindingResponse: Codable, Sendable {
+    let binding: DNSBinding?
+
+    enum CodingKeys: String, CodingKey {
+        case binding
+    }
+}
+
+struct DNSActionReceipt: Codable, Sendable {
+    let operationId: String?
+    let jobId: String?
+    let resourceId: String?
+    let nodeID: String?
+    let hostname: String?
+    let recordIds: [String]?
+    let jobIds: [String]?
+    let recordsRetained: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case operationId = "operation_id"
+        case jobId = "job_id"
+        case resourceId = "resource_id"
+        case nodeID = "node_id"
+        case hostname
+        case recordIds = "record_ids"
+        case jobIds = "job_ids"
+        case recordsRetained = "records_retained"
+    }
+}
+
+struct DNSCredentialBatchItem: Codable, Sendable {
+    let connectionId: String
+    let jobId: String
+    let name: String
+    let status: String
+    let stage: String
+    let errorMessage: String?
+
+    enum CodingKeys: String, CodingKey {
+        case connectionId = "connection_id"
+        case jobId = "job_id"
+        case name
+        case status
+        case stage
+        case errorMessage = "error_message"
+    }
+}
+
 struct CredentialSummary: Codable, Sendable, Identifiable {
     let referenceCount: Int?
     let id: String
@@ -130,6 +302,7 @@ struct CredentialReceipt: Codable, Sendable {
 }
 
 struct CredentialBatch: Codable, Sendable, Identifiable {
+    let dnsItems: [DNSCredentialBatchItem]?
     let id: String
     let credentialId: String
     let version: Int
@@ -137,6 +310,7 @@ struct CredentialBatch: Codable, Sendable, Identifiable {
     let items: [CredentialBatchItem]
 
     enum CodingKeys: String, CodingKey {
+        case dnsItems = "dns_items"
         case id
         case credentialId = "credential_id"
         case version
@@ -250,6 +424,8 @@ struct NodeUsageUpdateResponse: Codable, Sendable {
 }
 
 struct NodeSummary: Codable, Sendable, Identifiable {
+    let publishedConnection: PublishedConnection?
+    let dnsBinding: DNSBinding?
     let package: NodePackage?
     let packageUsage: NodePackageUsage?
     let id: String
@@ -265,6 +441,8 @@ struct NodeSummary: Codable, Sendable, Identifiable {
     let proxyProbeUrl: String?
 
     enum CodingKeys: String, CodingKey {
+        case publishedConnection = "published_connection"
+        case dnsBinding = "dns_binding"
         case package
         case packageUsage = "package_usage"
         case id
@@ -318,6 +496,8 @@ struct NodeConnectionDetail: Codable, Sendable {
 }
 
 struct NodeDetail: Codable, Sendable, Identifiable {
+    let publishedConnection: PublishedConnection?
+    let dnsBinding: DNSBinding?
     let package: NodePackage?
     let packageUsage: NodePackageUsage?
     let id: String
@@ -340,6 +520,8 @@ struct NodeDetail: Codable, Sendable, Identifiable {
     let updatedAt: String
 
     enum CodingKeys: String, CodingKey {
+        case publishedConnection = "published_connection"
+        case dnsBinding = "dns_binding"
         case package
         case packageUsage = "package_usage"
         case id
@@ -436,6 +618,9 @@ struct JobResult: Codable, Sendable {
 }
 
 struct JobSummary: Codable, Sendable, Identifiable {
+    let resourceType: String?
+    let resourceId: String?
+    let resourceName: String?
     let id: String
     let kind: String
     let nodeID: String?
@@ -453,6 +638,9 @@ struct JobSummary: Codable, Sendable, Identifiable {
     let finishedAt: String?
 
     enum CodingKeys: String, CodingKey {
+        case resourceType = "resource_type"
+        case resourceId = "resource_id"
+        case resourceName = "resource_name"
         case id
         case kind
         case nodeID = "node_id"
@@ -776,12 +964,14 @@ struct HysteriaAuthResponse: Codable, Sendable {
 }
 
 struct CreatedEntity: Codable, Sendable {
+    let dnsAllocation: DNSActionReceipt?
     let id: String?
     let revision: Int?
     let nodeAuthToken: String?
     let node: NodeReceipt?
 
     enum CodingKeys: String, CodingKey {
+        case dnsAllocation = "dns_allocation"
         case id
         case revision
         case nodeAuthToken = "node_auth_token"

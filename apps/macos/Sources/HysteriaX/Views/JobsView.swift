@@ -3,6 +3,14 @@ import SwiftUI
 enum JobDisplayText {
     static func kind(_ value: String) -> String {
         switch value {
+        case "dns-verify": "验证 DNS 连接"
+        case "dns-connection-refresh": "刷新 DNS 域名"
+        case "dns-zone-refresh": "刷新 DNS 记录"
+        case "dns-record-create": "创建 DNS 记录"
+        case "dns-record-update": "修改 DNS 记录"
+        case "dns-record-delete": "删除 DNS 记录"
+        case "dns-record-check": "验证 DNS 解析"
+        case "dns-credential-apply": "更新 DNS 连接凭据"
         case "ssh-test": "SSH 测试"
         case "credential-apply": "应用凭据"
         case "deploy": "部署"
@@ -64,6 +72,8 @@ enum JobDisplayText {
             "node_deleting": "删除节点中",
             "node_removed": "管理记录已移除",
             "superseded": "已被新任务替代",
+            "dns_completed": "DNS 操作完成",
+            "dns_propagation_wait": "等待 DNS 解析更新",
             "failed": "失败",
         ]
         return labels[value] ?? value
@@ -110,7 +120,7 @@ enum DateDisplayText {
 }
 
 private extension JobSummary {
-    var displayNodeName: String { nodeName ?? nodeID ?? "—" }
+    var displayNodeName: String { resourceName ?? nodeName ?? nodeID ?? "—" }
     var localizedKind: String { JobDisplayText.kind(kind) }
     var localizedStatus: String { JobDisplayText.status(status) }
     var localizedStage: String { JobDisplayText.stage(stage) }
@@ -258,7 +268,7 @@ struct JobsView: View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
             VStack(alignment: .leading, spacing: 4) {
                 Text(JobDisplayText.kind(job.kind)).font(.headline)
-                Text(job.nodeName ?? job.nodeID ?? "未关联节点")
+                Text(job.resourceName ?? job.nodeName ?? job.nodeID ?? "未关联节点")
                     .font(.callout).foregroundStyle(.secondary).lineLimit(2).textSelection(.enabled)
             }
             Text(JobDisplayText.status(job.status))
@@ -274,6 +284,11 @@ struct JobsView: View {
             if let retryID = job.retryJobId {
                 Button("查看重试任务") { selectedJobID = retryID }
                     .accessibilityIdentifier("jobs.retryLink.\(job.id)")
+            }
+            if job.kind.hasPrefix("dns-"), job.kind != "dns-credential-apply", job.status == "failed", job.retryJobId == nil {
+                Button("重试 DNS 操作") {
+                    Task { do { try await store.retryDNSJob(job) } catch { actionError = error.localizedDescription } }
+                }.disabled(!store.isConnected || !store.supportsDNSManagement)
             }
             if let action = retryAction(for: job),
                let node = store.nodes.first(where: { $0.id == job.nodeID }) {

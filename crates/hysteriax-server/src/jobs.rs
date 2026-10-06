@@ -103,7 +103,7 @@ async fn recover_interrupted(pool: &PgPool) -> Result<(), sqlx::Error> {
 async fn claim_next(pool: &PgPool) -> Result<Option<JobInput>, sqlx::Error> {
     let timestamp = now();
     let mut tx = db::begin_write(pool).await?;
-    let row = sqlx::query("UPDATE jobs SET status = 'running', stage = 'starting', attempts = attempts + 1, started_at = COALESCE(started_at, $1), updated_at = $2 WHERE id = (SELECT candidate.id FROM jobs AS candidate WHERE candidate.status = 'queued' AND candidate.available_at <= $3 AND (candidate.node_id IS NULL OR NOT EXISTS (SELECT 1 FROM jobs AS active WHERE active.node_id = candidate.node_id AND active.status = 'running')) ORDER BY candidate.available_at, candidate.created_at, candidate.id LIMIT 1) RETURNING id, kind, node_id, target_revision, payload_json, attempts")
+    let row = sqlx::query("UPDATE jobs SET status = 'running', stage = 'starting', attempts = attempts + 1, started_at = COALESCE(started_at, $1), updated_at = $2 WHERE id = (SELECT candidate.id FROM jobs AS candidate WHERE candidate.status = 'queued' AND candidate.available_at <= $3 AND (candidate.node_id IS NULL OR NOT EXISTS (SELECT 1 FROM jobs AS active WHERE active.node_id = candidate.node_id AND active.status = 'running')) AND (candidate.kind NOT IN ('deploy','sync','rollback') OR NOT EXISTS (SELECT 1 FROM jobs AS dependency WHERE dependency.node_id=candidate.node_id AND dependency.kind LIKE 'dns-%' AND dependency.status IN ('queued','running'))) AND (candidate.resource_key IS NULL OR NOT EXISTS (SELECT 1 FROM jobs AS resource_active WHERE resource_active.resource_key=candidate.resource_key AND resource_active.status='running')) ORDER BY candidate.available_at, candidate.created_at, candidate.id LIMIT 1) RETURNING id, kind, node_id, target_revision, payload_json, attempts")
         .bind(timestamp).bind(timestamp).bind(timestamp).fetch_optional(&mut *tx).await?;
     let job = if let Some(row) = row {
         let job = JobInput {
@@ -180,6 +180,10 @@ async fn execute_one(state: AppState, job: JobInput) {
         }
         Err(error) => {
             let message = safe_error(&state.pool, &state.secrets, &job, &error).await;
+            let mut job = job;
+            if let Some(delay) = crate::dns::provider::retry_delay(&error) {
+                job.payload["dns_retry_after"] = json!(delay);
+            }
             let retry = deployment::retryable(&error)
                 && if job.kind == "kick" {
                     crate::kick_requests::retry_delay(job.attempts).is_some()
@@ -235,6 +239,13 @@ async fn succeed(pool: &PgPool, job: &JobInput, output: JobOutput) -> Result<(),
         {
             sqlx::query("UPDATE nodes SET state = CASE WHEN state IN ('deleting', 'delete_failed') THEN state ELSE $1 END, deployed_revision = $2, deployed_config_enc = $3, deployed_content_sha256 = $4, last_seen_at = $5, updated_at = $6 WHERE id = $7")
                 .bind(state).bind(revision).bind(config).bind(output.deployed_sha256.as_deref()).bind(timestamp).bind(timestamp).bind(node_id).execute(&mut *tx).await?;
+            if let Some(connection) = &output.published_connection {
+                sqlx::query("UPDATE nodes SET published_connection=$1 WHERE id=$2")
+                    .bind(connection)
+                    .bind(node_id)
+                    .execute(&mut *tx)
+                    .await?;
+            }
             sqlx::query("UPDATE config_versions SET deployed_success = TRUE WHERE node_id = $1 AND revision = $2")
                 .bind(node_id).bind(revision).execute(&mut *tx).await?;
         } else {
@@ -302,6 +313,11 @@ async fn fail(
     let (status, stage, available_at, finished_at, event_name) = if retry {
         let delay = if job.kind == "kick" {
             crate::kick_requests::retry_delay(job.attempts).unwrap_or(300)
+        } else if job.kind.starts_with("dns-") {
+            job.payload["dns_retry_after"]
+                .as_i64()
+                .unwrap_or(30 * job.attempts)
+                .max(30)
         } else {
             30
         };
@@ -358,7 +374,11 @@ async fn fail(
             Some("fingerprint_changed")
         } else if message.contains("changed outside HysteriaX") {
             Some("drift")
-        } else if !retry && job.kind != "ssh-test" && job.kind != "kick" {
+        } else if !retry
+            && job.kind != "ssh-test"
+            && job.kind != "kick"
+            && !job.kind.starts_with("dns-")
+        {
             Some("sync_failed")
         } else {
             None
@@ -372,6 +392,10 @@ async fn fail(
                 .execute(&mut *tx)
                 .await?;
         }
+    }
+    if job.kind.starts_with("dns-record-") && job.kind != "dns-record-check" {
+        sqlx::query("UPDATE dns_records SET state=$1,updated_at=now() WHERE id=(SELECT resource_id FROM dns_operations WHERE id=$2) AND desired IS NOT NULL")
+            .bind(if retry { "pending" } else { "failed" }).bind(job.payload["dns_operation_id"].as_str()).execute(&mut *tx).await?;
     }
     if !retry {
         crate::kick_requests::finish(&mut tx, job, stage).await?;
@@ -579,6 +603,7 @@ mod tests {
             deployed_revision: None,
             deployed_config: None,
             deployed_sha256: None,
+            published_connection: None,
             delete_node: false,
         };
         super::succeed(&state.pool, &job, output).await.unwrap();
@@ -888,5 +913,114 @@ mod tests {
             assert!(!safe.contains(value), "job error leaked a secret: {value}");
         }
         assert!(safe.contains("[redacted]"));
+    }
+}
+
+#[cfg(test)]
+mod dns_job_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[tokio::test]
+    async fn dns_jobs_serialize_by_zone_and_deployments_wait_for_dns_dependencies() {
+        let (state, ssh, connection, zone) = crate::dns::tests::fixture().await;
+        let node = crate::dns::tests::node(&state, &ssh).await;
+        let mut tx = crate::db::begin_write(&state.pool).await.unwrap();
+        let deploy = crate::api::enqueue_job_in_tx(&mut tx, "deploy", Some(&node), Some(1))
+            .await
+            .unwrap();
+        let mut jobs = Vec::new();
+        for index in 0..2 {
+            let key = format!("zone-job:{index}");
+            let receipt = crate::dns::enqueue(
+                &mut tx,
+                crate::dns::Operation {
+                    key: &key,
+                    request: &json!({"index":index}),
+                    connection: &connection,
+                    version: 1,
+                    resource_type: "dns_zone",
+                    resource: &zone,
+                    resource_name: "example.test",
+                    resource_key: format!("dns-zone:{zone}"),
+                    action: "zone-refresh",
+                    payload: json!({}),
+                    node: Some(&node),
+                },
+            )
+            .await
+            .unwrap();
+            jobs.push(receipt["job_id"].as_str().unwrap().to_owned());
+        }
+        tx.commit().await.unwrap();
+        let first = claim_next(&state.pool).await.unwrap().unwrap();
+        assert_eq!(first.id, jobs[0]);
+        assert!(claim_next(&state.pool).await.unwrap().is_none());
+        sqlx::query("UPDATE jobs SET status='succeeded' WHERE id=$1")
+            .bind(&first.id)
+            .execute(&state.pool)
+            .await
+            .unwrap();
+        let second = claim_next(&state.pool).await.unwrap().unwrap();
+        assert_eq!(second.id, jobs[1]);
+        sqlx::query("UPDATE jobs SET status='succeeded' WHERE id=$1")
+            .bind(&second.id)
+            .execute(&state.pool)
+            .await
+            .unwrap();
+        assert_eq!(claim_next(&state.pool).await.unwrap().unwrap().id, deploy);
+    }
+
+    #[tokio::test]
+    async fn successful_deployment_publishes_executed_connection_and_cancelled_result_cannot_publish()
+     {
+        let (state, ssh, _, _) = crate::dns::tests::fixture().await;
+        let node = crate::dns::tests::node(&state, &ssh).await;
+        let mut tx = crate::db::begin_write(&state.pool).await.unwrap();
+        crate::api::enqueue_job_in_tx(&mut tx, "deploy", Some(&node), Some(1))
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        let job = claim_next(&state.pool).await.unwrap().unwrap();
+        let connection = json!({"public_host":"old.example.test","public_port":443,"listen_addr":":443","tls_sni":null,"tls_skip_verify":false});
+        sqlx::query("UPDATE nodes SET public_host='concurrent.example.test' WHERE id=$1")
+            .bind(&node)
+            .execute(&state.pool)
+            .await
+            .unwrap();
+        let output = || JobOutput {
+            stage: "health_checked".into(),
+            result: json!({}),
+            node_state: Some("deployed".into()),
+            deployed_revision: Some(1),
+            deployed_config: Some(state.secrets.encrypt("{}").unwrap()),
+            deployed_sha256: Some("digest".into()),
+            published_connection: Some(connection.clone()),
+            delete_node: false,
+        };
+        succeed(&state.pool, &job, output()).await.unwrap();
+        assert_eq!(
+            sqlx::query_scalar::<_, Option<serde_json::Value>>(
+                "SELECT published_connection FROM nodes WHERE id=$1"
+            )
+            .bind(&node)
+            .fetch_one(&state.pool)
+            .await
+            .unwrap(),
+            Some(connection.clone())
+        );
+        let mut stale = output();
+        stale.published_connection = Some(json!({"public_host":"stale.example.test"}));
+        succeed(&state.pool, &job, stale).await.unwrap();
+        assert_eq!(
+            sqlx::query_scalar::<_, Option<serde_json::Value>>(
+                "SELECT published_connection FROM nodes WHERE id=$1"
+            )
+            .bind(&node)
+            .fetch_one(&state.pool)
+            .await
+            .unwrap(),
+            Some(connection)
+        );
     }
 }

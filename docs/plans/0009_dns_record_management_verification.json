@@ -1,0 +1,41 @@
+{
+  "date": "2026-10-06",
+  "service": "https://hysteriax.cc",
+  "image": "nieaowei/hysteriax-server:dns-management-20261006-145940",
+  "digest": "sha256:fcee7928f122179b67472a3a1b9beac07fc93ff6a71ba0b57cdf2cd85af23707",
+  "rust_tests": 144,
+  "rust_failures": 0,
+  "client_checks": [
+    "dns",
+    "acme_dns",
+    "subscriptions",
+    "node_packages"
+  ],
+  "macos_build_and_launch": "passed",
+  "ui_result_bundle": "apps/macos/.build/dns-ui-1791269299.xcresult",
+  "ui_scenarios": [
+    "record_table_selection",
+    "record_editor",
+    "connections_and_zones",
+    "node_address_modes",
+    "automatic_allocation_fields",
+    "separate_acme_uses_allocated_domain"
+  ],
+  "live_checks": [
+    "Cloudflare credential/zone discovery and record refresh",
+    "real A/AAAA/CNAME creation, idempotency and authoritative/recursive DNS checks",
+    "real Cloudflare record update",
+    "automatic node allocation is idempotent and does not enable ACME",
+    "separate ACME proxy configuration, first deployment and endpoint publication",
+    "subscription and real public UDP/TLS proxy transfer on allocated hostname",
+    "manual existing-record reassignment and published subscription transfer",
+    "explicit rollback publishes the historical hostname and remains reachable",
+    "sync restores the desired domain after rollback",
+    "certificate-mismatched domain switch retains working published subscription",
+    "domain recovery after failed switch",
+    "manual domain allocation during node creation",
+    "queued DNS write survives real service restart"
+  ],
+  "cleanup": "verified",
+  "ipv6_proxy_traffic": "not exercised: test host has no public IPv6; AAAA provider and resolution checks passed"
+}

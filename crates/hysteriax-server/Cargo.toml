@@ -19,8 +19,9 @@ chrono.workspace = true
 chrono-tz = "0.10"
 futures-core.workspace = true
 hex.workspace = true
+hickory-proto = "0.24"
 rand.workspace = true
-reqwest.workspace = true
+reqwest = { workspace = true, features = ["json"] }
 rustls.workspace = true
 rustls-pemfile.workspace = true
 russh.workspace = true

@@ -1,12 +1,13 @@
 import SwiftUI
 
 private enum MainSection: String, CaseIterable, Identifiable {
-    case overview, nodes, users, credentials, jobs, audit
+    case overview, nodes, dns, users, credentials, jobs, audit
 
     var id: String { rawValue }
     var title: String {
         switch self {
         case .overview: "概览"
+        case .dns: "DNS 记录"
         case .nodes: "节点"
         case .users: "用户"
         case .credentials: "凭据"
@@ -17,6 +18,7 @@ private enum MainSection: String, CaseIterable, Identifiable {
     var pageTitle: String {
         switch self {
         case .overview: "HysteriaX 管理中心"
+        case .dns: "DNS 记录"
         case .nodes: "节点"
         case .users: "用户"
         case .credentials: "凭据"
@@ -27,6 +29,7 @@ private enum MainSection: String, CaseIterable, Identifiable {
     var pageAccessibilityIdentifier: String {
         switch self {
         case .overview: "overview.page"
+        case .dns: "dns.page"
         case .nodes: "nodes.title"
         case .users: "users.title"
         case .credentials: "credentials.page"
@@ -37,6 +40,7 @@ private enum MainSection: String, CaseIterable, Identifiable {
     var symbol: String {
         switch self {
         case .overview: "square.grid.2x2"
+        case .dns: "network"
         case .nodes: "server.rack"
         case .users: "person.2"
         case .credentials: "key.horizontal"
@@ -62,6 +66,8 @@ struct ContentView: View {
         switch currentSection {
         case .overview:
             store.lastUpdated.map { "数据更新于 \($0.formatted(date: .abbreviated, time: .shortened))" } ?? "连接管理服务以读取最新状态"
+        case .dns:
+            "管理域名解析记录和节点域名分配。"
         case .nodes:
             "管理 SSH 连接、Hysteria 配置和部署状态。"
         case .users:
@@ -135,11 +141,16 @@ struct ContentView: View {
             selectedSection = destination.section
         }
         case .nodes: NodesView(store: store, initialSelection: overviewDestination?.section == "nodes" ? overviewDestination?.entityID : nil, onInitialSelectionHandled: { overviewDestination = nil })
+        case .dns: DNSRecordsView(store: store)
         case .users: UsersView(store: store, initialSelection: overviewDestination?.section == "users" ? overviewDestination?.entityID : nil, onInitialSelectionHandled: { overviewDestination = nil })
         case .jobs: JobsView(store: store, initialSelection: overviewDestination?.section == "jobs" ? overviewDestination?.entityID : nil, onInitialSelectionHandled: { overviewDestination = nil })
         case .credentials: CredentialsView(store: store) { type, id in
-            overviewDestination = OverviewDestination(section: type == "user" ? "users" : type == "job" ? "jobs" : "nodes", entityID: id)
-            selectedSection = type == "user" ? "users" : type == "job" ? "jobs" : "nodes"
+            if type == "dns_connection" {
+                selectedSection = "dns"
+            } else {
+                overviewDestination = OverviewDestination(section: type == "user" ? "users" : type == "job" ? "jobs" : "nodes", entityID: id)
+                selectedSection = type == "user" ? "users" : type == "job" ? "jobs" : "nodes"
+            }
         }
         case .audit: AuditView(store: store)
         }

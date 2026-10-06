@@ -4,7 +4,7 @@ use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use sqlx::Row;
@@ -25,7 +25,7 @@ use crate::{
     state::AppState,
 };
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct CreateNode {
     package: Option<crate::node_limits::Package>,
@@ -37,7 +37,9 @@ pub struct CreateNode {
     ssh_credential_id: String,
     ssh_credential_version: i64,
     ssh_host_fingerprint: Option<String>,
+    #[serde(default)]
     public_host: String,
+    dns_allocation: Option<crate::dns::binding::Allocation>,
     public_port: u16,
     listen_addr: String,
     #[serde(default = "default_traffic_stats_port")]
@@ -109,8 +111,39 @@ pub async fn get(
 
 pub async fn create(
     State(state): State<AppState>,
-    Json(input): Json<CreateNode>,
+    Json(mut input): Json<CreateNode>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
+    let allocation_request = serde_json::to_value(&input).map_err(|_| ApiError::internal())?;
+    if let Some(allocation) = &input.dns_allocation {
+        let mut tx = db::begin_write(&state.pool).await?;
+        let previous = crate::dns::existing_operation(
+            &mut tx,
+            &allocation.idempotency_key,
+            &allocation_request,
+        )
+        .await?;
+        tx.commit().await?;
+        if let Some(previous) = previous {
+            let node_id = previous["resource_id"]
+                .as_str()
+                .ok_or_else(ApiError::internal)?;
+            let Json(node) = get(State(state.clone()), Path(node_id.to_owned())).await?;
+            return Ok((
+                StatusCode::OK,
+                Json(
+                    json!({"node":node,"note":"Node already created; authentication token is not reissued."}),
+                ),
+            ));
+        }
+    }
+    let id = Uuid::new_v4().to_string();
+    let prepared = if let Some(allocation) = &input.dns_allocation {
+        let prepared = crate::dns::binding::prepare(&state, &id, allocation).await?;
+        input.public_host = prepared.hostname.clone();
+        Some(prepared)
+    } else {
+        None
+    };
     if input.initial_usage_bytes.is_some_and(|x| x < 0) {
         return Err(ApiError::bad_request("initial usage must be nonnegative"));
     }
@@ -133,7 +166,6 @@ pub async fn create(
         false,
     )
     .await?;
-    let id = Uuid::new_v4().to_string();
     crate::credentials::require_managed_config(&input.config)
         .map_err(|e| ApiError::bad_request(e.to_string()))?;
     let (resolved, _) =
@@ -163,6 +195,32 @@ pub async fn create(
     let digest = hex::encode(Sha256::digest(deployment_snapshot_json.as_bytes()));
 
     let mut tx = db::begin_write(&state.pool).await?;
+    if let Some(allocation) = &input.dns_allocation
+        && let Some(previous) = crate::dns::existing_operation(
+            &mut tx,
+            &allocation.idempotency_key,
+            &allocation_request,
+        )
+        .await?
+    {
+        tx.commit().await?;
+        let Json(node) = get(
+            State(state.clone()),
+            Path(
+                previous["resource_id"]
+                    .as_str()
+                    .ok_or_else(ApiError::internal)?
+                    .to_owned(),
+            ),
+        )
+        .await?;
+        return Ok((
+            StatusCode::OK,
+            Json(
+                json!({"node":node,"note":"Node already created; authentication token is not reissued."}),
+            ),
+        ));
+    }
     crate::credentials::check_bindings(
         &mut tx,
         &input.config,
@@ -193,6 +251,21 @@ pub async fn create(
     sqlx::query("INSERT INTO config_versions (id, node_id, revision, config_enc, content_sha256, created_at) VALUES ($1, $2, 1, $3, $4, $5)")
         .bind(Uuid::new_v4().to_string()).bind(&id).bind(state.secrets.encrypt(&deployment_snapshot_json)?).bind(digest).bind(now)
         .execute(&mut *tx).await?;
+    let dns_result = if let (Some(allocation), Some(prepared)) = (&input.dns_allocation, &prepared)
+    {
+        Some(
+            crate::dns::binding::bind_in_tx(
+                &mut tx,
+                &id,
+                allocation,
+                prepared,
+                &allocation_request,
+            )
+            .await?,
+        )
+    } else {
+        None
+    };
     sqlx::query("INSERT INTO audit_records (id, actor, action, entity_type, entity_id, detail_json, created_at) VALUES ($1, 'admin', 'node.created', 'node', $2, $3, $4)")
         .bind(Uuid::new_v4().to_string()).bind(&id).bind(json!({"name": input.name.trim(), "package": input.package, "initial_usage_bytes": input.initial_usage_bytes.unwrap_or(0)})).bind(now)
         .execute(&mut *tx).await?;
@@ -203,6 +276,7 @@ pub async fn create(
         Json(json!({
             "node": {"id": id, "name": input.name.trim(), "revision": 1, "state": "new", "traffic_stats_port": input.traffic_stats_port, "proxy_probe_url": proxy_probe_url},
             "node_auth_token": token,
+            "dns_allocation": dns_result,
             "note": "The node token is shown once here and is stored encrypted for server configuration generation."
         })),
     ))
@@ -265,6 +339,17 @@ pub async fn patch(
     let public_host: String = input
         .public_host
         .unwrap_or_else(|| current.get("public_host"));
+    let connection_changed = public_host != current.get::<String, _>("public_host")
+        || input
+            .public_port
+            .is_some_and(|p| i32::from(p) != current.get::<i32, _>("public_port"))
+        || input
+            .tls_sni
+            .as_ref()
+            .is_some_and(|s| Some(s) != current.get::<Option<String>, _>("tls_sni").as_ref())
+        || input
+            .tls_skip_verify
+            .is_some_and(|v| v != current.get::<bool, _>("tls_skip_verify"));
     let public_port: u16 = input
         .public_port
         .unwrap_or_else(|| current.get::<i32, _>("public_port") as u16);
@@ -384,6 +469,16 @@ pub async fn patch(
     )
     .await
     .map_err(|e| ApiError::conflict(e.to_string()))?;
+    let bound: Option<String> =
+        sqlx::query_scalar("SELECT hostname FROM dns_bindings WHERE node_id=$1")
+            .bind(&id)
+            .fetch_optional(&mut *tx)
+            .await?;
+    if bound.as_ref().is_some_and(|host| host != &public_host) {
+        return Err(ApiError::conflict(
+            "use the DNS binding operation to reassign or unbind the node domain",
+        ));
+    }
     let m_tls_enabled = config
         .get("tls")
         .and_then(Value::as_object)
@@ -419,8 +514,11 @@ pub async fn patch(
     if let Some(package) = &input.package {
         crate::node_limits::save(&mut tx, &id, package).await?;
     }
-    let sync_required =
-        config_changed || listener_changed || proxy_probe_url_changed || traffic_stats_port_changed;
+    let sync_required = config_changed
+        || connection_changed
+        || listener_changed
+        || proxy_probe_url_changed
+        || traffic_stats_port_changed;
     if sync_required {
         supersede_queued_syncs_in_tx(&mut tx, &id).await?;
         enqueue_job_in_tx(&mut tx, "sync", Some(&id), Some(next_revision)).await?;
@@ -456,11 +554,18 @@ pub async fn remove_record(
     }
     // Cancelling the local future cannot retract an already-issued remote script.
     // Wait for these operations before promising a record-only removal.
-    let mutating: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM jobs WHERE node_id=$1 AND status='running' AND kind IN ('deploy','sync','rollback','uninstall','credential-apply'))")
+    let mutating: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM jobs WHERE node_id=$1 AND status='running' AND (kind IN ('deploy','sync','rollback','uninstall','credential-apply') OR kind LIKE 'dns-%'))")
         .bind(&id).fetch_one(&mut *tx).await?;
     if mutating {
         return Err(ApiError::conflict(
             "a remote deployment, uninstall or credential update is still running; wait for it to finish before removing the node record",
+        ));
+    }
+    let unresolved_dns: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM jobs j JOIN dns_operations o ON o.job_id=j.id WHERE j.node_id=$1 AND o.applied_at IS NULL AND o.action IN ('record-create','record-update','record-delete') AND j.status IN ('running','failed','queued'))")
+        .bind(&id).fetch_one(&mut *tx).await?;
+    if unresolved_dns {
+        return Err(ApiError::conflict(
+            "finish or reconcile pending DNS writes before removing the node record",
         ));
     }
     let cancelled = sqlx::query("UPDATE jobs SET status='cancelled',stage='node_removed',updated_at=now(),finished_at=now() WHERE node_id=$1 AND status IN ('queued','running') RETURNING id,kind")
@@ -511,6 +616,13 @@ pub async fn delete(
     }
     let deployed_revision: Option<i64> = node.get("deployed_revision");
     let mut tx = db::begin_write(&state.pool).await?;
+    let unresolved_dns: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM jobs j JOIN dns_operations o ON o.job_id=j.id WHERE j.node_id=$1 AND o.applied_at IS NULL AND o.action IN ('record-create','record-update','record-delete') AND j.status IN ('running','failed','queued'))")
+        .bind(&id).fetch_one(&mut *tx).await?;
+    if unresolved_dns {
+        return Err(ApiError::conflict(
+            "finish or reconcile pending DNS writes before deleting the node",
+        ));
+    }
     let node_state: String = sqlx::query_scalar("SELECT state FROM nodes WHERE id = $1")
         .bind(&id)
         .fetch_one(&mut *tx)
@@ -774,6 +886,8 @@ async fn node_json(state: &AppState, row: &sqlx::postgres::PgRow) -> Result<Valu
         "package": package, "package_usage": package_usage,
         "id": node_id, "name": row.get::<String, _>("name"),
         "ssh": {"host": row.get::<String, _>("ssh_host"), "port": row.get::<i32, _>("ssh_port"), "username": row.get::<String, _>("ssh_username"), "auth_type": if credential_kind == "ssh_password" { "password" } else { "private_key" }, "credential_id": row.get::<String,_>("ssh_credential_id"), "credential_version": row.get::<i64,_>("ssh_credential_version"), "secret_configured": true, "host_fingerprint": row.get::<Option<String>, _>("ssh_host_fingerprint")},
+        "published_connection": row.get::<Option<Value>,_>("published_connection"),
+        "dns_binding": crate::api::dns::binding_summary(&state.pool, &node_id).await?,
         "public": {"host": row.get::<String, _>("public_host"), "port": row.get::<i32, _>("public_port"), "listen_addr": row.get::<String, _>("listen_addr"), "tls_sni": row.get::<Option<String>, _>("tls_sni"), "skip_cert_verify": row.get::<bool, _>("tls_skip_verify")},
         "traffic_stats_port": traffic_stats_port,
         "config": config, "yaml_preview": yaml_preview,

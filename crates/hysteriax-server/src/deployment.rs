@@ -39,6 +39,7 @@ pub struct JobOutput {
     pub deployed_revision: Option<i64>,
     pub deployed_config: Option<String>,
     pub deployed_sha256: Option<String>,
+    pub published_connection: Option<Value>,
     pub delete_node: bool,
 }
 
@@ -58,6 +59,9 @@ pub async fn run_job(pool: &PgPool, secrets: &SecretBox, job: &JobInput) -> Resu
             bail!("credential deployment superseded; retry the latest credential batch");
         }
     }
+    if job.kind.starts_with("dns-") {
+        return crate::dns::worker::execute(pool, secrets, job).await;
+    }
     match job.kind.as_str() {
         "credential-apply" => crate::credentials::worker::apply(pool, secrets, job).await,
         "ssh-test" => ssh_test(pool, secrets, job).await,
@@ -69,6 +73,9 @@ pub async fn run_job(pool: &PgPool, secrets: &SecretBox, job: &JobInput) -> Resu
 }
 
 pub fn retryable(error: &anyhow::Error) -> bool {
+    if crate::dns::provider::retry_delay(error).is_some() {
+        return true;
+    }
     error.chain().any(|cause| {
         cause.downcast_ref::<ssh::SshError>().is_some_and(|error| {
             matches!(
@@ -169,6 +176,7 @@ async fn ssh_test(pool: &PgPool, secrets: &SecretBox, job: &JobInput) -> Result<
                 deployed_revision: None,
                 deployed_config: None,
                 deployed_sha256: None,
+                published_connection: None,
                 delete_node: false,
             })
         }
@@ -201,6 +209,7 @@ async fn ssh_test(pool: &PgPool, secrets: &SecretBox, job: &JobInput) -> Result<
                 deployed_revision: None,
                 deployed_config: None,
                 deployed_sha256: None,
+                published_connection: None,
                 delete_node: false,
             })
         }
@@ -276,6 +285,11 @@ async fn deploy_with_probe(
         crate::api::resources::resolve_config_resources(pool, secrets, node_id, &options)
             .await
             .map_err(|error| anyhow::anyhow!(error.message))?;
+    let target_host = snapshot["public_host"]
+        .as_str()
+        .context("deployment snapshot host is missing")?;
+    crate::dns::binding::ensure_ready(pool, secrets, node_id, target_host, job.kind == "rollback")
+        .await?;
     let listen_addr = snapshot
         .get("listen_addr")
         .and_then(Value::as_str)
@@ -494,8 +508,12 @@ async fn deploy_with_probe(
     let mut health_failure = health_check.err().map(|error| error.to_string());
     let mut proxy_probe_result = None;
     if healthy {
-        let public_host: String = row.get("public_host");
-        let tls_sni: Option<String> = row.get("tls_sni");
+        let connection = connection_snapshot(&snapshot)?;
+        let public_host = connection["public_host"]
+            .as_str()
+            .context("missing snapshot host")?
+            .to_owned();
+        let tls_sni = connection["tls_sni"].as_str().map(str::to_owned);
         report_progress(
             pool,
             job,
@@ -612,6 +630,7 @@ async fn deploy_with_probe(
         deployed_revision: Some(revision),
         deployed_config: Some(deployed_config),
         deployed_sha256: Some(deployed_sha256),
+        published_connection: Some(connection_snapshot(&snapshot)?),
         delete_node: false,
     })
 }
@@ -1183,6 +1202,7 @@ async fn uninstall(pool: &PgPool, secrets: &SecretBox, job: &JobInput) -> Result
         deployed_revision: None,
         deployed_config: None,
         deployed_sha256: None,
+        published_connection: None,
         delete_node: true,
     })
 }
@@ -1527,8 +1547,28 @@ fn clients_offline_output(node_id: &str, user_id: &str) -> JobOutput {
         deployed_revision: None,
         deployed_config: None,
         deployed_sha256: None,
+        published_connection: None,
         delete_node: false,
     }
+}
+
+/// Publish only the connection settings from the revision that passed deployment.
+pub(crate) fn connection_snapshot(snapshot: &Value) -> Result<Value> {
+    let host = snapshot["public_host"]
+        .as_str()
+        .context("snapshot public_host is missing")?;
+    let port = snapshot["public_port"]
+        .as_u64()
+        .filter(|p| (1..=65535).contains(p))
+        .context("snapshot public_port is invalid")?;
+    let listen = snapshot["listen_addr"]
+        .as_str()
+        .context("snapshot listen_addr is missing")?;
+    Ok(
+        json!({"public_host": host, "public_port": port, "listen_addr": listen,
+        "tls_sni": snapshot.get("tls_sni").cloned().unwrap_or(Value::Null),
+        "tls_skip_verify": snapshot["tls_skip_verify"].as_bool().unwrap_or(false)}),
+    )
 }
 
 #[cfg(test)]

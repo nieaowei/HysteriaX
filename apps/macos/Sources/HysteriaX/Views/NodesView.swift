@@ -101,6 +101,7 @@ struct NodesView: View {
                 nodeDetailPane(node)
                     .id(node.id)
                     .frame(maxHeight: 400)
+                    .accessibilityElement(children: .contain)
                     .accessibilityIdentifier("nodes.detail")
             }
         }
@@ -192,6 +193,13 @@ struct NodesView: View {
                     nodeMetric("目标配置", value: "v\(node.revision)")
                     nodeMetric("已部署配置", value: node.deployedRevision.map { "v\($0)" } ?? "尚未部署")
                     nodeMetric("套餐有效期", value: PackageDisplay.expiry(node.package))
+                    if let binding = node.dnsBinding {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("节点域名").font(.caption).foregroundStyle(.secondary)
+                            Text(binding.hostname).textSelection(.enabled)
+                            Button("查看 DNS 记录") { store.showDNSRecord(binding.recordIds.first) }.buttonStyle(.link)
+                        }
+                    }
                     nodeMetric("分配用户", value: "\(assignedUsers(node).count) 人")
                 }
             }
@@ -265,7 +273,7 @@ struct NodesView: View {
             Menu("配置") {
                 Button("服务器配置") { serverConfigurationNode = node }
                 Button("代理配置") { configurationNode = node }
-            }
+            }.accessibilityIdentifier("node.configure.\(node.id)")
             Button(node.deployedRevision == nil ? "部署" : "同步") {
                 run(node, action: node.deployedRevision == nil ? "deploy" : "sync")
             }
@@ -407,12 +415,14 @@ private struct NodeFormView: View {
     @State private var initialUsageGB = "0"
     @State private var createdToken: String?
     @State private var isSaving = false
+    @State private var dnsDraft = DNSAllocationDraft()
+    @State private var createdNodeID: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             Text("添加节点").font(.title.bold())
-            if let createdToken {
-                ContentUnavailableView("节点已创建", systemImage: "checkmark.circle", description: Text("节点认证令牌：\n\(createdToken)\n请将令牌保存在安全位置，并在代理配置页设置 TLS 证书后再部署。"))
+            if createdNodeID != nil {
+                ContentUnavailableView("节点已创建", systemImage: "checkmark.circle", description: Text("节点认证令牌：\n\(createdToken ?? "此前请求已创建节点，令牌不会重复显示。")\n请将令牌保存在安全位置，并在代理配置页设置 TLS 证书后再部署。"))
                 HStack { Spacer(); Button("完成") { dismiss() }.keyboardShortcut(.defaultAction) }
             } else {
                 Form {
@@ -443,13 +453,18 @@ private struct NodeFormView: View {
                         } else { Text("升级管理服务后可设置有效期和流量套餐。").foregroundStyle(.secondary) }
                     }
                     Section("公开连接") {
-                        TextField("公开地址", text: $publicHost)
-                            .accessibilityLabel("公开地址")
-                            .accessibilityIdentifier("node.create.publicHost")
+                        if store.supportsDNSManagement {
+                            DNSAllocationFields(store: store, draft: $dnsDraft, sshHost: sshHost)
+                        }
+                        if dnsDraft.mode == "external" {
+                            TextField("公开地址", text: $publicHost)
+                                .accessibilityLabel("公开地址")
+                                .accessibilityIdentifier("node.create.publicHost")
+                        }
                         TextField("公开端口", text: $publicPort)
                             .accessibilityLabel("公开端口")
                             .accessibilityIdentifier("node.create.publicPort")
-                        Text("公开地址默认跟随 SSH 地址，可手动修改。公开端口用于初始化监听端口；创建后可在代理配置中设置端口联动、TLS 证书及其他 Hysteria 参数。")
+                        Text(dnsDraft.mode == "external" ? "公开地址默认跟随 SSH 地址，可手动修改。公开端口用于初始化监听端口；创建后可在代理配置中设置端口联动、TLS 证书及其他 Hysteria 参数。" : "公开地址使用所分配的域名。公开端口用于初始化监听端口；创建后在代理配置中设置 TLS 证书及其他 Hysteria 参数。")
                             .font(.callout).foregroundStyle(.secondary)
                     }
                 }
@@ -465,7 +480,8 @@ private struct NodeFormView: View {
             }
         }
         .padding(24)
-        .frame(width: 600, height: createdToken == nil ? 620 : 360)
+        .frame(width: 640, height: createdNodeID == nil ? 660 : 360)
+        .task { await store.refreshDNS() }
     }
 
     private func save() {
@@ -478,7 +494,9 @@ private struct NodeFormView: View {
         Task {
             defer { isSaving = false }
             do {
+                let allocation = try dnsDraft.allocation(zones: store.dnsZones, records: store.dnsRecords)
                 let response = try await store.createNode(NodeCreateRequest(
+                    dnsAllocation: allocation,
                     package: store.supportsNodePackages ? packageDraft.package() : nil,
                     initialUsageBytes: store.supportsNodePackages ? NodePackageDraft.bytes(initialUsageGB) : nil,
                     name: name, sshHost: sshHost, sshPort: sshPort, sshUsername: sshUsername,
@@ -486,6 +504,7 @@ private struct NodeFormView: View {
                     sshCredentialId: sshCredentialId, sshCredentialVersion: store.credentials.first(where: { $0.id == sshCredentialId })?.latestVersion ?? 1
                 ))
                 createdToken = response.nodeAuthToken
+                createdNodeID = response.node?.id
             } catch { errorMessage = error.localizedDescription }
         }
     }

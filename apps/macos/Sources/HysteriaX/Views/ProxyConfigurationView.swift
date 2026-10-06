@@ -91,6 +91,7 @@ struct ProxyConfigurationView: View {
     @State private var showingResourceImporter = false
     @State private var resourceKind = "acl"
     @State private var resourceMessage: String?
+    @State private var showingDNSBindingEditor = false
     @State private var creatingCredential: ConfigurationCredentialTarget?
 
     var body: some View {
@@ -111,6 +112,23 @@ struct ProxyConfigurationView: View {
                 ProgressView("读取代理配置…").frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if let detail {
                 Form {
+                    if store.supportsDNSManagement {
+                        Section("公开连接与域名") {
+                            LabeledContent("目标地址", value: detail.connection.host)
+                            LabeledContent("已发布地址", value: detail.publishedConnection?.publicHost ?? "尚未部署")
+                            if let binding = detail.dnsBinding {
+                                ForEach(binding.records) { record in
+                                    HStack {
+                                        Text("\(record.recordType) · \(record.stateLabel) · \(record.resolutionLabel)")
+                                        Spacer()
+                                        Button("查看 DNS 记录") { store.showDNSRecord(record.id); dismiss() }
+                                    }
+                                }
+                            }
+                            Button("分配或更换域名…") { showingDNSBindingEditor = true }
+                            Text("域名变更单独保存，完成后重新加载此配置。请先保存其他修改。").font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
                     Section("监听") {
                         TextField("UDP 监听地址", text: $listenAddress)
                         Toggle("公开端口跟随监听端口", isOn: Binding(
@@ -159,6 +177,13 @@ struct ProxyConfigurationView: View {
                         }
                         .accessibilityIdentifier("proxy.tls.mode")
                         if tlsMode == "acme" {
+                            if let binding = detail.dnsBinding {
+                                Button("使用已分配域名") {
+                                    if !acmeDomains.contains(where: { $0.value == binding.hostname }) {
+                                        acmeDomains.append(StringListEntry(value: binding.hostname))
+                                    }
+                                }
+                            }
                             Text("ACME 域名")
                             StringListEditor(entries: $acmeDomains, prompt: "域名")
                             TextField("ACME 邮箱", text: $acmeEmail)
@@ -444,6 +469,7 @@ struct ProxyConfigurationView: View {
         }
         .padding(20)
         .frame(minWidth: 820, idealWidth: 1080, minHeight: 760)
+        .sheet(isPresented: $showingDNSBindingEditor, onDismiss: { Task { await load() } }) { DNSBindingEditorView(store: store, nodeID: nodeID) }
         .task(id: nodeID) { await load() }
         .sheet(item: $creatingCredential) { target in
             CredentialEditorView(store: store, initialKind: target.kind, allowedKinds: [target.kind], allowsUserOwnership: false) { receipt in

@@ -4,11 +4,12 @@ struct CredentialPickerView: View {
     @Bindable var store: ManagementStore
     @Binding var selection: String
     var kinds: [String]
+    var dnsProvider: String? = nil
     var ownerUserID: String? = nil
     var title = "凭据"
     @State private var creating = false
     private var entries: [CredentialSummary] {
-        store.credentials.filter { kinds.contains($0.kind) && $0.ownerUserId == ownerUserID && (!$0.archived || $0.id == selection) }
+        store.credentials.filter { kinds.contains($0.kind) && (dnsProvider == nil || $0.metadata["provider"]?.stringValue == dnsProvider) && $0.ownerUserId == ownerUserID && (!$0.archived || $0.id == selection) }
     }
     var body: some View {
         HStack {
