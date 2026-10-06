@@ -331,9 +331,10 @@ def main():
                 status != 200
                 or b"proxies: []" not in empty_config
                 or b"DIRECT" not in empty_config
-                or b"MATCH,DIRECT" not in empty_config
+                or b"SELECT" not in empty_config
+                or b"MATCH,PROXY" not in empty_config
             ):
-                raise RuntimeError("unassigned user did not receive a valid DIRECT-only subscription")
+                raise RuntimeError("unassigned user did not receive a valid subscription with a DIRECT fallback")
             empty_config_path = temp / "empty-subscription.yaml"
             empty_config_path.write_bytes(empty_config)
             subprocess.run(

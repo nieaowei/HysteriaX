@@ -1,5 +1,5 @@
 //! Subscription negotiation and renderers. Never log this module's node model: it contains secrets.
-use super::{ClashConfig, ClashEchOptions, ClashGroup, ClashProxy, ClashRealmOptions};
+use super::{ClashEchOptions, ClashProxy, ClashRealmOptions};
 use crate::error::ApiError;
 use axum::{
     body::Body,
@@ -181,6 +181,7 @@ impl SubscriptionNode {
             certificate: self.certificate.clone(),
             private_key: self.private_key.clone(),
             skip_cert_verify: self.skip_cert_verify,
+            udp: true,
             up: self.up.clone(),
             down: self.down.clone(),
             obfs: self.obfs.clone(),
@@ -423,34 +424,10 @@ pub(super) fn render_subscription(
         ));
     }
     let (body, content_type) = match format {
-        SubscriptionFormat::Mihomo => {
-            let mut group_nodes = vec!["DIRECT".to_owned()];
-            group_nodes.extend(compatible.iter().map(|n| n.name.clone()));
-            let config = ClashConfig {
-                mixed_port: 7890,
-                allow_lan: false,
-                bind_address: "127.0.0.1".into(),
-                mode: "rule".into(),
-                proxies: compatible.iter().map(|n| n.to_mihomo()).collect(),
-                proxy_groups: vec![ClashGroup {
-                    name: "节点选择".into(),
-                    group_type: "select".into(),
-                    proxies: group_nodes,
-                }],
-                rules: vec![
-                    if compatible.is_empty() {
-                        "MATCH,DIRECT"
-                    } else {
-                        "MATCH,节点选择"
-                    }
-                    .into(),
-                ],
-            };
-            (
-                serde_yaml::to_string(&config).map_err(|_| ApiError::internal())?,
-                "application/yaml; charset=utf-8",
-            )
-        }
+        SubscriptionFormat::Mihomo => (
+            render_mihomo_template(&compatible)?,
+            "application/yaml; charset=utf-8",
+        ),
         SubscriptionFormat::Singbox => {
             let mut outbounds = vec![json!({"type": "direct", "tag": "DIRECT"})];
             outbounds.extend(compatible.iter().map(|n| n.singbox()));
@@ -496,6 +473,28 @@ pub(super) fn render_subscription(
         HeaderValue::from_str(&filtered.to_string()).unwrap(),
     );
     Ok(response)
+}
+
+fn render_mihomo_template(nodes: &[&SubscriptionNode]) -> Result<String, ApiError> {
+    let mut config: serde_yaml::Value = serde_yaml::from_str(include_str!("mihomo-template.yaml"))
+        .map_err(|_| ApiError::internal())?;
+    let proxies = nodes
+        .iter()
+        .map(|node| node.to_mihomo())
+        .collect::<Vec<_>>();
+    config["proxies"] = serde_yaml::to_value(proxies).map_err(|_| ApiError::internal())?;
+
+    let mut names = nodes
+        .iter()
+        .map(|node| node.name.clone())
+        .collect::<Vec<_>>();
+    if names.is_empty() {
+        // Keep the fixed rule chain valid when a user has no deployed node assignments.
+        names.push("DIRECT".into());
+    }
+    config["proxy-groups"][0]["proxies"] =
+        serde_yaml::to_value(names).map_err(|_| ApiError::internal())?;
+    serde_yaml::to_string(&config).map_err(|_| ApiError::internal())
 }
 
 fn html_escape(value: &str) -> String {
@@ -818,7 +817,8 @@ mod tests {
             match format {
                 SubscriptionFormat::Mihomo => {
                     let v: serde_yaml::Value = serde_yaml::from_slice(&body).unwrap();
-                    assert_eq!(v["rules"][0], "MATCH,DIRECT");
+                    assert_eq!(v["rules"][30], "MATCH,PROXY");
+                    assert_eq!(v["proxy-groups"][0]["proxies"][0], "DIRECT");
                 }
                 SubscriptionFormat::Singbox => {
                     let v: Value = serde_json::from_slice(&body).unwrap();

@@ -38,13 +38,20 @@ manual selection fallback. It loads no external assets, disables indexing, and
 sends no referrer. Copy the chosen link into your client; opening it in a browser
 uses an unknown kernel version and may filter advanced nodes.
 
-Mihomo preserves the existing localhost mixed proxy, selection group, and rules.
+Mihomo uses the fixed configuration in `src/api/subscriptions/mihomo-template.yaml`:
+local mixed and redirect ports, LAN access, DNS-over-HTTPS/TLS with fake-IP,
+the `SELECT`, `PROXY`, and `IPFake` groups, the configured rule providers, and
+the template's ordered rules. The assigned nodes and their connection credentials
+are generated dynamically into `SELECT`; an empty assignment uses `DIRECT` there.
+`allow-lan: true` and `bind-address: '*'` expose the local proxy listeners to
+devices that can reach the client machine's network interfaces.
+The template deliberately omits the sample's external controller and shared secret.
 sing-box provides `127.0.0.1:7890`, a node selector (first node selected initially),
-a direct outbound, and a final route to the selector. There is no TUN or remote
-rule set. With no assigned deployed nodes, both formats select direct routing.
-URI output contains one `hysteria2://` link per line; Base64 encodes exactly that
-UTF-8 list, including the trailing newline. An empty URI/Base64 subscription is empty.
-URI lists carry connection parameters rather than client routing or bandwidth tuning.
+a direct outbound, and a final route to the selector. With no assigned deployed
+nodes, sing-box selects direct routing. URI output contains one `hysteria2://` link per
+line; Base64 encodes exactly that UTF-8 list, including the trailing newline. An empty
+URI/Base64 subscription is empty. URI lists carry connection parameters rather than
+client routing or bandwidth tuning.
 
 ## Capability checks
 

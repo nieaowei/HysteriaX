@@ -29,21 +29,6 @@ pub struct RotateSubscription {
 }
 
 #[derive(Serialize)]
-struct ClashConfig {
-    #[serde(rename = "mixed-port")]
-    mixed_port: u16,
-    #[serde(rename = "allow-lan")]
-    allow_lan: bool,
-    #[serde(rename = "bind-address")]
-    bind_address: String,
-    mode: String,
-    proxies: Vec<ClashProxy>,
-    #[serde(rename = "proxy-groups")]
-    proxy_groups: Vec<ClashGroup>,
-    rules: Vec<String>,
-}
-
-#[derive(Serialize)]
 struct ClashProxy {
     name: String,
     #[serde(rename = "type")]
@@ -63,6 +48,7 @@ struct ClashProxy {
     private_key: Option<String>,
     #[serde(rename = "skip-cert-verify")]
     skip_cert_verify: bool,
+    udp: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     up: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -107,14 +93,6 @@ struct ClashRealmOptions {
     stun_servers: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none", rename = "skip-cert-verify")]
     skip_cert_verify: Option<bool>,
-}
-
-#[derive(Serialize)]
-struct ClashGroup {
-    name: String,
-    #[serde(rename = "type")]
-    group_type: String,
-    proxies: Vec<String>,
 }
 
 pub async fn get_user(
