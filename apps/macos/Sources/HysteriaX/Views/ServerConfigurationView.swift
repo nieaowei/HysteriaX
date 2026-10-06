@@ -9,6 +9,7 @@ struct ServerConfigurationView: View {
     @State private var isLoading = true
     @State private var isSaving = false
     @State private var message: String?
+    @State private var showingDNSBindingEditor = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -48,6 +49,24 @@ struct ServerConfigurationView: View {
                         }
                     }
                     .disabled(isSaving)
+                    if store.supportsDNSManagement {
+                        Section("公网地址与域名") {
+                            LabeledContent("目标地址", value: detail.connection.host)
+                            LabeledContent("已发布地址", value: detail.publishedConnection?.publicHost ?? "尚未部署")
+                            if let binding = detail.dnsBinding {
+                                ForEach(binding.records) { record in
+                                    HStack {
+                                        Text("\(record.recordType) · \(record.stateLabel) · \(record.resolutionLabel)")
+                                        Spacer()
+                                        Button("查看 DNS 记录") { store.showDNSRecord(record.id); dismiss() }
+                                    }
+                                }
+                            }
+                            Button("分配或更换域名…") { showingDNSBindingEditor = true }
+                            Text("域名变更单独保存。").font(.caption).foregroundStyle(.secondary)
+                        }
+                        .disabled(isSaving)
+                    }
                     Section("有效期与流量套餐") {
                         NodePackageManagementView(store: store, detail: detail, onUpdated: { self.detail = $0 }, onSavingChanged: { isSaving = $0 })
                     }
@@ -62,7 +81,15 @@ struct ServerConfigurationView: View {
         .padding(24)
         .frame(minWidth: 640, idealWidth: 720, minHeight: 660)
         .interactiveDismissDisabled(isSaving)
+        .sheet(isPresented: $showingDNSBindingEditor, onDismiss: { Task { await refreshAfterDNSBinding() } }) {
+            DNSBindingEditorView(store: store, nodeID: nodeID)
+        }
         .task(id: nodeID) { await load() }
+    }
+
+    private func refreshAfterDNSBinding() async {
+        do { detail = try await store.nodeDetail(nodeID) }
+        catch { message = error.localizedDescription }
     }
 
     private func load() async {
