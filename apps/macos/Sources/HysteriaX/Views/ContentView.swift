@@ -140,7 +140,10 @@ struct ContentView: View {
             overviewDestination = destination
             selectedSection = destination.section
         }
-        case .nodes: NodesView(store: store, initialSelection: overviewDestination?.section == "nodes" ? overviewDestination?.entityID : nil, onInitialSelectionHandled: { overviewDestination = nil })
+        case .nodes: NodesView(store: store, initialSelection: overviewDestination?.section == "nodes" ? overviewDestination?.entityID : nil, onInitialSelectionHandled: { overviewDestination = nil }, onOpenJob: { jobID in
+            overviewDestination = OverviewDestination(section: "jobs", entityID: jobID)
+            selectedSection = "jobs"
+        })
         case .dns: DNSRecordsView(store: store)
         case .users: UsersView(store: store, initialSelection: overviewDestination?.section == "users" ? overviewDestination?.entityID : nil, onInitialSelectionHandled: { overviewDestination = nil })
         case .jobs: JobsView(store: store, initialSelection: overviewDestination?.section == "jobs" ? overviewDestination?.entityID : nil, onInitialSelectionHandled: { overviewDestination = nil })

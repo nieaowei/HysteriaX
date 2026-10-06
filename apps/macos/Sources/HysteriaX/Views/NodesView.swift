@@ -4,6 +4,9 @@ struct NodesView: View {
     @Bindable var store: ManagementStore
     var initialSelection: String? = nil
     var onInitialSelectionHandled: () -> Void = {}
+    var onOpenJob: (String) -> Void = { _ in }
+    @State private var submittingActions: [String: String] = [:]
+    @State private var submittedActions: [String: SubmittedNodeAction] = [:]
     @State private var showingAddNode = false
     @State private var configurationNode: NodeSummary?
     @State private var serverConfigurationNode: NodeSummary?
@@ -113,6 +116,14 @@ struct NodesView: View {
         }
         .searchable(text: $searchText, prompt: "搜索节点")
         .onChange(of: searchText) { _, _ in selection = nil }
+        .onChange(of: store.serviceAddress) { _, _ in
+            submittingActions = [:]
+            submittedActions = [:]
+        }
+        .onChange(of: store.jobs.map(\.id)) { _, ids in
+            let knownIDs = Set(ids)
+            submittedActions = submittedActions.filter { !knownIDs.contains($0.value.jobID) }
+        }
         .onChange(of: selection) { _, _ in detail = nil; detailError = nil }
         .task(id: detailRequestKey) { await loadDetail() }
         .sheet(isPresented: $showingAddNode) { NodeFormView(store: store) }
@@ -214,11 +225,11 @@ struct NodesView: View {
                     ViewThatFits(in: .horizontal) {
                         HStack(alignment: .top, spacing: 16) {
                             nodeConnections(node).frame(minWidth: 280, maxWidth: .infinity)
-                            nodePackage(node).frame(minWidth: 280, maxWidth: .infinity)
+                            nodeTasksAndPackage(node).frame(minWidth: 280, maxWidth: .infinity)
                         }
                         VStack(alignment: .leading, spacing: 16) {
                             nodeConnections(node)
-                            nodePackage(node)
+                            nodeTasksAndPackage(node)
                         }
                     }
                     GroupBox {
@@ -274,6 +285,7 @@ struct NodesView: View {
     private func nodeActions(_ node: NodeSummary) -> some View {
         HStack(spacing: 8) {
             Button("SSH 测试") { run(node, action: "ssh-test") }
+                .disabled(operationInProgress(node))
             Menu("配置") {
                 Button("服务器配置") { serverConfigurationNode = node }
                 Button("代理配置") { configurationNode = node }
@@ -281,12 +293,14 @@ struct NodesView: View {
             Button(node.deployedRevision == nil ? "部署" : "同步") {
                 run(node, action: node.deployedRevision == nil ? "deploy" : "sync")
             }
+            .disabled(operationInProgress(node))
             Menu("更多") {
-                Button("部署") { run(node, action: "deploy") }
-                Button("同步") { run(node, action: "sync") }
-                Button("回滚") { run(node, action: "rollback") }.disabled(node.deployedRevision == nil)
+                Button("部署") { run(node, action: "deploy") }.disabled(operationInProgress(node))
+                Button("同步") { run(node, action: "sync") }.disabled(operationInProgress(node))
+                Button("回滚") { run(node, action: "rollback") }.disabled(node.deployedRevision == nil || operationInProgress(node))
                 Divider()
                 Button("删除节点", role: .destructive) { deletionNode = node; showingDeleteConfirmation = true }
+                    .disabled(operationInProgress(node))
             }
         }
         .fixedSize()
@@ -322,6 +336,14 @@ struct NodesView: View {
         } label: { Label("连接信息", systemImage: "network") }
     }
 
+    private func nodeTasksAndPackage(_ node: NodeSummary) -> some View {
+        VStack(alignment: .leading, spacing: 16) {
+            nodeTasks(node)
+            nodePackage(node)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
     private func nodePackage(_ node: NodeSummary) -> some View {
         GroupBox {
             VStack(alignment: .leading, spacing: 12) {
@@ -343,12 +365,134 @@ struct NodesView: View {
         }
     }
 
-    private func run(_ node: NodeSummary, action: String) {
-        Task {
-            do { try await store.runNodeAction(node, action: action) }
-            catch { actionError = error.localizedDescription }
+    private func relatedTasks(_ node: NodeSummary) -> [JobSummary] {
+        NodeTaskFeedback.tasks(for: node.id, in: store.jobs)
+    }
+
+    private func pendingSubmission(_ node: NodeSummary) -> SubmittedNodeAction? {
+        guard let submitted = submittedActions[node.id], !store.jobs.contains(where: { $0.id == submitted.jobID }) else { return nil }
+        return submitted
+    }
+
+    private func operationInProgress(_ node: NodeSummary) -> Bool {
+        submittingActions[node.id] != nil || pendingSubmission(node) != nil || relatedTasks(node).contains(where: NodeTaskFeedback.blocksOperation)
+    }
+
+    @ViewBuilder private func nodeTasks(_ node: NodeSummary) -> some View {
+        let tasks = relatedTasks(node)
+        let displayed = Array(tasks.prefix(3))
+        let submitting = submittingActions[node.id]
+        let submitted = pendingSubmission(node)
+        if !tasks.isEmpty || submitting != nil || submitted != nil {
+            GroupBox {
+                VStack(alignment: .leading, spacing: 10) {
+                    if !store.isConnected {
+                        Label("离线快照", systemImage: "wifi.slash")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    if let submitting {
+                        HStack(spacing: 8) {
+                            ProgressView().controlSize(.small)
+                            Text("\(JobDisplayText.kind(submitting)) · 正在提交")
+                        }
+                        .font(.callout)
+                        .accessibilityIdentifier("nodes.action.submitting")
+                    } else if let submitted {
+                        HStack(spacing: 8) {
+                            Button(JobDisplayText.kind(submitted.action)) { onOpenJob(submitted.jobID) }
+                                .buttonStyle(.link).fontWeight(.medium)
+                            Text(JobDisplayText.status(submitted.status)).foregroundStyle(.blue)
+                            Spacer(minLength: 8)
+                            nodeTaskTime(submitted.submittedAt)
+                        }
+                        .font(.callout)
+                        .accessibilityIdentifier("nodes.action.accepted")
+                    }
+                    ForEach(displayed) { job in
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack(spacing: 8) {
+                                if NodeTaskFeedback.isActive(job) && store.isConnected {
+                                    ProgressView().controlSize(.small)
+                                }
+                                Button(JobDisplayText.kind(job.kind)) { onOpenJob(job.id) }
+                                    .buttonStyle(.link).fontWeight(.medium)
+                                    .lineLimit(1).help(JobDisplayText.kind(job.kind))
+                                    .accessibilityLabel("查看\(JobDisplayText.kind(job.kind))任务详情")
+                                    .accessibilityIdentifier("nodes.job.\(job.id)")
+                                Text(JobDisplayText.status(job.status)).foregroundStyle(taskColor(job))
+                                    .fixedSize()
+                                Spacer(minLength: 8)
+                                nodeTaskTime(DateDisplayText.parse(job.createdAt))
+                            }
+                            .font(.callout)
+                            if let message = job.errorMessage, !message.isEmpty {
+                                Text(message).font(.caption).foregroundStyle(.orange)
+                                    .lineLimit(1).help(message).textSelection(.enabled)
+                            } else if NodeTaskFeedback.isActive(job) {
+                                Text(JobDisplayText.stage(job.stage)).font(.caption).foregroundStyle(.secondary)
+                                    .lineLimit(1).help(JobDisplayText.stage(job.stage))
+                            }
+                        }
+                    }
+                    if tasks.count > displayed.count {
+                        Text("另有 \(tasks.count - displayed.count) 项任务")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.vertical, 4)
+            } label: {
+                Label("当前与最近任务", systemImage: "list.bullet.rectangle")
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityIdentifier("nodes.tasks")
         }
     }
+
+    private func nodeTaskTime(_ date: Date?) -> some View {
+        Text(date.map { $0.formatted(.dateTime.month(.twoDigits).day(.twoDigits).hour(.twoDigits(amPM: .omitted)).minute(.twoDigits)) } ?? "—")
+            .font(.caption).monospacedDigit().foregroundStyle(.secondary)
+            .fixedSize()
+            .help(date.map { "提交时间：\($0.formatted(date: .complete, time: .standard))" } ?? "提交时间未知")
+    }
+
+    private func taskColor(_ job: JobSummary) -> Color {
+        switch job.status {
+        case "succeeded": .green
+        case "queued", "running": .blue
+        case "failed", "rolled_back": .orange
+        default: .secondary
+        }
+    }
+
+    private func run(_ node: NodeSummary, action: String) {
+        guard store.isConnected, !operationInProgress(node) else { return }
+        let service = store.serviceAddress
+        let submittedAt = Date()
+        submittingActions[node.id] = action
+        submittedActions[node.id] = nil
+        Task {
+            do {
+                let receipt = try await store.runNodeAction(node, action: action)
+                guard store.serviceAddress == service else { return }
+                submittedActions[node.id] = SubmittedNodeAction(action: action, jobID: receipt.jobId, status: receipt.status, submittedAt: submittedAt)
+                submittingActions[node.id] = nil
+                await store.refresh()
+            } catch {
+                guard store.serviceAddress == service else { return }
+                submittingActions[node.id] = nil
+                actionError = error.localizedDescription
+            }
+        }
+    }
+
+    private struct SubmittedNodeAction {
+        let action: String
+        let jobID: String
+        let status: String
+        let submittedAt: Date
+    }
+
 }
 
 private extension NodeSummary {

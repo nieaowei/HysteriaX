@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		000000000000000000002B02 /* Models/NodeTaskFeedback.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001B02 /* Models/NodeTaskFeedback.swift */; };
 		000000000000000000002B01 /* Views/DNSRecordDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001B01 /* Views/DNSRecordDetailView.swift */; };
 		000000000000000000002B00 /* Views/MainVerticalSplitView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001B00 /* Views/MainVerticalSplitView.swift */; };
 		0000000000000000000F2000 /* Models/DNSAllocationDraft.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000F1000 /* Models/DNSAllocationDraft.swift */; };
@@ -64,6 +65,7 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		000000000000000000001B02 /* Models/NodeTaskFeedback.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models/NodeTaskFeedback.swift; sourceTree = "<group>"; };
 		000000000000000000001B01 /* Views/DNSRecordDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/DNSRecordDetailView.swift; sourceTree = "<group>"; };
 		000000000000000000001B00 /* Views/MainVerticalSplitView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/MainVerticalSplitView.swift; sourceTree = "<group>"; };
 		0000000000000000000F1000 /* Models/DNSAllocationDraft.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models/DNSAllocationDraft.swift; sourceTree = "<group>"; };
@@ -173,6 +175,7 @@
 				000000000000000000001005 /* Views/AuditView.swift */,
 				000000000000000000001006 /* Views/ContentView.swift */,
 				000000000000000000001B01 /* Views/DNSRecordDetailView.swift */,
+				000000000000000000001B02 /* Models/NodeTaskFeedback.swift */,
 				000000000000000000001B00 /* Views/MainVerticalSplitView.swift */,
 				000000000000000000001007 /* Views/JobsView.swift */,
 				000000000000000000001801 /* Views/SSHHostFingerprintChangeView.swift */,
@@ -315,6 +318,7 @@
 				000000000000000000002005 /* Views/AuditView.swift in Sources */,
 				000000000000000000002006 /* Views/ContentView.swift in Sources */,
 				000000000000000000002B01 /* Views/DNSRecordDetailView.swift in Sources */,
+				000000000000000000002B02 /* Models/NodeTaskFeedback.swift in Sources */,
 				000000000000000000002B00 /* Views/MainVerticalSplitView.swift in Sources */,
 				000000000000000000002007 /* Views/JobsView.swift in Sources */,
 				000000000000000000002801 /* Views/SSHHostFingerprintChangeView.swift in Sources */,

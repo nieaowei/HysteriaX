@@ -233,7 +233,7 @@ final class ManagementStore {
         await refresh()
     }
 
-    func runNodeAction(_ node: NodeSummary, action: String) async throws {
+    func runNodeAction(_ node: NodeSummary, action: String) async throws -> JobReceipt {
         let api = try requireConnectedAPI()
         let operation: APIOperation<RevisionRequest, JobReceipt>
         switch action {
@@ -243,8 +243,7 @@ final class ManagementStore {
         case "rollback": operation = APIEndpoints.rollbackNode(id: node.id)
         default: throw APIClientError.server("未知的节点操作。")
         }
-        let _: JobReceipt = try await api.post(operation, body: RevisionRequest(expectedRevision: node.revision))
-        await refresh()
+        return try await api.post(operation, body: RevisionRequest(expectedRevision: node.revision))
     }
 
     func deleteNode(_ node: NodeSummary) async throws {
