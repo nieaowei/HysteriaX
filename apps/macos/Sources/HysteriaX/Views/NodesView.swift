@@ -196,8 +196,13 @@ struct NodesView: View {
                     if let binding = node.dnsBinding {
                         VStack(alignment: .leading, spacing: 4) {
                             Text("节点域名").font(.caption).foregroundStyle(.secondary)
-                            Text(binding.hostname).textSelection(.enabled)
-                            Button("查看 DNS 记录") { store.showDNSRecord(binding.recordIds.first) }.buttonStyle(.link)
+                            Button {
+                                store.showDNSRecord(binding.recordIds.first)
+                            } label: {
+                                Text(binding.hostname)
+                            }
+                            .buttonStyle(.link)
+                            .help("查看 DNS 记录")
                         }
                     }
                     nodeMetric("分配用户", value: "\(assignedUsers(node).count) 人")
