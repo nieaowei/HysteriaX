@@ -28,20 +28,27 @@ struct DNSRecordsView: View {
             ContentUnavailableView("需要升级管理服务", systemImage: "network", description: Text("此服务尚不支持 DNS 记录管理。"))
         } else {
             VStack(spacing: 0) {
-                filters.padding(12)
-                Table(visibleRecords, selection: $selection, sortOrder: $sortOrder) {
-                    TableColumn("域名", value: \.name) { Text($0.name).accessibilityIdentifier("dns.record.row.\($0.id)") }.width(min: 160, ideal: 250)
-                    TableColumn("类型", value: \.recordType).width(60)
-                    TableColumn("目标", value: \.content) { Text($0.content).textSelection(.enabled) }.width(min: 140, ideal: 230)
-                    TableColumn("TTL") { Text($0.ttl == 1 ? "自动" : String($0.ttl)) }.width(60)
-                    TableColumn("节点") { record in Text(record.boundNodeId.flatMap { id in store.nodes.first { $0.id == id }?.name } ?? "—") }.width(min: 90, ideal: 120)
-                    TableColumn("状态") { record in VStack(alignment: .leading) { Text(record.stateLabel); Text(record.resolutionLabel).font(.caption).foregroundStyle(.secondary) } }.width(min: 100, ideal: 120)
-                    TableColumn("来源") { Text($0.origin == "hysteriax" ? "HysteriaX 创建" : "已有记录") }.width(min: 100, ideal: 120)
+                MainVerticalSplitView(hasDetail: selected != nil) {
+                    VStack(spacing: 0) {
+                        filters.padding(12)
+                        Table(visibleRecords, selection: $selection, sortOrder: $sortOrder) {
+                            TableColumn("域名", value: \.name) { Text($0.name).accessibilityIdentifier("dns.record.row.\($0.id)") }.width(min: 160, ideal: 250)
+                            TableColumn("类型", value: \.recordType).width(60)
+                            TableColumn("目标", value: \.content) { Text($0.content).textSelection(.enabled) }.width(min: 140, ideal: 230)
+                            TableColumn("TTL") { Text($0.ttl == 1 ? "自动" : String($0.ttl)) }.width(60)
+                            TableColumn("节点") { record in Text(record.boundNodeId.flatMap { id in store.nodes.first { $0.id == id }?.name } ?? "—") }.width(min: 90, ideal: 120)
+                            TableColumn("状态") { record in VStack(alignment: .leading) { Text(record.stateLabel); Text(record.resolutionLabel).font(.caption).foregroundStyle(.secondary) } }.width(min: 100, ideal: 120)
+                            TableColumn("来源") { Text($0.origin == "hysteriax" ? "HysteriaX 创建" : "已有记录") }.width(min: 100, ideal: 120)
+                        }
+                        .overlay {
+                            if visibleRecords.isEmpty { ContentUnavailableView("暂无 DNS 记录", systemImage: "network", description: Text("配置连接、启用域名区域并刷新记录，或直接创建记录。")) }
+                        }
+                    }
+                } detail: {
+                    if let selected {
+                        detail(selected)
+                    }
                 }
-                .overlay {
-                    if visibleRecords.isEmpty { ContentUnavailableView("暂无 DNS 记录", systemImage: "network", description: Text("配置连接、启用域名区域并刷新记录，或直接创建记录。")) }
-                }
-                if let selected { Divider(); detail(selected).padding(16) }
                 if let message = store.dnsError { Text(message).font(.callout).foregroundStyle(.orange).padding(8) }
                 if !store.isConnected {
                     Text("离线快照 · \(store.dnsUpdatedAt?.formatted(date: .abbreviated, time: .shortened) ?? "尚未读取")").font(.caption).foregroundStyle(.secondary).padding(8)
@@ -85,30 +92,21 @@ struct DNSRecordsView: View {
         }.onChange(of: connectionID) { _, _ in zoneID = "" }
     }
     private func detail(_ record: DNSRecord) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack { Text(record.name).font(.headline).textSelection(.enabled); Text("\(record.recordType) → \(record.content)").textSelection(.enabled); Spacer(); Text(record.proxied ? "Cloudflare 代理" : "DNS only").foregroundStyle(.secondary) }
-            HStack {
-                Button("编辑…") { editing = record }.disabled(!record.supportsEditing || record.desired != nil)
-                Button("检查解析") { run { try await store.checkDNSRecord(record) } }.disabled(!record.supportsEditing || record.state != "synced")
-                Button("删除…", role: .destructive) { deleting = record }.disabled(!record.supportsEditing || record.boundNodeId != nil || record.desired != nil)
-                Button("绑定节点…") { bindingRecord = record }
-                    .disabled(!record.supportsEditing || record.proxied || record.state != "synced" || record.boundNodeId != nil)
-                Button("任务记录") { store.requestedSection = "jobs" }
-                Button("审计记录") { store.requestedSection = "audit" }
-                Spacer()
-                Text("检查时间：\(DateDisplayText.local(record.checkedAt))").font(.caption).foregroundStyle(.secondary)
-            }.disabled(!store.isConnected || busy)
-            if let desired = record.desired {
-                Text("待执行：\(desired["content"]?.stringValue ?? "删除记录")").font(.caption).foregroundStyle(.orange)
-            }
-            if let job = store.jobs.first(where: { $0.resourceId == record.id && $0.status == "failed" && $0.retryJobId == nil }) {
-                HStack {
-                    Text(job.errorMessage ?? "DNS 操作失败").font(.caption).foregroundStyle(.red)
-                    Button("重试") { run { try await store.retryDNSJob(job) } }.disabled(!store.isConnected || busy)
-                }
-            }
-            if !record.supportsEditing { Text("此记录类型首期只读。").font(.caption).foregroundStyle(.secondary) }
-        }
+        let zone = store.dnsZones.first { $0.id == record.zoneId }
+        let connection = store.dnsConnections.first { $0.id == zone?.connectionId }
+        let failedJob = store.jobs.first { $0.resourceId == record.id && $0.status == "failed" && $0.retryJobId == nil }
+        return DNSRecordDetailView(
+            record: record, zone: zone, connection: connection,
+            node: store.nodes.first { $0.id == record.boundNodeId }, failedJob: failedJob,
+            isConnected: store.isConnected, busy: busy,
+            onEdit: { editing = record },
+            onCheck: { run { try await store.checkDNSRecord(record) } },
+            onDelete: { deleting = record },
+            onBind: { bindingRecord = record },
+            onRetry: { if let failedJob { run { try await store.retryDNSJob(failedJob) } } },
+            onOpenJobs: { store.requestedSection = "jobs" },
+            onOpenAudit: { store.requestedSection = "audit" }
+        )
         .sheet(item: $bindingRecord) { DNSRecordBindingPicker(store: store, record: $0) }
     }
     @State private var bindingRecord: DNSRecord?

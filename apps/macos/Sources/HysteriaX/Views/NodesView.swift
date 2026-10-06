@@ -31,7 +31,7 @@ struct NodesView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
+        MainVerticalSplitView(hasDetail: store.nodes.contains { $0.id == selection }) {
             Table(visibleNodes, selection: $selection, sortOrder: $sortOrder) {
                 TableColumn("名称", value: \.name) { node in
                     Text(node.name)
@@ -96,11 +96,10 @@ struct NodesView: View {
                     ContentUnavailableView("没有匹配的节点", systemImage: "magnifyingglass")
                 }
             }
+        } detail: {
             if let node = store.nodes.first(where: { $0.id == selection }) {
-                Divider()
                 nodeDetailPane(node)
                     .id(node.id)
-                    .frame(maxHeight: 400)
                     .accessibilityElement(children: .contain)
                     .accessibilityIdentifier("nodes.detail")
             }

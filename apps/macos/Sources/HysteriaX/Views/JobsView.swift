@@ -164,7 +164,7 @@ struct JobsView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        MainVerticalSplitView(hasDetail: selectedJob != nil) {
             Table(visibleJobs, selection: $selectedJobID, sortOrder: $sortOrder) {
                 TableColumn("节点", value: \.displayNodeName)
                 TableColumn("类型", value: \.localizedKind)
@@ -186,11 +186,10 @@ struct JobsView: View {
                     ContentUnavailableView("没有匹配的任务", systemImage: "magnifyingglass")
                 }
             }
+        } detail: {
             if let job = selectedJob {
-                Divider()
                 jobDetailPane(job)
                     .id(job.id)
-                    .frame(maxHeight: 400)
                     .accessibilityIdentifier("jobs.detail")
             }
         }

@@ -32,7 +32,7 @@ struct UsersView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
+        MainVerticalSplitView(hasDetail: store.users.contains { $0.id == selectedUserID }) {
             Table(visibleUsers, selection: $selectedUserID, sortOrder: $sortOrder) {
                 TableColumn("名称", value: \.name) { user in
                     Text(user.name)
@@ -65,11 +65,10 @@ struct UsersView: View {
                     ContentUnavailableView("没有匹配的用户", systemImage: "magnifyingglass")
                 }
             }
+        } detail: {
             if let user = store.users.first(where: { $0.id == selectedUserID }) {
-                Divider()
                 userDetailPane(user)
                     .id(user.id)
-                    .frame(maxHeight: 400)
                     .accessibilityIdentifier("users.detail")
             }
         }

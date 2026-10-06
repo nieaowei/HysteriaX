@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		000000000000000000002B01 /* Views/DNSRecordDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001B01 /* Views/DNSRecordDetailView.swift */; };
+		000000000000000000002B00 /* Views/MainVerticalSplitView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001B00 /* Views/MainVerticalSplitView.swift */; };
 		0000000000000000000F2000 /* Models/DNSAllocationDraft.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000F1000 /* Models/DNSAllocationDraft.swift */; };
 		0000000000000000000F2001 /* Stores/DNSStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000F1001 /* Stores/DNSStore.swift */; };
 		0000000000000000000F2002 /* Views/DNSAllocationFields.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000F1002 /* Views/DNSAllocationFields.swift */; };
@@ -62,6 +64,8 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		000000000000000000001B01 /* Views/DNSRecordDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/DNSRecordDetailView.swift; sourceTree = "<group>"; };
+		000000000000000000001B00 /* Views/MainVerticalSplitView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/MainVerticalSplitView.swift; sourceTree = "<group>"; };
 		0000000000000000000F1000 /* Models/DNSAllocationDraft.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models/DNSAllocationDraft.swift; sourceTree = "<group>"; };
 		0000000000000000000F1001 /* Stores/DNSStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Stores/DNSStore.swift; sourceTree = "<group>"; };
 		0000000000000000000F1002 /* Views/DNSAllocationFields.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/DNSAllocationFields.swift; sourceTree = "<group>"; };
@@ -168,6 +172,8 @@
 				000000000000000000001004 /* Stores/ManagementStore.swift */,
 				000000000000000000001005 /* Views/AuditView.swift */,
 				000000000000000000001006 /* Views/ContentView.swift */,
+				000000000000000000001B01 /* Views/DNSRecordDetailView.swift */,
+				000000000000000000001B00 /* Views/MainVerticalSplitView.swift */,
 				000000000000000000001007 /* Views/JobsView.swift */,
 				000000000000000000001801 /* Views/SSHHostFingerprintChangeView.swift */,
 				000000000000000000001800 /* Models/SSHHostFingerprintChange.swift */,
@@ -308,6 +314,8 @@
 				000000000000000000002004 /* Stores/ManagementStore.swift in Sources */,
 				000000000000000000002005 /* Views/AuditView.swift in Sources */,
 				000000000000000000002006 /* Views/ContentView.swift in Sources */,
+				000000000000000000002B01 /* Views/DNSRecordDetailView.swift in Sources */,
+				000000000000000000002B00 /* Views/MainVerticalSplitView.swift in Sources */,
 				000000000000000000002007 /* Views/JobsView.swift in Sources */,
 				000000000000000000002801 /* Views/SSHHostFingerprintChangeView.swift in Sources */,
 				000000000000000000002800 /* Models/SSHHostFingerprintChange.swift in Sources */,

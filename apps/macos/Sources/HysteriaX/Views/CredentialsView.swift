@@ -76,32 +76,33 @@ struct CredentialsView: View {
 
     private var credentialContent: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Table(entries, selection: $selection) {
-                TableColumn("名称", value: \.name)
-                TableColumn("类型", value: \.typeTitle)
-                TableColumn("状态", value: \.statusTitle)
-                TableColumn("引用") { entry in Text(entry.isManaged ? String(entry.referenceCount ?? 0) : "—") }
-                TableColumn("到期") { entry in Text(entry.expiresAt.map { DateDisplayText.local($0) } ?? "未知") }
-            }
-            .frame(minHeight: 180)
-            .accessibilityIdentifier("credentials.table")
-            .overlay {
-                if entries.isEmpty {
-                    ContentUnavailableView(
-                        categoryEntries.isEmpty ? "暂无\(category.title)" : "没有匹配的凭据",
-                        systemImage: "key.horizontal",
-                        description: Text(categoryEntries.isEmpty
-                            ? (store.isConnected ? "当前没有\(category.title)。" : "连接服务后可查看\(category.title)。")
-                            : "尝试其他搜索词或类型。")
-                    )
+            MainVerticalSplitView(hasDetail: selected != nil) {
+                Table(entries, selection: $selection) {
+                    TableColumn("名称", value: \.name)
+                    TableColumn("类型", value: \.typeTitle)
+                    TableColumn("状态", value: \.statusTitle)
+                    TableColumn("引用") { entry in Text(entry.isManaged ? String(entry.referenceCount ?? 0) : "—") }
+                    TableColumn("到期") { entry in Text(entry.expiresAt.map { DateDisplayText.local($0) } ?? "未知") }
                 }
-            }
-            if let selected {
-                Divider()
-                credentialDetailPane(selected)
-                    .id(selected.id)
-                    .frame(maxHeight: 380)
-                    .accessibilityIdentifier("credentials.detail")
+                .frame(minHeight: 180)
+                .accessibilityIdentifier("credentials.table")
+                .overlay {
+                    if entries.isEmpty {
+                        ContentUnavailableView(
+                            categoryEntries.isEmpty ? "暂无\(category.title)" : "没有匹配的凭据",
+                            systemImage: "key.horizontal",
+                            description: Text(categoryEntries.isEmpty
+                                ? (store.isConnected ? "当前没有\(category.title)。" : "连接服务后可查看\(category.title)。")
+                                : "尝试其他搜索词或类型。")
+                        )
+                    }
+                }
+            } detail: {
+                if let selected {
+                    credentialDetailPane(selected)
+                        .id(selected.id)
+                        .accessibilityIdentifier("credentials.detail")
+                }
             }
             if let error { Text(error).foregroundStyle(.red).padding(12) }
         }
