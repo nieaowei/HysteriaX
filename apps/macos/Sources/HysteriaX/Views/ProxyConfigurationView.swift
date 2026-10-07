@@ -113,6 +113,8 @@ struct ProxyConfigurationView: View {
                 Form {
                     Section(L10n.text("监听")) {
                         TextField(L10n.text("UDP 监听地址"), text: $listenAddress)
+                        Text(L10n.text("支持端口列表和范围，例如 :443,445-450。端口跳跃节点的公网端口须与首个监听端口相同，远端还须安装 nftables 或 iptables。"))
+                            .font(.callout).foregroundStyle(.secondary)
                         Toggle(L10n.text("公开端口跟随监听端口"), isOn: Binding(
                             get: { publicPortDraft.followsListener },
                             set: { follows in
@@ -130,11 +132,7 @@ struct ProxyConfigurationView: View {
                         .accessibilityIdentifier("node.config.publicPort")
                         Text(L10n.text("默认使用首个监听端口；手动修改公开端口后独立保存，用于公网端口映射。"))
                             .font(.callout).foregroundStyle(.secondary)
-                        Text(L10n.text("支持端口列表和范围，例如 :443,445-450。端口跳跃节点的公网端口须与首个监听端口相同，远端还须安装 nftables 或 iptables。"))
-                            .font(.callout).foregroundStyle(.secondary)
-                    }
-                    Section(L10n.text("Hysteria trafficStats 接口")) {
-                        TextField(L10n.text("本机端口"), text: $trafficStatsPort)
+                        TextField(L10n.text("控制API端口"), text: $trafficStatsPort)
                         Text(L10n.text("仅绑定节点本机回环地址，用于流量采集和在线设备管理。请选用节点上未被占用的 TCP 端口。"))
                             .font(.callout).foregroundStyle(.secondary)
                     }
@@ -159,14 +157,17 @@ struct ProxyConfigurationView: View {
                         }
                         .accessibilityIdentifier("proxy.tls.mode")
                         if tlsMode == "acme" {
-                            if let binding = detail.dnsBinding {
-                                Button(L10n.text("使用已分配域名")) {
-                                    if !acmeDomains.contains(where: { $0.value == binding.hostname }) {
-                                        acmeDomains.append(StringListEntry(value: binding.hostname))
+                            LabeledContent {
+                                if let binding = detail.dnsBinding {
+                                    Button(L10n.text("使用已分配域名")) {
+                                        if !acmeDomains.contains(where: { $0.value == binding.hostname }) {
+                                            acmeDomains.append(StringListEntry(value: binding.hostname))
+                                        }
                                     }
                                 }
+                            } label: {
+                                Text(L10n.text("ACME 域名"))
                             }
-                            Text(L10n.text("ACME 域名"))
                             StringListEditor(entries: $acmeDomains, prompt: L10n.text("域名"))
                             TextField(L10n.text("ACME 邮箱"), text: $acmeEmail)
                             Picker("ACME CA", selection: $acmeCA) {
