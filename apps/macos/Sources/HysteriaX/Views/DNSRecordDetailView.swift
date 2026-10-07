@@ -41,7 +41,7 @@ struct DNSRecordDetailView: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(4)
                         } label: {
-                            Label("记录信息", systemImage: "network").foregroundStyle(.blue)
+                            Label("记录信息", systemImage: "network")
                         }
                         .frame(maxWidth: .infinity, alignment: .topLeading)
                         GroupBox {
@@ -74,7 +74,7 @@ struct DNSRecordDetailView: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(4)
                         } label: {
-                            Label("解析与节点", systemImage: "point.3.connected.trianglepath.dotted").foregroundStyle(.teal)
+                            Label("解析与节点", systemImage: "point.3.connected.trianglepath.dotted")
                         }
                         .frame(maxWidth: .infinity, alignment: .topLeading)
                     }

@@ -14,7 +14,7 @@ struct DetailHeaderLayout: Layout {
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) -> CGSize {
         let width = proposal.width.flatMap { $0.isFinite ? $0 : nil } ?? 640
         measure(width, subviews, &cache)
-        let height = cache.horizontal ? cache.sizes.map(\.height).max() ?? 0 : cache.sizes.map(\.height).reduce(0, +) + stackedSpacing
+        let height = cache.horizontal ? cache.sizes.map(\.height).max() ?? 0 : cache.sizes.map(\.height).reduce(0, +) + stackedSpacing * CGFloat(max(0, subviews.count - 1))
         return CGSize(width: width, height: height)
     }
 
@@ -31,7 +31,14 @@ struct DetailHeaderLayout: Layout {
 
     private func measure(_ width: CGFloat, _ subviews: Subviews, _ cache: inout Cache) {
         cache.width = width
-        guard subviews.count == 2 else { cache.sizes = []; return }
+        cache.horizontal = false
+        guard subviews.count == 2 else {
+            // Conditional action groups can be absent while details load.
+            cache.sizes = subviews.map { view in
+                CGSize(width: width, height: view.sizeThatFits(ProposedViewSize(width: width, height: nil)).height)
+            }
+            return
+        }
         let titleWidth = min(320, subviews[0].sizeThatFits(.unspecified).width)
         let actionsWidth = subviews[1].sizeThatFits(.unspecified).width
         cache.horizontal = width >= titleWidth + actionsWidth + spacing
