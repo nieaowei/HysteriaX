@@ -32,17 +32,17 @@ enum ACMEDNSProvider: String, CaseIterable, Identifiable {
         case .duckdns:
             return [
                 ACMEDNSField(key: "duckdns_api_token", title: "API Token"),
-                ACMEDNSField(key: "duckdns_override_domain", title: "覆盖域名", required: false, secret: false,
-                             help: "通过 CNAME 指向 DuckDNS 时填写目标域名；直接使用 DuckDNS 域名可留空。"),
+                ACMEDNSField(key: "duckdns_override_domain", title: L10n.text("覆盖域名"), required: false, secret: false,
+                             help: L10n.text("通过 CNAME 指向 DuckDNS 时填写目标域名；直接使用 DuckDNS 域名可留空。")),
             ]
         case .namecheap:
             return [
                 ACMEDNSField(key: "namecheap_api_key", title: "API Key"),
                 ACMEDNSField(key: "namecheap_api_user", title: "API User", secret: false),
                 ACMEDNSField(key: "namecheap_client_ip", title: "Client IP", required: false, secret: false,
-                             help: "发起请求的节点公网 IPv4，须加入 Namecheap API 白名单。留空由节点自动探测。"),
+                             help: L10n.text("发起请求的节点公网 IPv4，须加入 Namecheap API 白名单。留空由节点自动探测。")),
                 ACMEDNSField(key: "namecheap_api_endpoint", title: "API Endpoint", required: false, secret: false,
-                             help: "默认使用正式环境；仅需沙箱或自定义端点时填写完整 HTTP(S) URL。"),
+                             help: L10n.text("默认使用正式环境；仅需沙箱或自定义端点时填写完整 HTTP(S) URL。")),
             ]
         case .porkbun:
             return [
@@ -51,7 +51,7 @@ enum ACMEDNSProvider: String, CaseIterable, Identifiable {
             ]
         case .godaddy:
             return [ACMEDNSField(key: "godaddy_api_token", title: "API Token",
-                                 help: "按 API Key:API Secret 格式填写。")]
+                                 help: L10n.text("按 API Key:API Secret 格式填写。"))]
         default:
             return [ACMEDNSField(key: "\(rawValue)_api_token", title: "API Token")]
         }
@@ -95,16 +95,16 @@ struct ACMEDNSDraft {
     }
 
     var validationError: String? {
-        guard let definition else { return "请选择支持的 DNS 服务商。" }
+        guard let definition else { return L10n.text("请选择支持的 DNS 服务商。") }
         for field in definition.fields where field.required {
             if values[field.key, default: ""].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                return "请填写 \(definition.title) 的 \(field.title)。"
+                return L10n.text("请填写 {0} 的 {1}。", String(describing: (definition.title)), String(describing: (field.title)))
             }
         }
         if provider == "namecheap" {
             let ip = values["namecheap_client_ip", default: ""]
             if !ip.hasPrefix("credential://"), !ip.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, !Self.isIPv4Address(ip) {
-                return "Namecheap Client IP 必须是有效的 IPv4 地址。"
+                return L10n.text("Namecheap Client IP 必须是有效的 IPv4 地址。")
             }
             let endpoint = values["namecheap_api_endpoint", default: ""]
             if !endpoint.hasPrefix("credential://"), !endpoint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -112,7 +112,7 @@ struct ACMEDNSDraft {
                       ["http", "https"].contains(url.scheme?.lowercased() ?? ""),
                       let host = url.host, !host.isEmpty,
                       !endpoint.contains(where: { $0.isWhitespace }) else {
-                    return "Namecheap API Endpoint 必须是完整的 HTTP(S) URL。"
+                    return L10n.text("Namecheap API Endpoint 必须是完整的 HTTP(S) URL。")
                 }
             }
         }

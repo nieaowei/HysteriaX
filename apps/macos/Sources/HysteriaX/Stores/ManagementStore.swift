@@ -196,7 +196,7 @@ final class ManagementStore {
             if let data = try? JSONEncoder().encode(snapshot) { UserDefaults.standard.set(data, forKey: displaySnapshotKey) }
         } catch {
             guard generation == serviceGeneration, request == overviewRequestGeneration, !Task.isCancelled else { return }
-            overviewError = "概览监控暂不可用：\(error.localizedDescription)"
+            overviewError = L10n.text("概览监控暂不可用：{0}", String(describing: (error.localizedDescription)))
         }
     }
 
@@ -241,7 +241,7 @@ final class ManagementStore {
         case "deploy": operation = APIEndpoints.deployNode(id: node.id)
         case "sync": operation = APIEndpoints.syncNode(id: node.id)
         case "rollback": operation = APIEndpoints.rollbackNode(id: node.id)
-        default: throw APIClientError.server("未知的节点操作。")
+        default: throw APIClientError.server(L10n.text("未知的节点操作。"))
         }
         return try await api.post(operation, body: RevisionRequest(expectedRevision: node.revision))
     }
@@ -254,7 +254,7 @@ final class ManagementStore {
 
     func removeNodeRecord(_ node: NodeSummary) async throws {
         let api = try requireConnectedAPI()
-        guard supportsNodeRecordRemoval else { throw APIClientError.server("请先更新管理服务以支持仅移除节点记录。") }
+        guard supportsNodeRecordRemoval else { throw APIClientError.server(L10n.text("请先更新管理服务以支持仅移除节点记录。")) }
         try await api.deleteNoContent(APIEndpoints.removeNodeRecord(id: node.id, expectedRevision: node.revision))
         await refresh()
     }
@@ -266,7 +266,7 @@ final class ManagementStore {
 
     func retryJob(_ job: JobSummary, on node: NodeSummary) async throws {
         let client = try requireConnectedAPI()
-        guard supportsJobRetryLinks else { throw APIClientError.server("请先更新管理服务以支持关联重试。") }
+        guard supportsJobRetryLinks else { throw APIClientError.server(L10n.text("请先更新管理服务以支持关联重试。")) }
         let _: JobReceipt = try await client.post(APIEndpoints.retryJob(id: job.id), body: RevisionRequest(expectedRevision: node.revision))
         await refresh()
     }
@@ -339,7 +339,7 @@ final class ManagementStore {
 
     func uploadResource(nodeID: String, name: String, kind: String, data: Data) async throws -> ResourceReceipt {
         guard ["acl", "geoip", "geosite"].contains(kind) else {
-            throw APIClientError.server("配置资源仅支持 ACL、GeoIP 和 GeoSite；证书和密钥请在凭据中心导入。")
+            throw APIClientError.server(L10n.text("配置资源仅支持 ACL、GeoIP 和 GeoSite；证书和密钥请在凭据中心导入。"))
         }
         let api = try requireConnectedAPI()
         let request = ResourceUploadRequest(name: name, resourceKind: kind, contentBase64: data.base64EncodedString())
@@ -348,7 +348,7 @@ final class ManagementStore {
 
     func confirmChangedHostFingerprint(_ job: JobSummary) async throws {
         guard let change = SSHHostFingerprintChange(job: job), let nodeID = job.nodeID else {
-            throw APIClientError.server("此任务没有可确认的 SSH 指纹变更。")
+            throw APIClientError.server(L10n.text("此任务没有可确认的 SSH 指纹变更。"))
         }
         let client = try requireConnectedAPI()
         let generation = serviceGeneration
@@ -359,7 +359,7 @@ final class ManagementStore {
               latestJob.job.retryJobId == nil,
               SSHHostFingerprintChange(job: latestJob.job) == change,
               change.canConfirm(state: node.state, savedFingerprint: node.ssh.hostFingerprint) else {
-            throw APIClientError.server("节点指纹或任务状态已变化，请刷新并重新运行 SSH 测试后再确认。")
+            throw APIClientError.server(L10n.text("节点指纹或任务状态已变化，请刷新并重新运行 SSH 测试后再确认。"))
         }
         let _: NodeUpdateResponse = try await client.patch(
             APIEndpoints.updateNode(id: nodeID),
@@ -371,7 +371,7 @@ final class ManagementStore {
 
     func confirmHostFingerprint(nodeID: String, fingerprint: String) async throws {
         guard let node = nodes.first(where: { $0.id == nodeID }) else {
-            throw APIClientError.server("找不到对应节点。")
+            throw APIClientError.server(L10n.text("找不到对应节点。"))
         }
         let api = try requireConnectedAPI()
         let _: NodeUpdateResponse = try await api.patch(
@@ -458,7 +458,7 @@ final class ManagementStore {
         let api = try requireConnectedAPI()
         let subscription: SubscriptionStatus = try await api.get(APIEndpoints.getSubscription(id: user.id))
         guard let active = subscription.active else {
-            throw APIClientError.server("此用户尚未生成订阅地址，请先生成订阅。")
+            throw APIClientError.server(L10n.text("此用户尚未生成订阅地址，请先生成订阅。"))
         }
         if let format {
             return try format.subscriptionURL(autoURL: active.autoUrl, legacyURL: active.url)
@@ -470,14 +470,14 @@ final class ManagementStore {
         let api = try requireConnectedAPI()
         let subscription: SubscriptionStatus = try await api.get(APIEndpoints.getSubscription(id: user.id))
         guard let active = subscription.active else {
-            throw APIClientError.server("此用户尚未生成订阅地址，请先生成订阅再导出。")
+            throw APIClientError.server(L10n.text("此用户尚未生成订阅地址，请先生成订阅再导出。"))
         }
         let operation: APIOperation<NoRequest, NoResponse>
         if format == .mihomo {
             operation = APIEndpoints.downloadSubscription(token: active.token)
         } else {
             guard active.autoUrl != nil else {
-                throw APIClientError.server("此服务端尚未提供多格式订阅，请先升级服务端。")
+                throw APIClientError.server(L10n.text("此服务端尚未提供多格式订阅，请先升级服务端。"))
             }
             operation = APIEndpoints.downloadAutomaticSubscription(token: active.token, format: format.rawValue)
         }
@@ -547,7 +547,7 @@ final class ManagementStore {
         let currentAPI = try requireConnectedAPI()
         let normalizedLabel = label.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalizedLabel.isEmpty, normalizedLabel.unicodeScalars.count <= 100 else {
-            throw APIClientError.server("令牌用途需为 1 到 100 个字符。")
+            throw APIClientError.server(L10n.text("令牌用途需为 1 到 100 个字符。"))
         }
         guard let url = URL(string: serviceAddress), url.scheme == "https", url.host != nil else {
             throw APIClientError.invalidBaseURL
@@ -561,7 +561,7 @@ final class ManagementStore {
         do {
             try KeychainStore.saveToken(receipt.token)
         } catch {
-            errorMessage = "令牌已创建，但无法保存到 Keychain；请立即复制并安全保存此令牌。\(error.localizedDescription)"
+            errorMessage = L10n.text("令牌已创建，但无法保存到 Keychain；请立即复制并安全保存此令牌。{0}", String(describing: (error.localizedDescription)))
             return receipt
         }
         api = nextAPI
@@ -581,7 +581,7 @@ final class ManagementStore {
             await (nodeNotifications ?? .shared).deliver(credentials: credentials, service: serviceAddress)
         } catch {
             isConnected = false
-            errorMessage = "新令牌已保存并切换，但服务暂不可用：\(error.localizedDescription)"
+            errorMessage = L10n.text("新令牌已保存并切换，但服务暂不可用：{0}", String(describing: (error.localizedDescription)))
         }
         startEventUpdates(using: nextAPI)
         return receipt
@@ -589,10 +589,10 @@ final class ManagementStore {
 
     func revokeAdminToken(_ token: AdminTokenSummary) async throws {
         guard let currentAdminTokenID else {
-            throw APIClientError.server("先创建并切换到本 Mac 的新令牌，再撤销旧令牌。")
+            throw APIClientError.server(L10n.text("先创建并切换到本 Mac 的新令牌，再撤销旧令牌。"))
         }
         guard token.id != currentAdminTokenID else {
-            throw APIClientError.server("不能撤销本 Mac 当前使用的令牌。")
+            throw APIClientError.server(L10n.text("不能撤销本 Mac 当前使用的令牌。"))
         }
         let api = try requireConnectedAPI()
         try await api.deleteNoContent(APIEndpoints.revokeAdminToken(id: token.id))
@@ -639,7 +639,7 @@ final class ManagementStore {
         do {
             return (try await client.get(APIEndpoints.getServerMonitoring), nil)
         } catch {
-            return (nil, "监控信息暂不可用：\(error.localizedDescription)")
+            return (nil, L10n.text("监控信息暂不可用：{0}", String(describing: (error.localizedDescription))))
         }
     }
 
@@ -663,7 +663,7 @@ final class ManagementStore {
 
     func requireConnectedAPI() throws -> APIClient {
         guard isConnected, let api else {
-            throw APIClientError.server("管理服务当前不可用；恢复连接后才能读取详情或提交写操作。")
+            throw APIClientError.server(L10n.text("管理服务当前不可用；恢复连接后才能读取详情或提交写操作。"))
         }
         return api
     }

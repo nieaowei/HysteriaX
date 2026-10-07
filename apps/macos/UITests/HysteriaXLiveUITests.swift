@@ -31,6 +31,7 @@ final class HysteriaXLiveUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchEnvironment["HYSTERIAX_UI_TEST_SERVICE_ADDRESS"] = credentials.serviceAddress
         app.launchEnvironment["HYSTERIAX_UI_TEST_ADMIN_TOKEN"] = credentials.adminToken
+        app.launchArguments += ["-appLanguage", "zh-Hans"]
         app.launch()
         print("FRONTMOST_AFTER_LAUNCH=" + frontmostBundleIdentifier())
 

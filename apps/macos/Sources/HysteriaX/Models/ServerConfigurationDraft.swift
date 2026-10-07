@@ -23,9 +23,9 @@ struct ServerConfigurationDraft {
               !sshHost.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               !sshUsername.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               let port = Int(sshPort), (1...65535).contains(port) else {
-            throw APIClientError.server("请填写服务器名称、SSH 地址和用户；端口须在 1 到 65535 之间。")
+            throw APIClientError.server(L10n.text("请填写服务器名称、SSH 地址和用户；端口须在 1 到 65535 之间。"))
         }
-        guard !sshCredentialId.isEmpty else { throw APIClientError.server("请选择 SSH 凭据。") }
+        guard !sshCredentialId.isEmpty else { throw APIClientError.server(L10n.text("请选择 SSH 凭据。")) }
         return NodePatchRequest(
             expectedRevision: revision, name: name.trimmingCharacters(in: .whitespacesAndNewlines),
             sshHost: sshHost.trimmingCharacters(in: .whitespacesAndNewlines), sshPort: port,

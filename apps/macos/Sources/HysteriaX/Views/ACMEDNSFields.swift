@@ -4,13 +4,13 @@ struct ACMEDNSFields: View {
     @Binding var draft: ACMEDNSDraft
 
     var body: some View {
-        Picker("DNS 服务商", selection: $draft.provider) {
-            Text("选择服务商").tag("")
+        Picker(L10n.text("DNS 服务商"), selection: $draft.provider) {
+            Text(L10n.text("选择服务商")).tag("")
             ForEach(ACMEDNSProvider.allCases) { provider in
                 Text(provider.title).tag(provider.rawValue)
             }
             if !draft.provider.isEmpty, draft.definition == nil {
-                Text("不支持的服务商：\(draft.provider)").tag(draft.provider)
+                Text(L10n.text("不支持的服务商：{0}", String(describing: (draft.provider)))).tag(draft.provider)
             }
         }
         if let provider = draft.definition {
@@ -18,7 +18,7 @@ struct ACMEDNSFields: View {
                 input(field)
             }
             if provider.fields.contains(where: { !$0.required }) {
-                DisclosureGroup("可选参数") {
+                DisclosureGroup(L10n.text("可选参数")) {
                     ForEach(provider.fields.filter { !$0.required }) { field in
                         input(field)
                     }
@@ -29,8 +29,8 @@ struct ACMEDNSFields: View {
             }
         }
         if !draft.unknownKeys.isEmpty {
-            DisclosureGroup("原配置中的其他参数（\(draft.unknownKeys.count)）") {
-                Text("这些参数会保留。当前 Hysteria 版本可能忽略它们；请检查是否为拼写错误或其他服务商的参数。")
+            DisclosureGroup(L10n.text("原配置中的其他参数（{0}）", String(describing: (draft.unknownKeys.count)))) {
+                Text(L10n.text("这些参数会保留。当前 Hysteria 版本可能忽略它们；请检查是否为拼写错误或其他服务商的参数。"))
                     .font(.callout).foregroundStyle(.secondary)
                 ForEach(draft.unknownKeys, id: \.self) { key in
                     HStack {
@@ -40,14 +40,14 @@ struct ACMEDNSFields: View {
                         } label: {
                             Image(systemName: "minus.circle")
                         }
-                        .accessibilityLabel("删除参数 \(key)")
+                        .accessibilityLabel(L10n.text("删除参数 {0}", String(describing: (key))))
                     }
                 }
             }
         }
-        Text("DNS 凭据会加密保存在管理服务。所有 ACME 域名须由同一个 DNS 服务商管理。")
+        Text(L10n.text("DNS 凭据会加密保存在管理服务。所有 ACME 域名须由同一个 DNS 服务商管理。"))
             .font(.callout).foregroundStyle(.secondary)
-        Link("查看 ACME DNS 配置文档", destination: URL(string: "https://v2.hysteria.network/zh/docs/advanced/ACME-DNS-Config/")!)
+        Link(L10n.text("查看 ACME DNS 配置文档"), destination: URL(string: "https://v2.hysteria.network/zh/docs/advanced/ACME-DNS-Config/")!)
     }
 
     @ViewBuilder

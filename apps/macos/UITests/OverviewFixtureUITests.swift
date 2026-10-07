@@ -5,6 +5,7 @@ final class OverviewFixtureUITests: XCTestCase {
     func testOverviewNavigationAndKeyboardDismissal() {
         let app = XCUIApplication()
         app.launchEnvironment["HYSTERIAX_OVERVIEW_FIXTURE_DIRECTORY"] = "__OVERVIEW_FIXTURES__"
+        app.launchArguments += ["-appLanguage", "zh-Hans"]
         app.launch()
         let overview = app.descendants(matching: .any)["overview.page"].firstMatch
         XCTAssertTrue(overview.waitForExistence(timeout: 15))

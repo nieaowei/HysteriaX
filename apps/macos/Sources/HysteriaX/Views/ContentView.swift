@@ -6,24 +6,24 @@ private enum MainSection: String, CaseIterable, Identifiable {
     var id: String { rawValue }
     var title: String {
         switch self {
-        case .overview: "概览"
+        case .overview: L10n.text("概览")
         case .dns: "DNS"
-        case .nodes: "节点"
-        case .users: "用户"
-        case .credentials: "凭据"
-        case .jobs: "任务"
-        case .audit: "审计"
+        case .nodes: L10n.text("节点")
+        case .users: L10n.text("用户")
+        case .credentials: L10n.text("凭据")
+        case .jobs: L10n.text("任务")
+        case .audit: L10n.text("审计")
         }
     }
     var pageTitle: String {
         switch self {
-        case .overview: "HysteriaX 管理中心"
-        case .dns: "DNS 记录"
-        case .nodes: "节点"
-        case .users: "用户"
-        case .credentials: "凭据"
-        case .jobs: "任务"
-        case .audit: "审计"
+        case .overview: L10n.text("HysteriaX 管理中心")
+        case .dns: L10n.text("DNS 记录")
+        case .nodes: L10n.text("节点")
+        case .users: L10n.text("用户")
+        case .credentials: L10n.text("凭据")
+        case .jobs: L10n.text("任务")
+        case .audit: L10n.text("审计")
         }
     }
     var pageAccessibilityIdentifier: String {
@@ -65,19 +65,19 @@ struct ContentView: View {
     private var currentPageDescription: String {
         switch currentSection {
         case .overview:
-            store.lastUpdated.map { "数据更新于 \($0.formatted(date: .abbreviated, time: .shortened))" } ?? "连接管理服务以读取最新状态"
+            store.lastUpdated.map { L10n.text("数据更新于 {0}", String(describing: (L10n.date($0, date: .abbreviated, time: .shortened)))) } ?? L10n.text("连接管理服务以读取最新状态")
         case .dns:
-            "管理域名解析记录和节点域名分配。"
+            L10n.text("管理域名解析记录和节点域名分配。")
         case .nodes:
-            "管理 SSH 连接、Hysteria 配置和部署状态。"
+            L10n.text("管理 SSH 连接、Hysteria 配置和部署状态。")
         case .users:
-            "管理启停、到期、流量额度和节点分配。"
+            L10n.text("管理启停、到期、流量额度和节点分配。")
         case .credentials:
-            "集中管理凭据、引用、到期时间和更新结果。"
+            L10n.text("集中管理凭据、引用、到期时间和更新结果。")
         case .jobs:
-            "部署、同步和撤权任务的阶段与结果。"
+            L10n.text("部署、同步和撤权任务的阶段与结果。")
         case .audit:
-            "配置修改、凭据轮换、额度重置和撤权记录。"
+            L10n.text("配置修改、凭据轮换、额度重置和撤权记录。")
         }
     }
 
@@ -96,11 +96,11 @@ struct ContentView: View {
             .safeAreaInset(edge: .bottom) {
                 HStack(spacing: 8) {
                     Circle().fill(store.isConnected ? Color.green : Color.secondary).frame(width: 8, height: 8)
-                    Text(store.isConnected ? "服务已连接" : "服务未连接")
+                    Text(store.isConnected ? L10n.text("服务已连接") : L10n.text("服务未连接"))
                         .font(.caption).foregroundStyle(.secondary)
                     Spacer()
                     Button { openSettings() } label: { Image(systemName: "gearshape") }
-                        .buttonStyle(.plain).help("管理服务设置")
+                        .buttonStyle(.plain).help(L10n.text("管理服务设置"))
                 }
                 .padding(.horizontal, 14).padding(.vertical, 10)
             }
@@ -113,7 +113,7 @@ struct ContentView: View {
                 .toolbar {
                     ToolbarItemGroup {
                         Button { Task { await store.refresh(); store.requestOverviewHistoryRefresh() } } label: {
-                            Label("刷新", systemImage: "arrow.clockwise")
+                            Label(L10n.text("刷新"), systemImage: "arrow.clockwise")
                         }
                         .disabled(store.isLoading)
                     }
@@ -123,11 +123,11 @@ struct ContentView: View {
         .onChange(of: store.requestedSection) { _, section in
             if let section { selectedSection = section; store.requestedSection = nil }
         }
-        .alert("无法连接管理服务", isPresented: Binding(
+        .alert(L10n.text("无法连接管理服务"), isPresented: Binding(
             get: { store.errorMessage != nil },
             set: { if !$0 { store.errorMessage = nil } }
         )) {
-            Button("好", role: .cancel) { store.errorMessage = nil }
+            Button(L10n.text("好"), role: .cancel) { store.errorMessage = nil }
         } message: {
             Text(store.errorMessage ?? "")
         }

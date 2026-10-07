@@ -12,23 +12,23 @@ struct DNSBindingEditorView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("节点域名分配").font(.title2.bold())
+            Text(L10n.text("节点域名分配")).font(.title2.bold())
             if let detail {
                 Text(detail.name).foregroundStyle(.secondary)
                 Form {
                     DNSAllocationFields(store: store, draft: $draft, sshHost: detail.ssh.host)
-                    if draft.mode == "external" { TextField("替代公开地址", text: $externalHost) }
+                    if draft.mode == "external" { TextField(L10n.text("替代公开地址"), text: $externalHost) }
                     if let published = detail.publishedConnection {
-                        LabeledContent("已发布地址", value: published.publicHost)
+                        LabeledContent(L10n.text("已发布地址"), value: published.publicHost)
                     }
-                    if detail.dnsBinding != nil { Text("更换或解除绑定后保留原 DNS 记录，可在 DNS 记录页清理。").font(.caption).foregroundStyle(.secondary) }
+                    if detail.dnsBinding != nil { Text(L10n.text("更换或解除绑定后保留原 DNS 记录，可在 DNS 记录页清理。")).font(.caption).foregroundStyle(.secondary) }
                 }.formStyle(.grouped).disabled(saving)
-            } else { ProgressView("读取节点…").frame(maxWidth: .infinity, maxHeight: .infinity) }
+            } else { ProgressView(L10n.text("读取节点…")).frame(maxWidth: .infinity, maxHeight: .infinity) }
             if let error { Text(error).foregroundStyle(.red).textSelection(.enabled) }
             HStack {
-                Button("取消") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button(L10n.text("取消")) { dismiss() }.keyboardShortcut(.cancelAction)
                 Spacer()
-                Button(saving ? "正在提交…" : "保存域名分配") { save() }
+                Button(saving ? L10n.text("正在提交…") : L10n.text("保存域名分配")) { save() }
                     .disabled(saving || detail == nil || !store.isConnected).keyboardShortcut(.defaultAction)
             }
         }.padding(24).frame(width: 620, height: 620).interactiveDismissDisabled(saving)
@@ -72,17 +72,17 @@ struct DNSRecordBindingPicker: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("绑定 \(record.name)").font(.title2.bold())
-            Picker("节点", selection: $nodeID) {
-                Text("选择节点").tag("")
+            Text(L10n.text("绑定 {0}", String(describing: (record.name)))).font(.title2.bold())
+            Picker(L10n.text("节点"), selection: $nodeID) {
+                Text(L10n.text("选择节点")).tag("")
                 ForEach(store.nodes.filter { !["deleting", "delete_failed"].contains($0.state) }) { Text($0.name).tag($0.id) }
             }
-            Text("保留现有解析目标。已部署节点会验证新域名后再发布到订阅；证书仍在代理配置中设置。").font(.callout).foregroundStyle(.secondary)
+            Text(L10n.text("保留现有解析目标。已部署节点会验证新域名后再发布到订阅；证书仍在代理配置中设置。")).font(.callout).foregroundStyle(.secondary)
             if let error { Text(error).foregroundStyle(.red) }
             HStack {
-                Button("取消") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button(L10n.text("取消")) { dismiss() }.keyboardShortcut(.cancelAction)
                 Spacer()
-                Button("绑定") {
+                Button(L10n.text("绑定")) {
                     saving = true
                     Task {
                         defer { saving = false }

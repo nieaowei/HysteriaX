@@ -26,7 +26,7 @@ struct DNSRecordsView: View {
 
     var body: some View {
         if !store.supportsDNSManagement, store.isConnected {
-            ContentUnavailableView("需要升级管理服务", systemImage: "network", description: Text("此服务尚不支持 DNS 记录管理。"))
+            ContentUnavailableView(L10n.text("需要升级管理服务"), systemImage: "network", description: Text(L10n.text("此服务尚不支持 DNS 记录管理。")))
         } else {
             VStack(spacing: 0) {
                 MainVerticalSplitView(hasDetail: selected != nil) {
@@ -41,29 +41,29 @@ struct DNSRecordsView: View {
                 }
                 if let message = store.dnsError { Text(message).font(.callout).foregroundStyle(.orange).padding(8) }
                 if !store.isConnected {
-                    Text("离线快照 · \(store.dnsUpdatedAt?.formatted(date: .abbreviated, time: .shortened) ?? "尚未读取")").font(.caption).foregroundStyle(.secondary).padding(8)
+                    Text(L10n.text("离线快照 · {0}", String(describing: (store.dnsUpdatedAt.map { L10n.date($0) } ?? L10n.text("尚未读取"))))).font(.caption).foregroundStyle(.secondary).padding(8)
                 }
             }
-            .searchable(text: $search, prompt: "搜索域名或目标")
+            .searchable(text: $search, prompt: L10n.text("搜索域名或目标"))
             .toolbar {
                 ToolbarItemGroup {
                     Button { showingConnections = true } label: {
-                        Label("连接与域名区域", systemImage: "network")
+                        Label(L10n.text("连接与域名区域"), systemImage: "network")
                             .labelStyle(.iconOnly)
                     }
-                    .help("连接与域名区域")
+                    .help(L10n.text("连接与域名区域"))
                     .disabled(!store.isConnected)
-                    Button { creating = true } label: { Label("新增记录", systemImage: "plus") }
+                    Button { creating = true } label: { Label(L10n.text("新增记录"), systemImage: "plus") }
                         .disabled(!store.isConnected || !store.dnsZones.contains(where: \.enabled))
                 }
             }
             .sheet(isPresented: $showingConnections) { DNSConnectionsView(store: store) }
             .sheet(isPresented: $creating) { DNSRecordEditorView(store: store, record: nil, initialZoneID: zoneID) }
             .sheet(item: $editing) { DNSRecordEditorView(store: store, record: $0, initialZoneID: $0.zoneId) }
-            .confirmationDialog("删除 \(deleting?.name ?? "") 的 DNS 记录？", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } })) {
-                Button("删除远端记录", role: .destructive) { if let record = deleting { run { try await store.deleteDNSRecord(record) } }; deleting = nil }
+            .confirmationDialog(L10n.text("删除 {0} 的 DNS 记录？", String(describing: (deleting?.name ?? ""))), isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } })) {
+                Button(L10n.text("删除远端记录"), role: .destructive) { if let record = deleting { run { try await store.deleteDNSRecord(record) } }; deleting = nil }
             }
-            .alert("DNS 操作失败", isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) { Button("好", role: .cancel) { error = nil } } message: { Text(error ?? "") }
+            .alert(L10n.text("DNS 操作失败"), isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) { Button(L10n.text("好"), role: .cancel) { error = nil } } message: { Text(error ?? "") }
             .task { await store.refreshDNS(); openRequestedRecord() }
             .onChange(of: store.requestedDNSRecordID) { _, _ in openRequestedRecord() }
         }
@@ -72,7 +72,7 @@ struct DNSRecordsView: View {
         // Let the native table resize columns without rebuilding rows and sorting on every size change.
         let records = visibleRecords
         return Table(records, selection: $selection, sortOrder: $sortOrder) {
-            TableColumn("域名 / 类型", value: \.name) { record in
+            TableColumn(L10n.text("域名 / 类型"), value: \.name) { record in
                 VStack(alignment: .leading, spacing: 2) {
                     Text(record.name)
                         .lineLimit(1).truncationMode(.middle)
@@ -81,21 +81,21 @@ struct DNSRecordsView: View {
                 }
                 .help(record.name)
             }.width(min: 100, ideal: 240, max: .infinity)
-            TableColumn("目标 / TTL", value: \.content) { record in
+            TableColumn(L10n.text("目标 / TTL"), value: \.content) { record in
                 VStack(alignment: .leading, spacing: 2) {
                     Text(record.content)
                         .lineLimit(1).truncationMode(.middle)
                         .textSelection(.enabled)
-                    Text(record.ttl == 1 ? "TTL 自动" : "TTL \(record.ttl) 秒")
+                    Text(record.ttl == 1 ? L10n.text("TTL 自动") : L10n.text("TTL {0} 秒", String(describing: (record.ttl))))
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 .help(record.content)
             }.width(min: 100, ideal: 240, max: .infinity)
-            TableColumn("节点") { record in
+            TableColumn(L10n.text("节点")) { record in
                 let name = record.boundNodeId.flatMap { id in store.nodes.first { $0.id == id }?.name } ?? "—"
                 Text(name).lineLimit(1).help(name)
             }.width(min: 60, ideal: 76)
-            TableColumn("状态") { record in
+            TableColumn(L10n.text("状态")) { record in
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 5) {
                         Circle().fill(record.syncColor).frame(width: 5, height: 5)
@@ -106,33 +106,33 @@ struct DNSRecordsView: View {
                 .lineLimit(1)
                 .help("\(record.stateLabel) · \(record.resolutionLabel)")
             }.width(min: 80, ideal: 88)
-            TableColumn("来源") { record in
-                Text(record.origin == "hysteriax" ? "HysteriaX" : "已有记录")
+            TableColumn(L10n.text("来源")) { record in
+                Text(record.origin == "hysteriax" ? "HysteriaX" : L10n.text("已有记录"))
                     .font(.caption2.weight(.medium)).lineLimit(1)
                     .foregroundStyle(record.originColor)
                     .padding(.horizontal, 4).padding(.vertical, 2)
                     .background(record.originColor.opacity(0.10), in: Capsule())
-                    .help(record.origin == "hysteriax" ? "HysteriaX 创建" : "已有记录")
+                    .help(record.origin == "hysteriax" ? L10n.text("HysteriaX 创建") : L10n.text("已有记录"))
             }.width(min: 60, ideal: 66)
         }
         .scrollIndicators(.automatic, axes: .horizontal)
         .overlay {
-            if records.isEmpty { ContentUnavailableView("暂无 DNS 记录", systemImage: "network", description: Text("配置连接、启用域名区域并刷新记录，或直接创建记录。")) }
+            if records.isEmpty { ContentUnavailableView(L10n.text("暂无 DNS 记录"), systemImage: "network", description: Text(L10n.text("配置连接、启用域名区域并刷新记录，或直接创建记录。"))) }
         }
     }
 
     private var filters: some View {
         HStack {
-            Picker("连接", selection: $connectionID) {
-                Text("全部连接").tag("")
+            Picker(L10n.text("连接"), selection: $connectionID) {
+                Text(L10n.text("全部连接")).tag("")
                 ForEach(store.dnsConnections) { Text($0.name).tag($0.id) }
             }
-            Picker("域名区域", selection: $zoneID) {
-                Text("全部域名").tag("")
+            Picker(L10n.text("域名区域"), selection: $zoneID) {
+                Text(L10n.text("全部域名")).tag("")
                 ForEach(store.dnsZones.filter { connectionID.isEmpty || $0.connectionId == connectionID }) { Text($0.name).tag($0.id) }
             }
             if let zone = store.dnsZones.first(where: { $0.id == zoneID }) {
-                Button("刷新远端记录") { run { try await store.refreshDNSZone(zone) } }.disabled(!store.isConnected || !zone.enabled || busy)
+                Button(L10n.text("刷新远端记录")) { run { try await store.refreshDNSZone(zone) } }.disabled(!store.isConnected || !zone.enabled || busy)
             }
             Spacer()
             if store.dnsIsLoading || busy { ProgressView().controlSize(.small) }

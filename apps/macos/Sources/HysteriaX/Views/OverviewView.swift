@@ -46,10 +46,10 @@ struct OverviewView: View {
         }
         .toolbar {
             ToolbarItem(placement: .principal) {
-                Picker("概览分类", selection: $selectedTab) {
-                    tabLabel("运行概况", symbol: "square.grid.2x2", id: "summary")
-                    tabLabel("流量与额度", symbol: "chart.bar.xaxis", id: "traffic")
-                    tabLabel("连接与质量", symbol: "network", id: "quality")
+                Picker(L10n.text("概览分类"), selection: $selectedTab) {
+                    tabLabel(L10n.text("运行概况"), symbol: "square.grid.2x2", id: "summary")
+                    tabLabel(L10n.text("流量与额度"), symbol: "chart.bar.xaxis", id: "traffic")
+                    tabLabel(L10n.text("连接与质量"), symbol: "network", id: "quality")
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
@@ -64,7 +64,7 @@ struct OverviewView: View {
     private var statusBar: some View {
         VStack(alignment: .leading, spacing: 4) {
             if !store.isConnected {
-                Text(store.lastUpdated == nil ? "打开设置，填写管理服务地址和令牌。" : "显示上次更新的缓存数据，恢复连接后刷新。")
+                Text(store.lastUpdated == nil ? L10n.text("打开设置，填写管理服务地址和令牌。") : L10n.text("显示上次更新的缓存数据，恢复连接后刷新。"))
                     .foregroundStyle(.orange)
             }
             if let error = store.overviewError { Text(error).foregroundStyle(.orange) }
@@ -90,10 +90,10 @@ struct OverviewView: View {
                 }
             } else {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 180))], spacing: 16) {
-                    summaryCard("节点", value: "\(store.nodes.count)", symbol: "server.rack")
-                    summaryCard("用户", value: "\(store.users.count)", symbol: "person.2")
-                    summaryCard("最近任务中待处理", value: "\(store.jobs.filter { $0.status == "queued" || $0.status == "running" }.count)", symbol: "hourglass")
-                    summaryCard("需关注节点", value: "\(nodesNeedingAttention)", symbol: "exclamationmark.triangle")
+                    summaryCard(L10n.text("节点"), value: "\(store.nodes.count)", symbol: "server.rack")
+                    summaryCard(L10n.text("用户"), value: "\(store.users.count)", symbol: "person.2")
+                    summaryCard(L10n.text("最近任务中待处理"), value: "\(store.jobs.filter { $0.status == "queued" || $0.status == "running" }.count)", symbol: "hourglass")
+                    summaryCard(L10n.text("需关注节点"), value: "\(nodesNeedingAttention)", symbol: "exclamationmark.triangle")
                 }
                 monitoringUnavailable
             }
@@ -124,14 +124,14 @@ struct OverviewView: View {
     }
 
     private var monitoringUnavailable: some View {
-        Text("当前服务不支持高级概览监控，升级后可查看持续探测、在线统计与历史趋势。")
+        Text(L10n.text("当前服务不支持高级概览监控，升级后可查看持续探测、在线统计与历史趋势。"))
             .font(.callout).foregroundStyle(.secondary)
     }
 
     private var recentJobsSection: some View {
-        OverviewCard("最近任务", systemImage: "list.bullet.rectangle") {
+        OverviewCard(L10n.text("最近任务"), systemImage: "list.bullet.rectangle") {
             if store.jobs.isEmpty {
-                Text("暂无任务").foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 8)
+                Text(L10n.text("暂无任务")).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 8)
             } else {
                 VStack(spacing: 0) {
                     ForEach(store.jobs.prefix(5)) { job in
@@ -156,11 +156,11 @@ struct OverviewView: View {
         let expired = store.users.filter { DateDisplayText.parse($0.expiresAt).map { $0 <= now } ?? false }.count
         let expiring = store.users.filter { DateDisplayText.parse($0.expiresAt).map { $0 > now && $0 <= now.addingTimeInterval(7 * 86400) } ?? false }.count
         let depleted = store.users.filter { user in user.quotaBytes.map { user.usageBytes >= $0 } ?? false }.count
-        return OverviewCard("用户状态", systemImage: "person.2") {
+        return OverviewCard(L10n.text("用户状态"), systemImage: "person.2") {
             VStack(alignment: .leading, spacing: 6) {
-                Text("全部 \(store.users.count) · 启用 \(enabled) · 停用 \(store.users.count - enabled)")
-                Text("已过期 \(expired) · 7 天内到期 \(expiring) · 额度耗尽 \(depleted)").foregroundStyle(.secondary)
-                Text("到期与额度分类可能重叠；启用状态不代表用户在线。").font(.caption).foregroundStyle(.secondary)
+                Text(L10n.text("全部 {0} · 启用 {1} · 停用 {2}", String(describing: (store.users.count)), String(describing: (enabled)), String(describing: (store.users.count - enabled))))
+                Text(L10n.text("已过期 {0} · 7 天内到期 {1} · 额度耗尽 {2}", String(describing: (expired)), String(describing: (expiring)), String(describing: (depleted)))).foregroundStyle(.secondary)
+                Text(L10n.text("到期与额度分类可能重叠；启用状态不代表用户在线。")).font(.caption).foregroundStyle(.secondary)
             }.frame(maxWidth: .infinity, alignment: .leading)
         }
     }

@@ -40,33 +40,33 @@ struct NodeNotificationsButton: View {
                 }
                 .frame(width: 36, height: 34)
         }
-        .accessibilityLabel("通知，\(notificationCount) 条当前提醒")
+        .accessibilityLabel(L10n.text("通知，{0} 条当前提醒", String(describing: (notificationCount))))
         .accessibilityIdentifier("overview.notifications")
-        .help("节点提醒（\(notificationCount)）")
+        .help(L10n.text("节点提醒（{0}）", String(describing: (notificationCount))))
         .popover(isPresented: $isPresented, arrowEdge: .top) {
             VStack(alignment: .leading, spacing: 0) {
                 HStack {
-                    Text("节点提醒").font(.headline)
+                    Text(L10n.text("节点提醒")).font(.headline)
                     Text("\(notificationCount)").foregroundStyle(.secondary)
                     Spacer()
                     Button { isPresented = false } label: {
-                        Label("关闭通知", systemImage: "xmark")
+                        Label(L10n.text("关闭通知"), systemImage: "xmark")
                             .labelStyle(.iconOnly)
                     }
                     .buttonStyle(.plain)
                     .keyboardShortcut(.cancelAction)
-                    .help("关闭通知")
+                    .help(L10n.text("关闭通知"))
                 }
                 .padding(16)
                 Divider()
                 if !store.isConnected {
-                    Label("显示上次同步的提醒，恢复连接后更新。", systemImage: "clock.arrow.circlepath")
+                    Label(L10n.text("显示上次同步的提醒，恢复连接后更新。"), systemImage: "clock.arrow.circlepath")
                         .font(.caption).foregroundStyle(.secondary)
                         .padding(.horizontal, 16).padding(.top, 12)
                 }
                 if !monitoringIssues.isEmpty {
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("监控事项 \(monitoringIssues.count)").font(.subheadline.bold())
+                        Text(L10n.text("监控事项 {0}", String(describing: (monitoringIssues.count)))).font(.subheadline.bold())
                         ForEach(monitoringIssues.prefix(6)) { issue in
                             Button {
                                 isPresented = false
@@ -79,8 +79,8 @@ struct NodeNotificationsButton: View {
                 if notificationNodes.isEmpty && monitoringIssues.isEmpty {
                     VStack(spacing: 10) {
                         Image(systemName: "bell.slash").font(.title).foregroundStyle(.secondary)
-                        Text("暂无提醒").font(.headline)
-                        Text("节点到期和流量预警将在这里显示。")
+                        Text(L10n.text("暂无提醒")).font(.headline)
+                        Text(L10n.text("节点到期和流量预警将在这里显示。"))
                             .font(.callout).foregroundStyle(.secondary)
                     }
                     .frame(maxWidth: .infinity)

@@ -6,7 +6,7 @@ struct CredentialPickerView: View {
     var kinds: [String]
     var dnsProvider: String? = nil
     var ownerUserID: String? = nil
-    var title = "凭据"
+    var title = L10n.text("凭据")
     @State private var creating = false
     private var entries: [CredentialSummary] {
         store.credentials.filter { kinds.contains($0.kind) && (dnsProvider == nil || $0.metadata["provider"]?.stringValue == dnsProvider) && $0.ownerUserId == ownerUserID && (!$0.archived || $0.id == selection) }
@@ -14,11 +14,11 @@ struct CredentialPickerView: View {
     var body: some View {
         HStack {
             Picker(title, selection: $selection) {
-                Text("选择凭据").tag("")
+                Text(L10n.text("选择凭据")).tag("")
                 ForEach(entries) { Text("\($0.name) · v\($0.latestVersion)").tag($0.id) }
             }
             .accessibilityIdentifier("credential.picker")
-            Button("创建…") { creating = true }.disabled(!store.isConnected)
+            Button(L10n.text("创建…")) { creating = true }.disabled(!store.isConnected)
         }
         .sheet(isPresented: $creating) {
             CredentialEditorView(store: store, initialKind: kinds.first ?? "ssh_private_key", initialOwner: ownerUserID) { selection = $0.id }
@@ -41,8 +41,8 @@ struct ManagedDNSCredentialFields: View {
         })
     }
     var body: some View {
-        CredentialPickerView(store: store, selection: selection, kinds: ["dns"], title: "DNS 凭据")
-        if !draft.provider.isEmpty { LabeledContent("DNS 服务商", value: draft.definition?.title ?? draft.provider) }
-        Text("凭据版本发布后会自动更新全部引用节点。").font(.caption).foregroundStyle(.secondary)
+        CredentialPickerView(store: store, selection: selection, kinds: ["dns"], title: L10n.text("DNS 凭据"))
+        if !draft.provider.isEmpty { LabeledContent(L10n.text("DNS 服务商"), value: draft.definition?.title ?? draft.provider) }
+        Text(L10n.text("凭据版本发布后会自动更新全部引用节点。")).font(.caption).foregroundStyle(.secondary)
     }
 }

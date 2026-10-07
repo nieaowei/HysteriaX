@@ -7,6 +7,9 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		000000000000000000002C04 = {isa = PBXBuildFile; fileRef = 000000000000000000001C04; };
+		000000000000000000002C00 /* Localization.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001C00; };
+		000000000000000000002C01 /* Localizable.strings in Resources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001C01; };
 		000000000000000000002B03 /* Views/DetailHeaderLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001B03 /* Views/DetailHeaderLayout.swift */; };
 		000000000000000000002B02 /* Models/NodeTaskFeedback.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001B02 /* Models/NodeTaskFeedback.swift */; };
 		000000000000000000002B01 /* Views/DNSRecordDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001B01 /* Views/DNSRecordDetailView.swift */; };
@@ -67,6 +70,10 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		000000000000000000001C04 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Support/ManagementDisplayText.swift; sourceTree = "<group>"; };
+		000000000000000000001C00 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Support/Localization.swift; sourceTree = "<group>"; };
+		000000000000000000001C02 = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = en; path = Resources/en.lproj/Localizable.strings; sourceTree = "<group>"; };
+		000000000000000000001C03 = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = "zh-Hans"; path = "Resources/zh-Hans.lproj/Localizable.strings"; sourceTree = "<group>"; };
 		000000000000000000001B03 /* Views/DetailHeaderLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/DetailHeaderLayout.swift; sourceTree = "<group>"; };
 		000000000000000000001B02 /* Models/NodeTaskFeedback.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models/NodeTaskFeedback.swift; sourceTree = "<group>"; };
 		000000000000000000001B01 /* Views/DNSRecordDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/DNSRecordDetailView.swift; sourceTree = "<group>"; };
@@ -137,10 +144,17 @@
 		};
 /* End PBXFrameworksBuildPhase section */
 
+/* Begin PBXVariantGroup section */
+		000000000000000000001C01 = {isa = PBXVariantGroup; children = (000000000000000000001C02, 000000000000000000001C03); name = Localizable.strings; sourceTree = "<group>"; };
+/* End PBXVariantGroup section */
+
 /* Begin PBXGroup section */
 		000000000000000000003001 /* Sources/HysteriaX */ = {
 			isa = PBXGroup;
 			children = (
+				000000000000000000001C00 /* Localization.swift */,
+				000000000000000000001C04 /* ManagementDisplayText.swift */,
+				000000000000000000001C01 /* Localizable.strings */,
 				0000000000000000000F1000 /* Models/DNSAllocationDraft.swift */,
 				0000000000000000000F1001 /* Stores/DNSStore.swift */,
 				0000000000000000000F1002 /* Views/DNSAllocationFields.swift */,
@@ -254,10 +268,10 @@
 			};
 			buildConfigurationList = 000000000000000000007001 /* Build configuration list for PBXProject "HysteriaX" */;
 			compatibilityVersion = "Xcode 16.0";
-			developmentRegion = zh_CN;
+			developmentRegion = en;
 			hasScannedForEncodings = 0;
 			knownRegions = (
-				zh_CN,
+				"zh-Hans",
 				en,
 				Base,
 			);
@@ -276,6 +290,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				000000000000000000002C01 /* Localizable.strings in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -286,6 +301,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				000000000000000000002C00 /* Localization.swift in Sources */,
+				000000000000000000002C04 /* ManagementDisplayText.swift in Sources */,
 				0000000000000000000F2000 /* Models/DNSAllocationDraft.swift in Sources */,
 				0000000000000000000F2001 /* Stores/DNSStore.swift in Sources */,
 				0000000000000000000F2002 /* Views/DNSAllocationFields.swift in Sources */,

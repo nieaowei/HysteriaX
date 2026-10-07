@@ -27,7 +27,7 @@ enum ProxyProbeURLValidation {
               components.password == nil,
               components.query == nil,
               components.fragment == nil else {
-            return "探测地址必须是有效的 HTTP URL，不能包含认证信息、查询参数或片段。"
+            return L10n.text("探测地址必须是有效的 HTTP URL，不能包含认证信息、查询参数或片段。")
         }
         return nil
     }
@@ -99,8 +99,8 @@ enum SubscriptionFileFormat: String, CaseIterable, Sendable {
         switch self {
         case .mihomo: "Mihomo YAML"
         case .singbox: "sing-box JSON"
-        case .base64: "Base64 节点订阅"
-        case .uri: "纯文本节点链接"
+        case .base64: L10n.text("Base64 节点订阅")
+        case .uri: L10n.text("纯文本节点链接")
         }
     }
 
@@ -123,7 +123,7 @@ enum SubscriptionFileFormat: String, CaseIterable, Sendable {
     func subscriptionURL(autoURL: String?, legacyURL: String) throws -> String {
         if self == .mihomo { return legacyURL }
         guard let autoURL, var components = URLComponents(string: autoURL) else {
-            throw APIClientError.server("此服务端尚未提供多格式订阅，请先升级服务端。")
+            throw APIClientError.server(L10n.text("此服务端尚未提供多格式订阅，请先升级服务端。"))
         }
         var items = components.queryItems ?? []
         items.removeAll { $0.name == "format" }

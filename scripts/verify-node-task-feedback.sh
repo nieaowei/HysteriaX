@@ -5,6 +5,7 @@ SOURCE="$ROOT/apps/macos/Sources/HysteriaX"
 BUILD="$ROOT/apps/macos/.build/node-task-feedback"
 mkdir -p "$BUILD"
 swiftc -swift-version 6 -parse-as-library \
+  "$SOURCE/Support/Localization.swift" \
   "$SOURCE/Models/APIModels.swift" \
   "$SOURCE/Models/OpenAPIRequests.generated.swift" \
   "$SOURCE/Models/OpenAPIResponses.generated.swift" \

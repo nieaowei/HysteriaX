@@ -37,18 +37,18 @@ struct NodePackageDraft {
         guard normalized.count <= 64,
               normalized.range(of: #"^[0-9]+(?:\.[0-9]{1,9})?$"#, options: .regularExpression) != nil,
               let gb = Decimal(string: normalized, locale: Locale(identifier: "en_US_POSIX")), gb >= 0 else {
-            throw APIClientError.server("流量须为非负 GB 数值，使用小数点。")
+            throw APIClientError.server(L10n.text("流量须为非负 GB 数值，使用小数点。"))
         }
         let bytes = gb * 1_000_000_000
-        guard bytes <= Decimal(Int64.max) else { throw APIClientError.server("流量数值过大。") }
+        guard bytes <= Decimal(Int64.max) else { throw APIClientError.server(L10n.text("流量数值过大。")) }
         return NSDecimalNumber(decimal: bytes).int64Value
     }
 
     func package() throws -> NodePackage {
         let quota = hasQuota ? try Self.bytes(quotaGB) : nil
-        if let quota, quota <= 0 { throw APIClientError.server("套餐额度须大于零。") }
+        if let quota, quota <= 0 { throw APIClientError.server(L10n.text("套餐额度须大于零。")) }
         let timezone = timezone.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard TimeZone(identifier: timezone) != nil else { throw APIClientError.server("请输入有效的 IANA 时区，例如 Asia/Shanghai。") }
+        guard TimeZone(identifier: timezone) != nil else { throw APIClientError.server(L10n.text("请输入有效的 IANA 时区，例如 Asia/Shanghai。")) }
         return NodePackage(
             expiresAt: hasExpiry ? ISO8601DateFormatter().string(from: expiry) : nil,
             quotaBytes: quota, cycle: cycle, resetDay: resetDay, timezone: timezone,
@@ -62,29 +62,29 @@ enum PackageDisplay {
     static func date(_ value: String?) -> Date? { DateDisplayParser.shared.parse(value) }
     static func warning(_ kind: String) -> String {
         switch kind {
-        case "expiring": "节点即将到期"
-        case "expired": "节点已到期，代理已限制"
-        case "traffic_warning": "节点流量接近额度"
-        case "quota_exhausted": "节点流量已耗尽，代理已限制"
+        case "expiring": L10n.text("节点即将到期")
+        case "expired": L10n.text("节点已到期，代理已限制")
+        case "traffic_warning": L10n.text("节点流量接近额度")
+        case "quota_exhausted": L10n.text("节点流量已耗尽，代理已限制")
         default: kind
         }
     }
     static func gap(_ reason: String) -> String {
         switch reason {
-        case "network_sample_failed": "网卡采集失败，请检查 SSH 和网卡设置"
-        case "network_counter_reset_or_interface_changed": "服务器重启、网卡变化或计数重置，已重新建立基线"
-        case "meter_configuration_changed": "计费设置已修改，等待建立采集基线"
-        case "usage_corrected": "用量已校正，等待建立采集基线"
-        default: "存在未能完整采集的流量"
+        case "network_sample_failed": L10n.text("网卡采集失败，请检查 SSH 和网卡设置")
+        case "network_counter_reset_or_interface_changed": L10n.text("服务器重启、网卡变化或计数重置，已重新建立基线")
+        case "meter_configuration_changed": L10n.text("计费设置已修改，等待建立采集基线")
+        case "usage_corrected": L10n.text("用量已校正，等待建立采集基线")
+        default: L10n.text("存在未能完整采集的流量")
         }
     }
     static func expiry(_ package: NodePackage?) -> String {
-        guard let date = date(package?.expiresAt) else { return "不限时" }
+        guard let date = date(package?.expiresAt) else { return L10n.text("不限时") }
         let days = Int(ceil(date.timeIntervalSinceNow / 86400))
-        return days <= 0 ? "已到期" : "剩余 \(days) 天"
+        return days <= 0 ? L10n.text("已到期") : L10n.text("剩余 {0} 天", String(describing: (days)))
     }
     static func listUsage(_ package: NodePackage?, _ usage: NodePackageUsage?) -> String {
-        guard let quota = package?.quotaBytes else { return "不限流量" }
+        guard let quota = package?.quotaBytes else { return L10n.text("不限流量") }
         let used = usage.map { twoDecimalGB($0.usageBytes) } ?? "—"
         return "\(used) / \(twoDecimalGB(quota)) GB"
     }
@@ -96,7 +96,7 @@ enum PackageDisplay {
     }
 
     static func usage(_ package: NodePackage?, _ usage: NodePackageUsage?) -> String {
-        guard let quota = package?.quotaBytes else { return "不限流量" }
+        guard let quota = package?.quotaBytes else { return L10n.text("不限流量") }
         let used = usage.map { NodePackageDraft.gbText($0.usageBytes) } ?? "—"
         return "\(used) / \(NodePackageDraft.gbText(quota)) GB"
     }

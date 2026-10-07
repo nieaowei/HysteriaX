@@ -3,7 +3,7 @@ import Foundation
 extension ManagementStore {
     func resolveMTLSCredential(userID: String, nodeID: String, certificate: String?, privateKey: String?, selected: String?) async throws -> (id: String, version: Int)? {
         if let selected, !selected.isEmpty {
-            guard let entry = credentials.first(where: { $0.id == selected && $0.ownerUserId == userID && $0.kind == "tls_identity" && !$0.archived }) else { throw APIClientError.server("请选择该用户的有效 mTLS 凭据。") }
+            guard let entry = credentials.first(where: { $0.id == selected && $0.ownerUserId == userID && $0.kind == "tls_identity" && !$0.archived }) else { throw APIClientError.server(L10n.text("请选择该用户的有效 mTLS 凭据。")) }
             return (entry.id, entry.latestVersion)
         }
         guard let certificate, let privateKey else { return nil }

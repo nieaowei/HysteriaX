@@ -8,10 +8,10 @@ struct OverviewServerCard: View {
     let error: String?
 
     var body: some View {
-        OverviewCard("管理服务器", systemImage: "server.rack") {
+        OverviewCard(L10n.text("管理服务器"), systemImage: "server.rack") {
             if let monitor = monitoring {
                 if !isConnected || error != nil {
-                    Label("以下为上次采集的数据", systemImage: "clock.arrow.circlepath")
+                    Label(L10n.text("以下为上次采集的数据"), systemImage: "clock.arrow.circlepath")
                         .font(.callout).foregroundStyle(.orange)
                 }
                 OverviewPairLayout {
@@ -21,13 +21,13 @@ struct OverviewServerCard: View {
                 OverviewColumnsLayout(wideColumns: 3, wideMinimum: 480) { serverResources(monitor) }
                 OverviewPairLayout(flexibleIndex: 1, spacing: 16, stackedSpacing: 6) {
                     serverDatabase(monitor)
-                    Text("采集于 \(sampleTime(monitor.sampledAt)) · 每 15 秒刷新")
+                    Text(L10n.text("采集于 {0} · 每 15 秒刷新", String(describing: (sampleTime(monitor.sampledAt)))))
                         .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }.font(.caption)
-                Text("资源指标为管理服务所在环境可见的主机数据。")
+                Text(L10n.text("资源指标为管理服务所在环境可见的主机数据。"))
                     .font(.caption).foregroundStyle(.secondary)
             } else {
-                Text(isLoading ? "正在获取服务器监控信息…" : "暂无服务器监控信息")
+                Text(isLoading ? L10n.text("正在获取服务器监控信息…") : L10n.text("暂无服务器监控信息"))
                     .foregroundStyle(.secondary).padding(.vertical, 8)
             }
             if let error = error {
@@ -38,24 +38,24 @@ struct OverviewServerCard: View {
 
 
     private func serverDatabase(_ monitor: ServerMonitoring) -> some View {
-        Label(monitor.database == "ok" ? "数据库正常" : "数据库不可用",
+        Label(monitor.database == "ok" ? L10n.text("数据库正常") : L10n.text("数据库不可用"),
               systemImage: monitor.database == "ok" ? "checkmark.circle" : "exclamationmark.triangle")
             .foregroundStyle(monitor.database == "ok" ? Color.secondary : Color.orange)
     }
 
     private func serverIdentity(_ monitor: ServerMonitoring) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(monitor.hostname ?? "主机名未提供").fontWeight(.medium)
-            Text(monitor.os ?? "系统信息未提供").foregroundStyle(.secondary)
+            Text(monitor.hostname ?? L10n.text("主机名未提供")).fontWeight(.medium)
+            Text(monitor.os ?? L10n.text("系统信息未提供")).foregroundStyle(.secondary)
             Text(serviceAddress).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
         }
     }
 
     private func serverUptimes(_ monitor: ServerMonitoring, alignment: HorizontalAlignment) -> some View {
         VStack(alignment: alignment, spacing: 6) {
-            Text("服务版本 \(monitor.serviceVersion)")
-            Text("服务运行 \(uptime(monitor.serviceUptimeSeconds))")
-            Text("主机运行 \(uptime(monitor.hostUptimeSeconds))").foregroundStyle(.secondary)
+            Text(L10n.text("服务版本 {0}", String(describing: (monitor.serviceVersion))))
+            Text(L10n.text("服务运行 {0}", String(describing: (uptime(monitor.serviceUptimeSeconds)))))
+            Text(L10n.text("主机运行 {0}", String(describing: (uptime(monitor.hostUptimeSeconds))))).foregroundStyle(.secondary)
         }
     }
 
@@ -63,13 +63,13 @@ struct OverviewServerCard: View {
         Group {
             resourceMetric("CPU", symbol: "cpu", fraction: monitor.cpuUsagePercent / 100,
                            value: String(format: "%.1f%%", monitor.cpuUsagePercent),
-                           detail: "\(monitor.cpuCount) 个逻辑核心")
-            resourceMetric("内存", symbol: "memorychip",
+                           detail: L10n.text("{0} 个逻辑核心", String(describing: (monitor.cpuCount))))
+            resourceMetric(L10n.text("内存"), symbol: "memorychip",
                            fraction: fraction(used: monitor.memoryUsedBytes, total: monitor.memoryTotalBytes),
-                           value: usage(monitor.memoryUsedBytes, monitor.memoryTotalBytes), detail: "已用 / 总量")
-            resourceMetric("根目录磁盘", symbol: "internaldrive",
+                           value: usage(monitor.memoryUsedBytes, monitor.memoryTotalBytes), detail: L10n.text("已用 / 总量"))
+            resourceMetric(L10n.text("根目录磁盘"), symbol: "internaldrive",
                            fraction: fraction(used: monitor.rootDiskUsedBytes, total: monitor.rootDiskTotalBytes),
-                           value: usage(monitor.rootDiskUsedBytes, monitor.rootDiskTotalBytes), detail: "已用 / 总量")
+                           value: usage(monitor.rootDiskUsedBytes, monitor.rootDiskTotalBytes), detail: L10n.text("已用 / 总量"))
         }
     }
 
@@ -91,7 +91,7 @@ struct OverviewServerCard: View {
     }
 
     private func usage(_ used: Int?, _ total: Int?) -> String {
-        guard let used, let total, total > 0 else { return "未提供" }
+        guard let used, let total, total > 0 else { return L10n.text("未提供") }
         return "\(ByteCountFormatter.string(fromByteCount: Int64(used), countStyle: .binary)) / \(ByteCountFormatter.string(fromByteCount: Int64(total), countStyle: .binary))"
     }
 
@@ -99,10 +99,10 @@ struct OverviewServerCard: View {
         let days = seconds / 86_400
         let hours = seconds % 86_400 / 3_600
         let minutes = seconds % 3_600 / 60
-        return days > 0 ? "\(days) 天 \(hours) 小时" : "\(hours) 小时 \(minutes) 分钟"
+        return days > 0 ? L10n.text("{0} 天 {1} 小时", String(describing: (days)), String(describing: (hours))) : L10n.text("{0} 小时 {1} 分钟", String(describing: (hours)), String(describing: (minutes)))
     }
 
     private func sampleTime(_ timestamp: String) -> String {
-        DateDisplayText.parse(timestamp)?.formatted(date: .abbreviated, time: .standard) ?? timestamp
+        DateDisplayText.parse(timestamp).map { L10n.date($0, time: .standard) } ?? timestamp
     }
 }

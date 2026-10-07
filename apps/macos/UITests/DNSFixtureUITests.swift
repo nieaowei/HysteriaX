@@ -5,6 +5,7 @@ final class DNSFixtureUITests: XCTestCase {
     func testDNSPageAndRecordEditor() {
         let app = XCUIApplication()
         app.launchEnvironment["HYSTERIAX_DNS_FIXTURE_DIRECTORY"] = "__DNS_FIXTURES__"
+        app.launchArguments += ["-appLanguage", "zh-Hans"]
         app.launch()
         addTeardownBlock { await MainActor.run { app.terminate() } }
         let sidebar = app.descendants(matching: .any)["sidebar.dns"].firstMatch

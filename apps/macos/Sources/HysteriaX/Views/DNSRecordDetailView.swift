@@ -29,67 +29,67 @@ struct DNSRecordDetailView: View {
                         OverviewColumnsLayout(wideColumns: 2, wideMinimum: 576, narrowColumns: 1) {
                             GroupBox {
                                 VStack(alignment: .leading, spacing: 8) {
-                                    compactItem("目标", value: record.content, monospaced: true)
+                                    compactItem(L10n.text("目标"), value: record.content, monospaced: true)
                                     OverviewColumnsLayout(wideColumns: 2, wideMinimum: 0, spacing: 8) {
-                                        compactItem("记录类型", value: record.recordType)
-                                        compactItem("TTL", value: record.ttl == 1 ? "自动" : "\(record.ttl) 秒")
-                                        compactItem("代理模式", value: record.proxied ? "Cloudflare 代理" : "仅 DNS")
-                                        compactItem("记录来源", value: record.origin == "hysteriax" ? "HysteriaX 创建" : "已有记录")
-                                        compactItem("域名区域", value: zone?.name ?? record.zoneId)
-                                        compactItem("服务连接", value: connection?.name ?? "未找到连接")
+                                        compactItem(L10n.text("记录类型"), value: record.recordType)
+                                        compactItem("TTL", value: record.ttl == 1 ? L10n.text("自动") : L10n.text("{0} 秒", String(describing: (record.ttl))))
+                                        compactItem(L10n.text("代理模式"), value: record.proxied ? L10n.text("Cloudflare 代理") : L10n.text("仅 DNS"))
+                                        compactItem(L10n.text("记录来源"), value: record.origin == "hysteriax" ? L10n.text("HysteriaX 创建") : L10n.text("已有记录"))
+                                        compactItem(L10n.text("域名区域"), value: zone?.name ?? record.zoneId)
+                                        compactItem(L10n.text("服务连接"), value: connection?.name ?? L10n.text("未找到连接"))
                                     }
                                 }
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .padding(4)
                             } label: {
-                                Label("记录信息", systemImage: "network")
+                                Label(L10n.text("记录信息"), systemImage: "network")
                             }
                             .frame(maxWidth: .infinity, alignment: .topLeading)
                             GroupBox {
                                 VStack(alignment: .leading, spacing: 8) {
                                     OverviewPairLayout(horizontalMinimum: 0, flexibleIndex: 1, spacing: 12) {
-                                        Text("解析状态").font(.caption).foregroundStyle(.secondary)
+                                        Text(L10n.text("解析状态")).font(.caption).foregroundStyle(.secondary)
                                             .frame(width: 56, alignment: .leading)
                                         Label(record.resolutionLabel, systemImage: record.resolutionStatus == "verified" ? "checkmark.circle" : "globe")
                                             .font(.callout)
                                             .foregroundStyle(record.resolutionColor)
                                             .frame(maxWidth: .infinity, alignment: .leading)
                                     }
-                                    compactField("最近检查", value: record.checkedAt.map { DateDisplayText.local($0) } ?? "尚未检查")
+                                    compactField(L10n.text("最近检查"), value: record.checkedAt.map { DateDisplayText.local($0) } ?? L10n.text("尚未检查"))
                                     if let node {
                                         OverviewPairLayout(horizontalMinimum: 0, flexibleIndex: 1, spacing: 12) {
-                                            Text("绑定节点").font(.caption).foregroundStyle(.secondary)
+                                            Text(L10n.text("绑定节点")).font(.caption).foregroundStyle(.secondary)
                                                 .frame(width: 56, alignment: .leading)
                                             Button(node.name) { onOpenNode(node.id) }
                                                 .buttonStyle(.link)
                                                 .font(.callout)
                                                 .frame(maxWidth: .infinity, alignment: .leading)
-                                                .help("查看节点详情")
+                                                .help(L10n.text("查看节点详情"))
                                                 .accessibilityIdentifier("dns.record.bound-node.\(node.id)")
                                         }
                                     } else {
-                                        compactField("绑定节点", value: record.boundNodeId == nil ? "未绑定节点" : "节点已不在当前列表")
+                                        compactField(L10n.text("绑定节点"), value: record.boundNodeId == nil ? L10n.text("未绑定节点") : L10n.text("节点已不在当前列表"))
                                     }
-                                    compactField("最近更新", value: DateDisplayText.local(record.updatedAt))
+                                    compactField(L10n.text("最近更新"), value: DateDisplayText.local(record.updatedAt))
                                 }
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .padding(4)
                             } label: {
-                                Label("解析与节点", systemImage: "point.3.connected.trianglepath.dotted")
+                                Label(L10n.text("解析与节点"), systemImage: "point.3.connected.trianglepath.dotted")
                             }
                             .frame(maxWidth: .infinity, alignment: .topLeading)
                         }
                         if let result = record.resolutionDetail {
-                            DisclosureGroup("解析检查结果") {
+                            DisclosureGroup(L10n.text("解析检查结果")) {
                                 VStack(alignment: .leading, spacing: 12) {
-                                    field("检查时的预期目标", value: result["expected"]?.stringValue ?? record.content, monospaced: true)
-                                    field("管理服务解析结果", value: answers(result["management_answers"]), monospaced: true)
+                                    field(L10n.text("检查时的预期目标"), value: result["expected"]?.stringValue ?? record.content, monospaced: true)
+                                    field(L10n.text("管理服务解析结果"), value: answers(result["management_answers"]), monospaced: true)
                                     ForEach(Array((result["authoritative"]?.arrayValue ?? []).enumerated()), id: \.offset) { _, value in
                                         if let authority = value.objectValue {
-                                            field(authority["server"]?.stringValue ?? "权威服务器",
-                                                  value: authority["error"] != nil ? "查询失败" : answers(authority["answers"]), monospaced: true)
+                                            field(authority["server"]?.stringValue ?? L10n.text("权威服务器"),
+                                                  value: authority["error"] != nil ? L10n.text("查询失败") : answers(authority["answers"]), monospaced: true)
                                             if let flattened = authority["flattened_addresses"]?.arrayValue, !flattened.isEmpty {
-                                                field("CNAME 展平地址", value: answers(.array(flattened)), monospaced: true)
+                                                field(L10n.text("CNAME 展平地址"), value: answers(.array(flattened)), monospaced: true)
                                             }
                                         }
                                     }
@@ -98,11 +98,11 @@ struct DNSRecordDetailView: View {
                             }
                             .font(.callout)
                         }
-                        DisclosureGroup("记录标识") {
+                        DisclosureGroup(L10n.text("记录标识")) {
                             VStack(alignment: .leading, spacing: 12) {
-                                field("记录 ID", value: record.id, monospaced: true)
-                                field("远端记录 ID", value: record.providerRecordId ?? "尚未写入远端", monospaced: true)
-                                field("版本", value: "v\(record.revision)")
+                                field(L10n.text("记录 ID"), value: record.id, monospaced: true)
+                                field(L10n.text("远端记录 ID"), value: record.providerRecordId ?? L10n.text("尚未写入远端"), monospaced: true)
+                                field(L10n.text("版本"), value: "v\(record.revision)")
                             }
                             .padding(.top, 10)
                         }
@@ -127,27 +127,27 @@ struct DNSRecordDetailView: View {
                     DNSRecordTypeBadge(record: record)
                     Label(record.stateLabel, systemImage: record.state == "synced" ? "checkmark.circle.fill" : "circle.fill")
                         .foregroundStyle(record.syncColor)
-                    if !isConnected { Label("离线快照", systemImage: "wifi.slash").foregroundStyle(.secondary) }
+                    if !isConnected { Label(L10n.text("离线快照"), systemImage: "wifi.slash").foregroundStyle(.secondary) }
                 }
                 .font(.caption)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             HStack(spacing: 8) {
-                Button("编辑…", systemImage: "pencil", action: onEdit)
+                Button(L10n.text("编辑…"), systemImage: "pencil", action: onEdit)
                     .disabled(!canAct || !record.supportsEditing || record.desired != nil)
-                Button("检查解析", systemImage: "arrow.triangle.2.circlepath", action: onCheck)
+                Button(L10n.text("检查解析"), systemImage: "arrow.triangle.2.circlepath", action: onCheck)
                     .disabled(!canAct || !record.supportsEditing || record.state != "synced")
-                Button("绑定节点…", systemImage: "server.rack", action: onBind)
+                Button(L10n.text("绑定节点…"), systemImage: "server.rack", action: onBind)
                     .disabled(!canAct || !record.supportsEditing || record.proxied || record.state != "synced" || record.boundNodeId != nil)
                 if busy { ProgressView().controlSize(.small) }
                 Menu {
-                    Button("任务记录", systemImage: "clock.arrow.circlepath", action: onOpenJobs)
-                    Button("审计记录", systemImage: "list.clipboard", action: onOpenAudit)
+                    Button(L10n.text("任务记录"), systemImage: "clock.arrow.circlepath", action: onOpenJobs)
+                    Button(L10n.text("审计记录"), systemImage: "list.clipboard", action: onOpenAudit)
                     Divider()
-                    Button("删除记录…", role: .destructive, action: onDelete)
+                    Button(L10n.text("删除记录…"), role: .destructive, action: onDelete)
                         .disabled(!canAct || !record.supportsEditing || record.boundNodeId != nil || record.desired != nil)
                 } label: {
-                    Label("更多操作", systemImage: "ellipsis.circle")
+                    Label(L10n.text("更多操作"), systemImage: "ellipsis.circle")
                         .labelStyle(.iconOnly)
                 }
                 .menuStyle(.borderlessButton)
@@ -161,34 +161,34 @@ struct DNSRecordDetailView: View {
 
     @ViewBuilder private var notices: some View {
         if let desired = record.desired {
-            notice("待执行变更", symbol: "clock", color: .orange) {
-                Text(desired["delete"]?.boolValue == true ? "正在等待删除记录。" :
-                        desired["content"]?.stringValue.map { "目标将更新为 \($0)" } ?? "正在等待写入记录变更。")
+            notice(L10n.text("待执行变更"), symbol: "clock", color: .orange) {
+                Text(desired["delete"]?.boolValue == true ? L10n.text("正在等待删除记录。") :
+                        desired["content"]?.stringValue.map { L10n.text("目标将更新为 {0}", String(describing: ($0))) } ?? L10n.text("正在等待写入记录变更。"))
                     .textSelection(.enabled)
             }
         }
         if let failedJob {
-            notice("DNS 操作失败", symbol: "exclamationmark.triangle", color: .orange) {
-                Text(failedJob.errorMessage ?? "操作未完成，请重试。")
+            notice(L10n.text("DNS 操作失败"), symbol: "exclamationmark.triangle", color: .orange) {
+                Text(failedJob.errorMessage ?? L10n.text("操作未完成，请重试。"))
                     .textSelection(.enabled)
-                Button("重试", systemImage: "arrow.clockwise", action: onRetry).disabled(!canAct)
+                Button(L10n.text("重试"), systemImage: "arrow.clockwise", action: onRetry).disabled(!canAct)
             }
         }
         if !record.supportsEditing {
-            notice("只读记录", symbol: "lock", color: .secondary) {
-                Text("此类型暂不支持编辑、删除和节点绑定。")
+            notice(L10n.text("只读记录"), symbol: "lock", color: .secondary) {
+                Text(L10n.text("此类型暂不支持编辑、删除和节点绑定。"))
             }
         } else if record.proxied && record.boundNodeId == nil {
-            notice("Cloudflare 代理已开启", symbol: "cloud", color: .secondary) {
-                Text("绑定节点需要使用仅 DNS 模式。")
+            notice(L10n.text("Cloudflare 代理已开启"), symbol: "cloud", color: .secondary) {
+                Text(L10n.text("绑定节点需要使用仅 DNS 模式。"))
             }
         }
     }
 
     private func answers(_ value: JSONValue?) -> String {
-        guard let values = value?.arrayValue else { return "未取得查询结果" }
+        guard let values = value?.arrayValue else { return L10n.text("未取得查询结果") }
         let strings = values.compactMap(\.stringValue)
-        return strings.isEmpty ? "无解析记录" : strings.joined(separator: "\n")
+        return strings.isEmpty ? L10n.text("无解析记录") : strings.joined(separator: "\n")
     }
 
     private func compactItem(_ title: String, value: String, monospaced: Bool = false) -> some View {

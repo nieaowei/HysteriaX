@@ -23,21 +23,21 @@ struct AuditView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             Table(visibleRecords, sortOrder: $sortOrder) {
-                TableColumn("操作", value: \.localizedAction)
-                TableColumn("对象", value: \.localizedEntityType)
-                TableColumn("对象 ID", value: \.entityID)
-                TableColumn("操作者", value: \.localizedActor)
-                TableColumn("时间") { record in Text(DateDisplayText.local(record.createdAt)) }
+                TableColumn(L10n.text("操作"), value: \.localizedAction)
+                TableColumn(L10n.text("对象"), value: \.localizedEntityType)
+                TableColumn(L10n.text("对象 ID"), value: \.entityID)
+                TableColumn(L10n.text("操作者"), value: \.localizedActor)
+                TableColumn(L10n.text("时间")) { record in Text(DateDisplayText.local(record.createdAt)) }
             }
             .overlay {
                 if store.auditRecords.isEmpty {
-                    ContentUnavailableView("暂无审计记录", systemImage: "clock.arrow.circlepath")
+                    ContentUnavailableView(L10n.text("暂无审计记录"), systemImage: "clock.arrow.circlepath")
                 } else if visibleRecords.isEmpty {
-                    ContentUnavailableView("没有匹配的审计记录", systemImage: "magnifyingglass")
+                    ContentUnavailableView(L10n.text("没有匹配的审计记录"), systemImage: "magnifyingglass")
                 }
             }
         }
-        .searchable(text: $searchText, prompt: "搜索审计")
+        .searchable(text: $searchText, prompt: L10n.text("搜索审计"))
     }
 }
 

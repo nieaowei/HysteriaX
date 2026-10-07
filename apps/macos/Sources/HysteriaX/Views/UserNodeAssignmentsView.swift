@@ -34,10 +34,10 @@ struct UserNodeAssignmentsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("分配节点").font(.title.bold())
-            Text("为 \(user.name) 勾选可用节点，取消勾选即可移除。")
+            Text(L10n.text("分配节点")).font(.title.bold())
+            Text(L10n.text("为 {0} 勾选可用节点，取消勾选即可移除。", String(describing: (user.name))))
                 .foregroundStyle(.secondary)
-            TextField("搜索节点", text: $searchText)
+            TextField(L10n.text("搜索节点"), text: $searchText)
                 .textFieldStyle(.roundedBorder)
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 12) {
@@ -46,20 +46,20 @@ struct UserNodeAssignmentsView: View {
                         Divider()
                     }
                     if visibleNodes.isEmpty {
-                        Text(store.nodes.isEmpty ? "暂无节点，请先添加节点。" : "没有匹配的节点。")
+                        Text(store.nodes.isEmpty ? L10n.text("暂无节点，请先添加节点。") : L10n.text("没有匹配的节点。"))
                             .foregroundStyle(.secondary)
                             .frame(maxWidth: .infinity, minHeight: 80)
                     }
                 }
             }
             .frame(minHeight: 180)
-            Text("新增 \(additions.count) 个 · 移除 \(removals.count) 个 · 已选择 \(selected.count) 个")
+            Text(L10n.text("新增 {0} 个 · 移除 {1} 个 · 已选择 {2} 个", String(describing: (additions.count)), String(describing: (removals.count)), String(describing: (selected.count))))
                 .font(.callout)
                 .accessibilityIdentifier("user.assignments.changes")
-            Text("移除后会撤销该用户在节点上的访问权限，并排队断开现有连接。")
+            Text(L10n.text("移除后会撤销该用户在节点上的访问权限，并排队断开现有连接。"))
                 .font(.caption).foregroundStyle(.secondary)
             if !credentials.isEmpty {
-                GroupBox("新节点连接密码（请及时保存）") {
+                GroupBox(L10n.text("新节点连接密码（请及时保存）")) {
                     ScrollView {
                         Text(credentials.keys.sorted().map { "\(nodeName($0)): \(credentials[$0] ?? "")" }.joined(separator: "\n"))
                             .textSelection(.enabled)
@@ -72,11 +72,11 @@ struct UserNodeAssignmentsView: View {
                 Text(errorMessage).font(.callout).foregroundStyle(.red)
             }
             HStack {
-                Button(hasChanges ? "取消" : "完成") { dismiss() }
+                Button(hasChanges ? L10n.text("取消") : L10n.text("完成")) { dismiss() }
                     .keyboardShortcut(.cancelAction)
                 Spacer()
                 if isSaving { ProgressView().controlSize(.small) }
-                Button(isSaving ? "正在保存…" : "保存更改") {
+                Button(isSaving ? L10n.text("正在保存…") : L10n.text("保存更改")) {
                     if removals.isEmpty { save() }
                     else { showingRemovalConfirmation = true }
                 }
@@ -89,10 +89,10 @@ struct UserNodeAssignmentsView: View {
         .frame(width: 580, height: 620)
         .disabled(isSaving)
         .interactiveDismissDisabled(isSaving)
-        .confirmationDialog("移除 \(removals.count) 个节点？", isPresented: $showingRemovalConfirmation, titleVisibility: .visible) {
-            Button("保存并移除节点", role: .destructive) { save() }
+        .confirmationDialog(L10n.text("移除 {0} 个节点？", String(describing: (removals.count))), isPresented: $showingRemovalConfirmation, titleVisibility: .visible) {
+            Button(L10n.text("保存并移除节点"), role: .destructive) { save() }
         } message: {
-            Text("\(user.name) 将无法继续使用这些节点，现有连接会被排队断开。")
+            Text(L10n.text("{0} 将无法继续使用这些节点，现有连接会被排队断开。", String(describing: (user.name))))
         }
 
     }
@@ -110,15 +110,15 @@ struct UserNodeAssignmentsView: View {
                 .toggleStyle(.checkbox)
                 .accessibilityIdentifier("user.assignments.node.\(node.id)")
                 Spacer()
-                Text(additions.contains(node.id) ? "待分配" : removals.contains(node.id) ? "待移除" : applied.contains(node.id) ? "已分配" : "未分配")
+                Text(additions.contains(node.id) ? L10n.text("待分配") : removals.contains(node.id) ? L10n.text("待移除") : applied.contains(node.id) ? L10n.text("已分配") : L10n.text("未分配"))
                     .font(.caption)
                     .foregroundStyle(removals.contains(node.id) ? Color.red : Color.secondary)
             }
             if additions.contains(node.id) {
-                DisclosureGroup("mTLS 客户端证书（普通节点可留空）") {
+                DisclosureGroup(L10n.text("mTLS 客户端证书（普通节点可留空）")) {
                     VStack(alignment: .leading, spacing: 8) {
-                        CredentialPickerView(store: store, selection: Binding(get: { mtlsSelections[node.id] ?? "" }, set: { mtlsSelections[node.id] = $0 }), kinds: ["tls_identity"], ownerUserID: user.id, title: "mTLS 凭据")
-                        Text("启用 mTLS 的节点需选择匹配的证书和私钥。")
+                        CredentialPickerView(store: store, selection: Binding(get: { mtlsSelections[node.id] ?? "" }, set: { mtlsSelections[node.id] = $0 }), kinds: ["tls_identity"], ownerUserID: user.id, title: L10n.text("mTLS 凭据"))
+                        Text(L10n.text("启用 mTLS 的节点需选择匹配的证书和私钥。"))
                             .font(.caption).foregroundStyle(.secondary)
                     }
                     .padding(.top, 8)
@@ -156,7 +156,7 @@ struct UserNodeAssignmentsView: View {
                 if credentials.isEmpty { dismiss() }
             } catch {
                 await store.refresh()
-                errorMessage = "\(nodeName(currentNodeID))：\(error.localizedDescription) 已完成的更改已保留；其余更改尚未提交。若数据已被其他操作修改，请重新打开弹窗。"
+                errorMessage = L10n.text("{0}：{1} 已完成的更改已保留；其余更改尚未提交。若数据已被其他操作修改，请重新打开弹窗。", String(describing: (nodeName(currentNodeID))), String(describing: (error.localizedDescription)))
             }
         }
     }

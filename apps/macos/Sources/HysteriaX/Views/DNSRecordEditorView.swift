@@ -19,27 +19,27 @@ struct DNSRecordEditorView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text(record == nil ? "新增 DNS 记录" : "编辑 DNS 记录").font(.title2.bold())
+            Text(record == nil ? L10n.text("新增 DNS 记录") : L10n.text("编辑 DNS 记录")).font(.title2.bold())
             Form {
-                Picker("域名区域", selection: $zoneID) {
-                    Text("选择域名区域").tag("")
+                Picker(L10n.text("域名区域"), selection: $zoneID) {
+                    Text(L10n.text("选择域名区域")).tag("")
                     ForEach(store.dnsZones.filter(\.enabled)) { Text($0.name).tag($0.id) }
                 }.disabled(record != nil)
-                TextField("完整域名（根域名可填 @）", text: $name).accessibilityIdentifier("dns.record.name")
-                Picker("类型", selection: $recordType) { ForEach(["A", "AAAA", "CNAME"], id: \.self) { Text($0).tag($0) } }
-                TextField(recordType == "CNAME" ? "目标域名" : "目标 IP", text: $content).accessibilityIdentifier("dns.record.content")
-                TextField("TTL（1 表示自动）", text: $ttl)
-                Toggle("Cloudflare 代理", isOn: $proxied)
+                TextField(L10n.text("完整域名（根域名可填 @）"), text: $name).accessibilityIdentifier("dns.record.name")
+                Picker(L10n.text("类型"), selection: $recordType) { ForEach(["A", "AAAA", "CNAME"], id: \.self) { Text($0).tag($0) } }
+                TextField(recordType == "CNAME" ? L10n.text("目标域名") : L10n.text("目标 IP"), text: $content).accessibilityIdentifier("dns.record.content")
+                TextField(L10n.text("TTL（1 表示自动）"), text: $ttl)
+                Toggle(L10n.text("Cloudflare 代理"), isOn: $proxied)
                 if record?.boundNodeId != nil {
-                    Text("此记录关联节点。修改解析目标会影响连接；域名、类型和代理状态需通过节点重新分配修改。").font(.caption).foregroundStyle(.secondary)
+                    Text(L10n.text("此记录关联节点。修改解析目标会影响连接；域名、类型和代理状态需通过节点重新分配修改。")).font(.caption).foregroundStyle(.secondary)
                 }
             }.formStyle(.grouped).disabled(loading || saving)
             if let error { Text(error).foregroundStyle(.red).textSelection(.enabled) }
             HStack {
-                Button("取消") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button(L10n.text("取消")) { dismiss() }.keyboardShortcut(.cancelAction)
                 Spacer()
                 if loading { ProgressView().controlSize(.small) }
-                Button(saving ? "正在提交…" : "保存") { save() }
+                Button(saving ? L10n.text("正在提交…") : L10n.text("保存")) { save() }
                     .disabled(saving || loading || !store.isConnected || zoneID.isEmpty || (record != nil && loaded == nil))
                     .keyboardShortcut(.defaultAction)
             }
@@ -58,7 +58,7 @@ struct DNSRecordEditorView: View {
         }
     }
     private func save() {
-        guard let ttlValue = Int(ttl) else { error = "请输入有效的 TTL。"; return }
+        guard let ttlValue = Int(ttl) else { error = L10n.text("请输入有效的 TTL。"); return }
         saving = true
         Task {
             defer { saving = false }

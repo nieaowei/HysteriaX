@@ -47,7 +47,7 @@ extension ManagementStore {
 
     func createDNSConnection(name: String, credentialID: String) async throws {
         guard let credential = credentials.first(where: { $0.id == credentialID && !$0.archived && $0.kind == "dns" && $0.metadata["provider"]?.stringValue == "cloudflare" }) else {
-            throw APIClientError.server("请选择有效的 Cloudflare DNS 凭据。")
+            throw APIClientError.server(L10n.text("请选择有效的 Cloudflare DNS 凭据。"))
         }
         let _: DNSConnection = try await requireConnectedAPI().post(APIEndpoints.createDNSConnection,
             body: DNSConnectionCreateRequest(name: name, credentialId: credentialID, credentialVersion: credential.latestVersion))
@@ -107,7 +107,7 @@ extension ManagementStore {
         switch job.resourceType {
         case "dns_record": revision = try await dnsRecordDetail(id).revision
         case "dns_zone":
-            guard let zone = dnsZones.first(where: { $0.id == id }) else { throw APIClientError.server("域名区域已不存在。") }
+            guard let zone = dnsZones.first(where: { $0.id == id }) else { throw APIClientError.server(L10n.text("域名区域已不存在。")) }
             revision = zone.revision
         case "dns_connection":
             let connection = try await requireConnectedAPI().get(APIEndpoints.getDNSConnection(id: id))

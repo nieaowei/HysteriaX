@@ -4,6 +4,7 @@ root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 tmp_dir=$(mktemp -d)
 trap 'rm -rf "$tmp_dir"' EXIT INT TERM
 swiftc -swift-version 6 -parse-as-library \
+  "$root/apps/macos/Sources/HysteriaX/Support/Localization.swift" \
   "$root/apps/macos/Sources/HysteriaX/Models/CredentialDisplay.swift" \
   "$root/apps/macos/Sources/HysteriaX/Models/APIModels.swift" \
   "$root/apps/macos/Sources/HysteriaX/Models/OpenAPIRequests.generated.swift" \

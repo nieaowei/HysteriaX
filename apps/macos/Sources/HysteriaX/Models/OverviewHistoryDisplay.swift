@@ -11,7 +11,7 @@ struct OverviewHistoryDisplay {
     let maxTrafficCovered: Int64
     let maxTrafficExpected: Int64
     let minOnlineCovered: Int64
-    let updatedAtText: String
+    var updatedAtText: String { DateDisplayText.local(history.generatedAt) }
 
     init(_ history: OverviewHistory) {
         self.history = history
@@ -25,7 +25,6 @@ struct OverviewHistoryDisplay {
         maxTrafficCovered = history.buckets.map(\.trafficCoveredNodes).max() ?? 0
         maxTrafficExpected = history.buckets.map(\.trafficExpectedNodes).max() ?? 0
         minOnlineCovered = history.buckets.map(\.coveredNodes).min() ?? 0
-        updatedAtText = DateDisplayText.local(history.generatedAt)
     }
 
     subscript<T>(dynamicMember key: KeyPath<OverviewHistory, T>) -> T { history[keyPath: key] }

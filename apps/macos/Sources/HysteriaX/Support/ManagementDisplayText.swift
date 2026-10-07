@@ -3,79 +3,79 @@ import Foundation
 enum JobDisplayText {
     static func kind(_ value: String) -> String {
         switch value {
-        case "dns-verify": "验证 DNS 连接"
-        case "dns-connection-refresh": "刷新 DNS 域名"
-        case "dns-zone-refresh": "刷新 DNS 记录"
-        case "dns-record-create": "创建 DNS 记录"
-        case "dns-record-update": "修改 DNS 记录"
-        case "dns-record-delete": "删除 DNS 记录"
-        case "dns-record-check": "验证 DNS 解析"
-        case "dns-credential-apply": "更新 DNS 连接凭据"
-        case "ssh-test": "SSH 测试"
-        case "credential-apply": "应用凭据"
-        case "deploy": "部署"
-        case "sync": "同步"
-        case "rollback": "回滚"
-        case "kick": "断开客户端"
-        case "uninstall": "卸载"
+        case "dns-verify": L10n.text("验证 DNS 连接")
+        case "dns-connection-refresh": L10n.text("刷新 DNS 域名")
+        case "dns-zone-refresh": L10n.text("刷新 DNS 记录")
+        case "dns-record-create": L10n.text("创建 DNS 记录")
+        case "dns-record-update": L10n.text("修改 DNS 记录")
+        case "dns-record-delete": L10n.text("删除 DNS 记录")
+        case "dns-record-check": L10n.text("验证 DNS 解析")
+        case "dns-credential-apply": L10n.text("更新 DNS 连接凭据")
+        case "ssh-test": L10n.text("SSH 测试")
+        case "credential-apply": L10n.text("应用凭据")
+        case "deploy": L10n.text("部署")
+        case "sync": L10n.text("同步")
+        case "rollback": L10n.text("回滚")
+        case "kick": L10n.text("断开客户端")
+        case "uninstall": L10n.text("卸载")
         default: value
         }
     }
 
     static func status(_ value: String) -> String {
         switch value {
-        case "queued": "排队中"
-        case "running": "执行中"
-        case "succeeded": "成功"
-        case "failed": "失败"
-        case "rolled_back": "已回滚"
-        case "cancelled": "已取消"
+        case "queued": L10n.text("排队中")
+        case "running": L10n.text("执行中")
+        case "succeeded": L10n.text("成功")
+        case "failed": L10n.text("失败")
+        case "rolled_back": L10n.text("已回滚")
+        case "cancelled": L10n.text("已取消")
         default: value
         }
     }
 
     static func stage(_ value: String) -> String {
         let labels = [
-            "credential_applied": "凭据已应用",
-            "credential_deployment_queued": "凭据部署已排队",
-            "credential_revocation_queued": "连接撤销已排队",
-            "queued": "排队中",
-            "running": "执行中",
-            "starting": "准备中",
-            "retry_wait": "等待重试",
-            "waiting_recovery": "等待节点 SSH 恢复",
-            "needs_attention": "需要人工处理",
-            "restriction_cleared": "限制已解除，跳过断开",
-            "recovered": "重启后恢复",
-            "loading_connection": "读取 SSH 连接",
-            "connecting": "连接节点",
-            "checking_environment": "检查节点环境",
-            "loading_revision": "读取配置版本",
-            "resolving_resources": "检查配置资源",
-            "checking_drift": "检查配置漂移",
-            "downloading_release": "下载并校验程序",
-            "rendering_configuration": "生成服务配置",
-            "uploading_files": "上传部署文件",
-            "installing_service": "安装系统服务",
-            "checking_health": "检查服务健康状态",
-            "checking_proxy_traffic": "检查客户端代理转发",
-            "health_checked": "健康检查通过",
-            "rolling_back": "恢复上一版本",
-            "rolled_back": "已回滚",
-            "rollback_failed": "回滚失败",
-            "fingerprint_confirmation_required": "等待确认 SSH 指纹",
-            "environment_checked": "环境检查通过",
-            "kicking_clients": "断开客户端",
-            "checking_clients": "检查客户端状态",
-            "clients_offline": "客户端已下线",
-            "uninstalling_service": "卸载系统服务",
-            "remote_uninstalled": "远端卸载完成",
-            "node_deleting": "删除节点中",
-            "node_removed": "管理记录已移除",
-            "superseded": "已被新任务替代",
-            "dns_completed": "DNS 操作完成",
-            "dns_propagation_wait": "等待 DNS 解析更新",
-            "failed": "失败",
+            "credential_applied": L10n.text("凭据已应用"),
+            "credential_deployment_queued": L10n.text("凭据部署已排队"),
+            "credential_revocation_queued": L10n.text("连接撤销已排队"),
+            "queued": L10n.text("排队中"),
+            "running": L10n.text("执行中"),
+            "starting": L10n.text("准备中"),
+            "retry_wait": L10n.text("等待重试"),
+            "waiting_recovery": L10n.text("等待节点 SSH 恢复"),
+            "needs_attention": L10n.text("需要人工处理"),
+            "restriction_cleared": L10n.text("限制已解除，跳过断开"),
+            "recovered": L10n.text("重启后恢复"),
+            "loading_connection": L10n.text("读取 SSH 连接"),
+            "connecting": L10n.text("连接节点"),
+            "checking_environment": L10n.text("检查节点环境"),
+            "loading_revision": L10n.text("读取配置版本"),
+            "resolving_resources": L10n.text("检查配置资源"),
+            "checking_drift": L10n.text("检查配置漂移"),
+            "downloading_release": L10n.text("下载并校验程序"),
+            "rendering_configuration": L10n.text("生成服务配置"),
+            "uploading_files": L10n.text("上传部署文件"),
+            "installing_service": L10n.text("安装系统服务"),
+            "checking_health": L10n.text("检查服务健康状态"),
+            "checking_proxy_traffic": L10n.text("检查客户端代理转发"),
+            "health_checked": L10n.text("健康检查通过"),
+            "rolling_back": L10n.text("恢复上一版本"),
+            "rolled_back": L10n.text("已回滚"),
+            "rollback_failed": L10n.text("回滚失败"),
+            "fingerprint_confirmation_required": L10n.text("等待确认 SSH 指纹"),
+            "environment_checked": L10n.text("环境检查通过"),
+            "kicking_clients": L10n.text("断开客户端"),
+            "checking_clients": L10n.text("检查客户端状态"),
+            "clients_offline": L10n.text("客户端已下线"),
+            "uninstalling_service": L10n.text("卸载系统服务"),
+            "remote_uninstalled": L10n.text("远端卸载完成"),
+            "node_deleting": L10n.text("删除节点中"),
+            "node_removed": L10n.text("管理记录已移除"),
+            "superseded": L10n.text("已被新任务替代"),
+            "dns_completed": L10n.text("DNS 操作完成"),
+            "dns_propagation_wait": L10n.text("等待 DNS 解析更新"),
+            "failed": L10n.text("失败"),
         ]
         return labels[value] ?? value
     }
@@ -83,87 +83,87 @@ enum JobDisplayText {
     static func logMessage(stage: String, message: String) -> String {
         if stage == "checking_clients",
            let captures = captures(#"^(\d+) client device\(s\) remain online; requesting another kick\.$"#, in: message) {
-            return "还有 \(captures[0]) 台设备在线，正在再次请求断开。"
+            return L10n.text("还有 {0} 台设备在线，正在再次请求断开。", String(describing: (captures[0])))
         }
         if let captures = captures(#"^Waiting up to (\d+) seconds for the traffic and online statistics APIs, including certificate provisioning\.$"#, in: message) {
-            return "正在等待流量统计和在线状态接口就绪（包括证书签发），最长等待 \(captures[0]) 秒。"
+            return L10n.text("正在等待流量统计和在线状态接口就绪（包括证书签发），最长等待 {0} 秒。", String(describing: (captures[0])))
         }
         let messages = [
-            "Connecting to the node and verifying its pinned SSH host key.": "正在连接节点并验证已保存的 SSH 主机指纹。",
-            "Running the pinned Hysteria client through the new server and forwarding a TCP request.": "正在使用固定版本的 Hysteria 客户端连接新服务并验证 TCP 请求转发。",
-            "Requesting that the node disconnect the user's active client devices.": "正在请求节点断开该用户的在线客户端。",
-            "The new service did not become healthy; restoring the previous configuration.": "新服务未通过健康检查，正在恢复上一配置。",
-            "The new service did not become healthy; cleaning up the failed first installation.": "新服务未通过健康检查，正在清理失败的首次安装。",
-            "The new service did not become healthy; rolling back the installation.": "新服务未通过健康检查，正在回滚安装。",
-            "Loading the saved SSH connection.": "正在读取保存的 SSH 连接。",
-            "Connecting to the node and checking its SSH host key.": "正在连接节点并验证 SSH 主机指纹。",
-            "Checking the operating system, architecture, systemd, and sudo access.": "正在检查操作系统、架构、systemd 和 sudo 权限。",
-            "Loading the target configuration revision and encrypted resources.": "正在加载目标配置版本和加密资源。",
-            "Resolving and validating the configuration resource references.": "正在解析并验证配置资源引用。",
-            "Checking the operating system, architecture, systemd, sudo access, disk space, and listener requirements.": "正在检查系统版本、架构、systemd、sudo、磁盘空间和监听端口要求。",
-            "Comparing the remote configuration with the last successfully deployed version.": "正在将远端配置与上次成功部署版本比较。",
-            "Downloading and verifying the pinned Hysteria release asset.": "正在下载并校验固定版本的 Hysteria 程序。",
-            "Rendering the server configuration and systemd unit.": "正在生成服务端配置和 systemd 单元文件。",
-            "Uploading the verified binary, configuration, unit, and referenced resources.": "正在上传已校验程序、配置、服务文件和引用资源。",
-            "Installing the managed systemd service and applying the new configuration.": "正在安装托管的 systemd 服务并应用配置。",
-            "Waiting for the traffic and online statistics APIs to become healthy.": "正在等待流量统计和在线状态接口就绪。",
-            "The new service did not become healthy; restoring the previous successful configuration.": "新服务未通过健康检查，正在恢复上一成功配置。",
-            "Requesting that the node disconnect the user's active client sessions.": "正在请求节点断开该用户的在线客户端。",
-            "The node reports no active client devices for this user.": "节点已确认该用户没有在线客户端。",
-            "Connecting to the node and verifying HysteriaX ownership before removal.": "正在连接节点并验证 HysteriaX 所有权。",
-            "Checking remote systemd and the managed-install marker.": "正在检查远端 systemd 和托管安装标记。",
-            "Stopping the managed service and removing its files and service account.": "正在停止托管服务并移除文件和服务账户。",
+            "Connecting to the node and verifying its pinned SSH host key.": L10n.text("正在连接节点并验证已保存的 SSH 主机指纹。"),
+            "Running the pinned Hysteria client through the new server and forwarding a TCP request.": L10n.text("正在使用固定版本的 Hysteria 客户端连接新服务并验证 TCP 请求转发。"),
+            "Requesting that the node disconnect the user's active client devices.": L10n.text("正在请求节点断开该用户的在线客户端。"),
+            "The new service did not become healthy; restoring the previous configuration.": L10n.text("新服务未通过健康检查，正在恢复上一配置。"),
+            "The new service did not become healthy; cleaning up the failed first installation.": L10n.text("新服务未通过健康检查，正在清理失败的首次安装。"),
+            "The new service did not become healthy; rolling back the installation.": L10n.text("新服务未通过健康检查，正在回滚安装。"),
+            "Loading the saved SSH connection.": L10n.text("正在读取保存的 SSH 连接。"),
+            "Connecting to the node and checking its SSH host key.": L10n.text("正在连接节点并验证 SSH 主机指纹。"),
+            "Checking the operating system, architecture, systemd, and sudo access.": L10n.text("正在检查操作系统、架构、systemd 和 sudo 权限。"),
+            "Loading the target configuration revision and encrypted resources.": L10n.text("正在加载目标配置版本和加密资源。"),
+            "Resolving and validating the configuration resource references.": L10n.text("正在解析并验证配置资源引用。"),
+            "Checking the operating system, architecture, systemd, sudo access, disk space, and listener requirements.": L10n.text("正在检查系统版本、架构、systemd、sudo、磁盘空间和监听端口要求。"),
+            "Comparing the remote configuration with the last successfully deployed version.": L10n.text("正在将远端配置与上次成功部署版本比较。"),
+            "Downloading and verifying the pinned Hysteria release asset.": L10n.text("正在下载并校验固定版本的 Hysteria 程序。"),
+            "Rendering the server configuration and systemd unit.": L10n.text("正在生成服务端配置和 systemd 单元文件。"),
+            "Uploading the verified binary, configuration, unit, and referenced resources.": L10n.text("正在上传已校验程序、配置、服务文件和引用资源。"),
+            "Installing the managed systemd service and applying the new configuration.": L10n.text("正在安装托管的 systemd 服务并应用配置。"),
+            "Waiting for the traffic and online statistics APIs to become healthy.": L10n.text("正在等待流量统计和在线状态接口就绪。"),
+            "The new service did not become healthy; restoring the previous successful configuration.": L10n.text("新服务未通过健康检查，正在恢复上一成功配置。"),
+            "Requesting that the node disconnect the user's active client sessions.": L10n.text("正在请求节点断开该用户的在线客户端。"),
+            "The node reports no active client devices for this user.": L10n.text("节点已确认该用户没有在线客户端。"),
+            "Connecting to the node and verifying HysteriaX ownership before removal.": L10n.text("正在连接节点并验证 HysteriaX 所有权。"),
+            "Checking remote systemd and the managed-install marker.": L10n.text("正在检查远端 systemd 和托管安装标记。"),
+            "Stopping the managed service and removing its files and service account.": L10n.text("正在停止托管服务并移除文件和服务账户。"),
         ]
         return messages[message] ?? message
     }
 
     // Translate known contexts while retaining unknown library errors and remote output.
     static func errorMessage(_ message: String) -> String {
-        if let translated = errors[message] { return translated }
+        if let translated = errors[message] { return L10n.text(translated) }
         if let values = captures(#"^remote command failed with exit code (\d+): ([\s\S]*)$"#, in: message) {
-            return "远端命令执行失败（退出码 \(values[0])）：\(errorMessage(values[1]))"
+            return L10n.text("远端命令执行失败（退出码 {0}）：{1}", String(describing: (values[0])), String(describing: (errorMessage(values[1]))))
         }
         if let values = captures(#"^SSH host key changed: expected ([^;]+); observed (.+)$"#, in: message) {
-            return "SSH 主机指纹已变化：预期 \(values[0])；实际 \(values[1])"
+            return L10n.text("SSH 主机指纹已变化：预期 {0}；实际 {1}", String(describing: (values[0])), String(describing: (values[1])))
         }
         if let values = captures(#"^confirm this SSH host fingerprint before (deploying|uninstalling|kicking clients): (.+)$"#, in: message) {
-            let action = ["deploying": "部署", "uninstalling": "卸载", "kicking clients": "断开客户端"][values[0]] ?? "操作"
-            return "请先确认 SSH 主机指纹再\(action)：\(values[1])"
+            let action = ["deploying": L10n.text("部署"), "uninstalling": L10n.text("卸载"), "kicking clients": L10n.text("断开客户端")][values[0]] ?? L10n.text("操作")
+            return L10n.text("请先确认 SSH 主机指纹再{0}：{1}", String(describing: (action)), String(describing: (values[1])))
         }
         if let values = captures(#"^(\d+) client device\(s\) remain online after repeated Hysteria kick requests$"#, in: message) {
-            return "多次请求断开后，仍有 \(values[0]) 台客户端设备在线。"
+            return L10n.text("多次请求断开后，仍有 {0} 台客户端设备在线。", String(describing: (values[0])))
         }
         if let values = captures(#"^DNS provider returned HTTP (\d+)$"#, in: message) {
-            return "DNS 服务商返回 HTTP \(values[0])"
+            return L10n.text("DNS 服务商返回 HTTP {0}", String(describing: (values[0])))
         }
         if let values = captures(#"^post-deployment health check failed \(([\s\S]*)\)(; | and )([\s\S]*)$"#, in: message) {
-            return "部署后健康检查失败（\(errorMessage(values[0]))）；\(errorMessage(values[2]))"
+            return L10n.text("部署后健康检查失败（{0}）；{1}", String(describing: (errorMessage(values[0]))), String(describing: (errorMessage(values[2]))))
         }
         // anyhow joins error contexts with ': '; only translate a recognized prefix.
         for prefix in errors.keys.sorted(by: { $0.count > $1.count }) {
             if message.hasPrefix(prefix + ": ") {
-                return errors[prefix]! + "：" + errorMessage(String(message.dropFirst(prefix.count + 2)))
+                return L10n.text(errors[prefix]!) + (L10n.language == "en" ? ": " : "：") + errorMessage(String(message.dropFirst(prefix.count + 2)))
             }
         }
         for (prefix, translated) in [
-            ("remote diagnostics: ", "远端诊断："),
-            ("the pinned Hysteria client did not establish an authenticated proxy session: ", "固定版本的 Hysteria 客户端未建立已认证的代理连接："),
+            ("remote diagnostics: ", L10n.text("远端诊断：")),
+            ("the pinned Hysteria client did not establish an authenticated proxy session: ", L10n.text("固定版本的 Hysteria 客户端未建立已认证的代理连接：")),
         ] {
             if message.hasPrefix(prefix) {
                 return translated + errorMessage(String(message.dropFirst(prefix.count)))
             }
         }
         if let values = captures(#"^startup health check timed out after ([\d.]+)s \(budget (\d+)s\); last error: ([\s\S]*)$"#, in: message) {
-            return "启动健康检查超时，已等待 \(values[0]) 秒（最长 \(values[1]) 秒）；最后错误：\(errorMessage(values[2]))"
+            return L10n.text("启动健康检查超时，已等待 {0} 秒（最长 {1} 秒）；最后错误：{2}", String(describing: (values[0])), String(describing: (values[1])), String(describing: (errorMessage(values[2]))))
         }
         if let values = captures(#"^([\s\S]+); waited ([\d.]+)s$"#, in: message) {
-            return "\(errorMessage(values[0]))；已等待 \(values[1]) 秒"
+            return L10n.text("{0}；已等待 {1} 秒", String(describing: (errorMessage(values[0]))), String(describing: (values[1])))
         }
         if let values = captures(#"^Hysteria service failed during startup: ActiveState=([^,]+), SubState=([^,]+), ExecMainStatus=(\d+), NRestarts=(\d+)$"#, in: message) {
-            return "Hysteria 服务启动失败：活动状态=\(values[0])，子状态=\(values[1])，退出码=\(values[2])，重启次数=\(values[3])"
+            return L10n.text("Hysteria 服务启动失败：活动状态={0}，子状态={1}，退出码={2}，重启次数={3}", String(describing: (values[0])), String(describing: (values[1])), String(describing: (values[2])), String(describing: (values[3])))
         }
         if let range = message.range(of: "; remote diagnostics: ") {
-            return errorMessage(String(message[..<range.lowerBound])) + "；远端诊断：" + String(message[range.upperBound...])
+            return errorMessage(String(message[..<range.lowerBound])) + L10n.text("；远端诊断：") + String(message[range.upperBound...])
         }
         return message
     }
@@ -276,60 +276,60 @@ enum JobDisplayText {
 enum AuditDisplayText {
     static func action(_ value: String) -> String {
         let labels = [
-            "node.created": "创建节点",
-            "node.updated": "更新节点",
-            "node.restricted": "限制节点代理",
-            "node.restored": "恢复节点代理",
-            "node.usage_reset": "重置节点套餐用量",
-            "node.usage_corrected": "校正节点套餐用量",
-            "node.deleted": "删除节点",
-            "node.record_removed": "移除节点管理记录",
-            "node.resource_uploaded": "上传节点资源",
-            "node.resource_deleted": "删除节点资源",
-            "node.uninstall_requested": "请求卸载节点",
-            "user.created": "创建用户",
-            "user.updated": "更新用户",
-            "user.deleted": "删除用户",
-            "user.assigned": "分配用户到节点",
-            "user.unassigned": "撤销节点分配",
-            "user.client_certificate_updated": "更新客户端证书",
-            "user.credentials_rotated": "轮换连接凭据",
-            "user.subscription_rotated": "轮换订阅令牌",
-            "user.quota_reset": "重置流量额度",
-            "resource.created": "上传配置资源",
-            "resource.deleted": "删除配置资源",
-            "credential.created": "创建凭据",
-            "credential.updated": "更新凭据",
-            "credential.version_published": "发布凭据版本",
-            "credential.deleted": "删除凭据",
-            "credential.batch_retried": "重试凭据更新批次",
-            "dns.connection.created": "创建 DNS 连接",
-            "dns.connection.updated": "更新 DNS 连接",
-            "dns.connection.deleted": "删除 DNS 连接",
-            "dns.zone.updated": "更新 DNS 域名",
-            "dns.node.bound": "绑定节点 DNS",
-            "dns.node.unbound": "解除节点 DNS 绑定",
-            "dns.verify": "验证 DNS 连接",
-            "dns.connection-refresh": "刷新 DNS 域名",
-            "dns.zone-refresh": "刷新 DNS 记录",
-            "dns.record-create": "创建 DNS 记录",
-            "dns.record-update": "修改 DNS 记录",
-            "dns.record-delete": "删除 DNS 记录",
-            "dns.record-check": "验证 DNS 解析",
-            "dns.credential-apply": "更新 DNS 连接凭据",
-            "admin_token.created": "创建管理员令牌",
-            "admin_token.revoked": "撤销管理员令牌",
+            "node.created": L10n.text("创建节点"),
+            "node.updated": L10n.text("更新节点"),
+            "node.restricted": L10n.text("限制节点代理"),
+            "node.restored": L10n.text("恢复节点代理"),
+            "node.usage_reset": L10n.text("重置节点套餐用量"),
+            "node.usage_corrected": L10n.text("校正节点套餐用量"),
+            "node.deleted": L10n.text("删除节点"),
+            "node.record_removed": L10n.text("移除节点管理记录"),
+            "node.resource_uploaded": L10n.text("上传节点资源"),
+            "node.resource_deleted": L10n.text("删除节点资源"),
+            "node.uninstall_requested": L10n.text("请求卸载节点"),
+            "user.created": L10n.text("创建用户"),
+            "user.updated": L10n.text("更新用户"),
+            "user.deleted": L10n.text("删除用户"),
+            "user.assigned": L10n.text("分配用户到节点"),
+            "user.unassigned": L10n.text("撤销节点分配"),
+            "user.client_certificate_updated": L10n.text("更新客户端证书"),
+            "user.credentials_rotated": L10n.text("轮换连接凭据"),
+            "user.subscription_rotated": L10n.text("轮换订阅令牌"),
+            "user.quota_reset": L10n.text("重置流量额度"),
+            "resource.created": L10n.text("上传配置资源"),
+            "resource.deleted": L10n.text("删除配置资源"),
+            "credential.created": L10n.text("创建凭据"),
+            "credential.updated": L10n.text("更新凭据"),
+            "credential.version_published": L10n.text("发布凭据版本"),
+            "credential.deleted": L10n.text("删除凭据"),
+            "credential.batch_retried": L10n.text("重试凭据更新批次"),
+            "dns.connection.created": L10n.text("创建 DNS 连接"),
+            "dns.connection.updated": L10n.text("更新 DNS 连接"),
+            "dns.connection.deleted": L10n.text("删除 DNS 连接"),
+            "dns.zone.updated": L10n.text("更新 DNS 域名"),
+            "dns.node.bound": L10n.text("绑定节点 DNS"),
+            "dns.node.unbound": L10n.text("解除节点 DNS 绑定"),
+            "dns.verify": L10n.text("验证 DNS 连接"),
+            "dns.connection-refresh": L10n.text("刷新 DNS 域名"),
+            "dns.zone-refresh": L10n.text("刷新 DNS 记录"),
+            "dns.record-create": L10n.text("创建 DNS 记录"),
+            "dns.record-update": L10n.text("修改 DNS 记录"),
+            "dns.record-delete": L10n.text("删除 DNS 记录"),
+            "dns.record-check": L10n.text("验证 DNS 解析"),
+            "dns.credential-apply": L10n.text("更新 DNS 连接凭据"),
+            "admin_token.created": L10n.text("创建管理员令牌"),
+            "admin_token.revoked": L10n.text("撤销管理员令牌"),
         ]
         return labels[value] ?? value
     }
 
     static func entityType(_ value: String) -> String {
         switch value {
-        case "node": "节点"
-        case "user": "用户"
-        case "resource": "资源"
-        case "admin_token": "管理员令牌"
-        case "credential": "凭据"
+        case "node": L10n.text("节点")
+        case "user": L10n.text("用户")
+        case "resource": L10n.text("资源")
+        case "admin_token": L10n.text("管理员令牌")
+        case "credential": L10n.text("凭据")
         case "dns": "DNS"
         default: value
         }
@@ -337,8 +337,8 @@ enum AuditDisplayText {
 
     static func actor(_ value: String) -> String {
         switch value {
-        case "admin": "管理员"
-        case "system": "系统"
+        case "admin": L10n.text("管理员")
+        case "system": L10n.text("系统")
         default: value
         }
     }

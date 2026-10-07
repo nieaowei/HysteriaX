@@ -97,23 +97,23 @@ struct ProxyConfigurationView: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("代理配置").font(.title.bold())
-                    Text(detail.map { "\($0.name) · 修订版 \($0.revision)" } ?? (isLoading ? "加载代理配置…" : "代理配置不可用"))
+                    Text(L10n.text("代理配置")).font(.title.bold())
+                    Text(detail.map { L10n.text("{0} · 修订版 {1}", String(describing: ($0.name)), String(describing: ($0.revision))) } ?? (isLoading ? L10n.text("加载代理配置…") : L10n.text("代理配置不可用")))
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
-                Button("取消") { dismiss() }.keyboardShortcut(.cancelAction)
-                Button(isSaving ? "正在保存…" : "保存并同步") { save() }
+                Button(L10n.text("取消")) { dismiss() }.keyboardShortcut(.cancelAction)
+                Button(isSaving ? L10n.text("正在保存…") : L10n.text("保存并同步")) { save() }
                     .disabled(isSaving || isLoading || detail == nil || !store.isConnected)
                     .keyboardShortcut(.defaultAction)
             }
             if isLoading {
-                ProgressView("读取代理配置…").frame(maxWidth: .infinity, maxHeight: .infinity)
+                ProgressView(L10n.text("读取代理配置…")).frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if let detail {
                 Form {
-                    Section("监听") {
-                        TextField("UDP 监听地址", text: $listenAddress)
-                        Toggle("公开端口跟随监听端口", isOn: Binding(
+                    Section(L10n.text("监听")) {
+                        TextField(L10n.text("UDP 监听地址"), text: $listenAddress)
+                        Toggle(L10n.text("公开端口跟随监听端口"), isOn: Binding(
                             get: { publicPortDraft.followsListener },
                             set: { follows in
                                 if !follows {
@@ -123,113 +123,113 @@ struct ProxyConfigurationView: View {
                             }
                         ))
                         .accessibilityIdentifier("node.config.followListenPort")
-                        TextField("公开端口", text: Binding(
+                        TextField(L10n.text("公开端口"), text: Binding(
                             get: { publicPortDraft.portText(listenAddress: listenAddress) },
                             set: { publicPortDraft.setCustomPort($0) }
                         ))
                         .accessibilityIdentifier("node.config.publicPort")
-                        Text("默认使用首个监听端口；手动修改公开端口后独立保存，用于公网端口映射。")
+                        Text(L10n.text("默认使用首个监听端口；手动修改公开端口后独立保存，用于公网端口映射。"))
                             .font(.callout).foregroundStyle(.secondary)
-                        Text("支持端口列表和范围，例如 :443,445-450。端口跳跃节点的公网端口须与首个监听端口相同，远端还须安装 nftables 或 iptables。")
-                            .font(.callout).foregroundStyle(.secondary)
-                    }
-                    Section("Hysteria trafficStats 接口") {
-                        TextField("本机端口", text: $trafficStatsPort)
-                        Text("仅绑定节点本机回环地址，用于流量采集和在线设备管理。请选用节点上未被占用的 TCP 端口。")
+                        Text(L10n.text("支持端口列表和范围，例如 :443,445-450。端口跳跃节点的公网端口须与首个监听端口相同，远端还须安装 nftables 或 iptables。"))
                             .font(.callout).foregroundStyle(.secondary)
                     }
-                    Section("部署连通性检查") {
-                        TextField("HTTP 探测 URL（可选）", text: $proxyProbeURL, prompt: Text("http://status.example.test/health"))
-                        Text("默认探测节点的本机统计接口。自定义 ACL 或 outbound 阻止该地址时，填写一个可通过当前路由访问并返回 HTTP 200 的无凭据 URL。")
+                    Section(L10n.text("Hysteria trafficStats 接口")) {
+                        TextField(L10n.text("本机端口"), text: $trafficStatsPort)
+                        Text(L10n.text("仅绑定节点本机回环地址，用于流量采集和在线设备管理。请选用节点上未被占用的 TCP 端口。"))
                             .font(.callout).foregroundStyle(.secondary)
                     }
-                    Section("客户端 TLS") {
-                        TextField("TLS SNI（可选）", text: $tlsSNI)
+                    Section(L10n.text("部署连通性检查")) {
+                        TextField(L10n.text("HTTP 探测 URL（可选）"), text: $proxyProbeURL, prompt: Text("http://status.example.test/health"))
+                        Text(L10n.text("默认探测节点的本机统计接口。自定义 ACL 或 outbound 阻止该地址时，填写一个可通过当前路由访问并返回 HTTP 200 的无凭据 URL。"))
+                            .font(.callout).foregroundStyle(.secondary)
+                    }
+                    Section(L10n.text("客户端 TLS")) {
+                        TextField(L10n.text("TLS SNI（可选）"), text: $tlsSNI)
                             .accessibilityIdentifier("node.config.tlsSNI")
-                        Toggle("跳过证书验证", isOn: $skipCertVerify)
+                        Toggle(L10n.text("跳过证书验证"), isOn: $skipCertVerify)
                             .accessibilityIdentifier("node.config.skipCertVerify")
-                        Text("用于用户订阅中的客户端 TLS 设置；SNI 留空时默认使用公开地址。")
+                        Text(L10n.text("用于用户订阅中的客户端 TLS 设置；SNI 留空时默认使用公开地址。"))
                             .font(.callout).foregroundStyle(.secondary)
                     }
-                    Section("TLS 与证书") {
-                        Picker("证书来源", selection: $tlsMode) {
-                            Text("未设置").tag("none")
-                            Text("ACME 自动申请").tag("acme")
-                            Text("凭据中心证书").tag("tls")
+                    Section(L10n.text("TLS 与证书")) {
+                        Picker(L10n.text("证书来源"), selection: $tlsMode) {
+                            Text(L10n.text("未设置")).tag("none")
+                            Text(L10n.text("ACME 自动申请")).tag("acme")
+                            Text(L10n.text("凭据中心证书")).tag("tls")
                         }
                         .accessibilityIdentifier("proxy.tls.mode")
                         if tlsMode == "acme" {
                             if let binding = detail.dnsBinding {
-                                Button("使用已分配域名") {
+                                Button(L10n.text("使用已分配域名")) {
                                     if !acmeDomains.contains(where: { $0.value == binding.hostname }) {
                                         acmeDomains.append(StringListEntry(value: binding.hostname))
                                     }
                                 }
                             }
-                            Text("ACME 域名")
-                            StringListEditor(entries: $acmeDomains, prompt: "域名")
-                            TextField("ACME 邮箱", text: $acmeEmail)
+                            Text(L10n.text("ACME 域名"))
+                            StringListEditor(entries: $acmeDomains, prompt: L10n.text("域名"))
+                            TextField(L10n.text("ACME 邮箱"), text: $acmeEmail)
                             Picker("ACME CA", selection: $acmeCA) {
-                                Text("默认 CA").tag("")
+                                Text(L10n.text("默认 CA")).tag("")
                                 Text("Let's Encrypt").tag("letsencrypt")
                                 Text("ZeroSSL").tag("zerossl")
                             }
-                            TextField("ACME 监听主机（可选）", text: $acmeListenHost)
-                            TextField("ACME 状态目录（可选）", text: $acmeDirectory)
-                            Toggle("使用旧版 ACME 字段", isOn: $acmeLegacyMode)
+                            TextField(L10n.text("ACME 监听主机（可选）"), text: $acmeListenHost)
+                            TextField(L10n.text("ACME 状态目录（可选）"), text: $acmeDirectory)
+                            Toggle(L10n.text("使用旧版 ACME 字段"), isOn: $acmeLegacyMode)
                             if acmeLegacyMode {
-                                Toggle("禁用 HTTP-01", isOn: $acmeDisableHTTP)
-                                Toggle("禁用 TLS-ALPN-01", isOn: $acmeDisableTLSALPN)
-                                TextField("旧版 HTTP-01 备用端口", text: $acmeLegacyHTTPPort)
-                                TextField("旧版 TLS-ALPN-01 备用端口", text: $acmeLegacyTLSPort)
+                                Toggle(L10n.text("禁用 HTTP-01"), isOn: $acmeDisableHTTP)
+                                Toggle(L10n.text("禁用 TLS-ALPN-01"), isOn: $acmeDisableTLSALPN)
+                                TextField(L10n.text("旧版 HTTP-01 备用端口"), text: $acmeLegacyHTTPPort)
+                                TextField(L10n.text("旧版 TLS-ALPN-01 备用端口"), text: $acmeLegacyTLSPort)
                             } else {
-                                Picker("验证方式", selection: $acmeType) {
+                                Picker(L10n.text("验证方式"), selection: $acmeType) {
                                     Text("HTTP-01（TCP 80）").tag("http")
                                     Text("TLS-ALPN-01（TCP 443）").tag("tls")
                                     Text("DNS-01").tag("dns")
                                 }
                                 if acmeType == "http" {
-                                    TextField("HTTP-01 备用端口", text: $acmeHTTPAltPort)
+                                    TextField(L10n.text("HTTP-01 备用端口"), text: $acmeHTTPAltPort)
                                 } else if acmeType == "tls" {
-                                    TextField("TLS-ALPN-01 备用端口", text: $acmeTLSAltPort)
+                                    TextField(L10n.text("TLS-ALPN-01 备用端口"), text: $acmeTLSAltPort)
                                 } else {
                                     ManagedDNSCredentialFields(store: store, draft: $acmeDNS)
                                 }
                             }
                         } else if tlsMode == "tls" {
-                            credentialReferencePicker("TLS 证书对", target: .identity, selection: tlsIdentitySelection)
-                            credentialReferencePicker("mTLS 客户端 CA", target: .clientCA, selection: $tlsClientCAPath, optional: true)
-                            Picker("SNI 检查", selection: $tlsSNIGuard) {
-                                Text("严格").tag("strict")
+                            credentialReferencePicker(L10n.text("TLS 证书对"), target: .identity, selection: tlsIdentitySelection)
+                            credentialReferencePicker(L10n.text("mTLS 客户端 CA"), target: .clientCA, selection: $tlsClientCAPath, optional: true)
+                            Picker(L10n.text("SNI 检查"), selection: $tlsSNIGuard) {
+                                Text(L10n.text("严格")).tag("strict")
                                 Text("DNS SAN").tag("dns-san")
-                                Text("关闭").tag("disable")
+                                Text(L10n.text("关闭")).tag("disable")
                             }
-                            Text("填写客户端 CA 后，分配用户时必须提供匹配的客户端证书和私钥。至少分配一位用户后再部署；健康检查会用该证书完成真实 Hysteria 连接，并在订阅中提供证书内容。")
+                            Text(L10n.text("填写客户端 CA 后，分配用户时必须提供匹配的客户端证书和私钥。至少分配一位用户后再部署；健康检查会用该证书完成真实 Hysteria 连接，并在订阅中提供证书内容。"))
                                 .font(.callout).foregroundStyle(.secondary)
                         }
-                        credentialReferencePicker("ECH 凭据", target: .ech, selection: $echKeyPath, optional: true)
-                        Text("TLS 证书对、CA 和 ECH 密钥可在此创建，或选择凭据中心已有凭据。ECH 需要 TLS 或 ACME 证书；导入 Hysteria 生成的 ech.pem 后，订阅会包含客户端 ECH 配置。")
+                        credentialReferencePicker(L10n.text("ECH 凭据"), target: .ech, selection: $echKeyPath, optional: true)
+                        Text(L10n.text("TLS 证书对、CA 和 ECH 密钥可在此创建，或选择凭据中心已有凭据。ECH 需要 TLS 或 ACME 证书；导入 Hysteria 生成的 ech.pem 后，订阅会包含客户端 ECH 配置。"))
                             .font(.callout).foregroundStyle(.secondary)
                     }
-                    Section("配置资源") {
-                        Picker("资源类型", selection: $resourceKind) {
-                            Text("ACL 规则").tag("acl")
-                            Text("GeoIP 数据").tag("geoip")
-                            Text("GeoSite 数据").tag("geosite")
+                    Section(L10n.text("配置资源")) {
+                        Picker(L10n.text("资源类型"), selection: $resourceKind) {
+                            Text(L10n.text("ACL 规则")).tag("acl")
+                            Text(L10n.text("GeoIP 数据")).tag("geoip")
+                            Text(L10n.text("GeoSite 数据")).tag("geosite")
                         }
                         .accessibilityIdentifier("proxy.resource.kind")
-                        Text("仅用于 ACL 规则、GeoIP 和 GeoSite 数据文件。")
+                        Text(L10n.text("仅用于 ACL 规则、GeoIP 和 GeoSite 数据文件。"))
                             .font(.callout).foregroundStyle(.secondary)
                         HStack {
                             Spacer()
-                            Button("上传配置文件…") { showingResourceImporter = true }
+                            Button(L10n.text("上传配置文件…")) { showingResourceImporter = true }
                                 .disabled(!store.isConnected)
                         }
                         if let resourceMessage {
                             Text(resourceMessage).font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
                         }
                         if resources.isEmpty {
-                            Text("没有已上传配置资源。上传后复制引用到对应的 ACL、GeoIP 或 GeoSite 字段。")
+                            Text(L10n.text("没有已上传配置资源。上传后复制引用到对应的 ACL、GeoIP 或 GeoSite 字段。"))
                                 .font(.callout).foregroundStyle(.secondary)
                         } else {
                             ForEach(resources) { resource in
@@ -240,152 +240,152 @@ struct ProxyConfigurationView: View {
                                             .font(.caption).foregroundStyle(.secondary)
                                     }
                                     Spacer()
-                                    Button("复制引用") { copy(resource.reference) }
+                                    Button(L10n.text("复制引用")) { copy(resource.reference) }
                                         .buttonStyle(.borderless)
                                 }
                             }
                         }
                     }
-                    Section("带宽与拥塞控制") {
-                        Text("速率使用固定版 Hysteria 的整数单位；非零值至少为 65,536 字节/秒。")
+                    Section(L10n.text("带宽与拥塞控制")) {
+                        Text(L10n.text("速率使用固定版 Hysteria 的整数单位；非零值至少为 65,536 字节/秒。"))
                             .font(.callout).foregroundStyle(.secondary)
-                        TextField("上传限制（如 100 Mbps）", text: $bandwidthUp)
-                        TextField("下载限制（如 500 Mbps）", text: $bandwidthDown)
-                        Toggle("禁用带宽损失补偿", isOn: $disableLossCompensation)
-                        Toggle("忽略客户端带宽声明", isOn: $ignoreClientBandwidth)
-                        Picker("拥塞控制", selection: $congestionType) {
+                        TextField(L10n.text("上传限制（如 100 Mbps）"), text: $bandwidthUp)
+                        TextField(L10n.text("下载限制（如 500 Mbps）"), text: $bandwidthDown)
+                        Toggle(L10n.text("禁用带宽损失补偿"), isOn: $disableLossCompensation)
+                        Toggle(L10n.text("忽略客户端带宽声明"), isOn: $ignoreClientBandwidth)
+                        Picker(L10n.text("拥塞控制"), selection: $congestionType) {
                             Text("BBR").tag("bbr")
                             Text("Reno").tag("reno")
                         }
                         if congestionType == "bbr" {
-                            Picker("BBR 配置", selection: $bbrProfile) {
-                                Text("标准").tag("standard")
-                                Text("保守").tag("conservative")
-                                Text("激进").tag("aggressive")
+                            Picker(L10n.text("BBR 配置"), selection: $bbrProfile) {
+                                Text(L10n.text("标准")).tag("standard")
+                                Text(L10n.text("保守")).tag("conservative")
+                                Text(L10n.text("激进")).tag("aggressive")
                             }
                         }
                     }
-                    Section("UDP、测速与混淆") {
-                        Toggle("禁用 UDP 转发", isOn: $disableUDP)
-                        TextField("UDP 空闲超时（如 30s）", text: $udpIdleTimeout)
-                        Text("UDP 空闲超时须为 2 到 600 秒；留空或填 0 使用默认值。")
+                    Section(L10n.text("UDP、测速与混淆")) {
+                        Toggle(L10n.text("禁用 UDP 转发"), isOn: $disableUDP)
+                        TextField(L10n.text("UDP 空闲超时（如 30s）"), text: $udpIdleTimeout)
+                        Text(L10n.text("UDP 空闲超时须为 2 到 600 秒；留空或填 0 使用默认值。"))
                             .font(.callout).foregroundStyle(.secondary)
-                        Toggle("启用测速服务", isOn: $speedTest)
-                        Picker("混淆", selection: $obfsType) {
-                            Text("关闭").tag("none")
+                        Toggle(L10n.text("启用测速服务"), isOn: $speedTest)
+                        Picker(L10n.text("混淆"), selection: $obfsType) {
+                            Text(L10n.text("关闭")).tag("none")
                             Text("Salamander").tag("salamander")
-                            Text("Gecko（实验性）").tag("gecko")
+                            Text(L10n.text("Gecko（实验性）")).tag("gecko")
                         }
                         if obfsType != "none" {
-                            SecureField("混淆密码", text: $obfsPassword)
+                            SecureField(L10n.text("混淆密码"), text: $obfsPassword)
                         }
                         if obfsType == "gecko" {
-                            TextField("最小分片字节数", text: $obfsMinPacket)
-                            TextField("最大分片字节数", text: $obfsMaxPacket)
+                            TextField(L10n.text("最小分片字节数"), text: $obfsMinPacket)
+                            TextField(L10n.text("最大分片字节数"), text: $obfsMaxPacket)
                         }
                     }
                     Section("ACL") {
-                        TextField("ACL 文件路径或 resource:// 引用", text: $aclFileReference)
-                        TextField("GeoIP 文件路径或 resource:// 引用", text: $geoIPReference)
-                        TextField("GeoSite 文件路径或 resource:// 引用", text: $geoSiteReference)
-                        TextField("Geo 数据更新间隔（如 24h）", text: $geoUpdateInterval)
-                        Text("acl.file 和下面的内联规则不能同时填写。")
+                        TextField(L10n.text("ACL 文件路径或 resource:// 引用"), text: $aclFileReference)
+                        TextField(L10n.text("GeoIP 文件路径或 resource:// 引用"), text: $geoIPReference)
+                        TextField(L10n.text("GeoSite 文件路径或 resource:// 引用"), text: $geoSiteReference)
+                        TextField(L10n.text("Geo 数据更新间隔（如 24h）"), text: $geoUpdateInterval)
+                        Text(L10n.text("acl.file 和下面的内联规则不能同时填写。"))
                             .font(.callout).foregroundStyle(.secondary)
-                        Text("每行一条规则，例如 reject(all, udp/443)。")
+                        Text(L10n.text("每行一条规则，例如 reject(all, udp/443)。"))
                             .font(.callout).foregroundStyle(.secondary)
                         TextEditor(text: $aclInline)
                             .font(.system(.body, design: .monospaced))
                             .frame(minHeight: 100)
                     }
-                    Section("QUIC 参数") {
-                        TextField("空闲超时（如 30s）", text: $quicIdleTimeout)
-                        TextField("最大并发流", text: $quicMaxStreams)
-                        TextField("初始流接收窗口（字节）", text: $quicInitStreamWindow)
-                        TextField("最大流接收窗口（字节）", text: $quicMaxStreamWindow)
-                        TextField("初始连接接收窗口（字节）", text: $quicInitConnectionWindow)
-                        TextField("最大连接接收窗口（字节）", text: $quicMaxConnectionWindow)
-                        Toggle("禁用路径 MTU 探测", isOn: $disablePathMTU)
-                        Toggle("禁用无状态重置", isOn: $disableStatelessReset)
-                        Text("非默认接收窗口至少 16 KiB，初始窗口不能大于最大窗口；并发流至少 8，空闲超时须为 4 到 120 秒。")
+                    Section(L10n.text("QUIC 参数")) {
+                        TextField(L10n.text("空闲超时（如 30s）"), text: $quicIdleTimeout)
+                        TextField(L10n.text("最大并发流"), text: $quicMaxStreams)
+                        TextField(L10n.text("初始流接收窗口（字节）"), text: $quicInitStreamWindow)
+                        TextField(L10n.text("最大流接收窗口（字节）"), text: $quicMaxStreamWindow)
+                        TextField(L10n.text("初始连接接收窗口（字节）"), text: $quicInitConnectionWindow)
+                        TextField(L10n.text("最大连接接收窗口（字节）"), text: $quicMaxConnectionWindow)
+                        Toggle(L10n.text("禁用路径 MTU 探测"), isOn: $disablePathMTU)
+                        Toggle(L10n.text("禁用无状态重置"), isOn: $disableStatelessReset)
+                        Text(L10n.text("非默认接收窗口至少 16 KiB，初始窗口不能大于最大窗口；并发流至少 8，空闲超时须为 4 到 120 秒。"))
                             .font(.callout).foregroundStyle(.secondary)
                     }
-                    Section("DNS 解析器") {
-                        Picker("类型", selection: $resolverType) {
-                            Text("系统默认").tag("none")
+                    Section(L10n.text("DNS 解析器")) {
+                        Picker(L10n.text("类型"), selection: $resolverType) {
+                            Text(L10n.text("系统默认")).tag("none")
                             Text("UDP").tag("udp")
                             Text("TCP").tag("tcp")
                             Text("TLS").tag("tls")
                             Text("HTTPS").tag("https")
                         }
                         if resolverType != "none" {
-                            TextField("解析器地址", text: $resolverAddress)
-                            TextField("查询超时（如 4s）", text: $resolverTimeout)
+                            TextField(L10n.text("解析器地址"), text: $resolverAddress)
+                            TextField(L10n.text("查询超时（如 4s）"), text: $resolverTimeout)
                             if resolverType == "tls" || resolverType == "https" {
                                 TextField("TLS SNI", text: $resolverSNI)
-                                Toggle("跳过解析器 TLS 验证", isOn: $resolverInsecure)
+                                Toggle(L10n.text("跳过解析器 TLS 验证"), isOn: $resolverInsecure)
                             }
                         }
                     }
-                    Section("协议嗅探") {
-                        Toggle("启用嗅探", isOn: $sniffEnabled)
+                    Section(L10n.text("协议嗅探")) {
+                        Toggle(L10n.text("启用嗅探"), isOn: $sniffEnabled)
                         if sniffEnabled {
-                            TextField("嗅探超时（如 2s）", text: $sniffTimeout)
-                            Toggle("重写已有域名请求", isOn: $sniffRewriteDomain)
-                            TextField("TCP 端口（如 80,443）", text: $sniffTCPPorts)
-                            TextField("UDP 端口（如 all）", text: $sniffUDPPorts)
+                            TextField(L10n.text("嗅探超时（如 2s）"), text: $sniffTimeout)
+                            Toggle(L10n.text("重写已有域名请求"), isOn: $sniffRewriteDomain)
+                            TextField(L10n.text("TCP 端口（如 80,443）"), text: $sniffTCPPorts)
+                            TextField(L10n.text("UDP 端口（如 all）"), text: $sniffUDPPorts)
                         }
                     }
-                    Section("出站代理") {
-                        Toggle("配置出站列表", isOn: $hasOutbound)
+                    Section(L10n.text("出站代理")) {
+                        Toggle(L10n.text("配置出站列表"), isOn: $hasOutbound)
                             .onChange(of: hasOutbound) { _, enabled in
                                 if enabled && outboundDrafts.isEmpty {
                                     outboundDrafts = [OutboundDraft()]
                                 }
                             }
                         if hasOutbound {
-                            Text("第一项是默认出站；ACL 可按名称选择其他出站。")
+                            Text(L10n.text("第一项是默认出站；ACL 可按名称选择其他出站。"))
                                 .font(.caption).foregroundStyle(.secondary)
                             ForEach($outboundDrafts) { $outbound in
                                 VStack(alignment: .leading, spacing: 8) {
                                     HStack {
-                                        Text(outbound.id == outboundDrafts.first?.id ? "默认出站" : "备用出站")
+                                        Text(outbound.id == outboundDrafts.first?.id ? L10n.text("默认出站") : L10n.text("备用出站"))
                                             .font(.headline)
                                         Spacer()
-                                        Button("设为默认", systemImage: "arrow.up.to.line") {
+                                        Button(L10n.text("设为默认"), systemImage: "arrow.up.to.line") {
                                             moveOutboundToDefault(outbound.id)
                                         }
                                         .disabled(outbound.id == outboundDrafts.first?.id)
                                         Button(role: .destructive) {
                                             removeOutbound(outbound.id)
                                         } label: {
-                                            Label("删除", systemImage: "trash")
+                                            Label(L10n.text("删除"), systemImage: "trash")
                                         }
                                     }
-                                    TextField("出站名称", text: $outbound.name)
-                                    Picker("类型", selection: $outbound.type) {
-                                        Text("直连").tag("direct")
+                                    TextField(L10n.text("出站名称"), text: $outbound.name)
+                                    Picker(L10n.text("类型"), selection: $outbound.type) {
+                                        Text(L10n.text("直连")).tag("direct")
                                         Text("SOCKS5").tag("socks5")
                                         Text("HTTP(S)").tag("http")
                                     }
                                     if outbound.type == "socks5" {
-                                        TextField("SOCKS5 地址", text: $outbound.address)
-                                        TextField("用户名（可选）", text: $outbound.username)
-                                        SecureField("密码（可选）", text: $outbound.password)
+                                        TextField(L10n.text("SOCKS5 地址"), text: $outbound.address)
+                                        TextField(L10n.text("用户名（可选）"), text: $outbound.username)
+                                        SecureField(L10n.text("密码（可选）"), text: $outbound.password)
                                     } else if outbound.type == "http" {
-                                        TextField("代理 URL", text: $outbound.url)
-                                        Toggle("跳过 HTTPS 代理验证", isOn: $outbound.insecure)
+                                        TextField(L10n.text("代理 URL"), text: $outbound.url)
+                                        Toggle(L10n.text("跳过 HTTPS 代理验证"), isOn: $outbound.insecure)
                                     } else {
-                                        Picker("直连模式", selection: $outbound.directMode) {
-                                            Text("自动（双栈）").tag("")
-                                            Text("优先 IPv6").tag("64")
-                                            Text("优先 IPv4").tag("46")
-                                            Text("仅 IPv6").tag("6")
-                                            Text("仅 IPv4").tag("4")
+                                        Picker(L10n.text("直连模式"), selection: $outbound.directMode) {
+                                            Text(L10n.text("自动（双栈）")).tag("")
+                                            Text(L10n.text("优先 IPv6")).tag("64")
+                                            Text(L10n.text("优先 IPv4")).tag("46")
+                                            Text(L10n.text("仅 IPv6")).tag("6")
+                                            Text(L10n.text("仅 IPv4")).tag("4")
                                         }
-                                        TextField("绑定 IPv4", text: $outbound.bindIPv4)
-                                        TextField("绑定 IPv6", text: $outbound.bindIPv6)
-                                        TextField("绑定网络设备", text: $outbound.bindDevice)
-                                        Toggle("启用 TCP Fast Open", isOn: $outbound.fastOpen)
+                                        TextField(L10n.text("绑定 IPv4"), text: $outbound.bindIPv4)
+                                        TextField(L10n.text("绑定 IPv6"), text: $outbound.bindIPv6)
+                                        TextField(L10n.text("绑定网络设备"), text: $outbound.bindDevice)
+                                        Toggle(L10n.text("启用 TCP Fast Open"), isOn: $outbound.fastOpen)
                                     }
                                 }
                                 .padding(10)
@@ -393,43 +393,43 @@ struct ProxyConfigurationView: View {
                             }
                             HStack {
                                 Spacer()
-                                Button("添加出站", systemImage: "plus") {
+                                Button(L10n.text("添加出站"), systemImage: "plus") {
                                     outboundDrafts.append(OutboundDraft())
                                 }
                             }
                         }
                     }
-                    Section("伪装") {
-                        Picker("模式", selection: $masqueradeType) {
-                            Text("关闭").tag("none")
-                            Text("静态文件目录").tag("file")
-                            Text("反向代理").tag("proxy")
-                            Text("固定文本").tag("string")
+                    Section(L10n.text("伪装")) {
+                        Picker(L10n.text("模式"), selection: $masqueradeType) {
+                            Text(L10n.text("关闭")).tag("none")
+                            Text(L10n.text("静态文件目录")).tag("file")
+                            Text(L10n.text("反向代理")).tag("proxy")
+                            Text(L10n.text("固定文本")).tag("string")
                         }
-                        if masqueradeType == "file" { TextField("节点上的目录路径", text: $masqueradeDirectory) }
+                        if masqueradeType == "file" { TextField(L10n.text("节点上的目录路径"), text: $masqueradeDirectory) }
                         if masqueradeType == "proxy" {
-                            TextField("上游 URL", text: $masqueradeURL)
-                            Toggle("重写 Host", isOn: $masqueradeRewriteHost)
-                            Toggle("添加 X-Forwarded 头", isOn: $masqueradeXForwarded)
-                            Toggle("跳过上游 TLS 验证", isOn: $masqueradeInsecure)
+                            TextField(L10n.text("上游 URL"), text: $masqueradeURL)
+                            Toggle(L10n.text("重写 Host"), isOn: $masqueradeRewriteHost)
+                            Toggle(L10n.text("添加 X-Forwarded 头"), isOn: $masqueradeXForwarded)
+                            Toggle(L10n.text("跳过上游 TLS 验证"), isOn: $masqueradeInsecure)
                         }
                         if masqueradeType == "string" {
-                            TextField("返回内容", text: $masqueradeContent)
-                            TextField("HTTP 状态码", text: $masqueradeStatusCode)
-                            Text("响应头")
+                            TextField(L10n.text("返回内容"), text: $masqueradeContent)
+                            TextField(L10n.text("HTTP 状态码"), text: $masqueradeStatusCode)
+                            Text(L10n.text("响应头"))
                             StringMapEditor(
                                 entries: $masqueradeHeaderEntries,
-                                keyPrompt: "响应头名称",
-                                valuePrompt: "响应头值",
+                                keyPrompt: L10n.text("响应头名称"),
+                                valuePrompt: L10n.text("响应头值"),
                                 masksValues: false
                             )
                         }
-                        TextField("额外 HTTP 监听地址", text: $masqueradeListenHTTP)
-                        TextField("额外 HTTPS 监听地址", text: $masqueradeListenHTTPS)
-                        Toggle("强制 HTTPS", isOn: $masqueradeForceHTTPS)
+                        TextField(L10n.text("额外 HTTP 监听地址"), text: $masqueradeListenHTTP)
+                        TextField(L10n.text("额外 HTTPS 监听地址"), text: $masqueradeListenHTTPS)
+                        Toggle(L10n.text("强制 HTTPS"), isOn: $masqueradeForceHTTPS)
                     }
-                    Section("兼容限制") {
-                        Text("Realm 可使用固定版 Mihomo；生成的订阅会为 STUN 打洞设置 30 秒握手期限，服务端使用监听端口作为本地 UDP 端口。Realm 不能与端口跳跃组合。启用 Mimic 仍受兼容限制；ECH 需要在凭据中心导入并选择 ECH 密钥。")
+                    Section(L10n.text("兼容限制")) {
+                        Text(L10n.text("Realm 可使用固定版 Mihomo；生成的订阅会为 STUN 打洞设置 30 秒握手期限，服务端使用监听端口作为本地 UDP 端口。Realm 不能与端口跳跃组合。启用 Mimic 仍受兼容限制；ECH 需要在凭据中心导入并选择 ECH 密钥。"))
                             .font(.callout).foregroundStyle(.secondary)
                     }
                 }
@@ -441,11 +441,11 @@ struct ProxyConfigurationView: View {
             } else if let errorMessage {
                 VStack(spacing: 12) {
                     ContentUnavailableView(
-                        "无法加载代理配置",
+                        L10n.text("无法加载代理配置"),
                         systemImage: "exclamationmark.triangle",
                         description: Text(errorMessage)
                     )
-                    Button("重试") { Task { await load() } }
+                    Button(L10n.text("重试")) { Task { await load() } }
                 }
             }
         }
@@ -471,7 +471,7 @@ struct ProxyConfigurationView: View {
 
     private func yamlPreviewPane(_ yaml: String) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("YAML 预览")
+            Text(L10n.text("YAML 预览"))
                 .font(.headline)
                 .padding(12)
             Divider()
@@ -1030,17 +1030,17 @@ struct ProxyConfigurationView: View {
             .filter { $0.resourceKind == target.kind }
         return HStack {
             Picker(title, selection: selection) {
-                Text(optional ? "不启用" : "选择凭据").tag("")
+                Text(optional ? L10n.text("不启用") : L10n.text("选择凭据")).tag("")
                 ForEach(entries) { entry in
                     Text(entry.name).tag(entry.reference)
                 }
                 if !selection.wrappedValue.isEmpty && !entries.contains(where: { $0.reference == selection.wrappedValue }) {
-                    Text(selection.wrappedValue.hasPrefix("credential://") ? "当前凭据（不可用）" : "当前远端文件")
+                    Text(selection.wrappedValue.hasPrefix("credential://") ? L10n.text("当前凭据（不可用）") : L10n.text("当前远端文件"))
                         .tag(selection.wrappedValue)
                 }
             }
             .accessibilityIdentifier("proxy.credential.\(target.rawValue)")
-            Button("创建…") { creatingCredential = target }
+            Button(L10n.text("创建…")) { creatingCredential = target }
                 .disabled(!store.isConnected)
                 .accessibilityIdentifier("proxy.credential.create.\(target.rawValue)")
         }
@@ -1053,7 +1053,7 @@ struct ProxyConfigurationView: View {
             defer { if hasAccess { url.stopAccessingSecurityScopedResource() } }
             let data = try Data(contentsOf: url, options: .mappedIfSafe)
             guard !data.isEmpty, data.count <= 20 * 1024 * 1024 else {
-                errorMessage = "资源文件须在 1 字节到 20 MiB 之间。"
+                errorMessage = L10n.text("资源文件须在 1 字节到 20 MiB 之间。")
                 return
             }
             Task {
@@ -1066,7 +1066,7 @@ struct ProxyConfigurationView: View {
                     )
                     copy(receipt.reference)
                     resources = try await store.nodeResources(nodeID)
-                    resourceMessage = "已加密上传，引用已复制：\(receipt.reference)"
+                    resourceMessage = L10n.text("已加密上传，引用已复制：{0}", String(describing: (receipt.reference)))
                 } catch { errorMessage = error.localizedDescription }
             }
         } catch { errorMessage = error.localizedDescription }
@@ -1088,7 +1088,7 @@ struct ProxyConfigurationView: View {
             return true
         }
         guard let integer = Int(value), integer >= 0 else {
-            errorMessage = "\(field)须为非负整数。"
+            errorMessage = L10n.text("{0}须为非负整数。", String(describing: (field)))
             return false
         }
         object[field] = .integer(integer)
@@ -1137,7 +1137,7 @@ struct ProxyConfigurationView: View {
     ) -> Bool {
         guard let milliseconds = durationMilliseconds(value),
               milliseconds == 0 || (minimumMilliseconds...maximumMilliseconds).contains(milliseconds) else {
-            errorMessage = "\(field)须为0，或在 \(Int(minimumMilliseconds))ms 到 \(Int(maximumMilliseconds))ms 之间。"
+            errorMessage = L10n.text("{0}须为0，或在 {1}ms 到 {2}ms 之间。", String(describing: (field)), String(describing: (Int(minimumMilliseconds))), String(describing: (Int(maximumMilliseconds))))
             return false
         }
         return true
@@ -1165,11 +1165,11 @@ struct ProxyConfigurationView: View {
 
     private func validateBandwidthValue(_ value: String, field: String) -> Bool {
         guard let rate = bandwidthRate(value) else {
-            errorMessage = "\(field)须为整数，并使用 bps、kbps、Mbps、Gbps 或 Tbps 单位。"
+            errorMessage = L10n.text("{0}须为整数，并使用 bps、kbps、Mbps、Gbps 或 Tbps 单位。", String(describing: (field)))
             return false
         }
         if rate.amount > 0 && rate.bytesPerSecond < 65_536 {
-            errorMessage = "\(field)换算后须至少为65,536字节/秒。"
+            errorMessage = L10n.text("{0}换算后须至少为65,536字节/秒。", String(describing: (field)))
             return false
         }
         return true
@@ -1181,7 +1181,7 @@ struct ProxyConfigurationView: View {
             return true
         }
         guard let port = Int(value), (1...65535).contains(port) else {
-            errorMessage = "\(field)必须在 1 到 65535 之间。"
+            errorMessage = L10n.text("{0}必须在 1 到 65535 之间。", String(describing: (field)))
             return false
         }
         object[key] = .integer(port)
@@ -1222,7 +1222,7 @@ struct ProxyConfigurationView: View {
     private func validateDraft() -> Bool {
         guard let publicPort = Int(publicPortDraft.portText(listenAddress: listenAddress)),
               (1...65535).contains(publicPort) else {
-            errorMessage = "公开端口必须是 1 到 65535 的整数；联动时请填写有效的监听端口。"
+            errorMessage = L10n.text("公开端口必须是 1 到 65535 的整数；联动时请填写有效的监听端口。")
             return false
         }
         if let validationError = ProxyProbeURLValidation.error(proxyProbeURL) {
@@ -1230,33 +1230,33 @@ struct ProxyConfigurationView: View {
             return false
         }
         guard let port = Int(trafficStatsPort), (1...65535).contains(port) else {
-            errorMessage = "trafficStats 端口必须是 1 到 65535 的整数。"
+            errorMessage = L10n.text("trafficStats 端口必须是 1 到 65535 的整数。")
             return false
         }
-        if !bandwidthUp.isEmpty && !validateBandwidthValue(bandwidthUp, field: "上传带宽") { return false }
-        if !bandwidthDown.isEmpty && !validateBandwidthValue(bandwidthDown, field: "下载带宽") { return false }
+        if !bandwidthUp.isEmpty && !validateBandwidthValue(bandwidthUp, field: L10n.text("上传带宽")) { return false }
+        if !bandwidthDown.isEmpty && !validateBandwidthValue(bandwidthDown, field: L10n.text("下载带宽")) { return false }
 
         if tlsMode == "acme" {
             let domains = acmeDomains.map { $0.value.trimmingCharacters(in: .whitespacesAndNewlines) }
                 .filter { !$0.isEmpty }
             guard !domains.isEmpty else {
-                errorMessage = "请填写 ACME 域名。"
+                errorMessage = L10n.text("请填写 ACME 域名。")
                 return false
             }
             guard Set(domains.map { $0.lowercased() }).count == domains.count else {
-                errorMessage = "ACME 域名不能重复。"
+                errorMessage = L10n.text("ACME 域名不能重复。")
                 return false
             }
             if acmeLegacyMode {
                 var ports: [String: JSONValue] = [:]
-                guard setPort(acmeLegacyHTTPPort, field: "旧版 HTTP-01 备用端口", key: "altHTTPPort", in: &ports),
-                      setPort(acmeLegacyTLSPort, field: "旧版 TLS-ALPN-01 备用端口", key: "altTLSALPNPort", in: &ports) else { return false }
+                guard setPort(acmeLegacyHTTPPort, field: L10n.text("旧版 HTTP-01 备用端口"), key: "altHTTPPort", in: &ports),
+                      setPort(acmeLegacyTLSPort, field: L10n.text("旧版 TLS-ALPN-01 备用端口"), key: "altTLSALPNPort", in: &ports) else { return false }
             } else if acmeType == "http" {
                 var port: [String: JSONValue] = [:]
-                guard setPort(acmeHTTPAltPort, field: "HTTP-01 备用端口", key: "altPort", in: &port) else { return false }
+                guard setPort(acmeHTTPAltPort, field: L10n.text("HTTP-01 备用端口"), key: "altPort", in: &port) else { return false }
             } else if acmeType == "tls" {
                 var port: [String: JSONValue] = [:]
-                guard setPort(acmeTLSAltPort, field: "TLS-ALPN-01 备用端口", key: "altPort", in: &port) else { return false }
+                guard setPort(acmeTLSAltPort, field: L10n.text("TLS-ALPN-01 备用端口"), key: "altPort", in: &port) else { return false }
             } else {
                 if let validationError = acmeDNS.validationError {
                     errorMessage = validationError
@@ -1264,23 +1264,23 @@ struct ProxyConfigurationView: View {
                 }
             }
         } else if tlsMode == "tls", (certificatePath.isEmpty || privateKeyPath.isEmpty) {
-            errorMessage = "请选择 TLS 证书和私钥凭据。"
+            errorMessage = L10n.text("请选择 TLS 证书和私钥凭据。")
             return false
         }
 
         if !udpIdleTimeout.isEmpty,
-           !validateDurationRange(udpIdleTimeout, field: "UDP 空闲超时", minimumMilliseconds: 2_000, maximumMilliseconds: 600_000) {
+           !validateDurationRange(udpIdleTimeout, field: L10n.text("UDP 空闲超时"), minimumMilliseconds: 2_000, maximumMilliseconds: 600_000) {
             return false
         }
         if obfsType != "none" {
             guard !obfsPassword.isEmpty else {
-                errorMessage = "请设置混淆密码。"
+                errorMessage = L10n.text("请设置混淆密码。")
                 return false
             }
             if obfsType == "gecko" {
                 guard let minimum = Int(obfsMinPacket), let maximum = Int(obfsMaxPacket),
                       minimum >= 512, maximum >= minimum, maximum <= 2048 else {
-                    errorMessage = "Gecko 分片范围须满足 512 ≤ 最小值 ≤ 最大值 ≤ 2048。"
+                    errorMessage = L10n.text("Gecko 分片范围须满足 512 ≤ 最小值 ≤ 最大值 ≤ 2048。")
                     return false
                 }
             }
@@ -1288,7 +1288,7 @@ struct ProxyConfigurationView: View {
 
         let rules = aclInline.split(whereSeparator: \.isNewline)
         if !aclFileReference.isEmpty && !rules.isEmpty {
-            errorMessage = "acl.file 和内联规则不能同时启用。"
+            errorMessage = L10n.text("acl.file 和内联规则不能同时启用。")
             return false
         }
 
@@ -1299,13 +1299,13 @@ struct ProxyConfigurationView: View {
               setInteger(quicMaxConnectionWindow, field: "maxConnReceiveWindow", in: &quic),
               setInteger(quicMaxStreams, field: "maxIncomingStreams", in: &quic) else { return false }
         for (text, field) in [
-            (quicInitStreamWindow, "初始流接收窗口"),
-            (quicMaxStreamWindow, "最大流接收窗口"),
-            (quicInitConnectionWindow, "初始连接接收窗口"),
-            (quicMaxConnectionWindow, "最大连接接收窗口"),
+            (quicInitStreamWindow, L10n.text("初始流接收窗口")),
+            (quicMaxStreamWindow, L10n.text("最大流接收窗口")),
+            (quicInitConnectionWindow, L10n.text("初始连接接收窗口")),
+            (quicMaxConnectionWindow, L10n.text("最大连接接收窗口")),
         ] {
             if let value = Int(text), value > 0, value < 16_384 {
-                errorMessage = "\(field)须为0，或至少16,384字节。"
+                errorMessage = L10n.text("{0}须为0，或至少16,384字节。", String(describing: (field)))
                 return false
             }
         }
@@ -1314,73 +1314,73 @@ struct ProxyConfigurationView: View {
         let initialConnectionWindow = Int(quicInitConnectionWindow).flatMap { $0 > 0 ? $0 : nil } ?? 20_971_520
         let maximumConnectionWindow = Int(quicMaxConnectionWindow).flatMap { $0 > 0 ? $0 : nil } ?? 20_971_520
         guard initialStreamWindow <= maximumStreamWindow else {
-            errorMessage = "初始流接收窗口不能大于最大流接收窗口。"
+            errorMessage = L10n.text("初始流接收窗口不能大于最大流接收窗口。")
             return false
         }
         guard initialConnectionWindow <= maximumConnectionWindow else {
-            errorMessage = "初始连接接收窗口不能大于最大连接接收窗口。"
+            errorMessage = L10n.text("初始连接接收窗口不能大于最大连接接收窗口。")
             return false
         }
         if let streams = Int(quicMaxStreams), streams > 0, streams < 8 {
-            errorMessage = "最大并发流须为0，或至少为8。"
+            errorMessage = L10n.text("最大并发流须为0，或至少为8。")
             return false
         }
         if !quicIdleTimeout.isEmpty,
-           !validateDurationRange(quicIdleTimeout, field: "QUIC 空闲超时", minimumMilliseconds: 4_000, maximumMilliseconds: 120_000) {
+           !validateDurationRange(quicIdleTimeout, field: L10n.text("QUIC 空闲超时"), minimumMilliseconds: 4_000, maximumMilliseconds: 120_000) {
             return false
         }
 
         if resolverType != "none", resolverAddress.isEmpty {
-            errorMessage = "请填写 DNS 解析器地址。"
+            errorMessage = L10n.text("请填写 DNS 解析器地址。")
             return false
         }
 
         if hasOutbound {
             guard !outboundDrafts.isEmpty else {
-                errorMessage = "至少需要一个出站配置。"
+                errorMessage = L10n.text("至少需要一个出站配置。")
                 return false
             }
             var names = Set<String>()
             for outbound in outboundDrafts {
                 let name = outbound.name.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !name.isEmpty else {
-                    errorMessage = "请填写每个出站名称。"
+                    errorMessage = L10n.text("请填写每个出站名称。")
                     return false
                 }
                 guard names.insert(name.lowercased()).inserted else {
-                    errorMessage = "出站名称不能重复。"
+                    errorMessage = L10n.text("出站名称不能重复。")
                     return false
                 }
                 if outbound.type == "socks5", outbound.address.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    errorMessage = "请填写 SOCKS5 地址。"
+                    errorMessage = L10n.text("请填写 SOCKS5 地址。")
                     return false
                 }
                 if outbound.type == "http", outbound.url.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    errorMessage = "请填写 HTTP(S) 代理 URL。"
+                    errorMessage = L10n.text("请填写 HTTP(S) 代理 URL。")
                     return false
                 }
             }
         }
 
         if masqueradeType == "file", masqueradeDirectory.isEmpty {
-            errorMessage = "请填写伪装文件目录。"
+            errorMessage = L10n.text("请填写伪装文件目录。")
             return false
         }
         if masqueradeType == "proxy", masqueradeURL.isEmpty {
-            errorMessage = "请填写伪装上游 URL。"
+            errorMessage = L10n.text("请填写伪装上游 URL。")
             return false
         }
         if masqueradeType == "string" {
             do { _ = try stringMap(masqueradeHeaderEntries) }
             catch {
-                errorMessage = "伪装响应头名称不能为空或重复。"
+                errorMessage = L10n.text("伪装响应头名称不能为空或重复。")
                 return false
             }
             if !masqueradeStatusCode.isEmpty,
                let status = Int(masqueradeStatusCode), (100...599).contains(status) {
                 return true
             } else if !masqueradeStatusCode.isEmpty {
-                errorMessage = "HTTP 状态码必须在 100 到 599 之间。"
+                errorMessage = L10n.text("HTTP 状态码必须在 100 到 599 之间。")
                 return false
             }
         }
@@ -1433,7 +1433,7 @@ private struct StringListEditor: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             if entries.isEmpty {
-                Text("暂无条目")
+                Text(L10n.text("暂无条目"))
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
@@ -1444,15 +1444,15 @@ private struct StringListEditor: View {
                         let id = entry.id
                         entries.removeAll { $0.id == id }
                     } label: {
-                        Label("删除条目", systemImage: "minus.circle")
+                        Label(L10n.text("删除条目"), systemImage: "minus.circle")
                             .labelStyle(.iconOnly)
                     }
-                    .accessibilityLabel("删除条目")
+                    .accessibilityLabel(L10n.text("删除条目"))
                 }
             }
             HStack {
                 Spacer()
-                Button("添加条目", systemImage: "plus") {
+                Button(L10n.text("添加条目"), systemImage: "plus") {
                     entries.append(StringListEntry())
                 }
             }
@@ -1482,7 +1482,7 @@ private struct StringMapEditor: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             if entries.isEmpty {
-                Text("暂无映射项")
+                Text(L10n.text("暂无映射项"))
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
@@ -1501,15 +1501,15 @@ private struct StringMapEditor: View {
                         let id = entry.id
                         entries.removeAll { $0.id == id }
                     } label: {
-                        Label("删除映射项", systemImage: "minus.circle")
+                        Label(L10n.text("删除映射项"), systemImage: "minus.circle")
                             .labelStyle(.iconOnly)
                     }
-                    .accessibilityLabel("删除映射项")
+                    .accessibilityLabel(L10n.text("删除映射项"))
                 }
             }
             HStack {
                 Spacer()
-                Button("添加映射项", systemImage: "plus") {
+                Button(L10n.text("添加映射项"), systemImage: "plus") {
                     entries.append(StringMapEntry())
                 }
             }

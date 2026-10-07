@@ -47,8 +47,8 @@ final class NodeAlertNotifications: NSObject, UNUserNotificationCenterDelegate {
     func requestPermission() async -> String {
         do {
             let granted = try await transport.requestPermission()
-            return granted ? "已启用系统通知；应用运行并联网时发送。" : "系统通知未获授权；应用内提醒仍可用。请在系统设置中允许通知。"
-        } catch { return "无法启用系统通知：\(error.localizedDescription)" }
+            return granted ? L10n.text("已启用系统通知；应用运行并联网时发送。") : L10n.text("系统通知未获授权；应用内提醒仍可用。请在系统设置中允许通知。")
+        } catch { return L10n.text("无法启用系统通知：{0}", String(describing: (error.localizedDescription))) }
     }
 
     func deliver(nodes: [NodeSummary], service: String) async {
@@ -89,8 +89,8 @@ final class NodeAlertNotifications: NSObject, UNUserNotificationCenterDelegate {
             guard !seen.contains(identifier) else { continue }
             do {
                 try await transport.send(id: "credential-\(identifier)",
-                    title: "\(entry.name)：\(days < 0 ? "已到期" : "即将到期")",
-                    body: "\(entry.typeTitle) · \(DateDisplayParser.shared.parse(entry.expiresAt)?.formatted(date: .abbreviated, time: .shortened) ?? "未知")。请准备新凭据并发布新版本。")
+                    title: L10n.text("{0}：{1}", entry.name, days < 0 ? L10n.text("已到期") : L10n.text("即将到期")),
+                    body: L10n.text("{0} · {1}。请准备新凭据并发布新版本。", String(describing: (entry.typeTitle)), String(describing: (DateDisplayParser.shared.parse(entry.expiresAt).map { L10n.date($0) } ?? L10n.text("未知")))))
                 seen.insert(identifier)
                 defaults.set(Array(seen), forKey: key)
             } catch { /* Retry on the next refresh without marking delivery. */ }

@@ -27,7 +27,7 @@ struct CredentialsView: View {
 
     var body: some View {
         credentialContent
-        .searchable(text: $search, placement: .toolbar, prompt: "搜索凭据")
+        .searchable(text: $search, placement: .toolbar, prompt: L10n.text("搜索凭据"))
         .onChange(of: category) { _, _ in
             type = ""
             clearSelection()
@@ -36,22 +36,22 @@ struct CredentialsView: View {
         .onChange(of: type) { _, _ in clearSelection() }
         .toolbar {
             ToolbarItem(placement: .principal) {
-                Picker("凭据分类", selection: $category) {
-                    Text("运营凭据").tag(CredentialCategory.operations)
-                    Text("用户凭据").tag(CredentialCategory.user)
+                Picker(L10n.text("凭据分类"), selection: $category) {
+                    Text(L10n.text("运营凭据")).tag(CredentialCategory.operations)
+                    Text(L10n.text("用户凭据")).tag(CredentialCategory.user)
                 }
                 .pickerStyle(.segmented)
                 .accessibilityIdentifier("credentials.tabs")
             }
             ToolbarItemGroup {
-                Picker("类型", selection: $type) {
-                    Text("全部类型").tag("")
+                Picker(L10n.text("类型"), selection: $type) {
+                    Text(L10n.text("全部类型")).tag("")
                     ForEach(Array(Set(categoryEntries.map(\.kind))).sorted(), id: \.self) {
                         Text(CredentialDisplay.kind($0)).tag($0)
                     }
                 }
                 .accessibilityIdentifier("credentials.typeFilter")
-                Button { creating = true } label: { Label("创建凭据", systemImage: "plus") }
+                Button { creating = true } label: { Label(L10n.text("创建凭据"), systemImage: "plus") }
                     .disabled(!store.isConnected).keyboardShortcut("n", modifiers: .command)
                     .accessibilityIdentifier("credential.create")
             }
@@ -69,8 +69,8 @@ struct CredentialsView: View {
         .sheet(item: $replacing) { CredentialEditorView(store: store, replacing: $0) }
         .sheet(item: $editing) { CredentialMetadataEditor(store: store, detail: $0) }
         .task(id: "\(selection ?? ""): \(store.lastUpdated?.timeIntervalSince1970 ?? 0):\(store.isConnected)") { await load() }
-        .confirmationDialog("删除未被引用的凭据？", isPresented: $deleting) {
-            Button("删除", role: .destructive) { if let detail { Task { do { try await store.deleteCredential(detail); selection = nil } catch { self.error = error.localizedDescription } } } }
+        .confirmationDialog(L10n.text("删除未被引用的凭据？"), isPresented: $deleting) {
+            Button(L10n.text("删除"), role: .destructive) { if let detail { Task { do { try await store.deleteCredential(detail); selection = nil } catch { self.error = error.localizedDescription } } } }
         }
     }
 
@@ -78,22 +78,22 @@ struct CredentialsView: View {
         VStack(alignment: .leading, spacing: 0) {
             MainVerticalSplitView(hasDetail: selected != nil) {
                 Table(entries, selection: $selection) {
-                    TableColumn("名称", value: \.name)
-                    TableColumn("类型", value: \.typeTitle)
-                    TableColumn("状态", value: \.statusTitle)
-                    TableColumn("引用") { entry in Text(entry.isManaged ? String(entry.referenceCount ?? 0) : "—") }
-                    TableColumn("到期") { entry in Text(entry.expiresAt.map { DateDisplayText.local($0) } ?? "未知") }
+                    TableColumn(L10n.text("名称"), value: \.name)
+                    TableColumn(L10n.text("类型"), value: \.typeTitle)
+                    TableColumn(L10n.text("状态"), value: \.statusTitle)
+                    TableColumn(L10n.text("引用")) { entry in Text(entry.isManaged ? String(entry.referenceCount ?? 0) : "—") }
+                    TableColumn(L10n.text("到期")) { entry in Text(entry.expiresAt.map { DateDisplayText.local($0) } ?? L10n.text("未知")) }
                 }
                 .frame(minHeight: 180)
                 .accessibilityIdentifier("credentials.table")
                 .overlay {
                     if entries.isEmpty {
                         ContentUnavailableView(
-                            categoryEntries.isEmpty ? "暂无\(category.title)" : "没有匹配的凭据",
+                            categoryEntries.isEmpty ? L10n.text("暂无{0}", String(describing: (category.title))) : L10n.text("没有匹配的凭据"),
                             systemImage: "key.horizontal",
                             description: Text(categoryEntries.isEmpty
-                                ? (store.isConnected ? "当前没有\(category.title)。" : "连接服务后可查看\(category.title)。")
-                                : "尝试其他搜索词或类型。")
+                                ? (store.isConnected ? L10n.text("当前没有{0}。", String(describing: (category.title))) : L10n.text("连接服务后可查看{0}。", String(describing: (category.title))))
+                                : L10n.text("尝试其他搜索词或类型。"))
                         )
                     }
                 }
@@ -122,14 +122,14 @@ struct CredentialsView: View {
                     detailActions
                 }
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), alignment: .leading)], alignment: .leading, spacing: 12) {
-                    detailMetric("类型", value: entry.typeTitle)
+                    detailMetric(L10n.text("类型"), value: entry.typeTitle)
                     if entry.isManaged {
-                        detailMetric("最新版本", value: "v\(detail?.latestVersion ?? entry.latestVersion)")
-                        detailMetric("引用", value: String(detail?.references.count ?? entry.referenceCount ?? 0))
+                        detailMetric(L10n.text("最新版本"), value: "v\(detail?.latestVersion ?? entry.latestVersion)")
+                        detailMetric(L10n.text("引用"), value: String(detail?.references.count ?? entry.referenceCount ?? 0))
                     }
-                    detailMetric("到期时间", value: entry.expiresAt.map { DateDisplayText.local($0) } ?? "未知")
+                    detailMetric(L10n.text("到期时间"), value: entry.expiresAt.map { DateDisplayText.local($0) } ?? L10n.text("未知"))
                     if let userID = entry.ownerUserId {
-                        detailMetric("所属用户", value: store.users.first { $0.id == userID }?.name ?? userID)
+                        detailMetric(L10n.text("所属用户"), value: store.users.first { $0.id == userID }?.name ?? userID)
                     }
                 }
             }
@@ -148,7 +148,7 @@ struct CredentialsView: View {
                         } else {
                             HStack(spacing: 8) {
                                 if store.isConnected { ProgressView().controlSize(.small) }
-                                Text(store.isConnected ? "正在读取详情…" : "连接服务后可读取引用与版本详情。")
+                                Text(store.isConnected ? L10n.text("正在读取详情…") : L10n.text("连接服务后可读取引用与版本详情。"))
                                     .foregroundStyle(.secondary)
                             }
                         }
@@ -175,16 +175,16 @@ struct CredentialsView: View {
     @ViewBuilder private var detailActions: some View {
         if let detail, detail.id == selected?.id {
             HStack(spacing: 8) {
-                Button("发布新版本") { replacing = detail }
+                Button(L10n.text("发布新版本")) { replacing = detail }
                     .disabled(detail.archived)
-                Button("编辑信息") { editing = detail }
+                Button(L10n.text("编辑信息")) { editing = detail }
                 Menu {
-                    Button("删除凭据", role: .destructive) { deleting = true }
+                    Button(L10n.text("删除凭据"), role: .destructive) { deleting = true }
                         .disabled(!detail.references.isEmpty)
                 } label: { Image(systemName: "ellipsis") }
                 .menuIndicator(.hidden)
-                .help("更多操作")
-                .accessibilityLabel("更多凭据操作")
+                .help(L10n.text("更多操作"))
+                .accessibilityLabel(L10n.text("更多凭据操作"))
             }
             .fixedSize()
             .disabled(!store.isConnected)
@@ -200,12 +200,12 @@ struct CredentialsView: View {
 
     @ViewBuilder private func businessDetail(_ entry: CredentialSummary) -> some View {
         if let user = entry.ownerUserId {
-            GroupBox("用户凭据管理") {
+            GroupBox(L10n.text("用户凭据管理")) {
                 HStack {
-                    Text("在用户页面管理连接凭据、轮换与订阅。")
+                    Text(L10n.text("在用户页面管理连接凭据、轮换与订阅。"))
                         .font(.callout).foregroundStyle(.secondary)
                     Spacer()
-                    Button("管理用户") { onJump("user", user) }
+                    Button(L10n.text("管理用户")) { onJump("user", user) }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.vertical, 4)
@@ -213,14 +213,14 @@ struct CredentialsView: View {
         }
         if entry.kind == "admin_token", let id = entry.metadata["token_id"]?.stringValue,
            let token = store.adminTokens.first(where: { $0.id == id }) {
-            GroupBox("管理员访问") {
+            GroupBox(L10n.text("管理员访问")) {
                 HStack(alignment: .center, spacing: 16) {
                     VStack(alignment: .leading, spacing: 8) {
-                        Text(id == store.currentAdminTokenID ? "本 Mac 当前使用的 Token" : "管理员访问令牌").foregroundStyle(.secondary)
-                        if let lastUsed = token.lastUsedAt { detailMetric("最近使用", value: DateDisplayText.local(lastUsed)) }
+                        Text(id == store.currentAdminTokenID ? L10n.text("本 Mac 当前使用的 Token") : L10n.text("管理员访问令牌")).foregroundStyle(.secondary)
+                        if let lastUsed = token.lastUsedAt { detailMetric(L10n.text("最近使用"), value: DateDisplayText.local(lastUsed)) }
                     }
                     Spacer()
-                    Button("撤销 Token", role: .destructive) { Task { do { try await store.revokeAdminToken(token) } catch { self.error = error.localizedDescription } } }
+                    Button(L10n.text("撤销 Token"), role: .destructive) { Task { do { try await store.revokeAdminToken(token) } catch { self.error = error.localizedDescription } } }
                         .disabled(!store.isConnected || token.revokedAt != nil || id == store.currentAdminTokenID)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -246,7 +246,7 @@ struct CredentialsView: View {
 private enum CredentialCategory: Hashable {
     case user, operations
 
-    var title: String { self == .user ? "用户凭据" : "运营凭据" }
+    var title: String { self == .user ? L10n.text("用户凭据") : L10n.text("运营凭据") }
 
     func contains(_ entry: CredentialSummary) -> Bool {
         (entry.ownerUserId != nil) == (self == .user)
@@ -265,15 +265,15 @@ private struct CredentialMetadataEditor: View {
     @State private var saving = false
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            Text("凭据信息").font(.title2.bold())
-            TextField("名称", text: $name)
-            Toggle("归档（保留已有引用，禁止新增引用）", isOn: $archived)
-            Toggle("设置到期提醒", isOn: $hasReminder)
-            if hasReminder { DatePicker("提醒时间", selection: $reminder) }
+            Text(L10n.text("凭据信息")).font(.title2.bold())
+            TextField(L10n.text("名称"), text: $name)
+            Toggle(L10n.text("归档（保留已有引用，禁止新增引用）"), isOn: $archived)
+            Toggle(L10n.text("设置到期提醒"), isOn: $hasReminder)
+            if hasReminder { DatePicker(L10n.text("提醒时间"), selection: $reminder) }
             if let error { Text(error).foregroundStyle(.red) }
             HStack {
-                Button("取消") { dismiss() }; Spacer()
-                Button("保存") { Task {
+                Button(L10n.text("取消")) { dismiss() }; Spacer()
+                Button(L10n.text("保存")) { Task {
                     saving = true; defer { saving = false }
                     do { try await store.updateCredential(detail, name: name, archived: archived, reminderAt: hasReminder ? ISO8601DateFormatter().string(from: reminder) : nil); dismiss() }
                     catch { self.error = error.localizedDescription }

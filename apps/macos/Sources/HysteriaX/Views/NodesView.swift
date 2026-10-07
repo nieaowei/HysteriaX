@@ -36,33 +36,33 @@ struct NodesView: View {
     var body: some View {
         MainVerticalSplitView(hasDetail: store.nodes.contains { $0.id == selection }) {
             Table(visibleNodes, selection: $selection, sortOrder: $sortOrder) {
-                TableColumn("名称", value: \.name) { node in
+                TableColumn(L10n.text("名称"), value: \.name) { node in
                     Text(node.name)
                         .accessibilityLabel(node.name)
                         .accessibilityIdentifier("nodes.row.\(node.id)")
                 }
                 .width(min: 110, ideal: 150)
-                TableColumn("SSH 地址", value: \.displayHost) { node in
+                TableColumn(L10n.text("SSH 地址"), value: \.displayHost) { node in
                     Text(node.displayHost)
                         .monospaced()
                         .textSelection(.enabled)
                         .lineLimit(1)
-                        .help(node.ssh?.host ?? "暂无 SSH 主机地址")
+                        .help(node.ssh?.host ?? L10n.text("暂无 SSH 主机地址"))
                 }
                 .width(min: 110, ideal: 150)
-                TableColumn("状态", value: \.localizedState) { node in
+                TableColumn(L10n.text("状态"), value: \.localizedState) { node in
                     Text(node.localizedState).foregroundStyle(node.stateColor)
                 }
                 .width(min: 90, ideal: 110)
-                TableColumn("配置") { node in
+                TableColumn(L10n.text("配置")) { node in
                     VStack(alignment: .leading, spacing: 3) {
-                        Text("目标 v\(node.revision)").monospacedDigit()
-                        Text(node.deployedRevision.map { "已部署 v\($0)" } ?? "尚未部署")
+                        Text(L10n.text("目标 v{0}", String(describing: (node.revision)))).monospacedDigit()
+                        Text(node.deployedRevision.map { L10n.text("已部署 v{0}", String(describing: ($0))) } ?? L10n.text("尚未部署"))
                             .font(.caption).foregroundStyle(.secondary)
                     }
                 }
                 .width(min: 90, ideal: 110)
-                TableColumn("套餐") { node in
+                TableColumn(L10n.text("套餐")) { node in
                     VStack(alignment: .leading, spacing: 3) {
                         QuotaProgressView(usageBytes: node.packageUsage?.usageBytes, quotaBytes: node.package?.quotaBytes)
                         Text(PackageDisplay.expiry(node.package))
@@ -71,12 +71,12 @@ struct NodesView: View {
                     }
                 }
                 .width(min: 150, ideal: 180)
-                TableColumn("采样") { node in
+                TableColumn(L10n.text("采样")) { node in
                     VStack(alignment: .leading, spacing: 3) {
-                        Text(store.isConnected ? node.localizedFreshness : "离线缓存")
+                        Text(store.isConnected ? node.localizedFreshness : L10n.text("离线缓存"))
                             .foregroundStyle(store.isConnected ? node.freshnessColor : Color.secondary)
                         if (node.openGaps ?? 0) > 0 || (node.pendingRevocations ?? 0) > 0 {
-                            Text("缺口 \(node.openGaps ?? 0) · 待撤权 \(node.pendingRevocations ?? 0)")
+                            Text(L10n.text("缺口 {0} · 待撤权 {1}", String(describing: (node.openGaps ?? 0)), String(describing: (node.pendingRevocations ?? 0))))
                                 .font(.caption).foregroundStyle(.orange)
                         } else {
                             Text(DateDisplayText.local(node.lastSampleAt)).font(.caption).foregroundStyle(.secondary)
@@ -94,9 +94,9 @@ struct NodesView: View {
             }
             .overlay {
                 if store.nodes.isEmpty {
-                    ContentUnavailableView("还没有节点", systemImage: "server.rack", description: Text("添加一台服务器，填写 SSH 和公开连接信息。"))
+                    ContentUnavailableView(L10n.text("还没有节点"), systemImage: "server.rack", description: Text(L10n.text("添加一台服务器，填写 SSH 和公开连接信息。")))
                 } else if visibleNodes.isEmpty {
-                    ContentUnavailableView("没有匹配的节点", systemImage: "magnifyingglass")
+                    ContentUnavailableView(L10n.text("没有匹配的节点"), systemImage: "magnifyingglass")
                 }
             }
         } detail: {
@@ -109,12 +109,12 @@ struct NodesView: View {
         }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
-                Button { showingAddNode = true } label: { Label("添加节点", systemImage: "plus") }
+                Button { showingAddNode = true } label: { Label(L10n.text("添加节点"), systemImage: "plus") }
                     .keyboardShortcut("n", modifiers: .command)
                     .disabled(!store.isConnected)
             }
         }
-        .searchable(text: $searchText, prompt: "搜索节点")
+        .searchable(text: $searchText, prompt: L10n.text("搜索节点"))
         .onChange(of: searchText) { _, _ in selection = nil }
         .onChange(of: store.serviceAddress) { _, _ in
             submittingActions = [:]
@@ -133,11 +133,11 @@ struct NodesView: View {
         .sheet(item: $configurationNode) { node in
             ProxyConfigurationView(store: store, nodeID: node.id)
         }
-        .alert("节点操作失败", isPresented: Binding(get: { actionError != nil }, set: { if !$0 { actionError = nil } })) {
-            Button("好", role: .cancel) { actionError = nil }
+        .alert(L10n.text("节点操作失败"), isPresented: Binding(get: { actionError != nil }, set: { if !$0 { actionError = nil } })) {
+            Button(L10n.text("好"), role: .cancel) { actionError = nil }
         } message: { Text(actionError ?? "") }
-        .confirmationDialog("删除节点？", isPresented: $showingDeleteConfirmation, titleVisibility: .visible) {
-            Button("卸载并删除", role: .destructive) {
+        .confirmationDialog(L10n.text("删除节点？"), isPresented: $showingDeleteConfirmation, titleVisibility: .visible) {
+            Button(L10n.text("卸载并删除"), role: .destructive) {
                 guard let node = deletionNode else { return }
                 Task {
                     do { try await store.deleteNode(node); selection = nil }
@@ -145,15 +145,15 @@ struct NodesView: View {
                 }
             }
             if store.supportsNodeRecordRemoval {
-                Button("仅移除管理记录", role: .destructive) { showingRecordRemovalConfirmation = true }
+                Button(L10n.text("仅移除管理记录"), role: .destructive) { showingRecordRemovalConfirmation = true }
                     .accessibilityIdentifier("nodes.remove-record")
             }
         } message: {
-            Text("卸载并删除需要 SSH 连接。仅移除管理记录不需要 SSH，远端服务可能继续运行。")
+            Text(L10n.text("卸载并删除需要 SSH 连接。仅移除管理记录不需要 SSH，远端服务可能继续运行。"))
         }
-        .alert("仅移除管理记录？", isPresented: $showingRecordRemovalConfirmation) {
-            Button("取消", role: .cancel) {}
-            Button("移除记录", role: .destructive) {
+        .alert(L10n.text("仅移除管理记录？"), isPresented: $showingRecordRemovalConfirmation) {
+            Button(L10n.text("取消"), role: .cancel) {}
+            Button(L10n.text("移除记录"), role: .destructive) {
                 guard let node = deletionNode else { return }
                 Task {
                     do { try await store.removeNodeRecord(node); selection = nil }
@@ -162,7 +162,7 @@ struct NodesView: View {
             }
             .accessibilityIdentifier("nodes.confirm-remove-record")
         } message: {
-            Text("将从管理服务中移除「\(deletionNode?.name ?? "")」及其用户分配和待办，保留任务历史。此操作不会卸载远端服务；失联服务器上的服务可能仍在运行。")
+            Text(L10n.text("将从管理服务中移除「{0}」及其用户分配和待办，保留任务历史。此操作不会卸载远端服务；失联服务器上的服务可能仍在运行。", String(describing: (deletionNode?.name ?? ""))))
         }
     }
 
@@ -193,12 +193,12 @@ struct NodesView: View {
                     nodeActions(node)
                 }
                 LazyVGrid(columns: Array(repeating: GridItem(.flexible(minimum: 0), spacing: 12, alignment: .leading), count: node.dnsBinding == nil ? 4 : 5), alignment: .leading, spacing: 8) {
-                    nodeHeaderMetric("目标配置", value: "v\(node.revision)")
-                    nodeHeaderMetric("已部署配置", value: node.deployedRevision.map { "v\($0)" } ?? "尚未部署")
-                    nodeHeaderMetric("套餐有效期", value: PackageDisplay.expiry(node.package))
+                    nodeHeaderMetric(L10n.text("目标配置"), value: "v\(node.revision)")
+                    nodeHeaderMetric(L10n.text("已部署配置"), value: node.deployedRevision.map { "v\($0)" } ?? L10n.text("尚未部署"))
+                    nodeHeaderMetric(L10n.text("套餐有效期"), value: PackageDisplay.expiry(node.package))
                     if let binding = node.dnsBinding {
                         VStack(alignment: .leading, spacing: 2) {
-                            Text("节点域名").font(.caption).foregroundStyle(.secondary)
+                            Text(L10n.text("节点域名")).font(.caption).foregroundStyle(.secondary)
                             Button {
                                 store.showDNSRecord(binding.recordIds.first)
                             } label: {
@@ -206,11 +206,11 @@ struct NodesView: View {
                             }
                             .buttonStyle(.link)
                             .font(.callout)
-                            .help("\(binding.hostname) · 查看 DNS 记录")
+                            .help(L10n.text("{0} · 查看 DNS 记录", String(describing: (binding.hostname))))
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    nodeHeaderMetric("分配用户", value: "\(assignedUsers(node).count) 人")
+                    nodeHeaderMetric(L10n.text("分配用户"), value: L10n.text("{0} 人", String(describing: (assignedUsers(node).count))))
                 }
             }
             .padding(16)
@@ -223,33 +223,33 @@ struct NodesView: View {
                     }
                     GroupBox {
                         LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), alignment: .leading)], alignment: .leading, spacing: 12) {
-                            nodeMetric("采样状态", value: store.isConnected ? node.localizedFreshness : "离线缓存")
-                            nodeMetric("最近采样", value: DateDisplayText.local(node.lastSampleAt))
-                            nodeMetric("统计缺口", value: node.openGaps.map(String.init) ?? "未知")
-                            nodeMetric("待撤权任务", value: node.pendingRevocations.map(String.init) ?? "未知")
+                            nodeMetric(L10n.text("采样状态"), value: store.isConnected ? node.localizedFreshness : L10n.text("离线缓存"))
+                            nodeMetric(L10n.text("最近采样"), value: DateDisplayText.local(node.lastSampleAt))
+                            nodeMetric(L10n.text("统计缺口"), value: node.openGaps.map(String.init) ?? L10n.text("未知"))
+                            nodeMetric(L10n.text("待撤权任务"), value: node.pendingRevocations.map(String.init) ?? L10n.text("未知"))
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.vertical, 4)
-                    } label: { Label("采样与待办", systemImage: "waveform.path") }
-                    DisclosureGroup("分配用户（\(assignedUsers(node).count)）") {
+                    } label: { Label(L10n.text("采样与待办"), systemImage: "waveform.path") }
+                    DisclosureGroup(L10n.text("分配用户（{0}）", String(describing: (assignedUsers(node).count)))) {
                         LazyVGrid(columns: [GridItem(.adaptive(minimum: 180), alignment: .leading)], alignment: .leading, spacing: 10) {
                             ForEach(assignedUsers(node)) { user in
                                 HStack {
                                     Text(user.name)
                                     Spacer()
-                                    Text(user.enabled ? "启用" : "已停用").font(.caption).foregroundStyle(.secondary)
+                                    Text(user.enabled ? L10n.text("启用") : L10n.text("已停用")).font(.caption).foregroundStyle(.secondary)
                                 }
                             }
-                            if assignedUsers(node).isEmpty { Text("尚未分配用户").foregroundStyle(.secondary) }
+                            if assignedUsers(node).isEmpty { Text(L10n.text("尚未分配用户")).foregroundStyle(.secondary) }
                         }
                         .padding(.top, 8)
                     }
-                    DisclosureGroup("节点记录") {
+                    DisclosureGroup(L10n.text("节点记录")) {
                         VStack(alignment: .leading, spacing: 10) {
-                            nodeMetric("节点 ID", value: node.id)
+                            nodeMetric(L10n.text("节点 ID"), value: node.id)
                             if let detail, detail.id == node.id {
-                                nodeMetric("创建时间", value: DateDisplayText.local(detail.createdAt))
-                                nodeMetric("更新时间", value: DateDisplayText.local(detail.updatedAt))
+                                nodeMetric(L10n.text("创建时间"), value: DateDisplayText.local(detail.createdAt))
+                                nodeMetric(L10n.text("更新时间"), value: DateDisplayText.local(detail.updatedAt))
                             }
                         }
                         .padding(.top, 8)
@@ -273,22 +273,22 @@ struct NodesView: View {
 
     private func nodeActions(_ node: NodeSummary) -> some View {
         HStack(spacing: 8) {
-            Button("SSH 测试") { run(node, action: "ssh-test") }
+            Button(L10n.text("SSH 测试")) { run(node, action: "ssh-test") }
                 .disabled(operationInProgress(node))
-            Menu("配置") {
-                Button("服务器配置") { serverConfigurationNode = node }
-                Button("代理配置") { configurationNode = node }
+            Menu(L10n.text("配置")) {
+                Button(L10n.text("服务器配置")) { serverConfigurationNode = node }
+                Button(L10n.text("代理配置")) { configurationNode = node }
             }.accessibilityIdentifier("node.configure.\(node.id)")
-            Button(node.deployedRevision == nil ? "部署" : "同步") {
+            Button(node.deployedRevision == nil ? L10n.text("部署") : L10n.text("同步")) {
                 run(node, action: node.deployedRevision == nil ? "deploy" : "sync")
             }
             .disabled(operationInProgress(node))
-            Menu("更多") {
-                Button("部署") { run(node, action: "deploy") }.disabled(operationInProgress(node))
-                Button("同步") { run(node, action: "sync") }.disabled(operationInProgress(node))
-                Button("回滚") { run(node, action: "rollback") }.disabled(node.deployedRevision == nil || operationInProgress(node))
+            Menu(L10n.text("更多")) {
+                Button(L10n.text("部署")) { run(node, action: "deploy") }.disabled(operationInProgress(node))
+                Button(L10n.text("同步")) { run(node, action: "sync") }.disabled(operationInProgress(node))
+                Button(L10n.text("回滚")) { run(node, action: "rollback") }.disabled(node.deployedRevision == nil || operationInProgress(node))
                 Divider()
-                Button("删除节点", role: .destructive) { deletionNode = node; showingDeleteConfirmation = true }
+                Button(L10n.text("删除节点"), role: .destructive) { deletionNode = node; showingDeleteConfirmation = true }
                     .disabled(operationInProgress(node))
             }
         }
@@ -300,29 +300,29 @@ struct NodesView: View {
         GroupBox {
             VStack(alignment: .leading, spacing: 12) {
                 if let ssh = node.ssh {
-                    nodeMetric("SSH 连接", value: "\(ssh.username)@\(ssh.host):\(ssh.port)")
+                    nodeMetric(L10n.text("SSH 连接"), value: "\(ssh.username)@\(ssh.host):\(ssh.port)")
                     let credential = store.credentials.first { $0.id == ssh.credentialId }
-                    nodeMetric("SSH 凭据", value: "\(credential?.name ?? CredentialDisplay.kind(ssh.authType)) · v\(ssh.credentialVersion)")
-                    DisclosureGroup("主机指纹") {
-                        Text(ssh.hostFingerprint ?? "尚未确认")
+                    nodeMetric(L10n.text("SSH 凭据"), value: "\(credential?.name ?? CredentialDisplay.kind(ssh.authType)) · v\(ssh.credentialVersion)")
+                    DisclosureGroup(L10n.text("主机指纹")) {
+                        Text(ssh.hostFingerprint ?? L10n.text("尚未确认"))
                             .font(.system(.caption, design: .monospaced)).textSelection(.enabled)
                             .frame(maxWidth: .infinity, alignment: .leading).padding(.top, 6)
                     }
-                } else { Text("暂无 SSH 连接信息").foregroundStyle(.secondary) }
+                } else { Text(L10n.text("暂无 SSH 连接信息")).foregroundStyle(.secondary) }
                 Divider()
                 if let detail, detail.id == node.id {
-                    nodeMetric("公开连接", value: "\(detail.connection.host):\(detail.connection.port)")
-                    nodeMetric("监听地址", value: detail.connection.listenAddress)
+                    nodeMetric(L10n.text("公开连接"), value: "\(detail.connection.host):\(detail.connection.port)")
+                    nodeMetric(L10n.text("监听地址"), value: detail.connection.listenAddress)
                     if let sni = detail.connection.tlsSNI, !sni.isEmpty { nodeMetric("TLS SNI", value: sni) }
                 } else if let detailError {
-                    Text("无法读取公开连接：\(detailError)").font(.caption).foregroundStyle(.orange)
-                    Button("重试读取") { Task { await loadDetail() } }.disabled(!store.isConnected)
+                    Text(L10n.text("无法读取公开连接：{0}", String(describing: (detailError)))).font(.caption).foregroundStyle(.orange)
+                    Button(L10n.text("重试读取")) { Task { await loadDetail() } }.disabled(!store.isConnected)
                 } else if store.isConnected {
-                    ProgressView("读取公开连接…").controlSize(.small)
-                } else { Text("连接服务后可读取公开连接信息。").font(.caption).foregroundStyle(.secondary) }
+                    ProgressView(L10n.text("读取公开连接…")).controlSize(.small)
+                } else { Text(L10n.text("连接服务后可读取公开连接信息。")).font(.caption).foregroundStyle(.secondary) }
             }
             .frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 4)
-        } label: { Label("连接信息", systemImage: "network") }
+        } label: { Label(L10n.text("连接信息"), systemImage: "network") }
     }
 
     private func nodeTasksAndPackage(_ node: NodeSummary) -> some View {
@@ -340,7 +340,7 @@ struct NodesView: View {
                 NodePackageStatus(package: node.package, usage: node.packageUsage)
             }
             .frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 4)
-        } label: { Label("套餐与流量", systemImage: "chart.bar") }
+        } label: { Label(L10n.text("套餐与流量"), systemImage: "chart.bar") }
     }
 
     private func assignedUsers(_ node: NodeSummary) -> [UserSummary] {
@@ -386,13 +386,13 @@ struct NodesView: View {
             GroupBox {
                 VStack(alignment: .leading, spacing: 10) {
                     if !store.isConnected {
-                        Label("离线快照", systemImage: "wifi.slash")
+                        Label(L10n.text("离线快照"), systemImage: "wifi.slash")
                             .font(.caption).foregroundStyle(.secondary)
                     }
                     if let submitting {
                         HStack(spacing: 8) {
                             ProgressView().controlSize(.small)
-                            Text("\(JobDisplayText.kind(submitting)) · 正在提交")
+                            Text(L10n.text("{0} · 正在提交", String(describing: (JobDisplayText.kind(submitting)))))
                         }
                         .font(.callout)
                         .accessibilityIdentifier("nodes.action.submitting")
@@ -416,7 +416,7 @@ struct NodesView: View {
                                 Button(JobDisplayText.kind(job.kind)) { onOpenJob(job.id) }
                                     .buttonStyle(.link).fontWeight(.medium)
                                     .lineLimit(1).help(JobDisplayText.kind(job.kind))
-                                    .accessibilityLabel("查看\(JobDisplayText.kind(job.kind))任务详情")
+                                    .accessibilityLabel(L10n.text("查看{0}任务详情", String(describing: (JobDisplayText.kind(job.kind)))))
                                     .accessibilityIdentifier("nodes.job.\(job.id)")
                                 Text(JobDisplayText.status(job.status)).foregroundStyle(taskColor(job))
                                     .fixedSize()
@@ -434,14 +434,14 @@ struct NodesView: View {
                         }
                     }
                     if tasks.count > displayed.count {
-                        Text("另有 \(tasks.count - displayed.count) 项任务")
+                        Text(L10n.text("另有 {0} 项任务", String(describing: (tasks.count - displayed.count))))
                             .font(.caption).foregroundStyle(.secondary)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.vertical, 4)
             } label: {
-                Label("当前与最近任务", systemImage: "list.bullet.rectangle")
+                Label(L10n.text("当前与最近任务"), systemImage: "list.bullet.rectangle")
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .accessibilityIdentifier("nodes.tasks")
@@ -449,10 +449,10 @@ struct NodesView: View {
     }
 
     private func nodeTaskTime(_ date: Date?) -> some View {
-        Text(date.map { $0.formatted(.dateTime.month(.twoDigits).day(.twoDigits).hour(.twoDigits(amPM: .omitted)).minute(.twoDigits)) } ?? "—")
+        Text(date.map { $0.formatted(.dateTime.locale(L10n.locale).month(.twoDigits).day(.twoDigits).hour(.twoDigits(amPM: .omitted)).minute(.twoDigits)) } ?? "—")
             .font(.caption).monospacedDigit().foregroundStyle(.secondary)
             .fixedSize()
-            .help(date.map { "提交时间：\($0.formatted(date: .complete, time: .standard))" } ?? "提交时间未知")
+            .help(date.map { L10n.text("提交时间：{0}", String(describing: (L10n.date($0, date: .complete, time: .standard)))) } ?? L10n.text("提交时间未知"))
     }
 
     private func taskColor(_ job: JobSummary) -> Color {
@@ -511,30 +511,30 @@ private extension NodeSummary {
 
     var localizedState: String {
         let labels = [
-            "new": "未部署",
-            "needs_fingerprint": "待确认指纹",
-            "fingerprint_changed": "指纹已变更",
-            "ready": "待部署",
-            "syncing": "同步中",
-            "deployed": "已部署",
-            "rolled_back": "已回滚",
-            "sync_failed": "同步失败",
-            "rollback_failed": "回滚失败",
-            "drift": "远端配置已变更",
-            "unreachable": "无法连接",
-            "deleting": "卸载中",
-            "delete_failed": "卸载失败",
+            "new": L10n.text("未部署"),
+            "needs_fingerprint": L10n.text("待确认指纹"),
+            "fingerprint_changed": L10n.text("指纹已变更"),
+            "ready": L10n.text("待部署"),
+            "syncing": L10n.text("同步中"),
+            "deployed": L10n.text("已部署"),
+            "rolled_back": L10n.text("已回滚"),
+            "sync_failed": L10n.text("同步失败"),
+            "rollback_failed": L10n.text("回滚失败"),
+            "drift": L10n.text("远端配置已变更"),
+            "unreachable": L10n.text("无法连接"),
+            "deleting": L10n.text("卸载中"),
+            "delete_failed": L10n.text("卸载失败"),
         ]
         return labels[state] ?? state
     }
 
     var localizedFreshness: String {
         switch dataFreshness {
-        case .some("fresh"): "统计正常"
-        case .some("stale"): "采样已陈旧"
-        case .some("not_collected"): "尚未采集"
+        case .some("fresh"): L10n.text("统计正常")
+        case .some("stale"): L10n.text("采样已陈旧")
+        case .some("not_collected"): L10n.text("尚未采集")
         case .none: "—"
-        case .some(_): "统计状态未知"
+        case .some(_): L10n.text("统计状态未知")
         }
     }
 
@@ -567,60 +567,60 @@ private struct NodeFormView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            Text("添加节点").font(.title.bold())
+            Text(L10n.text("添加节点")).font(.title.bold())
             if createdNodeID != nil {
-                ContentUnavailableView("节点已创建", systemImage: "checkmark.circle", description: Text("节点认证令牌：\n\(createdToken ?? "此前请求已创建节点，令牌不会重复显示。")\n请将令牌保存在安全位置，并在代理配置页设置 TLS 证书后再部署。"))
-                HStack { Spacer(); Button("完成") { dismiss() }.keyboardShortcut(.defaultAction) }
+                ContentUnavailableView(L10n.text("节点已创建"), systemImage: "checkmark.circle", description: Text(L10n.text("节点认证令牌：\n{0}\n请将令牌保存在安全位置，并在代理配置页设置 TLS 证书后再部署。", String(describing: (createdToken ?? L10n.text("此前请求已创建节点，令牌不会重复显示。"))))))
+                HStack { Spacer(); Button(L10n.text("完成")) { dismiss() }.keyboardShortcut(.defaultAction) }
             } else {
                 Form {
-                    Section("SSH 连接") {
-                        TextField("节点名称", text: $name)
-                            .accessibilityLabel("节点名称")
+                    Section(L10n.text("SSH 连接")) {
+                        TextField(L10n.text("节点名称"), text: $name)
+                            .accessibilityLabel(L10n.text("节点名称"))
                             .accessibilityIdentifier("node.create.name")
-                        TextField("SSH 地址", text: $sshHost)
+                        TextField(L10n.text("SSH 地址"), text: $sshHost)
                             .onChange(of: sshHost) { oldValue, newValue in
                                 if publicHost.isEmpty || publicHost == oldValue {
                                     publicHost = newValue
                                 }
                             }
-                            .accessibilityLabel("SSH 地址")
+                            .accessibilityLabel(L10n.text("SSH 地址"))
                             .accessibilityIdentifier("node.create.sshHost")
-                        TextField("SSH 端口", text: $sshPort)
-                            .accessibilityLabel("SSH 端口")
+                        TextField(L10n.text("SSH 端口"), text: $sshPort)
+                            .accessibilityLabel(L10n.text("SSH 端口"))
                             .accessibilityIdentifier("node.create.sshPort")
-                        TextField("SSH 用户", text: $sshUsername)
-                            .accessibilityLabel("SSH 用户")
+                        TextField(L10n.text("SSH 用户"), text: $sshUsername)
+                            .accessibilityLabel(L10n.text("SSH 用户"))
                             .accessibilityIdentifier("node.create.sshUsername")
-                        CredentialPickerView(store: store, selection: $sshCredentialId, kinds: ["ssh_private_key", "ssh_password"], title: "SSH 凭据")
+                        CredentialPickerView(store: store, selection: $sshCredentialId, kinds: ["ssh_private_key", "ssh_password"], title: L10n.text("SSH 凭据"))
                     }
-                    Section("有效期与流量套餐") {
+                    Section(L10n.text("有效期与流量套餐")) {
                         if store.supportsNodePackages {
                             NodePackageFields(draft: $packageDraft)
-                            if packageDraft.hasQuota { TextField("已有用量（GB）", text: $initialUsageGB) }
-                        } else { Text("升级管理服务后可设置有效期和流量套餐。").foregroundStyle(.secondary) }
+                            if packageDraft.hasQuota { TextField(L10n.text("已有用量（GB）"), text: $initialUsageGB) }
+                        } else { Text(L10n.text("升级管理服务后可设置有效期和流量套餐。")).foregroundStyle(.secondary) }
                     }
-                    Section("公开连接") {
+                    Section(L10n.text("公开连接")) {
                         if store.supportsDNSManagement {
                             DNSAllocationFields(store: store, draft: $dnsDraft, sshHost: sshHost)
                         }
                         if dnsDraft.mode == "external" {
-                            TextField("公开地址", text: $publicHost)
-                                .accessibilityLabel("公开地址")
+                            TextField(L10n.text("公开地址"), text: $publicHost)
+                                .accessibilityLabel(L10n.text("公开地址"))
                                 .accessibilityIdentifier("node.create.publicHost")
                         }
-                        TextField("公开端口", text: $publicPort)
-                            .accessibilityLabel("公开端口")
+                        TextField(L10n.text("公开端口"), text: $publicPort)
+                            .accessibilityLabel(L10n.text("公开端口"))
                             .accessibilityIdentifier("node.create.publicPort")
-                        Text(dnsDraft.mode == "external" ? "公开地址默认跟随 SSH 地址，可手动修改。公开端口用于初始化监听端口；创建后可在代理配置中设置端口联动、TLS 证书及其他 Hysteria 参数。" : "公开地址使用所分配的域名。公开端口用于初始化监听端口；创建后在代理配置中设置 TLS 证书及其他 Hysteria 参数。")
+                        Text(dnsDraft.mode == "external" ? L10n.text("公开地址默认跟随 SSH 地址，可手动修改。公开端口用于初始化监听端口；创建后可在代理配置中设置端口联动、TLS 证书及其他 Hysteria 参数。") : L10n.text("公开地址使用所分配的域名。公开端口用于初始化监听端口；创建后在代理配置中设置 TLS 证书及其他 Hysteria 参数。"))
                             .font(.callout).foregroundStyle(.secondary)
                     }
                 }
                 .formStyle(.grouped)
                 if let errorMessage { Text(errorMessage).foregroundStyle(.red).font(.callout) }
                 HStack {
-                    Button("取消") { dismiss() }.keyboardShortcut(.cancelAction)
+                    Button(L10n.text("取消")) { dismiss() }.keyboardShortcut(.cancelAction)
                     Spacer()
-                    Button(isSaving ? "正在保存…" : "创建节点") { save() }
+                    Button(isSaving ? L10n.text("正在保存…") : L10n.text("创建节点")) { save() }
                         .disabled(isSaving)
                         .keyboardShortcut(.defaultAction)
                 }
@@ -634,7 +634,7 @@ private struct NodeFormView: View {
     private func save() {
         guard let sshPort = Int(sshPort), (1...65535).contains(sshPort),
               let publicPort = Int(publicPort), (1...65535).contains(publicPort) else {
-            errorMessage = "SSH 和公开端口都必须是 1 到 65535 的整数。"
+            errorMessage = L10n.text("SSH 和公开端口都必须是 1 到 65535 的整数。")
             return
         }
         isSaving = true

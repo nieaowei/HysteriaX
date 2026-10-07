@@ -10,39 +10,39 @@ extension CredentialSummary {
 enum CredentialDisplay {
     static func kind(_ value: String) -> String {
         switch value {
-        case "ssh_private_key": "SSH 私钥"
-        case "ssh_password": "SSH 密码"
-        case "tls_identity": "TLS 证书对"
-        case "ca_certificate": "CA 证书"
-        case "ech_key": "ECH 密钥"
-        case "dns": "ACME DNS 凭据"
+        case "ssh_private_key": L10n.text("SSH 私钥")
+        case "ssh_password": L10n.text("SSH 密码")
+        case "tls_identity": L10n.text("TLS 证书对")
+        case "ca_certificate": L10n.text("CA 证书")
+        case "ech_key": L10n.text("ECH 密钥")
+        case "dns": L10n.text("ACME DNS 凭据")
         case "api_token": "API Token"
-        case "admin_token": "管理员 Token"
-        case "subscription_token": "订阅 Token"
-        case "user_credential": "用户连接凭据"
+        case "admin_token": L10n.text("管理员 Token")
+        case "subscription_token": L10n.text("订阅 Token")
+        case "user_credential": L10n.text("用户连接凭据")
         default: value
         }
     }
     static func source(_ value: String) -> String {
         switch value {
-        case "desired": "目标配置"
-        case "deployed": "已部署配置"
-        case "history": "历史配置"
-        case "ssh": "SSH 访问"
-        case "mtls": "mTLS 身份"
-        case "batch": "更新任务"
+        case "desired": L10n.text("目标配置")
+        case "deployed": L10n.text("已部署配置")
+        case "history": L10n.text("历史配置")
+        case "ssh": L10n.text("SSH 访问")
+        case "mtls": L10n.text("mTLS 身份")
+        case "batch": L10n.text("更新任务")
         default: value
         }
     }
     static func status(_ value: String) -> String {
         switch value {
-        case "active": "有效"
-        case "archived": "已归档"
-        case "expiring": "即将到期"
-        case "expired": "已到期"
-        case "revoked": "已撤销"
-        case "disabled": "已停用"
-        case "quota_exhausted": "额度耗尽"
+        case "active": L10n.text("有效")
+        case "archived": L10n.text("已归档")
+        case "expiring": L10n.text("即将到期")
+        case "expired": L10n.text("已到期")
+        case "revoked": L10n.text("已撤销")
+        case "disabled": L10n.text("已停用")
+        case "quota_exhausted": L10n.text("额度耗尽")
         default: value
         }
     }
@@ -81,7 +81,7 @@ enum CredentialResources {
                     let parts = reference.dropFirst("credential://".count).split(separator: "/")
                     let version = Int(parts[1]) ?? entry.latestVersion
                     output.append(NodeResource(id: "\(entry.id):\(version):\(field)",
-                        name: "\(entry.name) · v\(version)\(entry.archived ? "（已归档，当前使用）" : "")",
+                        name: "\(entry.name) · v\(version)\(entry.archived ? L10n.text("（已归档，当前使用）") : "")",
                         resourceKind: kind, contentSHA256: version == entry.latestVersion ? (entry.metadata["fingerprint"]?.stringValue ?? "") : "",
                         sizeBytes: 0, createdAt: entry.createdAt, reference: reference))
                 }

@@ -3,6 +3,7 @@ import SwiftUI
 struct SettingsView: View {
     @Environment(\.openWindow) private var openWindow
     @Bindable var store: ManagementStore
+    @Bindable private var language = AppLanguage.shared
 #if HYSTERIAX_UI_TESTING
     @State private var serviceAddress = ProcessInfo.processInfo.environment[
         "HYSTERIAX_UI_TEST_SERVICE_ADDRESS"
@@ -18,25 +19,33 @@ struct SettingsView: View {
 
     var body: some View {
         Form {
-            Section("管理服务") {
-                TextField("HTTPS 地址", text: $serviceAddress, prompt: Text("https://manage.example.com"))
-                    .accessibilityLabel("HTTPS 地址")
+            Section(L10n.text("语言")) {
+                Picker(L10n.text("显示语言"), selection: $language.selection) {
+                    Text(L10n.text("跟随系统")).tag("system")
+                    Text("English").tag("en")
+                    Text("中文").tag("zh-Hans")
+                }
+                .accessibilityIdentifier("settings.language")
+            }
+            Section(L10n.text("管理服务")) {
+                TextField(L10n.text("HTTPS 地址"), text: $serviceAddress, prompt: Text("https://manage.example.com"))
+                    .accessibilityLabel(L10n.text("HTTPS 地址"))
                     .accessibilityIdentifier("settings.serviceAddress")
                     .textContentType(.URL)
-                SecureField("管理员 Bearer Token", text: $token)
-                    .accessibilityLabel("管理员 Bearer Token")
+                SecureField(L10n.text("管理员 Bearer Token"), text: $token)
+                    .accessibilityLabel(L10n.text("管理员 Bearer Token"))
                     .accessibilityIdentifier("settings.adminToken")
                     .textContentType(.password)
                 HStack {
                     Label(
-                        store.isConnected ? (isConnectedToEnteredService ? "已连接" : "当前地址未连接") : "未连接",
+                        store.isConnected ? (isConnectedToEnteredService ? L10n.text("已连接") : L10n.text("当前地址未连接")) : L10n.text("未连接"),
                         systemImage: store.isConnected && isConnectedToEnteredService ? "checkmark.circle.fill" : "circle"
                     )
                     .foregroundStyle(store.isConnected && isConnectedToEnteredService ? .green : .secondary)
                     .accessibilityIdentifier("settings.connectionState")
                     Spacer()
                     if isConnecting { ProgressView().controlSize(.small) }
-                    Button("验证并保存") { connect() }
+                    Button(L10n.text("验证并保存")) { connect() }
                         .disabled(isConnecting)
                 }
             }
@@ -47,8 +56,8 @@ struct SettingsView: View {
                     .accessibilityLabel(message)
                     .accessibilityIdentifier("settings.connectionMessage")
             }
-            Section("节点与凭据通知") {
-                Toggle("启用 macOS 系统通知", isOn: $packageNotifications)
+            Section(L10n.text("节点与凭据通知")) {
+                Toggle(L10n.text("启用 macOS 系统通知"), isOn: $packageNotifications)
                     .onChange(of: packageNotifications) { _, enabled in
                         if enabled {
                             Task {
@@ -57,22 +66,22 @@ struct SettingsView: View {
                             }
                         }
                     }
-                Text(notificationMessage ?? "应用内始终显示提醒；系统通知需要应用运行、联网并获得授权。")
+                Text(notificationMessage ?? L10n.text("应用内始终显示提醒；系统通知需要应用运行、联网并获得授权。"))
                     .font(.callout).foregroundStyle(.secondary)
             }
-            Section("安全") {
+            Section(L10n.text("安全")) {
                 #if HYSTERIAX_UI_TESTING
-                Text("测试环境中的管理员令牌只保存在当前进程内存中。")
+                Text(L10n.text("测试环境中的管理员令牌只保存在当前进程内存中。"))
                     .foregroundStyle(.secondary)
-                    .accessibilityLabel("测试环境中的管理员令牌只保存在当前进程内存中。")
+                    .accessibilityLabel(L10n.text("测试环境中的管理员令牌只保存在当前进程内存中。"))
                     .accessibilityIdentifier("settings.keychainMode")
                 #else
-                Text("管理员令牌保存在 macOS Keychain 中。服务端负责保存节点、用户和订阅数据。")
+                Text(L10n.text("管理员令牌保存在 macOS Keychain 中。服务端负责保存节点、用户和订阅数据。"))
                     .foregroundStyle(.secondary)
                 #endif
             }
-            Section("凭据管理") {
-                Button("在凭据中心管理 Token、证书和私钥") {
+            Section(L10n.text("凭据管理")) {
+                Button(L10n.text("在凭据中心管理 Token、证书和私钥")) {
                     store.requestedSection = "credentials"
                     openWindow(id: "main")
                 }.disabled(!store.isConnected)
@@ -89,7 +98,7 @@ struct SettingsView: View {
             defer { isConnecting = false }
             do {
                 try await store.connect(serviceAddress: serviceAddress, token: token)
-                message = "连接成功，服务端状态已刷新。"
+                message = L10n.text("连接成功，服务端状态已刷新。")
             } catch { message = error.localizedDescription }
         }
     }

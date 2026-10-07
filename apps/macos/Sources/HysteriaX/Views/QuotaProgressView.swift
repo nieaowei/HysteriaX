@@ -15,7 +15,7 @@ struct QuotaProgressView: View {
     }
 
     private var quotaText: String {
-        quotaBytes.map { ByteCountFormatter.string(fromByteCount: $0, countStyle: .file) } ?? "不限"
+        quotaBytes.map { ByteCountFormatter.string(fromByteCount: $0, countStyle: .file) } ?? L10n.text("不限")
     }
 
     var body: some View {
@@ -37,9 +37,9 @@ struct QuotaProgressView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("流量用量")
-        .accessibilityValue("已用 \(usageText)，额度 \(quotaText)")
-        .help("已用 \(usageText)，额度 \(quotaText)")
+        .accessibilityLabel(L10n.text("流量用量"))
+        .accessibilityValue(L10n.text("已用 {0}，额度 {1}", String(describing: (usageText)), String(describing: (quotaText))))
+        .help(L10n.text("已用 {0}，额度 {1}", String(describing: (usageText)), String(describing: (quotaText))))
     }
 }
 

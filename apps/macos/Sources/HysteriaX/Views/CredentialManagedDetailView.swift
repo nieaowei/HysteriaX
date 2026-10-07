@@ -12,13 +12,13 @@ struct CredentialManagedDetailView: View {
                 references
                 updates
             }
-            DisclosureGroup("版本历史（\(detail.versions.count)）") {
+            DisclosureGroup(L10n.text("版本历史（{0}）", String(describing: (detail.versions.count)))) {
                 VStack(spacing: 0) {
                     ForEach(detail.versions.sorted { $0.version > $1.version }, id: \.version) { version in
                         HStack {
                             Text("v\(version.version)").monospacedDigit()
                             if version.version == detail.latestVersion {
-                                Text("最新").font(.caption).foregroundStyle(.secondary)
+                                Text(L10n.text("最新")).font(.caption).foregroundStyle(.secondary)
                             }
                             Spacer()
                             Text(DateDisplayText.local(version.createdAt)).foregroundStyle(.secondary)
@@ -28,7 +28,7 @@ struct CredentialManagedDetailView: View {
                 }
             }
             if let fingerprint = detail.metadata["fingerprint"]?.stringValue {
-                DisclosureGroup("指纹") {
+                DisclosureGroup(L10n.text("指纹")) {
                     Text(fingerprint)
                         .font(.system(.caption, design: .monospaced))
                         .textSelection(.enabled)
@@ -37,7 +37,7 @@ struct CredentialManagedDetailView: View {
                 }
             }
             if let certificate = detail.metadata["certificate"]?.stringValue {
-                DisclosureGroup("公开证书") {
+                DisclosureGroup(L10n.text("公开证书")) {
                     Text(certificate)
                         .font(.system(.caption, design: .monospaced))
                         .textSelection(.enabled)
@@ -52,14 +52,14 @@ struct CredentialManagedDetailView: View {
         GroupBox {
             VStack(alignment: .leading, spacing: 0) {
                 if detail.references.isEmpty {
-                    emptyMessage("暂无引用", description: "该凭据尚未被节点或配置使用。")
+                    emptyMessage(L10n.text("暂无引用"), description: L10n.text("该凭据尚未被节点或配置使用。"))
                 }
                 ForEach(Array(detail.references.enumerated()), id: \.offset) { index, reference in
                     if index > 0 { Divider() }
                     HStack(alignment: .top, spacing: 12) {
                         VStack(alignment: .leading, spacing: 4) {
                             if reference.entityType == "batch" {
-                                Text("更新批次")
+                                Text(L10n.text("更新批次"))
                             } else {
                                 Button(reference.name ?? reference.entityID) {
                                     onJump(reference.entityType, reference.entityID)
@@ -77,7 +77,7 @@ struct CredentialManagedDetailView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         } label: {
-            Label("引用与生效版本（\(detail.references.count)）", systemImage: "link")
+            Label(L10n.text("引用与生效版本（{0}）", String(describing: (detail.references.count))), systemImage: "link")
         }
     }
 
@@ -85,7 +85,7 @@ struct CredentialManagedDetailView: View {
         GroupBox {
             VStack(alignment: .leading, spacing: 12) {
                 if detail.batches.isEmpty {
-                    emptyMessage("暂无更新批次", description: "发布新版本后，可在这里查看生效结果。")
+                    emptyMessage(L10n.text("暂无更新批次"), description: L10n.text("发布新版本后，可在这里查看生效结果。"))
                 }
                 ForEach(detail.batches) { batch in
                     VStack(alignment: .leading, spacing: 8) {
@@ -108,8 +108,8 @@ struct CredentialManagedDetailView: View {
                                         Image(systemName: "arrow.up.right.square")
                                     }
                                     .buttonStyle(.link)
-                                    .help("查看任务")
-                                    .accessibilityLabel("查看任务")
+                                    .help(L10n.text("查看任务"))
+                                    .accessibilityLabel(L10n.text("查看任务"))
                                 }
                                 if let message = item.errorMessage {
                                     Text(message).font(.caption).foregroundStyle(.red).textSelection(.enabled)
@@ -121,12 +121,12 @@ struct CredentialManagedDetailView: View {
                                 Button(item.name) { onJump("dns_connection", item.connectionId) }.buttonStyle(.link)
                                 Spacer()
                                 Text(JobDisplayText.status(item.status)).font(.caption)
-                                Button("查看任务") { onJump("job", item.jobId) }.buttonStyle(.link)
+                                Button(L10n.text("查看任务")) { onJump("job", item.jobId) }.buttonStyle(.link)
                             }
                             if let error = item.errorMessage { Text(error).font(.caption).foregroundStyle(.red) }
                         }
                         if batch.items.contains(where: { ["failed", "rolled_back", "cancelled"].contains($0.status) }) || (batch.dnsItems ?? []).contains(where: { ["failed", "cancelled"].contains($0.status) }) {
-                            Button("重试失败项") { onRetry(batch.id) }
+                            Button(L10n.text("重试失败项")) { onRetry(batch.id) }
                                 .disabled(!isConnected || detail.archived || batch.version != detail.latestVersion)
                         }
                     }
@@ -135,7 +135,7 @@ struct CredentialManagedDetailView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         } label: {
-            Label("更新结果（\(detail.batches.count)）", systemImage: "arrow.triangle.2.circlepath")
+            Label(L10n.text("更新结果（{0}）", String(describing: (detail.batches.count))), systemImage: "arrow.triangle.2.circlepath")
         }
     }
 

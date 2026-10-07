@@ -9,10 +9,10 @@ enum APIClientError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .invalidBaseURL: "请输入有效的 HTTPS 服务地址。"
-        case .invalidResponse: "管理服务返回了无法识别的响应。"
-        case .incompatibleAPI(let version): "此管理服务 API 版本（\(version)）与客户端不兼容。"
-        case .methodMismatch(let expected, let actual): "OpenAPI 接口要求使用 \(expected)，客户端传入了 \(actual)。"
+        case .invalidBaseURL: L10n.text("请输入有效的 HTTPS 服务地址。")
+        case .invalidResponse: L10n.text("管理服务返回了无法识别的响应。")
+        case .incompatibleAPI(let version): L10n.text("此管理服务 API 版本（{0}）与客户端不兼容。", String(describing: (version)))
+        case .methodMismatch(let expected, let actual): L10n.text("OpenAPI 接口要求使用 {0}，客户端传入了 {1}。", String(describing: (expected)), String(describing: (actual)))
         case .server(let message): message
         }
     }
@@ -102,7 +102,7 @@ actor APIClient {
         let (bytes, response) = try await session.bytes(for: request)
         guard let response = response as? HTTPURLResponse else { throw APIClientError.invalidResponse }
         guard (200..<300).contains(response.statusCode) else {
-            throw APIClientError.server("任务事件流返回 HTTP \(response.statusCode)。")
+            throw APIClientError.server(L10n.text("任务事件流返回 HTTP {0}。", String(describing: (response.statusCode))))
         }
 
         return AsyncThrowingStream { continuation in
@@ -182,13 +182,13 @@ actor APIClient {
             if let error = try? JSONDecoder().decode(APIErrorResponse.self, from: data) {
                 throw APIClientError.server(error.error.message)
             }
-            throw APIClientError.server("管理服务返回 HTTP \(response.statusCode)。")
+            throw APIClientError.server(L10n.text("管理服务返回 HTTP {0}。", String(describing: (response.statusCode))))
         }
         if rejectHTML {
             let contentType = response.value(forHTTPHeaderField: "Content-Type")?.lowercased() ?? ""
             let prefix = String(decoding: data.prefix(256), as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
             guard !contentType.contains("text/html"), !prefix.hasPrefix("<!doctype html"), !prefix.hasPrefix("<html") else {
-                throw APIClientError.server("订阅接口返回了网页，请选择明确的订阅格式。")
+                throw APIClientError.server(L10n.text("订阅接口返回了网页，请选择明确的订阅格式。"))
             }
         }
         return data
@@ -215,7 +215,7 @@ actor APIClient {
         do {
             return try JSONDecoder().decode(type, from: data)
         } catch {
-            throw APIClientError.server("解析管理服务响应失败：\(error.localizedDescription)")
+            throw APIClientError.server(L10n.text("解析管理服务响应失败：{0}", String(describing: (error.localizedDescription))))
         }
     }
 
