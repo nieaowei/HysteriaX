@@ -143,9 +143,6 @@ struct DNSRecordDetailView: View {
                 Menu {
                     Button(L10n.text("任务记录"), systemImage: "clock.arrow.circlepath", action: onOpenJobs)
                     Button(L10n.text("审计记录"), systemImage: "list.clipboard", action: onOpenAudit)
-                    Divider()
-                    Button(L10n.text("删除记录…"), role: .destructive, action: onDelete)
-                        .disabled(!canAct || !record.supportsEditing || record.boundNodeId != nil || record.desired != nil)
                 } label: {
                     Label(L10n.text("更多操作"), systemImage: "ellipsis.circle")
                         .labelStyle(.iconOnly)
@@ -153,6 +150,9 @@ struct DNSRecordDetailView: View {
                 .menuStyle(.borderlessButton)
                 .fixedSize()
                 .accessibilityIdentifier("dns.record.more")
+                Button(L10n.text("删除记录…"), role: .destructive, action: onDelete)
+                    .disabled(!canAct || !record.supportsEditing || record.boundNodeId != nil || record.desired != nil)
+                    .accessibilityIdentifier("dns.record.delete")
             }
             .controlSize(.small)
             .fixedSize()

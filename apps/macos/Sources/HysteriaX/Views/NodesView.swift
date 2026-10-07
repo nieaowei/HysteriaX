@@ -37,11 +37,24 @@ struct NodesView: View {
         MainVerticalSplitView(hasDetail: store.nodes.contains { $0.id == selection }) {
             Table(visibleNodes, selection: $selection, sortOrder: $sortOrder) {
                 TableColumn(L10n.text("名称"), value: \.name) { node in
-                    Text(node.name)
-                        .accessibilityLabel(node.name)
-                        .accessibilityIdentifier("nodes.row.\(node.id)")
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(node.name)
+                            .lineLimit(1)
+                            .help(node.name)
+                            .accessibilityLabel(node.name)
+                            .accessibilityIdentifier("nodes.row.\(node.id)")
+                        HStack(spacing: 4) {
+                            Text(L10n.text("目标 v{0}", String(node.revision)))
+                            Text("·")
+                            Text(node.deployedRevision.map { L10n.text("已部署 v{0}", String($0)) } ?? L10n.text("尚未部署"))
+                        }
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                        .lineLimit(1)
+                    }
                 }
-                .width(min: 110, ideal: 150)
+                .width(min: 140, ideal: 180)
                 TableColumn(L10n.text("SSH 地址"), value: \.displayHost) { node in
                     Text(node.displayHost)
                         .monospaced()
@@ -52,14 +65,6 @@ struct NodesView: View {
                 .width(min: 110, ideal: 150)
                 TableColumn(L10n.text("状态"), value: \.localizedState) { node in
                     Text(node.localizedState).foregroundStyle(node.stateColor)
-                }
-                .width(min: 90, ideal: 110)
-                TableColumn(L10n.text("配置")) { node in
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(L10n.text("目标 v{0}", String(describing: (node.revision)))).monospacedDigit()
-                        Text(node.deployedRevision.map { L10n.text("已部署 v{0}", String(describing: ($0))) } ?? L10n.text("尚未部署"))
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
                 }
                 .width(min: 90, ideal: 110)
                 TableColumn(L10n.text("套餐")) { node in
@@ -83,7 +88,7 @@ struct NodesView: View {
                         }
                     }
                 }
-                .width(min: 130, ideal: 160)
+                .width(min: 100, ideal: 130)
             }
             .frame(minHeight: 180)
             .task(id: initialSelection) {
@@ -285,7 +290,6 @@ struct NodesView: View {
             .disabled(operationInProgress(node))
             Menu(L10n.text("更多")) {
                 Button(L10n.text("部署")) { run(node, action: "deploy") }.disabled(operationInProgress(node))
-                Button(L10n.text("同步")) { run(node, action: "sync") }.disabled(operationInProgress(node))
                 Button(L10n.text("回滚")) { run(node, action: "rollback") }.disabled(node.deployedRevision == nil || operationInProgress(node))
                 Divider()
                 Button(L10n.text("删除节点"), role: .destructive) { deletionNode = node; showingDeleteConfirmation = true }

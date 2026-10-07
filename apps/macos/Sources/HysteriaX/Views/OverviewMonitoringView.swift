@@ -85,14 +85,11 @@ struct OverviewMonitoringView: View {
                 if overview.issues.isEmpty { Label(L10n.text("暂无需处理事项"), systemImage: "checkmark.circle").foregroundStyle(.secondary).padding(.vertical, 12) }
                 ForEach(viewState.showAllIssues ? overview.issues : Array(overview.issues.prefix(8))) { issue in
                     Button { navigate(OverviewDestination(section: issue.entityType == "job" ? "jobs" : issue.entityType == "user" ? "users" : "nodes", entityID: issue.entityID)) } label: {
-                        HStack(alignment: .top) {
+                        HStack(spacing: 10) {
                             Image(systemName: issue.severity <= 1 ? "exclamationmark.circle.fill" : "exclamationmark.triangle").foregroundStyle(issue.severity <= 1 ? Color.red : Color.orange)
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(issue.name).fontWeight(.medium)
-                                Text(OverviewDisplay.reason(issue)).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                                if let at = issue.occurredAt { Text(DateDisplayText.local(at)).font(.caption).foregroundStyle(.tertiary) }
-                            }
+                            Text(issue.name).fontWeight(.medium).lineLimit(1)
                             Spacer(minLength: 8)
+                            if let at = issue.occurredAt { Text(DateDisplayText.local(at)).font(.caption).foregroundStyle(.tertiary).lineLimit(1) }
                             Image(systemName: "chevron.right").foregroundStyle(.secondary)
                         }.padding(.vertical, 4).contentShape(Rectangle())
                     }.buttonStyle(.plain).accessibilityIdentifier("overview.issue.\(issue.id)")
