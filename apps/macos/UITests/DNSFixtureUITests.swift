@@ -14,7 +14,7 @@ final class DNSFixtureUITests: XCTestCase {
         XCTAssertTrue(record.waitForExistence(timeout: 10))
         app.activate()
         record.click()
-        XCTAssertTrue(app.staticTexts["DNS only"].firstMatch.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["仅 DNS"].firstMatch.waitForExistence(timeout: 5))
         let screenshot = XCTAttachment(screenshot: app.windows.firstMatch.screenshot())
         screenshot.name = "DNS records and node binding"
         screenshot.lifetime = .keepAlways
@@ -28,7 +28,7 @@ final class DNSFixtureUITests: XCTestCase {
         editor.lifetime = .keepAlways
         add(editor)
         app.buttons.matching(NSPredicate(format: "label == %@", "取消")).firstMatch.click()
-        app.buttons.matching(NSPredicate(format: "label == %@", "连接与域名…")).firstMatch.click()
+        app.buttons.matching(NSPredicate(format: "label == %@", "连接与域名区域")).firstMatch.click()
         XCTAssertTrue(app.staticTexts["DNS 连接与域名区域"].firstMatch.waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label == %@", "验证并读取域名")).firstMatch.exists)
         let connections = XCTAttachment(screenshot: app.windows.firstMatch.screenshot())

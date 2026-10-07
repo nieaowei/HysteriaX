@@ -2,6 +2,7 @@ import SwiftUI
 
 struct DNSRecordsView: View {
     @Bindable var store: ManagementStore
+    var onOpenNode: (String) -> Void = { _ in }
     @State private var selection: String?
     @State private var connectionID = ""
     @State private var zoneID = ""
@@ -31,18 +32,7 @@ struct DNSRecordsView: View {
                 MainVerticalSplitView(hasDetail: selected != nil) {
                     VStack(spacing: 0) {
                         filters.padding(12)
-                        Table(visibleRecords, selection: $selection, sortOrder: $sortOrder) {
-                            TableColumn("域名", value: \.name) { Text($0.name).accessibilityIdentifier("dns.record.row.\($0.id)") }.width(min: 160, ideal: 250)
-                            TableColumn("类型", value: \.recordType).width(60)
-                            TableColumn("目标", value: \.content) { Text($0.content).textSelection(.enabled) }.width(min: 140, ideal: 230)
-                            TableColumn("TTL") { Text($0.ttl == 1 ? "自动" : String($0.ttl)) }.width(60)
-                            TableColumn("节点") { record in Text(record.boundNodeId.flatMap { id in store.nodes.first { $0.id == id }?.name } ?? "—") }.width(min: 90, ideal: 120)
-                            TableColumn("状态") { record in VStack(alignment: .leading) { Text(record.stateLabel); Text(record.resolutionLabel).font(.caption).foregroundStyle(.secondary) } }.width(min: 100, ideal: 120)
-                            TableColumn("来源") { Text($0.origin == "hysteriax" ? "HysteriaX 创建" : "已有记录") }.width(min: 100, ideal: 120)
-                        }
-                        .overlay {
-                            if visibleRecords.isEmpty { ContentUnavailableView("暂无 DNS 记录", systemImage: "network", description: Text("配置连接、启用域名区域并刷新记录，或直接创建记录。")) }
-                        }
+                        recordsTable
                     }
                 } detail: {
                     if let selected {
@@ -57,10 +47,14 @@ struct DNSRecordsView: View {
             .searchable(text: $search, prompt: "搜索域名或目标")
             .toolbar {
                 ToolbarItemGroup {
-                    Button("连接与域名…") { showingConnections = true }.disabled(!store.isConnected)
+                    Button { showingConnections = true } label: {
+                        Label("连接与域名区域", systemImage: "network")
+                            .labelStyle(.iconOnly)
+                    }
+                    .help("连接与域名区域")
+                    .disabled(!store.isConnected)
                     Button { creating = true } label: { Label("新增记录", systemImage: "plus") }
                         .disabled(!store.isConnected || !store.dnsZones.contains(where: \.enabled))
-                    Button { Task { await store.refreshDNS() } } label: { Label("刷新列表", systemImage: "arrow.clockwise") }.disabled(store.dnsIsLoading)
                 }
             }
             .sheet(isPresented: $showingConnections) { DNSConnectionsView(store: store) }
@@ -74,6 +68,61 @@ struct DNSRecordsView: View {
             .onChange(of: store.requestedDNSRecordID) { _, _ in openRequestedRecord() }
         }
     }
+    private var recordsTable: some View {
+        GeometryReader { geometry in
+            // Allow for native column padding and the vertical scrollbar.
+            let textColumnWidth = max(0, (geometry.size.width - 116 - 76 - 88 - 66) / 2)
+            Table(visibleRecords, selection: $selection, sortOrder: $sortOrder) {
+                TableColumn("域名 / 类型", value: \.name) { record in
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(record.name)
+                            .lineLimit(1).truncationMode(.middle)
+                            .accessibilityIdentifier("dns.record.row.\(record.id)")
+                        DNSRecordTypeBadge(record: record)
+                    }
+                    .help(record.name)
+                }.width(min: 100, ideal: textColumnWidth)
+                TableColumn("目标 / TTL", value: \.content) { record in
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(record.content)
+                            .lineLimit(1).truncationMode(.middle)
+                            .textSelection(.enabled)
+                        Text(record.ttl == 1 ? "TTL 自动" : "TTL \(record.ttl) 秒")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    .help(record.content)
+                }.width(min: 100, ideal: textColumnWidth)
+                TableColumn("节点") { record in
+                    let name = record.boundNodeId.flatMap { id in store.nodes.first { $0.id == id }?.name } ?? "—"
+                    Text(name).lineLimit(1).help(name)
+                }.width(min: 60, ideal: 76)
+                TableColumn("状态") { record in
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: 5) {
+                            Circle().fill(record.syncColor).frame(width: 5, height: 5)
+                            Text(record.stateLabel).foregroundStyle(record.syncColor)
+                        }
+                        Text(record.resolutionLabel).font(.caption).foregroundStyle(record.resolutionColor)
+                    }
+                    .lineLimit(1)
+                    .help("\(record.stateLabel) · \(record.resolutionLabel)")
+                }.width(min: 80, ideal: 88)
+                TableColumn("来源") { record in
+                    Text(record.origin == "hysteriax" ? "HysteriaX" : "已有记录")
+                        .font(.caption2.weight(.medium)).lineLimit(1)
+                        .foregroundStyle(record.originColor)
+                        .padding(.horizontal, 4).padding(.vertical, 2)
+                        .background(record.originColor.opacity(0.10), in: Capsule())
+                        .help(record.origin == "hysteriax" ? "HysteriaX 创建" : "已有记录")
+                }.width(min: 60, ideal: 66)
+            }
+            .scrollIndicators(.automatic, axes: .horizontal)
+            .overlay {
+                if visibleRecords.isEmpty { ContentUnavailableView("暂无 DNS 记录", systemImage: "network", description: Text("配置连接、启用域名区域并刷新记录，或直接创建记录。")) }
+            }
+        }
+    }
+
     private var filters: some View {
         HStack {
             Picker("连接", selection: $connectionID) {
@@ -105,7 +154,8 @@ struct DNSRecordsView: View {
             onBind: { bindingRecord = record },
             onRetry: { if let failedJob { run { try await store.retryDNSJob(failedJob) } } },
             onOpenJobs: { store.requestedSection = "jobs" },
-            onOpenAudit: { store.requestedSection = "audit" }
+            onOpenAudit: { store.requestedSection = "audit" },
+            onOpenNode: onOpenNode
         )
         .sheet(item: $bindingRecord) { DNSRecordBindingPicker(store: store, record: $0) }
     }

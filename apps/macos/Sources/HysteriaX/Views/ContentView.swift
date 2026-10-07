@@ -144,7 +144,10 @@ struct ContentView: View {
             overviewDestination = OverviewDestination(section: "jobs", entityID: jobID)
             selectedSection = "jobs"
         })
-        case .dns: DNSRecordsView(store: store)
+        case .dns: DNSRecordsView(store: store) { nodeID in
+            overviewDestination = OverviewDestination(section: "nodes", entityID: nodeID)
+            selectedSection = "nodes"
+        }
         case .users: UsersView(store: store, initialSelection: overviewDestination?.section == "users" ? overviewDestination?.entityID : nil, onInitialSelectionHandled: { overviewDestination = nil })
         case .jobs: JobsView(store: store, initialSelection: overviewDestination?.section == "jobs" ? overviewDestination?.entityID : nil, onInitialSelectionHandled: { overviewDestination = nil })
         case .credentials: CredentialsView(store: store) { type, id in

@@ -10,6 +10,7 @@
 		000000000000000000002B03 /* Views/DetailHeaderLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001B03 /* Views/DetailHeaderLayout.swift */; };
 		000000000000000000002B02 /* Models/NodeTaskFeedback.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001B02 /* Models/NodeTaskFeedback.swift */; };
 		000000000000000000002B01 /* Views/DNSRecordDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001B01 /* Views/DNSRecordDetailView.swift */; };
+		7C78671F3CC4403BA2F4EB65 /* Views/DNSRecordAppearance.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63A415D8C64E4A67A79D058C /* Views/DNSRecordAppearance.swift */; };
 		000000000000000000002B00 /* Views/MainVerticalSplitView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001B00 /* Views/MainVerticalSplitView.swift */; };
 		0000000000000000000F2000 /* Models/DNSAllocationDraft.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000F1000 /* Models/DNSAllocationDraft.swift */; };
 		0000000000000000000F2001 /* Stores/DNSStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000F1001 /* Stores/DNSStore.swift */; };
@@ -69,6 +70,7 @@
 		000000000000000000001B03 /* Views/DetailHeaderLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/DetailHeaderLayout.swift; sourceTree = "<group>"; };
 		000000000000000000001B02 /* Models/NodeTaskFeedback.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models/NodeTaskFeedback.swift; sourceTree = "<group>"; };
 		000000000000000000001B01 /* Views/DNSRecordDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/DNSRecordDetailView.swift; sourceTree = "<group>"; };
+		63A415D8C64E4A67A79D058C /* Views/DNSRecordAppearance.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/DNSRecordAppearance.swift; sourceTree = "<group>"; };
 		000000000000000000001B00 /* Views/MainVerticalSplitView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/MainVerticalSplitView.swift; sourceTree = "<group>"; };
 		0000000000000000000F1000 /* Models/DNSAllocationDraft.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models/DNSAllocationDraft.swift; sourceTree = "<group>"; };
 		0000000000000000000F1001 /* Stores/DNSStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Stores/DNSStore.swift; sourceTree = "<group>"; };
@@ -177,6 +179,7 @@
 				000000000000000000001005 /* Views/AuditView.swift */,
 				000000000000000000001006 /* Views/ContentView.swift */,
 				000000000000000000001B01 /* Views/DNSRecordDetailView.swift */,
+				63A415D8C64E4A67A79D058C /* Views/DNSRecordAppearance.swift */,
 				000000000000000000001B02 /* Models/NodeTaskFeedback.swift */,
 				000000000000000000001B03 /* Views/DetailHeaderLayout.swift */,
 				000000000000000000001B00 /* Views/MainVerticalSplitView.swift */,
@@ -321,6 +324,7 @@
 				000000000000000000002005 /* Views/AuditView.swift in Sources */,
 				000000000000000000002006 /* Views/ContentView.swift in Sources */,
 				000000000000000000002B01 /* Views/DNSRecordDetailView.swift in Sources */,
+				7C78671F3CC4403BA2F4EB65 /* Views/DNSRecordAppearance.swift in Sources */,
 				000000000000000000002B02 /* Models/NodeTaskFeedback.swift in Sources */,
 				000000000000000000002B03 /* Views/DetailHeaderLayout.swift in Sources */,
 				000000000000000000002B00 /* Views/MainVerticalSplitView.swift in Sources */,
