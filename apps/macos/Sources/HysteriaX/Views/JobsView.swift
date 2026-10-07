@@ -1,114 +1,5 @@
 import SwiftUI
 
-enum JobDisplayText {
-    static func kind(_ value: String) -> String {
-        switch value {
-        case "dns-verify": "验证 DNS 连接"
-        case "dns-connection-refresh": "刷新 DNS 域名"
-        case "dns-zone-refresh": "刷新 DNS 记录"
-        case "dns-record-create": "创建 DNS 记录"
-        case "dns-record-update": "修改 DNS 记录"
-        case "dns-record-delete": "删除 DNS 记录"
-        case "dns-record-check": "验证 DNS 解析"
-        case "dns-credential-apply": "更新 DNS 连接凭据"
-        case "ssh-test": "SSH 测试"
-        case "credential-apply": "应用凭据"
-        case "deploy": "部署"
-        case "sync": "同步"
-        case "rollback": "回滚"
-        case "kick": "断开客户端"
-        case "uninstall": "卸载"
-        default: value
-        }
-    }
-
-    static func status(_ value: String) -> String {
-        switch value {
-        case "queued": "排队中"
-        case "running": "执行中"
-        case "succeeded": "成功"
-        case "failed": "失败"
-        case "rolled_back": "已回滚"
-        case "cancelled": "已取消"
-        default: value
-        }
-    }
-
-    static func stage(_ value: String) -> String {
-        let labels = [
-            "credential_applied": "凭据已应用",
-            "credential_deployment_queued": "凭据部署已排队",
-            "credential_revocation_queued": "连接撤销已排队",
-            "queued": "排队中",
-            "running": "执行中",
-            "starting": "准备中",
-            "retry_wait": "等待重试",
-            "waiting_recovery": "等待节点 SSH 恢复",
-            "needs_attention": "需要人工处理",
-            "restriction_cleared": "限制已解除，跳过断开",
-            "recovered": "重启后恢复",
-            "loading_connection": "读取 SSH 连接",
-            "connecting": "连接节点",
-            "checking_environment": "检查节点环境",
-            "loading_revision": "读取配置版本",
-            "resolving_resources": "检查配置资源",
-            "checking_drift": "检查配置漂移",
-            "downloading_release": "下载并校验程序",
-            "rendering_configuration": "生成服务配置",
-            "uploading_files": "上传部署文件",
-            "installing_service": "安装系统服务",
-            "checking_health": "检查服务健康状态",
-            "health_checked": "健康检查通过",
-            "rolling_back": "恢复上一版本",
-            "rolled_back": "已回滚",
-            "rollback_failed": "回滚失败",
-            "fingerprint_confirmation_required": "等待确认 SSH 指纹",
-            "environment_checked": "环境检查通过",
-            "kicking_clients": "断开客户端",
-            "checking_clients": "检查客户端状态",
-            "clients_offline": "客户端已下线",
-            "uninstalling_service": "卸载系统服务",
-            "remote_uninstalled": "远端卸载完成",
-            "node_deleting": "删除节点中",
-            "node_removed": "管理记录已移除",
-            "superseded": "已被新任务替代",
-            "dns_completed": "DNS 操作完成",
-            "dns_propagation_wait": "等待 DNS 解析更新",
-            "failed": "失败",
-        ]
-        return labels[value] ?? value
-    }
-
-    static func logMessage(stage: String, message: String) -> String {
-        if stage == "checking_clients",
-           let count = message.split(separator: " ").first,
-           let number = Int(count) {
-            return "还有 \(number) 台设备在线，正在再次请求断开。"
-        }
-        let messages = [
-            "Loading the saved SSH connection.": "正在读取保存的 SSH 连接。",
-            "Connecting to the node and checking its SSH host key.": "正在连接节点并验证 SSH 主机指纹。",
-            "Checking the operating system, architecture, systemd, and sudo access.": "正在检查操作系统、架构、systemd 和 sudo 权限。",
-            "Loading the target configuration revision and encrypted resources.": "正在加载目标配置版本和加密资源。",
-            "Resolving and validating the configuration resource references.": "正在解析并验证配置资源引用。",
-            "Checking the operating system, architecture, systemd, sudo access, disk space, and listener requirements.": "正在检查系统版本、架构、systemd、sudo、磁盘空间和监听端口要求。",
-            "Comparing the remote configuration with the last successfully deployed version.": "正在将远端配置与上次成功部署版本比较。",
-            "Downloading and verifying the pinned Hysteria release asset.": "正在下载并校验固定版本的 Hysteria 程序。",
-            "Rendering the server configuration and systemd unit.": "正在生成服务端配置和 systemd 单元文件。",
-            "Uploading the verified binary, configuration, unit, and referenced resources.": "正在上传已校验程序、配置、服务文件和引用资源。",
-            "Installing the managed systemd service and applying the new configuration.": "正在安装托管的 systemd 服务并应用配置。",
-            "Waiting for the traffic and online statistics APIs to become healthy.": "正在等待流量统计和在线状态接口就绪。",
-            "The new service did not become healthy; restoring the previous successful configuration.": "新服务未通过健康检查，正在恢复上一成功配置。",
-            "Requesting that the node disconnect the user's active client sessions.": "正在请求节点断开该用户的在线客户端。",
-            "The node reports no active client devices for this user.": "节点已确认该用户没有在线客户端。",
-            "Connecting to the node and verifying HysteriaX ownership before removal.": "正在连接节点并验证 HysteriaX 所有权。",
-            "Checking remote systemd and the managed-install marker.": "正在检查远端 systemd 和托管安装标记。",
-            "Stopping the managed service and removing its files and service account.": "正在停止托管服务并移除文件和服务账户。",
-        ]
-        return messages[message] ?? message
-    }
-}
-
 enum DateDisplayText {
     static func parse(_ value: String?) -> Date? { DateDisplayParser.shared.parse(value) }
 
@@ -198,7 +89,7 @@ struct JobsView: View {
         .task(id: detailRequestKey) { await loadSelectedJobDetail() }
         .alert("任务操作失败", isPresented: Binding(get: { actionError != nil }, set: { if !$0 { actionError = nil } })) {
             Button("好", role: .cancel) { actionError = nil }
-        } message: { Text(actionError ?? "") }
+        } message: { Text(JobDisplayText.errorMessage(actionError ?? "")) }
     }
 
     private func jobDetailPane(_ job: JobSummary) -> some View {
@@ -221,7 +112,7 @@ struct JobsView: View {
                 VStack(alignment: .leading, spacing: 16) {
                     if let error = job.errorMessage {
                         GroupBox {
-                            Text(error).foregroundStyle(.orange).textSelection(.enabled)
+                            Text(JobDisplayText.errorMessage(error)).foregroundStyle(.orange).textSelection(.enabled)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .padding(.vertical, 4)
                         } label: {
