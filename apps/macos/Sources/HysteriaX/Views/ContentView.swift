@@ -48,6 +48,17 @@ private enum MainSection: String, CaseIterable, Identifiable {
         case .audit: "clock.arrow.circlepath"
         }
     }
+    var iconColor: Color {
+        switch self {
+        case .overview: .blue
+        case .dns: .cyan
+        case .nodes: .indigo
+        case .users: .green
+        case .credentials: .orange
+        case .jobs: .purple
+        case .audit: .teal
+        }
+    }
 }
 
 struct ContentView: View {
@@ -85,7 +96,12 @@ struct ContentView: View {
         NavigationSplitView {
             List(selection: selection) {
                 ForEach(MainSection.allCases) { section in
-                    Label(section.title, systemImage: section.symbol)
+                    Label {
+                        Text(section.title)
+                    } icon: {
+                        Image(systemName: section.symbol)
+                            .foregroundStyle(section.iconColor)
+                    }
                         .tag(section.rawValue)
                         .accessibilityLabel(section.title)
                         .accessibilityIdentifier("sidebar.\(section.rawValue)")
