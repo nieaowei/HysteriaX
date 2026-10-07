@@ -192,23 +192,25 @@ struct NodesView: View {
                     nodeTitle(node)
                     nodeActions(node)
                 }
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), alignment: .leading)], alignment: .leading, spacing: 12) {
-                    nodeMetric("目标配置", value: "v\(node.revision)")
-                    nodeMetric("已部署配置", value: node.deployedRevision.map { "v\($0)" } ?? "尚未部署")
-                    nodeMetric("套餐有效期", value: PackageDisplay.expiry(node.package))
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(minimum: 0), spacing: 12, alignment: .leading), count: node.dnsBinding == nil ? 4 : 5), alignment: .leading, spacing: 8) {
+                    nodeHeaderMetric("目标配置", value: "v\(node.revision)")
+                    nodeHeaderMetric("已部署配置", value: node.deployedRevision.map { "v\($0)" } ?? "尚未部署")
+                    nodeHeaderMetric("套餐有效期", value: PackageDisplay.expiry(node.package))
                     if let binding = node.dnsBinding {
-                        VStack(alignment: .leading, spacing: 4) {
+                        VStack(alignment: .leading, spacing: 2) {
                             Text("节点域名").font(.caption).foregroundStyle(.secondary)
                             Button {
                                 store.showDNSRecord(binding.recordIds.first)
                             } label: {
-                                Text(binding.hostname)
+                                Text(binding.hostname).lineLimit(1).truncationMode(.middle)
                             }
                             .buttonStyle(.link)
-                            .help("查看 DNS 记录")
+                            .font(.callout)
+                            .help("\(binding.hostname) · 查看 DNS 记录")
                         }
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    nodeMetric("分配用户", value: "\(assignedUsers(node).count) 人")
+                    nodeHeaderMetric("分配用户", value: "\(assignedUsers(node).count) 人")
                 }
             }
             .padding(16)
@@ -343,6 +345,16 @@ struct NodesView: View {
 
     private func assignedUsers(_ node: NodeSummary) -> [UserSummary] {
         store.users.filter { $0.assignments.contains { $0.nodeID == node.id } }
+    }
+
+    private func nodeHeaderMetric(_ title: String, value: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title).font(.caption).foregroundStyle(.secondary)
+            Text(value).font(.callout).textSelection(.enabled)
+                .help(value)
+        }
+        .lineLimit(1)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func nodeMetric(_ title: String, value: String) -> some View {

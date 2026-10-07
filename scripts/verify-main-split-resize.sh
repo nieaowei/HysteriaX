@@ -7,4 +7,6 @@ python3 "$ROOT/scripts/overview-fixtures.py" "$BUILD"
 SOURCES=()
 while IFS= read -r source; do SOURCES+=("$source"); done < <(rg --files "$ROOT/apps/macos/Sources/HysteriaX" -g '*.swift' | rg -v '/App/HysteriaXApp.swift$')
 swiftc -swift-version 6 -whole-module-optimization -O -parse-as-library "${SOURCES[@]}" "$ROOT/tests/main-split-resize.swift" -o "$BUILD/main-split-resize"
-"$BUILD/main-split-resize" "$BUILD" "${1:-$BUILD/results.json}"
+OUTPUT="${1:-$BUILD/results.json}"
+if [[ $# -gt 0 ]]; then shift; fi
+"$BUILD/main-split-resize" "$BUILD" "$OUTPUT" "$@"

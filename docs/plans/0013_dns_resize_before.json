@@ -1,0 +1,20 @@
+{
+  "1": [
+    {
+      "frames": 48,
+      "mean_layout_ms": 11.616579770833333,
+      "mean_layout_render_ms": 73.55003810416665,
+      "name": "dns_detail",
+      "p95_layout_ms": 20.172083
+    }
+  ],
+  "200": [
+    {
+      "frames": 48,
+      "mean_layout_ms": 19.201559104166673,
+      "mean_layout_render_ms": 88.86988283333334,
+      "name": "dns_detail",
+      "p95_layout_ms": 24.068209
+    }
+  ]
+}

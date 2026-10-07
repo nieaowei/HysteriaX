@@ -7,7 +7,7 @@ private enum MainSection: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .overview: "概览"
-        case .dns: "DNS 记录"
+        case .dns: "DNS"
         case .nodes: "节点"
         case .users: "用户"
         case .credentials: "凭据"

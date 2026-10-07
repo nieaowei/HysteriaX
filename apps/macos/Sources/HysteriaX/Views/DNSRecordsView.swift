@@ -69,57 +69,55 @@ struct DNSRecordsView: View {
         }
     }
     private var recordsTable: some View {
-        GeometryReader { geometry in
-            // Allow for native column padding and the vertical scrollbar.
-            let textColumnWidth = max(0, (geometry.size.width - 116 - 76 - 88 - 66) / 2)
-            Table(visibleRecords, selection: $selection, sortOrder: $sortOrder) {
-                TableColumn("域名 / 类型", value: \.name) { record in
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(record.name)
-                            .lineLimit(1).truncationMode(.middle)
-                            .accessibilityIdentifier("dns.record.row.\(record.id)")
-                        DNSRecordTypeBadge(record: record)
+        // Let the native table resize columns without rebuilding rows and sorting on every size change.
+        let records = visibleRecords
+        return Table(records, selection: $selection, sortOrder: $sortOrder) {
+            TableColumn("域名 / 类型", value: \.name) { record in
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(record.name)
+                        .lineLimit(1).truncationMode(.middle)
+                        .accessibilityIdentifier("dns.record.row.\(record.id)")
+                    DNSRecordTypeBadge(record: record)
+                }
+                .help(record.name)
+            }.width(min: 100, ideal: 240, max: .infinity)
+            TableColumn("目标 / TTL", value: \.content) { record in
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(record.content)
+                        .lineLimit(1).truncationMode(.middle)
+                        .textSelection(.enabled)
+                    Text(record.ttl == 1 ? "TTL 自动" : "TTL \(record.ttl) 秒")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                .help(record.content)
+            }.width(min: 100, ideal: 240, max: .infinity)
+            TableColumn("节点") { record in
+                let name = record.boundNodeId.flatMap { id in store.nodes.first { $0.id == id }?.name } ?? "—"
+                Text(name).lineLimit(1).help(name)
+            }.width(min: 60, ideal: 76)
+            TableColumn("状态") { record in
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 5) {
+                        Circle().fill(record.syncColor).frame(width: 5, height: 5)
+                        Text(record.stateLabel).foregroundStyle(record.syncColor)
                     }
-                    .help(record.name)
-                }.width(min: 100, ideal: textColumnWidth)
-                TableColumn("目标 / TTL", value: \.content) { record in
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(record.content)
-                            .lineLimit(1).truncationMode(.middle)
-                            .textSelection(.enabled)
-                        Text(record.ttl == 1 ? "TTL 自动" : "TTL \(record.ttl) 秒")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                    .help(record.content)
-                }.width(min: 100, ideal: textColumnWidth)
-                TableColumn("节点") { record in
-                    let name = record.boundNodeId.flatMap { id in store.nodes.first { $0.id == id }?.name } ?? "—"
-                    Text(name).lineLimit(1).help(name)
-                }.width(min: 60, ideal: 76)
-                TableColumn("状态") { record in
-                    VStack(alignment: .leading, spacing: 2) {
-                        HStack(spacing: 5) {
-                            Circle().fill(record.syncColor).frame(width: 5, height: 5)
-                            Text(record.stateLabel).foregroundStyle(record.syncColor)
-                        }
-                        Text(record.resolutionLabel).font(.caption).foregroundStyle(record.resolutionColor)
-                    }
-                    .lineLimit(1)
-                    .help("\(record.stateLabel) · \(record.resolutionLabel)")
-                }.width(min: 80, ideal: 88)
-                TableColumn("来源") { record in
-                    Text(record.origin == "hysteriax" ? "HysteriaX" : "已有记录")
-                        .font(.caption2.weight(.medium)).lineLimit(1)
-                        .foregroundStyle(record.originColor)
-                        .padding(.horizontal, 4).padding(.vertical, 2)
-                        .background(record.originColor.opacity(0.10), in: Capsule())
-                        .help(record.origin == "hysteriax" ? "HysteriaX 创建" : "已有记录")
-                }.width(min: 60, ideal: 66)
-            }
-            .scrollIndicators(.automatic, axes: .horizontal)
-            .overlay {
-                if visibleRecords.isEmpty { ContentUnavailableView("暂无 DNS 记录", systemImage: "network", description: Text("配置连接、启用域名区域并刷新记录，或直接创建记录。")) }
-            }
+                    Text(record.resolutionLabel).font(.caption).foregroundStyle(record.resolutionColor)
+                }
+                .lineLimit(1)
+                .help("\(record.stateLabel) · \(record.resolutionLabel)")
+            }.width(min: 80, ideal: 88)
+            TableColumn("来源") { record in
+                Text(record.origin == "hysteriax" ? "HysteriaX" : "已有记录")
+                    .font(.caption2.weight(.medium)).lineLimit(1)
+                    .foregroundStyle(record.originColor)
+                    .padding(.horizontal, 4).padding(.vertical, 2)
+                    .background(record.originColor.opacity(0.10), in: Capsule())
+                    .help(record.origin == "hysteriax" ? "HysteriaX 创建" : "已有记录")
+            }.width(min: 60, ideal: 66)
+        }
+        .scrollIndicators(.automatic, axes: .horizontal)
+        .overlay {
+            if records.isEmpty { ContentUnavailableView("暂无 DNS 记录", systemImage: "network", description: Text("配置连接、启用域名区域并刷新记录，或直接创建记录。")) }
         }
     }
 

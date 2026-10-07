@@ -22,93 +22,96 @@ struct DNSRecordDetailView: View {
         VStack(alignment: .leading, spacing: 0) {
             header.padding(16)
             Divider()
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    notices
-                    HStack(alignment: .top, spacing: 16) {
-                        GroupBox {
-                            VStack(alignment: .leading, spacing: 8) {
-                                compactItem("目标", value: record.content, monospaced: true)
-                                LazyVGrid(columns: [GridItem(.flexible(), alignment: .leading), GridItem(.flexible(), alignment: .leading)], alignment: .leading, spacing: 8) {
-                                    compactItem("记录类型", value: record.recordType)
-                                    compactItem("TTL", value: record.ttl == 1 ? "自动" : "\(record.ttl) 秒")
-                                    compactItem("代理模式", value: record.proxied ? "Cloudflare 代理" : "仅 DNS")
-                                    compactItem("记录来源", value: record.origin == "hysteriax" ? "HysteriaX 创建" : "已有记录")
-                                    compactItem("域名区域", value: zone?.name ?? record.zoneId)
-                                    compactItem("服务连接", value: connection?.name ?? "未找到连接")
-                                }
-                            }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(4)
-                        } label: {
-                            Label("记录信息", systemImage: "network")
-                        }
-                        .frame(maxWidth: .infinity, alignment: .topLeading)
-                        GroupBox {
-                            Grid(alignment: .topLeading, horizontalSpacing: 12, verticalSpacing: 8) {
-                                GridRow(alignment: .firstTextBaseline) {
-                                    Text("解析状态").font(.caption).foregroundStyle(.secondary)
-                                        .fixedSize()
-                                    Label(record.resolutionLabel, systemImage: record.resolutionStatus == "verified" ? "checkmark.circle" : "globe")
-                                        .font(.callout)
-                                        .foregroundStyle(record.resolutionColor)
-                                        .frame(maxWidth: .infinity, alignment: .leading)
-                                }
-                                compactField("最近检查", value: record.checkedAt.map { DateDisplayText.local($0) } ?? "尚未检查")
-                                if let node {
-                                    GridRow(alignment: .firstTextBaseline) {
-                                        Text("绑定节点").font(.caption).foregroundStyle(.secondary)
-                                            .fixedSize()
-                                        Button(node.name) { onOpenNode(node.id) }
-                                            .buttonStyle(.link)
-                                            .font(.callout)
-                                            .frame(maxWidth: .infinity, alignment: .leading)
-                                            .help("查看节点详情")
-                                            .accessibilityIdentifier("dns.record.bound-node.\(node.id)")
+            GeometryReader { geometry in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 16) {
+                        notices
+                        OverviewColumnsLayout(wideColumns: 2, wideMinimum: 576, narrowColumns: 1) {
+                            GroupBox {
+                                VStack(alignment: .leading, spacing: 8) {
+                                    compactItem("目标", value: record.content, monospaced: true)
+                                    OverviewColumnsLayout(wideColumns: 2, wideMinimum: 0, spacing: 8) {
+                                        compactItem("记录类型", value: record.recordType)
+                                        compactItem("TTL", value: record.ttl == 1 ? "自动" : "\(record.ttl) 秒")
+                                        compactItem("代理模式", value: record.proxied ? "Cloudflare 代理" : "仅 DNS")
+                                        compactItem("记录来源", value: record.origin == "hysteriax" ? "HysteriaX 创建" : "已有记录")
+                                        compactItem("域名区域", value: zone?.name ?? record.zoneId)
+                                        compactItem("服务连接", value: connection?.name ?? "未找到连接")
                                     }
-                                } else {
-                                    compactField("绑定节点", value: record.boundNodeId == nil ? "未绑定节点" : "节点已不在当前列表")
                                 }
-                                compactField("最近更新", value: DateDisplayText.local(record.updatedAt))
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(4)
+                            } label: {
+                                Label("记录信息", systemImage: "network")
                             }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(4)
-                        } label: {
-                            Label("解析与节点", systemImage: "point.3.connected.trianglepath.dotted")
+                            .frame(maxWidth: .infinity, alignment: .topLeading)
+                            GroupBox {
+                                VStack(alignment: .leading, spacing: 8) {
+                                    OverviewPairLayout(horizontalMinimum: 0, flexibleIndex: 1, spacing: 12) {
+                                        Text("解析状态").font(.caption).foregroundStyle(.secondary)
+                                            .frame(width: 56, alignment: .leading)
+                                        Label(record.resolutionLabel, systemImage: record.resolutionStatus == "verified" ? "checkmark.circle" : "globe")
+                                            .font(.callout)
+                                            .foregroundStyle(record.resolutionColor)
+                                            .frame(maxWidth: .infinity, alignment: .leading)
+                                    }
+                                    compactField("最近检查", value: record.checkedAt.map { DateDisplayText.local($0) } ?? "尚未检查")
+                                    if let node {
+                                        OverviewPairLayout(horizontalMinimum: 0, flexibleIndex: 1, spacing: 12) {
+                                            Text("绑定节点").font(.caption).foregroundStyle(.secondary)
+                                                .frame(width: 56, alignment: .leading)
+                                            Button(node.name) { onOpenNode(node.id) }
+                                                .buttonStyle(.link)
+                                                .font(.callout)
+                                                .frame(maxWidth: .infinity, alignment: .leading)
+                                                .help("查看节点详情")
+                                                .accessibilityIdentifier("dns.record.bound-node.\(node.id)")
+                                        }
+                                    } else {
+                                        compactField("绑定节点", value: record.boundNodeId == nil ? "未绑定节点" : "节点已不在当前列表")
+                                    }
+                                    compactField("最近更新", value: DateDisplayText.local(record.updatedAt))
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(4)
+                            } label: {
+                                Label("解析与节点", systemImage: "point.3.connected.trianglepath.dotted")
+                            }
+                            .frame(maxWidth: .infinity, alignment: .topLeading)
                         }
-                        .frame(maxWidth: .infinity, alignment: .topLeading)
-                    }
-                    if let result = record.resolutionDetail {
-                        DisclosureGroup("解析检查结果") {
-                            VStack(alignment: .leading, spacing: 12) {
-                                field("检查时的预期目标", value: result["expected"]?.stringValue ?? record.content, monospaced: true)
-                                field("管理服务解析结果", value: answers(result["management_answers"]), monospaced: true)
-                                ForEach(Array((result["authoritative"]?.arrayValue ?? []).enumerated()), id: \.offset) { _, value in
-                                    if let authority = value.objectValue {
-                                        field(authority["server"]?.stringValue ?? "权威服务器",
-                                              value: authority["error"] != nil ? "查询失败" : answers(authority["answers"]), monospaced: true)
-                                        if let flattened = authority["flattened_addresses"]?.arrayValue, !flattened.isEmpty {
-                                            field("CNAME 展平地址", value: answers(.array(flattened)), monospaced: true)
+                        if let result = record.resolutionDetail {
+                            DisclosureGroup("解析检查结果") {
+                                VStack(alignment: .leading, spacing: 12) {
+                                    field("检查时的预期目标", value: result["expected"]?.stringValue ?? record.content, monospaced: true)
+                                    field("管理服务解析结果", value: answers(result["management_answers"]), monospaced: true)
+                                    ForEach(Array((result["authoritative"]?.arrayValue ?? []).enumerated()), id: \.offset) { _, value in
+                                        if let authority = value.objectValue {
+                                            field(authority["server"]?.stringValue ?? "权威服务器",
+                                                  value: authority["error"] != nil ? "查询失败" : answers(authority["answers"]), monospaced: true)
+                                            if let flattened = authority["flattened_addresses"]?.arrayValue, !flattened.isEmpty {
+                                                field("CNAME 展平地址", value: answers(.array(flattened)), monospaced: true)
+                                            }
                                         }
                                     }
                                 }
+                                .padding(.top, 10)
+                            }
+                            .font(.callout)
+                        }
+                        DisclosureGroup("记录标识") {
+                            VStack(alignment: .leading, spacing: 12) {
+                                field("记录 ID", value: record.id, monospaced: true)
+                                field("远端记录 ID", value: record.providerRecordId ?? "尚未写入远端", monospaced: true)
+                                field("版本", value: "v\(record.revision)")
                             }
                             .padding(.top, 10)
                         }
                         .font(.callout)
                     }
-                    DisclosureGroup("记录标识") {
-                        VStack(alignment: .leading, spacing: 12) {
-                            field("记录 ID", value: record.id, monospaced: true)
-                            field("远端记录 ID", value: record.providerRecordId ?? "尚未写入远端", monospaced: true)
-                            field("版本", value: "v\(record.revision)")
-                        }
-                        .padding(.top, 10)
-                    }
-                    .font(.callout)
+                    // Give the scroll content one concrete width instead of probing its intrinsic width.
+                    .frame(width: max(0, geometry.size.width - 32), alignment: .leading)
+                    .padding(16)
                 }
-                .padding(16)
-                .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
         .accessibilityElement(children: .contain)
@@ -116,7 +119,7 @@ struct DNSRecordDetailView: View {
     }
 
     private var header: some View {
-        HStack(alignment: .top, spacing: 16) {
+        DetailHeaderLayout {
             VStack(alignment: .leading, spacing: 6) {
                 Text(record.name).font(.headline).textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
@@ -189,16 +192,14 @@ struct DNSRecordDetailView: View {
     }
 
     private func compactItem(_ title: String, value: String, monospaced: Bool = false) -> some View {
-        Grid(alignment: .topLeading, horizontalSpacing: 12) {
-            compactField(title, value: value, monospaced: monospaced)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        compactField(title, value: value, monospaced: monospaced)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func compactField(_ title: String, value: String, monospaced: Bool = false) -> some View {
-        GridRow(alignment: .firstTextBaseline) {
+        OverviewPairLayout(horizontalMinimum: 0, flexibleIndex: 1, spacing: 12) {
             Text(title).font(.caption).foregroundStyle(.secondary)
-                .fixedSize()
+                .frame(width: 56, alignment: .leading)
             Text(value).font(monospaced ? .system(.callout, design: .monospaced) : .callout)
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)

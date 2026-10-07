@@ -8,15 +8,9 @@ struct CredentialManagedDetailView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            ViewThatFits(in: .horizontal) {
-                HStack(alignment: .top, spacing: 16) {
-                    references.frame(minWidth: 280, maxWidth: .infinity)
-                    updates.frame(minWidth: 280, maxWidth: .infinity)
-                }
-                VStack(alignment: .leading, spacing: 16) {
-                    references
-                    updates
-                }
+            OverviewColumnsLayout(wideColumns: 2, wideMinimum: 576, narrowColumns: 1) {
+                references
+                updates
             }
             DisclosureGroup("版本历史（\(detail.versions.count)）") {
                 VStack(spacing: 0) {
