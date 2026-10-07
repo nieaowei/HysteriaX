@@ -122,6 +122,7 @@ struct ContentView: View {
             }
         } detail: {
             detail
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 .accessibilityElement(children: .contain)
                 .accessibilityIdentifier(currentSection.pageAccessibilityIdentifier)
                 .navigationTitle(currentSection.pageTitle)
@@ -135,6 +136,7 @@ struct ContentView: View {
                     }
                 }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .task { await store.refresh() }
         .onChange(of: store.requestedSection) { _, section in
             if let section { selectedSection = section; store.requestedSection = nil }

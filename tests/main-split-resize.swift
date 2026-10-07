@@ -91,7 +91,23 @@ import SwiftUI
                 }
             })
         }
+        func groupRoot(count: Int) throws -> AnyView {
+            let groupStore = ManagementStore(restoreSnapshot: false)
+            let users = (0..<count).map { index -> [String: Any] in
+                ["id": String(format: "%08x-1234-5678-9abc-000000000000", index),
+                 "name": "Member \(index)", "enabled": true, "usage_bytes": 0, "revision": 1,
+                 "assignments": [], "created_at": stamp, "updated_at": stamp]
+            }
+            groupStore.users = try JSONDecoder().decode([UserSummary].self, from: JSONSerialization.data(withJSONObject: users))
+            groupStore.authorizationGroups = [AuthorizationGroupSummary(id: "resize-group", name: "Resize group", revision: 1,
+                userIds: groupStore.users.map(\.id), nodeIds: [], userCount: count, nodeCount: 0, createdAt: stamp, updatedAt: stamp)]
+            let page = AuthorizationPageState()
+            page.selectedGroupID = "resize-group"
+            return AnyView(AuthorizationGroupsView(store: groupStore, pageState: page, onOpenUser: { _ in }))
+        }
         let roots: [(String, AnyView)] = [
+            ("groups_6", try groupRoot(count: 6)),
+            ("groups_5000", try groupRoot(count: 5_000)),
             ("nodes_list", AnyView(NodesView(store: store))),
             ("nodes_detail", AnyView(NodesView(store: store, initialSelection: store.nodes.first?.id))),
             ("users_detail", AnyView(UsersView(store: store, initialSelection: store.users.first?.id))),

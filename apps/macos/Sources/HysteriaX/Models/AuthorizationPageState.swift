@@ -13,4 +13,22 @@ final class AuthorizationPageState {
     var selectedGroupID: String?
     var groupSearchText = ""
     var groupSortOrder = [KeyPathComparator<AuthorizationGroupSummary>(\.name)]
+    // Toolbar actions may outlive a tab view; keep their presentation state page-owned.
+    var groupEditorTarget: AuthorizationGroupEditorTarget?
+}
+
+struct AuthorizationGroupEditorTarget: Identifiable {
+    let group: AuthorizationGroupSummary?
+    let intent: AuthorizationGroupEditorIntent
+    var memberMode: AuthorizationMemberEditorMode = .members
+    var removedUserIDs: Set<String> = []
+    var id: String { "\(group?.id ?? "new"):\(intent.rawValue)" }
+}
+
+enum AuthorizationGroupEditorIntent: String, Equatable {
+    case create, rename, users, nodes
+}
+
+enum AuthorizationMemberEditorMode: String, Hashable {
+    case members, add, changes
 }

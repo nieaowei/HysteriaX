@@ -90,6 +90,37 @@ struct AuthorizationGroupClientChecks {
         page.userSearchText = "Alice"; page.selectedUserID = "user"
         page.groupSearchText = "Migrated"; page.selectedGroupID = "migration-abc"
         precondition(page.userSearchText == "Alice" && page.selectedUserID == "user")
+        checkMemberDrafts(user: oldUser)
         print("Authorization client checks passed: old service fallback, source decoding, personal mTLS wire shape, deletion receipt, isolated group errors and independent tab state.")
     }
+
+    static func checkMemberDrafts(user: UserSummary) {
+        let ids = Set((0..<5_000).map { "member-\($0)" })
+        let proposed = ids.subtracting(["member-0", "member-101"]).union(["new-member"])
+        let changes = AuthorizationMemberChanges(original: ids, proposed: proposed)
+        precondition(changes.added == ["new-member"] && changes.removed == ["member-0", "member-101"])
+        precondition(changes.undoing(["member-0", "new-member"]) == ids.subtracting(["member-101"]))
+        let concurrent = ids.subtracting(["member-10"]).union(["other-admin-added"])
+        let rebased = changes.applying(to: concurrent)
+        precondition(rebased.contains("other-admin-added") && !rebased.contains("member-10"))
+        precondition(rebased.contains("new-member") && !rebased.contains("member-101"))
+        let secondPreview = AuthorizationMemberChanges(original: concurrent, proposed: rebased)
+        precondition(secondPreview.added == changes.added && secondPreview.removed == changes.removed)
+        // Search/page selection changes affect only the currently visible rows.
+        let firstPage = Set((0..<100).map { "member-\($0)" })
+        let secondPage = Set((100..<200).map { "member-\($0)" })
+        var selection = AuthorizationMemberSelection.merging(["member-0"], visibleIDs: firstPage, into: [])
+        selection = AuthorizationMemberSelection.merging(["member-101"], visibleIDs: secondPage, into: selection)
+        precondition(selection == ["member-0", "member-101"])
+        selection = AuthorizationMemberSelection.merging([], visibleIDs: firstPage, into: selection)
+        precondition(selection == ["member-101"], "deselecting this page must preserve other pages")
+        let rows = AuthorizationMemberRow.make(users: [user], ids: ids.union([user.id]), changes: changes)
+        precondition(rows.count == 5_001 && rows.first { $0.id == user.id }?.name == user.name)
+        precondition(rows.first { $0.id == "member-0" }?.enabled == nil, "missing users must remain manageable by ID")
+        let pairs = (0..<5_000).flatMap { index in (0..<4).map { AuthorizationPair(userId: "member-\(index)", nodeID: "node-\($0)") } }
+        let impacts = AuthorizationUserImpact.grouped(pairs + [pairs[0]])
+        precondition(impacts.count == 5_000 && impacts.allSatisfy { $0.nodeIDs.count == 4 })
+        print("Member checks passed: 5,000 members, 20,000 connections, cross-page selection, targeted undo, missing users and concurrent membership rebase.")
+    }
+
 }

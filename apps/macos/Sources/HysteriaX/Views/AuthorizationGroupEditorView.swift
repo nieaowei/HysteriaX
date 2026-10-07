@@ -8,6 +8,12 @@ struct AuthorizationGroupEditorView: View {
     var onSaved: (String) -> Void = { _ in }
 
     @State private var name: String
+    @State private var originalUserIDs: Set<String>
+    @State private var memberMode: AuthorizationMemberEditorMode
+    @State private var showingImpact = false
+    @State private var previewUserIDs: Set<String>?
+    @State private var mtlsSearchText = ""
+    @State private var mtlsPendingOnly = true
     @State private var userIDs: Set<String>
     @State private var nodeIDs: Set<String>
     @State private var credentialIDsByPair: [String: String] = [:]
@@ -24,6 +30,8 @@ struct AuthorizationGroupEditorView: View {
         store: ManagementStore,
         group: AuthorizationGroupSummary?,
         intent: AuthorizationGroupEditorIntent,
+        memberMode: AuthorizationMemberEditorMode = .members,
+        removedUserIDs: Set<String> = [],
         onSaved: @escaping (String) -> Void = { _ in }
     ) {
         self.store = store
@@ -31,7 +39,9 @@ struct AuthorizationGroupEditorView: View {
         self.intent = intent
         self.onSaved = onSaved
         _name = State(initialValue: group?.name ?? "")
-        _userIDs = State(initialValue: Set(group?.userIds ?? []))
+        _originalUserIDs = State(initialValue: Set(group?.userIds ?? []))
+        _memberMode = State(initialValue: memberMode)
+        _userIDs = State(initialValue: Set(group?.userIds ?? []).subtracting(removedUserIDs))
         _nodeIDs = State(initialValue: Set(group?.nodeIds ?? []))
     }
 
@@ -44,69 +54,42 @@ struct AuthorizationGroupEditorView: View {
             Text(receipt == nil ? title : L10n.text("授权组已更新"))
                 .font(.title2.bold())
 
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-            if let receipt {
-                AuthorizationMutationReceiptView(
-                    store: store,
-                    createdCredentials: receipt.createdCredentials,
-                    revocationJobIDs: receipt.revocationJobIds
-                )
-            } else {
-                Text(description)
-                    .font(.callout).foregroundStyle(.secondary)
-
-                GroupBox {
-                    VStack(alignment: .leading, spacing: 14) {
-                        if intent == .create || intent == .rename {
-                            LabeledContent(L10n.text("授权组名称")) {
-                                TextField(L10n.text("授权组名称"), text: $name)
-                                    .textFieldStyle(.roundedBorder)
-                                    .accessibilityIdentifier("authorizationGroups.editor.name")
-                            }
-                        } else if let group {
-                            LabeledContent(L10n.text("授权组名称"), value: group.name)
+            if intent == .users, receipt == nil {
+                HStack {
+                    Text(group?.name ?? "").font(.headline)
+                    Spacer()
+                    Button(showingImpact ? L10n.text("返回成员编辑") : L10n.text("查看权限预览")) { showingImpact.toggle() }
+                        .disabled(!showingImpact && preview == nil && requiredMTLSPairs.isEmpty)
+                        .accessibilityIdentifier("authorization.members.showImpact")
+                }
+                if showingImpact {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 16) {
+                            if let preview { previewSummary(preview) }
+                            if !requiredMTLSPairs.isEmpty { mtlsBindingPicker }
                         }
-                        if canEditUsers {
-                            selectionRow(title: L10n.text("成员用户"), count: userIDs.count,
-                                buttonTitle: L10n.text("选择用户…"), identifier: "authorizationGroups.editor.users") { selectingUsers = true }
-                        } else {
-                            LabeledContent(L10n.text("成员用户"), value: L10n.text("{0} 位", String(userIDs.count)))
-                        }
-                        if canEditNodes {
-                            selectionRow(title: L10n.text("授权节点"), count: nodeIDs.count,
-                                buttonTitle: L10n.text("选择节点…"), identifier: "authorizationGroups.editor.nodes") { selectingNodes = true }
-                        } else {
-                            LabeledContent(L10n.text("授权节点"), value: L10n.text("{0} 个", String(nodeIDs.count)))
-                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(8)
-                    .disabled(isPreviewing || isSaving)
-                }
-
-                if let preview {
-                    previewSummary(preview)
-                }
-
-                if !requiredMTLSPairs.isEmpty {
-                    mtlsBindingPicker
-                        .accessibilityElement(children: .contain)
-                        .accessibilityIdentifier("authorizationGroups.editor.mtlsBindings")
+                } else {
+                    AuthorizationGroupMembersEditor(users: store.users, originalIDs: originalUserIDs, userIDs: $userIDs, mode: $memberMode)
                         .disabled(isPreviewing || isSaving)
                 }
-            }
-
+                Text(L10n.text("待添加 {0} 人 · 待移除 {1} 人", String(memberChanges.added.count), String(memberChanges.removed.count)))
+                    .font(.callout.weight(.medium))
+                    .accessibilityIdentifier("authorization.members.changeCount")
+            } else {
+                ScrollView {
+                    editorContent.frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(maxHeight: .infinity)
             }
-            .frame(maxHeight: .infinity)
 
             if let errorMessage { Text(errorMessage).foregroundStyle(.red).textSelection(.enabled) }
 
             HStack {
                 Button(receipt == nil ? L10n.text("取消") : L10n.text("完成"), role: .cancel) { dismiss() }
                     .keyboardShortcut(.cancelAction)
+                    .disabled(isSaving)
                 Spacer()
                 if receipt == nil {
                     Button(isPreviewing ? L10n.text("正在预览…") : L10n.text("预览影响")) { runPreview() }
@@ -120,8 +103,8 @@ struct AuthorizationGroupEditorView: View {
             }
         }
         .padding(24)
-        .frame(width: 760, height: 560)
-        .interactiveDismissDisabled(isSaving)
+        .frame(width: intent == .users ? 960 : 760, height: intent == .users ? 680 : 560)
+        .interactiveDismissDisabled(isSaving || (intent == .users && !memberChanges.changed.isEmpty))
         .sheet(isPresented: $selectingUsers) {
             AuthorizationMultiSelectSheet(
                 title: L10n.text("选择成员用户"),
@@ -136,9 +119,49 @@ struct AuthorizationGroupEditorView: View {
                 selection: $nodeIDs
             )
         }
-        .onChange(of: name) { _, _ in invalidatePreview(clearMTLS: true) }
-        .onChange(of: userIDs) { _, _ in if canEditUsers { invalidatePreview(clearMTLS: true) } }
+        .onChange(of: name) { _, _ in
+            if intent == .create || intent == .rename { invalidatePreview(clearMTLS: true) }
+        }
+        .onChange(of: userIDs) { _, _ in
+            if canEditUsers, previewUserIDs != userIDs { invalidatePreview(clearMTLS: true) }
+        }
         .onChange(of: nodeIDs) { _, _ in if canEditNodes { invalidatePreview(clearMTLS: true) } }
+    }
+
+    private var memberChanges: AuthorizationMemberChanges { .init(original: originalUserIDs, proposed: userIDs) }
+
+    @ViewBuilder
+    private var editorContent: some View {
+        if let receipt {
+            AuthorizationMutationReceiptView(store: store, createdCredentials: receipt.createdCredentials, revocationJobIDs: receipt.revocationJobIds)
+        } else {
+            VStack(alignment: .leading, spacing: 16) {
+                Text(description).font(.callout).foregroundStyle(.secondary)
+                GroupBox {
+                    VStack(alignment: .leading, spacing: 14) {
+                        if intent == .create || intent == .rename {
+                            LabeledContent(L10n.text("授权组名称")) {
+                                TextField(L10n.text("授权组名称"), text: $name)
+                                    .textFieldStyle(.roundedBorder)
+                                    .accessibilityIdentifier("authorizationGroups.editor.name")
+                            }
+                        } else if let group { LabeledContent(L10n.text("授权组名称"), value: group.name) }
+                        if canEditUsers {
+                            selectionRow(title: L10n.text("成员用户"), count: userIDs.count, buttonTitle: L10n.text("选择用户…"), identifier: "authorizationGroups.editor.users") { selectingUsers = true }
+                        } else { LabeledContent(L10n.text("成员用户"), value: L10n.text("{0} 位", String(userIDs.count))) }
+                        if canEditNodes {
+                            selectionRow(title: L10n.text("授权节点"), count: nodeIDs.count, buttonTitle: L10n.text("选择节点…"), identifier: "authorizationGroups.editor.nodes") { selectingNodes = true }
+                        } else { LabeledContent(L10n.text("授权节点"), value: L10n.text("{0} 个", String(nodeIDs.count))) }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading).padding(8)
+                    .disabled(isPreviewing || isSaving)
+                }
+                if let preview { previewSummary(preview) }
+                if !requiredMTLSPairs.isEmpty {
+                    mtlsBindingPicker.disabled(isPreviewing || isSaving)
+                }
+            }
+        }
     }
 
     private var title: String {
@@ -172,14 +195,21 @@ struct AuthorizationGroupEditorView: View {
             VStack(alignment: .leading, spacing: 10) {
                 Text(L10n.text("新增 {0} 条连接授权 · 移除 {1} 条连接授权", String(preview.additionsCount), String(preview.removalsCount)))
                     .font(.callout.weight(.medium))
+                Text(L10n.text("新增访问涉及 {0} 人 · 撤权涉及 {1} 人", String(Set(preview.additions.map(\.userId)).count), String(Set(preview.removals.map(\.userId)).count)))
+                    .font(.caption).foregroundStyle(.secondary)
+                if intent == .users, !memberChanges.removed.isEmpty {
+                    let revoked = memberChanges.removed.intersection(preview.removals.map(\.userId)).count
+                    Text(L10n.text("移除 {0} 位成员，其中 {1} 位将失去部分节点访问权限；其余成员的节点访问权限不变。", String(memberChanges.removed.count), String(revoked)))
+                        .font(.callout)
+                }
                 if !preview.additions.isEmpty {
                     DisclosureGroup(L10n.text("查看新增授权（{0}）", String(preview.additions.count))) {
-                        pairList(preview.additions).padding(.top, 6)
+                        AuthorizationUserImpactList(pairs: preview.additions, users: store.users, nodes: store.nodes).padding(.top, 6)
                     }
                 }
                 if !preview.removals.isEmpty {
                     DisclosureGroup(L10n.text("查看撤权对象（{0}）", String(preview.removals.count))) {
-                        pairList(preview.removals).padding(.top, 6)
+                        AuthorizationUserImpactList(pairs: preview.removals, users: store.users, nodes: store.nodes).padding(.top, 6)
                     }
                 }
                 if preview.missingMtls.isEmpty {
@@ -198,55 +228,46 @@ struct AuthorizationGroupEditorView: View {
         .accessibilityIdentifier("authorizationGroups.editor.previewSummary")
     }
 
-    private func pairList(_ pairs: [AuthorizationPair]) -> some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 6) {
-                ForEach(Array(pairs.enumerated()), id: \.offset) { _, pair in
-                    HStack(spacing: 8) {
-                        Text(userName(pair.userId))
-                        Image(systemName: "arrow.right").foregroundStyle(.secondary)
-                        Text(nodeName(pair.nodeID))
-                    }
-                    .font(.caption)
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .frame(maxHeight: 150)
-    }
-
     private var mtlsBindingPicker: some View {
-        GroupBox {
+        let impacts = AuthorizationUserImpact.grouped(requiredMTLSPairs)
+        let names = Dictionary(store.users.map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first })
+        let query = mtlsSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let pendingUsers = impacts.filter { impact in impact.nodeIDs.contains { (credentialIDsByPair[pairKey(impact.id, $0)] ?? "").isEmpty } }
+        return GroupBox {
             VStack(alignment: .leading, spacing: 12) {
-                ForEach(Array(requiredMTLSPairs.enumerated()), id: \.offset) { _, pair in
-                    let key = pairKey(pair.userId, pair.nodeID)
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("\(userName(pair.userId)) · \(nodeName(pair.nodeID))")
-                            .font(.callout.weight(.medium))
-                        CredentialPickerView(
-                            store: store,
-                            selection: Binding(
-                                get: { credentialIDsByPair[key] ?? "" },
-                                set: { newValue in
-                                    credentialIDsByPair[key] = newValue
-                                    preview = nil
+                Text(L10n.text("{0} 位用户待选择个人证书", String(pendingUsers.count))).font(.callout.weight(.medium))
+                HStack {
+                    TextField(L10n.text("搜索成员名称或 ID"), text: $mtlsSearchText).textFieldStyle(.roundedBorder)
+                    Toggle(L10n.text("仅显示待处理"), isOn: $mtlsPendingOnly).toggleStyle(.checkbox)
+                }
+                LazyVStack(alignment: .leading, spacing: 12) {
+                    ForEach((mtlsPendingOnly ? pendingUsers : impacts).filter { query.isEmpty || (names[$0.id] ?? $0.id).localizedStandardContains(query) || $0.id.localizedCaseInsensitiveContains(query) }) { impact in
+                        DisclosureGroup(L10n.text("{0} · {1} 个节点", names[impact.id] ?? impact.id, String(impact.nodeIDs.count))) {
+                            LazyVStack(alignment: .leading, spacing: 8) {
+                                ForEach(impact.nodeIDs, id: \.self) { nodeID in
+                                    let key = pairKey(impact.id, nodeID)
+                                    CredentialPickerView(
+                                        store: store,
+                                        selection: Binding(
+                                            get: { credentialIDsByPair[key] ?? "" },
+                                            set: { credentialIDsByPair[key] = $0; preview = nil }
+                                        ),
+                                        kinds: ["tls_identity"], ownerUserID: impact.id,
+                                        title: L10n.text("{0} 的 mTLS 凭据", names[impact.id] ?? impact.id) + " · " + nodeName(nodeID)
+                                    )
                                 }
-                            ),
-                            kinds: ["tls_identity"],
-                            ownerUserID: pair.userId,
-                            title: L10n.text("{0} 的 mTLS 凭据", String(describing: (userName(pair.userId))))
-                        )
-                    }
-                    if pairKey(pair.userId, pair.nodeID) != pairKey(requiredMTLSPairs.last?.userId ?? "", requiredMTLSPairs.last?.nodeID ?? "") {
-                        Divider()
+                            }
+                            .padding(.top, 6)
+                        }
                     }
                 }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.vertical, 4)
+            .frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 4)
         } label: {
             Label(L10n.text("逐项选择用户自己的证书"), systemImage: "checkmark.seal")
         }
+        .disabled(isPreviewing || isSaving)
+        .accessibilityIdentifier("authorizationGroups.editor.mtlsBindings")
     }
 
     private func runPreview() {
@@ -260,6 +281,9 @@ struct AuthorizationGroupEditorView: View {
                     let latest = try await store.authorizationGroupDetail(group.id)
                     self.group = latest
                     if intent == .users {
+                        name = latest.name
+                        userIDs = memberChanges.applying(to: Set(latest.userIds))
+                        originalUserIDs = Set(latest.userIds)
                         if nodeIDs != Set(latest.nodeIds) { credentialIDsByPair = [:]; requiredMTLSPairs = [] }
                         nodeIDs = Set(latest.nodeIds)
                     }
@@ -272,6 +296,7 @@ struct AuthorizationGroupEditorView: View {
                         nodeIDs = Set(latest.nodeIds)
                     }
                 }
+                previewUserIDs = userIDs
                 let requestedBindings = bindingRequests(for: requiredMTLSPairs)
                 let result = try await store.previewAuthorizationGroup(
                     group: group,
@@ -281,9 +306,11 @@ struct AuthorizationGroupEditorView: View {
                     mtlsBindings: requestedBindings
                 )
                 preview = result
+                let missingKeys = Set(result.missingMtls.map { pairKey($0.userId, $0.nodeID) })
                 requiredMTLSPairs = result.additions.filter { pair in
-                    result.missingMtls.contains { $0.userId == pair.userId && $0.nodeID == pair.nodeID } || credentialIDsByPair[pairKey(pair.userId, pair.nodeID)] != nil
+                    missingKeys.contains(pairKey(pair.userId, pair.nodeID)) || credentialIDsByPair[pairKey(pair.userId, pair.nodeID)] != nil
                 }
+                if intent == .users { showingImpact = true }
             } catch {
                 preview = nil
                 errorMessage = L10n.text("无法生成预览。草稿已保留，请重新加载数据后再试。\n{0}", String(describing: (error.localizedDescription)))
@@ -334,6 +361,7 @@ struct AuthorizationGroupEditorView: View {
     private func invalidatePreview(clearMTLS: Bool) {
         guard receipt == nil else { return }
         preview = nil
+        previewUserIDs = nil
         errorMessage = nil
         if clearMTLS {
             credentialIDsByPair = [:]

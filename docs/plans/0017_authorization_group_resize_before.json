@@ -1,0 +1,16 @@
+[
+  {
+    "frames" : 48,
+    "mean_layout_ms" : 8.7361163749999999,
+    "mean_layout_render_ms" : 273.1606475833334,
+    "name" : "groups_6",
+    "p95_layout_ms" : 12.301458
+  },
+  {
+    "frames" : 48,
+    "mean_layout_ms" : 264.81373260416666,
+    "mean_layout_render_ms" : 510.49461983333339,
+    "name" : "groups_5000",
+    "p95_layout_ms" : 305.31041599999998
+  }
+]

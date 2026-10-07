@@ -16,14 +16,19 @@ with tempfile.TemporaryDirectory(prefix="hx-group-ui-") as folder:
     fixtures = temp / "fixtures"
     fixtures.mkdir()
     stamp = "2026-10-07T00:00:00Z"
-    group = dict(id="group-1", name="常用线路", revision=1, user_ids=["user-1"], node_ids=["node-1"], user_count=1, node_count=1, created_at=stamp, updated_at=stamp)
+    def fixture_user_id(index):
+        return f"user-{index}" if index in (1, 101, 202, 203) else f"{index:08x}-1234-5678-9abc-000000000000"
+    group = dict(id="group-1", name="常用线路", revision=1, user_ids=[fixture_user_id(index) for index in range(1, 202)], node_ids=["node-1"], user_count=201, node_count=1, created_at=stamp, updated_at=stamp)
     user = dict(id="user-1", name="Alice", enabled=True, usage_bytes=0, revision=1, created_at=stamp, updated_at=stamp,
                 authorization_groups=[dict(id="group-1", name="常用线路", revision=1)],
                 assignments=[dict(node_id="node-1", created_at=stamp, source_groups=[dict(id="group-1", name="常用线路")])])
+    users = [user] + [dict(user, id=fixture_user_id(index), name=f"Member {index:04}", enabled=index % 7 != 0,
+                           authorization_groups=user["authorization_groups"] if index <= 201 else [],
+                           assignments=user["assignments"] if index <= 201 else []) for index in range(2, 302)]
     nodes = [dict(id="node-1", name="香港", revision=1, state="new", mtls_required=False),
              dict(id="node-2", name="日本 mTLS", revision=1, state="new", mtls_required=True)]
     responses = dict(version=dict(api_version="1.0.0", features=["authorization_groups"], current_admin_token_id="fixture", service_version="fixture", hysteria_version="app/v2.12.3", mihomo_version="v1.19.31"),
-                     groups=[group], group=group, users=[user], user=user, nodes=nodes, empty=[])
+                     groups=[group], group=group, users=users, user=user, nodes=nodes, empty=[])
     for name, value in responses.items():
         (fixtures / (name + ".json")).write_text(json.dumps(value))
     support = '''import Foundation
@@ -51,8 +56,13 @@ final class AuthorizationFixtureProtocol: URLProtocol, @unchecked Sendable {
             let users = input["user_ids"] as? [String] ?? ["user-1"]
             let nodes = input["node_ids"] as? [String] ?? ["node-1"]
             let pairs = users.flatMap { user in nodes.map { ["user_id":user,"node_id":$0] } }
-            let missing = pairs.filter { $0["node_id"] == "node-2" }
-            data = try! JSONSerialization.data(withJSONObject: ["action":input["action"] ?? "update_memberships", "preview_token":"fixture-preview", "additions_count":pairs.count, "removals_count":0, "additions":pairs, "removals":[], "missing_mtls":missing])
+            let existingGroup = try! JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: folder + "/group.json"))) as! [String:Any]
+            let existing = (existingGroup["user_ids"] as! [String]).map { ["user_id":$0, "node_id":"node-1"] }
+            let isUpdate = path == "/api/v1/authorization-groups/group-1/preview"
+            let additions = isUpdate ? pairs.filter { !existing.contains($0) } : pairs
+            let removals = isUpdate ? existing.filter { !pairs.contains($0) } : []
+            let missing = additions.filter { $0["node_id"] == "node-2" }
+            data = try! JSONSerialization.data(withJSONObject: ["action":input["action"] ?? "update_memberships", "preview_token":"fixture-preview", "additions_count":additions.count, "removals_count":removals.count, "additions":additions, "removals":removals, "missing_mtls":missing])
             status = 200
         }
         let response = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: "HTTP/1.1", headerFields: ["Content-Type":"application/json"])!

@@ -14,7 +14,7 @@ struct AuthorizationMutationReceiptView: View {
 
     var body: some View {
         GroupBox {
-            VStack(alignment: .leading, spacing: 12) {
+            LazyVStack(alignment: .leading, spacing: 12) {
                 Label(L10n.text("授权已更新"), systemImage: "checkmark.circle.fill")
                     .font(.callout.weight(.semibold))
                     .foregroundStyle(.green)
@@ -28,7 +28,7 @@ struct AuthorizationMutationReceiptView: View {
                             .font(.caption).foregroundStyle(.secondary)
                     }
                     DisclosureGroup(L10n.text("撤权任务 ID（{0}）", String(revocationJobIDs.count))) {
-                        VStack(alignment: .leading, spacing: 6) {
+                        LazyVStack(alignment: .leading, spacing: 6) {
                             ForEach(revocationJobIDs, id: \.self) { id in
                                 let job = matchingJobs.first { $0.id == id }
                                 HStack {
@@ -72,18 +72,20 @@ struct AuthorizationMutationReceiptView: View {
                     }
                     if let message { Text(message).font(.caption).foregroundStyle(.secondary) }
                     DisclosureGroup(L10n.text("连接密码")) {
-                    ForEach(Array(createdCredentials.enumerated()), id: \.offset) { _, item in
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("\(userName(item.userId)) · \(nodeName(item.nodeID))")
-                                .font(.callout.weight(.medium))
-                            Text(item.hy2Credential)
-                                .font(.system(.caption, design: .monospaced))
-                                .textSelection(.enabled)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(8)
-                                .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
+                        LazyVStack(alignment: .leading, spacing: 10) {
+                            ForEach(Array(createdCredentials.enumerated()), id: \.offset) { _, item in
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("\(userName(item.userId)) · \(nodeName(item.nodeID))")
+                                        .font(.callout.weight(.medium))
+                                    Text(item.hy2Credential)
+                                        .font(.system(.caption, design: .monospaced))
+                                        .textSelection(.enabled)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .padding(8)
+                                        .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
+                                }
+                            }
                         }
-                    }
                     }
 
                 }

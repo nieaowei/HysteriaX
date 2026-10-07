@@ -7,7 +7,7 @@ struct HysteriaXApp: App {
     var body: some Scene {
         WindowGroup("HysteriaX", id: "main") {
             ContentView(store: store)
-                .frame(minWidth: 920, minHeight: 600)
+                .frame(minWidth: 920, maxWidth: .infinity, minHeight: 600, maxHeight: .infinity)
                 .environment(\.locale, L10n.locale)
                 .onReceive(NotificationCenter.default.publisher(for: NSLocale.currentLocaleDidChangeNotification)) { _ in
                     AppLanguage.shared.refreshSystemLanguage()

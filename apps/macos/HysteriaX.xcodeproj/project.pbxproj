@@ -75,6 +75,11 @@
 		000000000000000000002801 /* Views/SSHHostFingerprintChangeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001801 /* Views/SSHHostFingerprintChangeView.swift */; };
 		000000000000000000002705 /* Views/CredentialManagedDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001705 /* Views/CredentialManagedDetailView.swift */; };
 		000000000000000000002900 /* Models/PublicPortDraft.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001900 /* Models/PublicPortDraft.swift */; };
+		F11E00000000000000000009 /* Models/AuthorizationMemberDraft.swift in Sources */ = {isa = PBXBuildFile; fileRef = F11F00000000000000000009 /* Models/AuthorizationMemberDraft.swift */; };
+		F11E0000000000000000000A /* Views/AuthorizationMemberBrowser.swift in Sources */ = {isa = PBXBuildFile; fileRef = F11F0000000000000000000A /* Views/AuthorizationMemberBrowser.swift */; };
+		F11E0000000000000000000B /* Views/AuthorizationGroupMembersEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = F11F0000000000000000000B /* Views/AuthorizationGroupMembersEditor.swift */; };
+		F11E0000000000000000000C /* Views/AuthorizationGroupMembersView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F11F0000000000000000000C /* Views/AuthorizationGroupMembersView.swift */; };
+		F11E0000000000000000000D /* Views/AuthorizationUserImpactList.swift in Sources */ = {isa = PBXBuildFile; fileRef = F11F0000000000000000000D /* Views/AuthorizationUserImpactList.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -148,6 +153,11 @@
 		000000000000000000001801 /* Views/SSHHostFingerprintChangeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/SSHHostFingerprintChangeView.swift; sourceTree = "<group>"; };
 		000000000000000000001705 /* Views/CredentialManagedDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/CredentialManagedDetailView.swift; sourceTree = "<group>"; };
 		000000000000000000001900 /* Models/PublicPortDraft.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models/PublicPortDraft.swift; sourceTree = "<group>"; };
+		F11F00000000000000000009 /* Models/AuthorizationMemberDraft.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models/AuthorizationMemberDraft.swift; sourceTree = "<group>"; };
+		F11F0000000000000000000A /* Views/AuthorizationMemberBrowser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/AuthorizationMemberBrowser.swift; sourceTree = "<group>"; };
+		F11F0000000000000000000B /* Views/AuthorizationGroupMembersEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/AuthorizationGroupMembersEditor.swift; sourceTree = "<group>"; };
+		F11F0000000000000000000C /* Views/AuthorizationGroupMembersView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/AuthorizationGroupMembersView.swift; sourceTree = "<group>"; };
+		F11F0000000000000000000D /* Views/AuthorizationUserImpactList.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/AuthorizationUserImpactList.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -176,6 +186,11 @@
 				F11F00000000000000000006 /* Views/AuthorizationMutationReceiptView.swift */,
 				F11F00000000000000000007 /* Views/AuthorizationMultiSelectSheet.swift */,
 				F11F00000000000000000008 /* Views/UserAuthorizationGroupMembershipView.swift */,
+				F11F0000000000000000000D /* Views/AuthorizationUserImpactList.swift */,
+				F11F0000000000000000000C /* Views/AuthorizationGroupMembersView.swift */,
+				F11F0000000000000000000B /* Views/AuthorizationGroupMembersEditor.swift */,
+				F11F0000000000000000000A /* Views/AuthorizationMemberBrowser.swift */,
+				F11F00000000000000000009 /* Models/AuthorizationMemberDraft.swift */,
 				000000000000000000001C00 /* Localization.swift */,
 				000000000000000000001C04 /* ManagementDisplayText.swift */,
 				000000000000000000001C01 /* Localizable.strings */,
@@ -333,6 +348,11 @@
 				F11E00000000000000000006 /* Views/AuthorizationMutationReceiptView.swift in Sources */,
 				F11E00000000000000000007 /* Views/AuthorizationMultiSelectSheet.swift in Sources */,
 				F11E00000000000000000008 /* Views/UserAuthorizationGroupMembershipView.swift in Sources */,
+				F11E0000000000000000000D /* Views/AuthorizationUserImpactList.swift in Sources */,
+				F11E0000000000000000000C /* Views/AuthorizationGroupMembersView.swift in Sources */,
+				F11E0000000000000000000B /* Views/AuthorizationGroupMembersEditor.swift in Sources */,
+				F11E0000000000000000000A /* Views/AuthorizationMemberBrowser.swift in Sources */,
+				F11E00000000000000000009 /* Models/AuthorizationMemberDraft.swift in Sources */,
 				000000000000000000002C00 /* Localization.swift in Sources */,
 				000000000000000000002C04 /* ManagementDisplayText.swift in Sources */,
 				0000000000000000000F2000 /* Models/DNSAllocationDraft.swift in Sources */,

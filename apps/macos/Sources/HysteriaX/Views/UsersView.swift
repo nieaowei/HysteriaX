@@ -26,6 +26,7 @@ struct UsersView: View {
                 }
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .toolbar {
             if store.supportsAuthorizationGroups {
                 ToolbarItem(placement: .principal) {
