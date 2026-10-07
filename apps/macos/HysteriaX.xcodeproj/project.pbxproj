@@ -7,6 +7,14 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		F11E00000000000000000001 /* Models/AuthorizationPageState.swift in Sources */ = {isa = PBXBuildFile; fileRef = F11F00000000000000000001 /* Models/AuthorizationPageState.swift */; };
+		F11E00000000000000000002 /* Stores/AuthorizationGroupStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F11F00000000000000000002 /* Stores/AuthorizationGroupStore.swift */; };
+		F11E00000000000000000003 /* Views/AuthorizationGroupsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F11F00000000000000000003 /* Views/AuthorizationGroupsView.swift */; };
+		F11E00000000000000000004 /* Views/AuthorizationGroupEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F11F00000000000000000004 /* Views/AuthorizationGroupEditorView.swift */; };
+		F11E00000000000000000005 /* Views/AuthorizationGroupDeletionPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F11F00000000000000000005 /* Views/AuthorizationGroupDeletionPreviewView.swift */; };
+		F11E00000000000000000006 /* Views/AuthorizationMutationReceiptView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F11F00000000000000000006 /* Views/AuthorizationMutationReceiptView.swift */; };
+		F11E00000000000000000007 /* Views/AuthorizationMultiSelectSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = F11F00000000000000000007 /* Views/AuthorizationMultiSelectSheet.swift */; };
+		F11E00000000000000000008 /* Views/UserAuthorizationGroupMembershipView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F11F00000000000000000008 /* Views/UserAuthorizationGroupMembershipView.swift */; };
 		000000000000000000002C04 = {isa = PBXBuildFile; fileRef = 000000000000000000001C04; };
 		000000000000000000002C00 /* Localization.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001C00; };
 		000000000000000000002C01 /* Localizable.strings in Resources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001C01; };
@@ -70,6 +78,14 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		F11F00000000000000000001 /* Models/AuthorizationPageState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models/AuthorizationPageState.swift; sourceTree = "<group>"; };
+		F11F00000000000000000002 /* Stores/AuthorizationGroupStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Stores/AuthorizationGroupStore.swift; sourceTree = "<group>"; };
+		F11F00000000000000000003 /* Views/AuthorizationGroupsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/AuthorizationGroupsView.swift; sourceTree = "<group>"; };
+		F11F00000000000000000004 /* Views/AuthorizationGroupEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/AuthorizationGroupEditorView.swift; sourceTree = "<group>"; };
+		F11F00000000000000000005 /* Views/AuthorizationGroupDeletionPreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/AuthorizationGroupDeletionPreviewView.swift; sourceTree = "<group>"; };
+		F11F00000000000000000006 /* Views/AuthorizationMutationReceiptView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/AuthorizationMutationReceiptView.swift; sourceTree = "<group>"; };
+		F11F00000000000000000007 /* Views/AuthorizationMultiSelectSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/AuthorizationMultiSelectSheet.swift; sourceTree = "<group>"; };
+		F11F00000000000000000008 /* Views/UserAuthorizationGroupMembershipView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/UserAuthorizationGroupMembershipView.swift; sourceTree = "<group>"; };
 		000000000000000000001C04 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Support/ManagementDisplayText.swift; sourceTree = "<group>"; };
 		000000000000000000001C00 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Support/Localization.swift; sourceTree = "<group>"; };
 		000000000000000000001C02 = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = en; path = Resources/en.lproj/Localizable.strings; sourceTree = "<group>"; };
@@ -152,6 +168,14 @@
 		000000000000000000003001 /* Sources/HysteriaX */ = {
 			isa = PBXGroup;
 			children = (
+				F11F00000000000000000001 /* Models/AuthorizationPageState.swift */,
+				F11F00000000000000000002 /* Stores/AuthorizationGroupStore.swift */,
+				F11F00000000000000000003 /* Views/AuthorizationGroupsView.swift */,
+				F11F00000000000000000004 /* Views/AuthorizationGroupEditorView.swift */,
+				F11F00000000000000000005 /* Views/AuthorizationGroupDeletionPreviewView.swift */,
+				F11F00000000000000000006 /* Views/AuthorizationMutationReceiptView.swift */,
+				F11F00000000000000000007 /* Views/AuthorizationMultiSelectSheet.swift */,
+				F11F00000000000000000008 /* Views/UserAuthorizationGroupMembershipView.swift */,
 				000000000000000000001C00 /* Localization.swift */,
 				000000000000000000001C04 /* ManagementDisplayText.swift */,
 				000000000000000000001C01 /* Localizable.strings */,
@@ -301,6 +325,14 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				F11E00000000000000000001 /* Models/AuthorizationPageState.swift in Sources */,
+				F11E00000000000000000002 /* Stores/AuthorizationGroupStore.swift in Sources */,
+				F11E00000000000000000003 /* Views/AuthorizationGroupsView.swift in Sources */,
+				F11E00000000000000000004 /* Views/AuthorizationGroupEditorView.swift in Sources */,
+				F11E00000000000000000005 /* Views/AuthorizationGroupDeletionPreviewView.swift in Sources */,
+				F11E00000000000000000006 /* Views/AuthorizationMutationReceiptView.swift in Sources */,
+				F11E00000000000000000007 /* Views/AuthorizationMultiSelectSheet.swift in Sources */,
+				F11E00000000000000000008 /* Views/UserAuthorizationGroupMembershipView.swift in Sources */,
 				000000000000000000002C00 /* Localization.swift in Sources */,
 				000000000000000000002C04 /* ManagementDisplayText.swift in Sources */,
 				0000000000000000000F2000 /* Models/DNSAllocationDraft.swift in Sources */,

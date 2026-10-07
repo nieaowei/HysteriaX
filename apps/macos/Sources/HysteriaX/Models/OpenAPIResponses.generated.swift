@@ -1,6 +1,142 @@
 // Generated from openapi/openapi.yaml by scripts/generate-swift-api-models.rb. Do not edit.
 import Foundation
 
+struct AuthorizationGroupReference: Codable, Sendable {
+    let id: String
+    let name: String
+    let revision: Int
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case revision
+    }
+}
+
+struct AuthorizationGroupSource: Codable, Sendable {
+    let id: String
+    let name: String
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case name
+    }
+}
+
+struct AuthorizationGroupSummary: Codable, Sendable, Identifiable {
+    let id: String
+    let name: String
+    let revision: Int
+    let userIds: [String]
+    let nodeIds: [String]
+    let userCount: Int
+    let nodeCount: Int
+    let createdAt: String
+    let updatedAt: String
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case revision
+        case userIds = "user_ids"
+        case nodeIds = "node_ids"
+        case userCount = "user_count"
+        case nodeCount = "node_count"
+        case createdAt = "created_at"
+        case updatedAt = "updated_at"
+    }
+}
+
+struct AuthorizationPair: Codable, Sendable {
+    let userId: String
+    let nodeID: String
+
+    enum CodingKeys: String, CodingKey {
+        case userId = "user_id"
+        case nodeID = "node_id"
+    }
+}
+
+struct AuthorizationMTLSBinding: Codable, Sendable {
+    let userId: String
+    let nodeID: String
+    let credentialId: String
+    let credentialVersion: Int
+
+    enum CodingKeys: String, CodingKey {
+        case userId = "user_id"
+        case nodeID = "node_id"
+        case credentialId = "credential_id"
+        case credentialVersion = "credential_version"
+    }
+}
+
+struct AuthorizationChangePreview: Codable, Sendable {
+    let action: String
+    let previewToken: String
+    let additionsCount: Int
+    let removalsCount: Int
+    let additions: [AuthorizationPair]
+    let removals: [AuthorizationPair]
+    let missingMtls: [AuthorizationPair]
+
+    enum CodingKeys: String, CodingKey {
+        case action
+        case previewToken = "preview_token"
+        case additionsCount = "additions_count"
+        case removalsCount = "removals_count"
+        case additions
+        case removals
+        case missingMtls = "missing_mtls"
+    }
+}
+
+struct AuthorizationCreatedCredential: Codable, Sendable {
+    let userId: String
+    let nodeID: String
+    let hy2Credential: String
+
+    enum CodingKeys: String, CodingKey {
+        case userId = "user_id"
+        case nodeID = "node_id"
+        case hy2Credential = "hy2_credential"
+    }
+}
+
+struct AuthorizationGroupMutationResponse: Codable, Sendable {
+    let group: AuthorizationGroupSummary?
+    let additionsCount: Int
+    let removalsCount: Int
+    let createdCredentials: [AuthorizationCreatedCredential]
+    let revocationJobIds: [String]
+
+    enum CodingKeys: String, CodingKey {
+        case group
+        case additionsCount = "additions_count"
+        case removalsCount = "removals_count"
+        case createdCredentials = "created_credentials"
+        case revocationJobIds = "revocation_job_ids"
+    }
+}
+
+struct UserAuthorizationGroupsMutationResponse: Codable, Sendable {
+    let userId: String
+    let revision: Int
+    let groupIds: [String]
+    let assignments: [AssignmentInfo]
+    let createdCredentials: [AuthorizationCreatedCredential]
+    let revocationJobIds: [String]
+
+    enum CodingKeys: String, CodingKey {
+        case userId = "user_id"
+        case revision
+        case groupIds = "group_ids"
+        case assignments
+        case createdCredentials = "created_credentials"
+        case revocationJobIds = "revocation_job_ids"
+    }
+}
+
 struct DNSConnection: Codable, Sendable, Identifiable {
     let id: String
     let name: String
@@ -436,6 +572,7 @@ struct NodeSummary: Codable, Sendable, Identifiable {
     let state: String
     let lastSampleAt: String?
     let dataFreshness: String?
+    let mtlsRequired: Bool?
     let openGaps: Int?
     let pendingRevocations: Int?
     let proxyProbeUrl: String?
@@ -453,6 +590,7 @@ struct NodeSummary: Codable, Sendable, Identifiable {
         case state
         case lastSampleAt = "last_sample_at"
         case dataFreshness = "data_freshness"
+        case mtlsRequired = "mtls_required"
         case openGaps = "open_gaps"
         case pendingRevocations = "pending_revocations"
         case proxyProbeUrl = "proxy_probe_url"
@@ -550,12 +688,14 @@ struct AssignmentInfo: Codable, Sendable {
     let createdAt: String
     let mtlsCredentialId: String?
     let mtlsCredentialVersion: Int?
+    let sourceGroups: [AuthorizationGroupSource]?
 
     enum CodingKeys: String, CodingKey {
         case nodeID = "node_id"
         case createdAt = "created_at"
         case mtlsCredentialId = "mtls_credential_id"
         case mtlsCredentialVersion = "mtls_credential_version"
+        case sourceGroups = "source_groups"
     }
 }
 
@@ -569,6 +709,7 @@ struct UserSummary: Codable, Sendable, Identifiable {
     let revision: Int
     let quotaResetAt: String?
     let assignments: [AssignmentInfo]
+    let authorizationGroups: [AuthorizationGroupReference]?
     let createdAt: String
     let updatedAt: String
 
@@ -582,6 +723,7 @@ struct UserSummary: Codable, Sendable, Identifiable {
         case revision
         case quotaResetAt = "quota_reset_at"
         case assignments
+        case authorizationGroups = "authorization_groups"
         case createdAt = "created_at"
         case updatedAt = "updated_at"
     }

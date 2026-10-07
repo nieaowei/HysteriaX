@@ -29,6 +29,10 @@ final class ManagementStore {
     var credentials: [CredentialSummary] = []
     var nodes: [NodeSummary] = []
     var users: [UserSummary] = []
+    var authorizationGroups: [AuthorizationGroupSummary] = []
+    var authorizationGroupsError: String?
+    var isLoadingAuthorizationGroups = false
+    var authorizationGroupsRequestID = UUID()
     var jobs: [JobSummary] = []
     var auditRecords: [AuditSummary] = []
     var adminTokens: [AdminTokenSummary] = []
@@ -40,6 +44,7 @@ final class ManagementStore {
     var overviewHistoryRefreshToken = UUID()
     var supportsOverviewMonitoring = false
     var supportsNodeRecordRemoval = false
+    var supportsAuthorizationGroups = false
     var supportsJobRetryLinks = false
     private let nodeNotifications: NodeAlertNotifications?
     private var historyCache: [String: OverviewHistory] = [:]
@@ -108,10 +113,15 @@ final class ManagementStore {
             dnsError = nil
             requestedDNSRecordID = nil
             supportsNodeRecordRemoval = false
+            supportsAuthorizationGroups = false
             serverMonitoring = nil
             serverMonitoringError = nil
             nodes = []
             users = []
+            authorizationGroups = []
+            authorizationGroupsError = nil
+            authorizationGroupsRequestID = UUID()
+            isLoadingAuthorizationGroups = false
             jobs = []
             auditRecords = []
             adminTokens = []
@@ -147,6 +157,8 @@ final class ManagementStore {
         supportsOverviewMonitoring = version.features?.contains("overview_monitoring") == true
         supportsJobRetryLinks = version.features?.contains("job_retry_links") == true
         supportsNodeRecordRemoval = version.features?.contains("node_record_removal") == true
+        supportsAuthorizationGroups = version.features?.contains("authorization_groups") == true
+        await refreshAuthorizationGroups()
         await refreshOverview()
         await refreshDNS()
         startEventUpdates(using: client)
@@ -168,7 +180,9 @@ final class ManagementStore {
             supportsOverviewMonitoring = version.features?.contains("overview_monitoring") == true
             supportsJobRetryLinks = version.features?.contains("job_retry_links") == true
             supportsNodeRecordRemoval = version.features?.contains("node_record_removal") == true
+            supportsAuthorizationGroups = version.features?.contains("authorization_groups") == true
             isConnected = true
+            await refreshAuthorizationGroups()
             errorMessage = nil
             await (nodeNotifications ?? .shared).deliver(nodes: nodes, service: serviceAddress)
             await (nodeNotifications ?? .shared).deliver(credentials: credentials, service: serviceAddress)
@@ -227,10 +241,12 @@ final class ManagementStore {
         return created
     }
 
-    func createUser(_ request: UserCreateRequest) async throws {
+    func createUser(_ request: UserCreateRequest) async throws -> String {
         let api = try requireConnectedAPI()
-        let _: CreatedEntity = try await api.post(APIEndpoints.createUser, body: request)
+        let created: CreatedEntity = try await api.post(APIEndpoints.createUser, body: request)
         await refresh()
+        guard let id = created.id else { throw APIClientError.invalidResponse }
+        return id
     }
 
     func runNodeAction(_ node: NodeSummary, action: String) async throws -> JobReceipt {

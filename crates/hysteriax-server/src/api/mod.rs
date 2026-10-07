@@ -1,3 +1,4 @@
+pub(crate) mod authorization_groups;
 pub(crate) mod credentials;
 pub(crate) mod dns;
 pub(crate) mod job_retries;
@@ -104,6 +105,32 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/api/v1/users/{id}",
             get(users::get).patch(users::patch).delete(users::delete),
+        )
+        .route(
+            "/api/v1/authorization-groups",
+            get(authorization_groups::list).post(authorization_groups::create),
+        )
+        .route(
+            "/api/v1/authorization-groups/preview",
+            post(authorization_groups::preview_create),
+        )
+        .route(
+            "/api/v1/authorization-groups/{id}",
+            get(authorization_groups::get)
+                .put(authorization_groups::update)
+                .delete(authorization_groups::delete),
+        )
+        .route(
+            "/api/v1/authorization-groups/{id}/preview",
+            post(authorization_groups::preview_group),
+        )
+        .route(
+            "/api/v1/users/{id}/authorization-groups/preview",
+            post(authorization_groups::preview_memberships),
+        )
+        .route(
+            "/api/v1/users/{id}/authorization-groups",
+            axum::routing::put(authorization_groups::update_memberships),
         )
         .route("/api/v1/users/{id}/assignments", post(users::assign))
         .route(
@@ -254,7 +281,7 @@ async fn healthz() -> Json<Value> {
 async fn api_version(Extension(actor): Extension<AdminActor>) -> Json<Value> {
     Json(json!({
         "api_version": "1.0.0",
-        "features": ["node_packages", "overview_monitoring", "job_retry_links", "credentials", "node_record_removal", "dns_management"],
+        "features": ["node_packages", "overview_monitoring", "job_retry_links", "credentials", "node_record_removal", "dns_management", "authorization_groups"],
         "current_admin_token_id": actor.id,
         "service_version": env!("CARGO_PKG_VERSION"),
         "hysteria_version": "app/v2.12.3",

@@ -539,6 +539,8 @@ paths:
     post:
       operationId: assignUserToNode
       summary: Assign user to node
+      description: Deprecated. New servers reject direct assignment writes; manage access through authorization groups.
+      deprecated: true
       requestBody:
         required: true
         content:
@@ -561,6 +563,8 @@ paths:
     delete:
       operationId: unassignUserFromNode
       summary: Unassign user from node
+      description: Deprecated. New servers reject direct assignment writes; manage access through authorization groups.
+      deprecated: true
       requestBody:
         required: true
         content:
@@ -586,6 +590,165 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/AssignmentMutationResponse' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+  /users/{id}/authorization-groups/preview:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    post:
+      operationId: previewUserAuthorizationGroups
+      summary: Preview a user's authorization-group membership change
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UserAuthorizationGroupsPreview' }
+      responses:
+        '200':
+          description: Membership change preview, including effective assignment deltas and missing mTLS bindings
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuthorizationChangePreview' }
+        '400': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+  /users/{id}/authorization-groups:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    put:
+      operationId: updateUserAuthorizationGroups
+      summary: Replace a user's authorization-group memberships
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UserAuthorizationGroupsUpdate' }
+      responses:
+        '200':
+          description: Updated memberships, effective assignments, one-time credentials, and queued revocations
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UserAuthorizationGroupsMutationResponse' }
+        '400': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+  /authorization-groups/preview:
+    post:
+      operationId: previewAuthorizationGroupCreate
+      summary: Preview authorization-group creation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AuthorizationGroupPreview' }
+      responses:
+        '200':
+          description: Creation preview, including effective assignment deltas and missing mTLS bindings
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuthorizationChangePreview' }
+        '400': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+  /authorization-groups:
+    get:
+      operationId: listAuthorizationGroups
+      summary: List authorization groups
+      responses:
+        '200':
+          description: Authorization groups with their member and node sets
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/AuthorizationGroupSummary' }
+    post:
+      operationId: createAuthorizationGroup
+      summary: Create an authorization group from a validated preview
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AuthorizationGroupCreate' }
+      responses:
+        '201':
+          description: Created group, one-time credentials, and queued revocations
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuthorizationGroupMutationResponse' }
+        '400': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+  /authorization-groups/{group_id}/preview:
+    parameters:
+      - name: group_id
+        in: path
+        required: true
+        schema: { type: string }
+    post:
+      operationId: previewAuthorizationGroupChange
+      summary: Preview an authorization-group update or deletion
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AuthorizationGroupPreview' }
+      responses:
+        '200':
+          description: Update or deletion preview, including effective assignment deltas and missing mTLS bindings
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuthorizationChangePreview' }
+        '400': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+  /authorization-groups/{group_id}:
+    parameters:
+      - name: group_id
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      operationId: getAuthorizationGroup
+      summary: Get an authorization group
+      responses:
+        '200':
+          description: Authorization group details
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuthorizationGroupSummary' }
+        '404': { $ref: '#/components/responses/Error' }
+    put:
+      operationId: updateAuthorizationGroup
+      summary: Replace an authorization group's members and nodes
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AuthorizationGroupUpdate' }
+      responses:
+        '200':
+          description: Updated group, one-time credentials, and queued revocations
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuthorizationGroupMutationResponse' }
+        '400': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+    delete:
+      operationId: deleteAuthorizationGroup
+      summary: Delete an authorization group from a validated preview
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AuthorizationGroupDelete' }
+      responses:
+        '200':
+          description: Deleted group, effective assignment changes, one-time credentials, and queued revocations
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuthorizationGroupMutationResponse' }
+        '400': { $ref: '#/components/responses/Error' }
         '404': { $ref: '#/components/responses/Error' }
         '409': { $ref: '#/components/responses/Error' }
   /users/{id}/credentials/rotate:
@@ -1400,6 +1563,103 @@ components:
       required: [expected_revision]
       properties:
         expected_revision: { type: integer, minimum: 1 }
+    AuthorizationPair:
+      type: object
+      required: [user_id, node_id]
+      properties:
+        user_id: { type: string, format: uuid }
+        node_id: { type: string, format: uuid }
+    AuthorizationMTLSBinding:
+      type: object
+      required: [user_id, node_id, credential_id, credential_version]
+      properties:
+        user_id: { type: string, format: uuid }
+        node_id: { type: string, format: uuid }
+        credential_id: { type: string, format: uuid }
+        credential_version: { type: integer, minimum: 1 }
+      additionalProperties: false
+    AuthorizationGroupPreview:
+      type: object
+      required: [action]
+      properties:
+        action: { type: string, enum: [create, update, delete] }
+        expected_revision: { type: integer, minimum: 1 }
+        name: { type: string }
+        user_ids:
+          type: array
+          items: { type: string, format: uuid }
+        node_ids:
+          type: array
+          items: { type: string, format: uuid }
+        mtls_bindings:
+          type: array
+          items: { $ref: '#/components/schemas/AuthorizationMTLSBinding' }
+      additionalProperties: false
+    AuthorizationGroupCreate:
+      type: object
+      required: [name, user_ids, node_ids, preview_token]
+      properties:
+        name: { type: string }
+        user_ids:
+          type: array
+          items: { type: string, format: uuid }
+        node_ids:
+          type: array
+          items: { type: string, format: uuid }
+        preview_token: { type: string }
+        mtls_bindings:
+          type: array
+          items: { $ref: '#/components/schemas/AuthorizationMTLSBinding' }
+      additionalProperties: false
+    AuthorizationGroupUpdate:
+      type: object
+      required: [expected_revision, name, user_ids, node_ids, preview_token]
+      properties:
+        expected_revision: { type: integer, minimum: 1 }
+        name: { type: string }
+        user_ids:
+          type: array
+          items: { type: string, format: uuid }
+        node_ids:
+          type: array
+          items: { type: string, format: uuid }
+        preview_token: { type: string }
+        mtls_bindings:
+          type: array
+          items: { $ref: '#/components/schemas/AuthorizationMTLSBinding' }
+      additionalProperties: false
+    AuthorizationGroupDelete:
+      type: object
+      required: [expected_revision, preview_token]
+      properties:
+        expected_revision: { type: integer, minimum: 1 }
+        preview_token: { type: string }
+      additionalProperties: false
+    UserAuthorizationGroupsPreview:
+      type: object
+      required: [expected_revision, group_ids]
+      properties:
+        expected_revision: { type: integer, minimum: 1 }
+        group_ids:
+          type: array
+          items: { type: string }
+        mtls_bindings:
+          type: array
+          items: { $ref: '#/components/schemas/AuthorizationMTLSBinding' }
+      additionalProperties: false
+    UserAuthorizationGroupsUpdate:
+      type: object
+      required: [expected_revision, preview_token, group_ids]
+      properties:
+        expected_revision: { type: integer, minimum: 1 }
+        preview_token: { type: string }
+        group_ids:
+          type: array
+          items: { type: string }
+        mtls_bindings:
+          type: array
+          items: { $ref: '#/components/schemas/AuthorizationMTLSBinding' }
+      additionalProperties: false
     AssignmentRequest:
       type: object
       required:
@@ -1642,6 +1902,75 @@ components:
             enabled: { type: boolean }
             expires_at: { type: [string, 'null'], format: date-time }
             quota_bytes: { type: [integer, 'null'], format: int64, minimum: 0 }
+    AuthorizationGroupReference:
+      type: object
+      required: [id, name, revision]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        revision: { type: integer }
+    AuthorizationGroupSource:
+      type: object
+      required: [id, name]
+      properties:
+        id: { type: string }
+        name: { type: string }
+    AuthorizationGroupSummary:
+      type: object
+      required: [id, name, revision, user_ids, node_ids, user_count, node_count, created_at, updated_at]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        revision: { type: integer }
+        user_ids:
+          type: array
+          items: { type: string, format: uuid }
+        node_ids:
+          type: array
+          items: { type: string, format: uuid }
+        user_count: { type: integer, minimum: 0 }
+        node_count: { type: integer, minimum: 0 }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    AuthorizationChangePreview:
+      type: object
+      required: [action, preview_token, additions_count, removals_count, additions, removals, missing_mtls]
+      properties:
+        action: { type: string, enum: [create, update, delete, update_memberships] }
+        preview_token: { type: string }
+        additions_count: { type: integer, minimum: 0 }
+        removals_count: { type: integer, minimum: 0 }
+        additions:
+          type: array
+          items: { $ref: '#/components/schemas/AuthorizationPair' }
+        removals:
+          type: array
+          items: { $ref: '#/components/schemas/AuthorizationPair' }
+        missing_mtls:
+          type: array
+          items: { $ref: '#/components/schemas/AuthorizationPair' }
+    AuthorizationCreatedCredential:
+      type: object
+      required: [user_id, node_id, hy2_credential]
+      properties:
+        user_id: { type: string, format: uuid }
+        node_id: { type: string, format: uuid }
+        hy2_credential: { type: string, description: One-time Hysteria credential returned after effective authorization is created. }
+    AuthorizationGroupMutationResponse:
+      type: object
+      required: [group, additions_count, removals_count, created_credentials, revocation_job_ids]
+      properties:
+        group:
+          $ref: '#/components/schemas/AuthorizationGroupSummary'
+          type: [object, 'null']
+        additions_count: { type: integer, minimum: 0 }
+        removals_count: { type: integer, minimum: 0 }
+        created_credentials:
+          type: array
+          items: { $ref: '#/components/schemas/AuthorizationCreatedCredential' }
+        revocation_job_ids:
+          type: array
+          items: { type: string, format: uuid }
     NodeSummary:
       type: object
       required: [id, name, revision, state]
@@ -1666,6 +1995,7 @@ components:
         state: { type: string }
         last_sample_at: { type: [string, 'null'], format: date-time }
         data_freshness: { type: string, enum: [fresh, stale, not_collected] }
+        mtls_required: { type: boolean }
         open_gaps: { type: integer }
         pending_revocations: { type: integer }
         proxy_probe_url: { type: [string, 'null'], maxLength: 2048 }
@@ -1758,6 +2088,9 @@ components:
           type:
           - integer
           - 'null'
+        source_groups:
+          type: array
+          items: { $ref: '#/components/schemas/AuthorizationGroupSource' }
     UserSummary:
       type: object
       required: [id, name, enabled, expires_at, quota_bytes, usage_bytes, revision, quota_reset_at, assignments, created_at, updated_at]
@@ -1773,8 +2106,29 @@ components:
         assignments:
           type: array
           items: { $ref: '#/components/schemas/AssignmentInfo' }
+        authorization_groups:
+          type: array
+          items: { $ref: '#/components/schemas/AuthorizationGroupReference' }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
+    UserAuthorizationGroupsMutationResponse:
+      type: object
+      required: [user_id, revision, group_ids, assignments, created_credentials, revocation_job_ids]
+      properties:
+        user_id: { type: string, format: uuid }
+        revision: { type: integer }
+        group_ids:
+          type: array
+          items: { type: string }
+        assignments:
+          type: array
+          items: { $ref: '#/components/schemas/AssignmentInfo' }
+        created_credentials:
+          type: array
+          items: { $ref: '#/components/schemas/AuthorizationCreatedCredential' }
+        revocation_job_ids:
+          type: array
+          items: { type: string, format: uuid }
     JobOutcome:
       type: object
       properties:
@@ -2061,7 +2415,7 @@ components:
       required: [api_version, service_version, hysteria_version, mihomo_version]
       properties:
         current_admin_token_id: { type: string }
-        features: { type: array, items: { type: string }, description: Optional supported features; node_packages enables node package writes. }
+        features: { type: array, items: { type: string }, description: Optional supported features; node_packages enables node package writes and authorization_groups enables group-based access management. }
         api_version: { type: string }
         service_version: { type: string }
         hysteria_version: { type: string }

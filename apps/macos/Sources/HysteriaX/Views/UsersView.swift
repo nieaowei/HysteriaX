@@ -6,12 +6,57 @@ struct UsersView: View {
     @Bindable var store: ManagementStore
     var initialSelection: String? = nil
     var onInitialSelectionHandled: () -> Void = {}
+
+    @SceneStorage("authorizationManagement.tab") private var selectedTab = "users"
+    @State private var pageState = AuthorizationPageState()
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if store.supportsAuthorizationGroups && selectedTab == "groups" {
+                AuthorizationGroupsView(store: store, pageState: pageState) { userID in
+                    selectedTab = "users"
+                    pageState.userSearchText = ""
+                    pageState.selectedUserID = userID
+                }
+            } else {
+                UserDirectoryView(store: store, pageState: pageState) { groupID in
+                    selectedTab = "groups"
+                    pageState.groupSearchText = ""
+                    pageState.selectedGroupID = groupID
+                }
+            }
+        }
+        .toolbar {
+            if store.supportsAuthorizationGroups {
+                ToolbarItem(placement: .principal) {
+                    Picker(L10n.text("用户页面"), selection: $selectedTab) {
+                        Text(L10n.text("用户")).tag("users")
+                        Text(L10n.text("授权组")).tag("groups")
+                    }
+                    .pickerStyle(.segmented)
+                    .accessibilityIdentifier("users.authorizationTabs")
+                }
+            }
+        }
+        .task(id: initialSelection) {
+            guard let initialSelection else { return }
+            selectedTab = "users"
+            pageState.userSearchText = ""
+            pageState.selectedUserID = initialSelection
+            onInitialSelectionHandled()
+        }
+    }
+}
+
+private struct UserDirectoryView: View {
+    @Bindable var store: ManagementStore
+    @Bindable var pageState: AuthorizationPageState
+    var onOpenAuthorizationGroup: (String) -> Void
     @State private var showingAddUser = false
     @State private var assignmentUser: UserSummary?
     @State private var showingEditUser = false
-    @State private var selectedUserID: String?
-    @State private var searchText = ""
-    @State private var sortOrder = [KeyPathComparator(\UserSummary.name)]
+    @State private var membershipUser: UserSummary?
+    @State private var pendingCreatedUserID: String?
     @State private var assignmentTarget: AssignmentTarget?
     @State private var showingDeleteConfirmation = false
     @State private var alertTitle = ""
@@ -21,19 +66,19 @@ struct UsersView: View {
     @State private var usageLoadingUserID: String?
 
     private var visibleUsers: [UserSummary] {
-        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let query = pageState.userSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
         let filtered = store.users.filter { user in
             query.isEmpty
                 || user.name.localizedStandardContains(query)
                 || user.id.localizedCaseInsensitiveContains(query)
                 || user.assignments.contains { $0.nodeID.localizedCaseInsensitiveContains(query) }
         }
-        return filtered.sorted(using: sortOrder)
+        return filtered.sorted(using: pageState.userSortOrder)
     }
 
     var body: some View {
-        MainVerticalSplitView(hasDetail: store.users.contains { $0.id == selectedUserID }) {
-            Table(visibleUsers, selection: $selectedUserID, sortOrder: $sortOrder) {
+        MainVerticalSplitView(hasDetail: store.users.contains { $0.id == pageState.selectedUserID }) {
+            Table(visibleUsers, selection: $pageState.selectedUserID, sortOrder: $pageState.userSortOrder) {
                 TableColumn(L10n.text("名称"), value: \.name) { user in
                     Text(user.name)
                         .accessibilityLabel(user.name)
@@ -52,12 +97,6 @@ struct UsersView: View {
                 TableColumn(L10n.text("到期")) { user in Text(user.expiresAt.map { DateDisplayText.local($0) } ?? L10n.text("不限")) }
             }
             .frame(minHeight: 180)
-            .task(id: initialSelection) {
-                guard let initialSelection else { return }
-                searchText = ""
-                selectedUserID = initialSelection
-                onInitialSelectionHandled()
-            }
             .overlay {
                 if store.users.isEmpty {
                     ContentUnavailableView(L10n.text("还没有用户"), systemImage: "person.2", description: Text(L10n.text("添加用户后可以分配节点并生成订阅。")))
@@ -66,9 +105,10 @@ struct UsersView: View {
                 }
             }
         } detail: {
-            if let user = store.users.first(where: { $0.id == selectedUserID }) {
+            if let user = store.users.first(where: { $0.id == pageState.selectedUserID }) {
                 userDetailPane(user)
                     .id(user.id)
+                    .accessibilityElement(children: .contain)
                     .accessibilityIdentifier("users.detail")
             }
         }
@@ -79,15 +119,15 @@ struct UsersView: View {
                     .disabled(!store.isConnected)
             }
         }
-        .searchable(text: $searchText, prompt: L10n.text("搜索用户"))
-        .onChange(of: searchText) { _, _ in selectedUserID = nil }
-        .onChange(of: selectedUserID) { _, _ in
+        .searchable(text: $pageState.userSearchText, placement: .toolbar, prompt: L10n.text("搜索用户"))
+        .onChange(of: pageState.userSearchText) { _, _ in pageState.selectedUserID = nil }
+        .onChange(of: pageState.selectedUserID) { _, _ in
             selectedUsage = nil
             usageErrorMessage = nil
             usageLoadingUserID = nil
         }
-        .task(id: "\(selectedUserID ?? "")|\(store.isConnected)") {
-            guard store.isConnected, let selectedUserID else {
+        .task(id: "\(pageState.selectedUserID ?? "")|\(store.isConnected)") {
+            guard store.isConnected, let selectedUserID = pageState.selectedUserID else {
                 selectedUsage = nil
                 usageErrorMessage = nil
                 usageLoadingUserID = nil
@@ -98,11 +138,19 @@ struct UsersView: View {
                 try? await Task.sleep(for: .seconds(15))
             }
         }
-        .sheet(isPresented: $showingAddUser) { UserFormView(store: store) }
+        .sheet(isPresented: $showingAddUser, onDismiss: openCreatedUserGroups) {
+            UserFormView(store: store) { userID in
+                pageState.selectedUserID = userID
+                pendingCreatedUserID = userID
+            }
+        }
         .sheet(isPresented: $showingEditUser) {
-            if let user = store.users.first(where: { $0.id == selectedUserID }) {
+            if let user = store.users.first(where: { $0.id == pageState.selectedUserID }) {
                 UserEditFormView(store: store, user: user)
             }
+        }
+        .sheet(item: $membershipUser) { user in
+            UserAuthorizationGroupMembershipView(store: store, user: user)
         }
         .sheet(item: $assignmentUser) { user in
             UserNodeAssignmentsView(store: store, user: user)
@@ -119,7 +167,7 @@ struct UsersView: View {
         }
         .confirmationDialog(L10n.text("删除用户？"), isPresented: $showingDeleteConfirmation, titleVisibility: .visible) {
             Button(L10n.text("删除用户"), role: .destructive) {
-                if let user = store.users.first(where: { $0.id == selectedUserID }) { delete(user) }
+                if let user = store.users.first(where: { $0.id == pageState.selectedUserID }) { delete(user) }
             }
         } message: {
             Text(L10n.text("用户的订阅和节点凭据会撤销，并排队断开在线设备。"))
@@ -127,6 +175,18 @@ struct UsersView: View {
         .alert(alertTitle, isPresented: Binding(get: { alertMessage != nil }, set: { if !$0 { alertMessage = nil } })) {
             Button(L10n.text("好"), role: .cancel) { alertMessage = nil }
         } message: { Text(alertMessage ?? "") }
+    }
+
+    private func openCreatedUserGroups() {
+        guard let userID = pendingCreatedUserID else { return }
+        pendingCreatedUserID = nil
+        guard store.supportsAuthorizationGroups else { return }
+        Task { @MainActor in
+            var user = store.users.first { $0.id == userID }
+            if user == nil { user = try? await store.userSummary(userID) }
+            guard let user else { return }
+            membershipUser = user
+        }
     }
 
     private func userDetailPane(_ user: UserSummary) -> some View {
@@ -140,7 +200,7 @@ struct UsersView: View {
                     userMetric(L10n.text("已用流量"), value: formatBytes(user.usageBytes))
                     userMetric(L10n.text("流量额度"), value: user.quotaBytes.map(formatBytes) ?? L10n.text("不限"))
                     userMetric(L10n.text("到期时间"), value: user.expiresAt.map { DateDisplayText.local($0) } ?? L10n.text("不限"))
-                    userMetric(L10n.text("分配节点"), value: L10n.text("{0} 个", String(describing: (user.assignments.count))))
+                    userMetric(L10n.text(store.supportsAuthorizationGroups ? "有效节点" : "分配节点"), value: L10n.text("{0} 个", String(describing: (user.assignments.count))))
                 }
             }
             .padding(16)
@@ -149,7 +209,10 @@ struct UsersView: View {
                 VStack(alignment: .leading, spacing: 16) {
                     OverviewColumnsLayout(wideColumns: 2, wideMinimum: 576, narrowColumns: 1) {
                         userQuota(user)
-                        userAssignments(user)
+                        VStack(alignment: .leading, spacing: 16) {
+                            if store.supportsAuthorizationGroups { userAuthorizationGroups(user) }
+                            userAssignments(user)
+                        }
                     }
                     if store.isConnected, let usage = selectedUsage, usage.userId == user.id,
                        let pending = usage.pendingRevocations, !pending.isEmpty {
@@ -208,9 +271,14 @@ struct UsersView: View {
 
     private func userDetailActions(_ user: UserSummary) -> some View {
         HStack(spacing: 8) {
-            Button(L10n.text("分配节点…")) { assignmentUser = user }
-                .accessibilityLabel(L10n.text("分配节点"))
-                .accessibilityIdentifier("users.assignNodeMenu")
+            if store.supportsAuthorizationGroups {
+                Button(L10n.text("管理授权组…"), systemImage: "person.3") { membershipUser = user }
+                    .accessibilityIdentifier("users.manageAuthorizationGroups")
+            } else {
+                Button(L10n.text("分配节点…")) { assignmentUser = user }
+                    .accessibilityLabel(L10n.text("分配节点"))
+                    .accessibilityIdentifier("users.assignNodeMenu")
+            }
             Menu(L10n.text("mTLS 证书")) {
                 ForEach(user.assignments, id: \.nodeID) { assignment in
                     if let node = store.nodes.first(where: { $0.id == assignment.nodeID }) {
@@ -294,7 +362,7 @@ struct UsersView: View {
         GroupBox {
             VStack(alignment: .leading, spacing: 0) {
                 if user.assignments.isEmpty {
-                    Text(L10n.text("尚未分配节点")).foregroundStyle(.secondary).padding(.vertical, 8)
+                    Text(L10n.text("尚未获得节点访问权限")).foregroundStyle(.secondary).padding(.vertical, 8)
                 }
                 ForEach(Array(user.assignments.enumerated()), id: \.element.nodeID) { index, assignment in
                     if index > 0 { Divider() }
@@ -303,6 +371,18 @@ struct UsersView: View {
                             Text(nodeDisplayName(assignment.nodeID)).font(.callout.weight(.medium))
                             Text(assignment.mtlsCredentialId == nil ? L10n.text("连接密码") : "mTLS · v\(assignment.mtlsCredentialVersion ?? 1)")
                                 .font(.caption).foregroundStyle(.secondary)
+                            if store.supportsAuthorizationGroups, let groups = assignment.sourceGroups, !groups.isEmpty {
+                                HStack(spacing: 6) {
+                                    Text(L10n.text("来源组"))
+                                        .font(.caption).foregroundStyle(.secondary)
+                                    ForEach(groups, id: \.id) { group in
+                                        Button(group.name) { onOpenAuthorizationGroup(group.id) }
+                                            .buttonStyle(.link)
+                                            .font(.caption)
+                                            .accessibilityIdentifier("users.assignment.sourceGroup.\(group.id)")
+                                    }
+                                }
+                            }
                             Text(L10n.text("分配于 {0}", String(describing: (DateDisplayText.local(assignment.createdAt)))))
                                 .font(.caption).foregroundStyle(.secondary)
                         }
@@ -321,7 +401,41 @@ struct UsersView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         } label: {
-            Label(L10n.text("已分配节点（{0}）", String(describing: (user.assignments.count))), systemImage: "server.rack")
+            Label(L10n.text(store.supportsAuthorizationGroups ? "有效节点（{0}）" : "已分配节点（{0}）", String(describing: (user.assignments.count))), systemImage: "server.rack")
+        }
+    }
+
+    private func userAuthorizationGroups(_ user: UserSummary) -> some View {
+        GroupBox {
+            let groups = user.authorizationGroups ?? []
+            VStack(alignment: .leading, spacing: 8) {
+                if groups.isEmpty {
+                    Text(L10n.text("用户尚未加入授权组。"))
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(groups, id: \.id) { group in
+                        Button {
+                            onOpenAuthorizationGroup(group.id)
+                        } label: {
+                            HStack(spacing: 8) {
+                                Image(systemName: "person.3")
+                                Text(group.name)
+                                Spacer()
+                                Image(systemName: "arrow.up.right")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier("users.authorizationGroup.\(group.id)")
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 4)
+        } label: {
+            Label(L10n.text("所属授权组（{0}）", String(describing: (user.authorizationGroups?.count ?? 0))), systemImage: "person.3")
         }
     }
 
@@ -405,7 +519,7 @@ struct UsersView: View {
         Task {
             do {
                 try await store.delete(user)
-                selectedUserID = nil
+                pageState.selectedUserID = nil
             } catch { showError(error) }
         }
     }
@@ -466,11 +580,11 @@ struct UsersView: View {
         usageErrorMessage = nil
         do {
             let response = try await store.userUsage(userID)
-            guard !Task.isCancelled, selectedUserID == userID else { return }
+            guard !Task.isCancelled, pageState.selectedUserID == userID else { return }
             selectedUsage = response
             usageLoadingUserID = nil
         } catch {
-            guard !Task.isCancelled, selectedUserID == userID else { return }
+            guard !Task.isCancelled, pageState.selectedUserID == userID else { return }
             usageErrorMessage = error.localizedDescription
             usageLoadingUserID = nil
         }
@@ -663,6 +777,7 @@ private struct UserAssignmentFormView: View {
 private struct UserFormView: View {
     @Environment(\.dismiss) private var dismiss
     @Bindable var store: ManagementStore
+    var onCreated: (String) -> Void = { _ in }
     @State private var name = ""
     @State private var quotaGB = ""
     @State private var expiresAt = false
@@ -673,6 +788,11 @@ private struct UserFormView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text(L10n.text("添加用户")).font(.title.bold())
+            if store.supportsAuthorizationGroups {
+                Text(L10n.text("新用户创建后不会自动获得节点权限。下一步可将用户加入授权组。"))
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
             Form {
                 TextField(L10n.text("用户名称"), text: $name)
                     .accessibilityLabel(L10n.text("用户名称"))
@@ -711,8 +831,9 @@ private struct UserFormView: View {
             defer { isSaving = false }
             do {
                 let date = expiresAt ? ISO8601DateFormatter().string(from: expiration) : nil
-                try await store.createUser(UserCreateRequest(name: name, enabled: true, expiresAt: date, quotaBytes: quota))
+                let userID = try await store.createUser(UserCreateRequest(name: name, enabled: true, expiresAt: date, quotaBytes: quota))
                 dismiss()
+                onCreated(userID)
             } catch { errorMessage = error.localizedDescription }
         }
     }

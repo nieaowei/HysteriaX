@@ -379,7 +379,17 @@ def main():
                 pending_job_id = str(uuid.uuid4())
                 future_time = "2099-01-01T00:00:00Z"
                 with database.connect() as connection:
-                    connection.execute(
+                    # Certificate updates may already have a pending kick for this
+                    # pair. Reuse it to exercise the one-active-kick invariant.
+                    existing = connection.execute(
+                        "SELECT id FROM jobs WHERE kind='kick' AND node_id=%s AND payload_json->>'user_id'=%s AND status IN ('queued','running')",
+                        (node2, user2),
+                    ).fetchone()
+                    if existing:
+                        pending_job_id = existing[0]
+                        connection.execute("UPDATE jobs SET status='queued',stage='retry_wait',available_at=%s WHERE id=%s", (datetime.fromisoformat(future_time.replace("Z", "+00:00")), pending_job_id))
+                    else:
+                        connection.execute(
                         "INSERT INTO jobs (id, kind, node_id, target_revision, payload_json, status, stage, available_at, created_at, updated_at) "
                         "VALUES (%s, 'kick', %s, NULL, %s, 'queued', 'retry_wait', %s, %s, %s)",
                         (

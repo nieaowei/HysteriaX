@@ -169,7 +169,7 @@ mod tests {
         .fetch_one(&pool)
         .await
         .unwrap();
-        assert_eq!(json_types, 5);
+        assert_eq!(json_types, 6);
     }
 
     #[tokio::test]

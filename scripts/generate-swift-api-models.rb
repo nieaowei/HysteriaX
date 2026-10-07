@@ -37,11 +37,20 @@ models = {
   "ResourceCreate" => "ResourceUploadRequest",
   "UserCreate" => "UserCreateRequest",
   "UserPatch" => "UserPatchRequest",
+  "AuthorizationGroupPreview" => "AuthorizationGroupPreviewRequest",
+  "AuthorizationGroupCreate" => "AuthorizationGroupCreateRequest",
+  "AuthorizationGroupUpdate" => "AuthorizationGroupUpdateRequest",
+  "AuthorizationGroupDelete" => "AuthorizationGroupDeleteRequest",
+  "UserAuthorizationGroupsPreview" => "UserAuthorizationGroupsPreviewRequest",
+  "UserAuthorizationGroupsUpdate" => "UserAuthorizationGroupsUpdateRequest",
   "Revision" => "RevisionRequest",
   "AssignmentRequest" => "AssignmentRequest",
   "AssignmentCertificateUpdate" => "AssignmentCertificateUpdateRequest",
 }
 response_models = %w[
+  AuthorizationGroupReference AuthorizationGroupSource AuthorizationGroupSummary AuthorizationPair AuthorizationMTLSBinding
+  AuthorizationChangePreview AuthorizationCreatedCredential AuthorizationGroupMutationResponse
+  UserAuthorizationGroupsMutationResponse
   DNSConnection DNSZone DNSRecord PublishedConnection DNSBinding DNSBindingResponse DNSActionReceipt DNSCredentialBatchItem
   CredentialSummary CredentialDetail CredentialVersion CredentialReference CredentialReceipt
   CredentialBatch CredentialBatchItem CredentialBatchReceipt
@@ -58,7 +67,7 @@ response_models = %w[
   AdminTokenSummary AdminTokenReceipt ServerMonitoring
   OverviewIssue OverviewNode OverviewResponse OverviewBucket OverviewHistory
 ]
-identifiable_models = %w[DNSConnection DNSZone DNSRecord CredentialSummary CredentialDetail CredentialBatch NodeSummary NodeDetail UserSummary JobSummary AuditSummary NodeResource AdminTokenSummary]
+identifiable_models = %w[AuthorizationGroupSummary DNSConnection DNSZone DNSRecord CredentialSummary CredentialDetail CredentialBatch NodeSummary NodeDetail UserSummary JobSummary AuditSummary NodeResource AdminTokenSummary]
 
 def resolve_schema(schema, schemas, stack = [])
   if schema.key?("$ref")
@@ -104,6 +113,7 @@ def swift_name(name, response = false)
     "tls_sni" => "tlsSNI",
     "tls_skip_verify" => "tlsSkipVerify",
     "node_id" => "nodeID",
+    "group_id" => "groupID",
   }
   if response
     overrides.merge!(

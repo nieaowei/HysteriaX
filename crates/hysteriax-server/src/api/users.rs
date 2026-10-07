@@ -45,6 +45,9 @@ pub struct RevisionRequest {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+#[allow(dead_code)]
+// Retain the legacy body shape to return a clear migration error.
+#[allow(dead_code)]
 pub struct AssignRequest {
     expected_revision: i64,
     node_id: String,
@@ -217,6 +220,11 @@ pub async fn delete(
             "user revision changed; reload before deleting",
         ));
     }
+    sqlx::query("UPDATE authorization_groups SET revision=revision+1,updated_at=$2 WHERE id IN (SELECT group_id FROM authorization_group_users WHERE user_id=$1)")
+        .bind(&id)
+        .bind(now())
+        .execute(&mut *tx)
+        .await?;
     let node_ids =
         sqlx::query_scalar::<_, String>("SELECT node_id FROM node_assignments WHERE user_id = $1")
             .bind(&id)
@@ -244,84 +252,11 @@ pub async fn delete(
 }
 
 pub async fn assign(
-    State(state): State<AppState>,
-    Path(user_id): Path<String>,
-    Json(input): Json<AssignRequest>,
+    State(_state): State<AppState>,
+    Path(_user_id): Path<String>,
+    Json(_input): Json<AssignRequest>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
-    let mut tx = db::begin_write(&state.pool).await?;
-    let user = sqlx::query("SELECT revision FROM users WHERE id = $1")
-        .bind(&user_id)
-        .fetch_optional(&mut *tx)
-        .await?
-        .ok_or_else(|| ApiError::not_found("user"))?;
-    let revision: i64 = user.get("revision");
-    if input.expected_revision != revision {
-        return Err(ApiError::conflict(format!(
-            "user revision is {revision}; reload before editing"
-        )));
-    }
-    let node_config_enc: Option<String> =
-        sqlx::query_scalar("SELECT desired_config_enc FROM nodes WHERE id = $1")
-            .bind(&input.node_id)
-            .fetch_optional(&mut *tx)
-            .await?;
-    let node_config_enc = node_config_enc.ok_or_else(|| ApiError::not_found("node"))?;
-    let node_config_json = state.secrets.decrypt(&node_config_enc)?;
-    let node_config: Value =
-        serde_json::from_str(&node_config_json).map_err(|_| ApiError::internal())?;
-    let mtls_required = node_config
-        .get("tls")
-        .and_then(Value::as_object)
-        .and_then(|tls| tls.get("clientCA"))
-        .and_then(Value::as_str)
-        .is_some_and(|value| !value.trim().is_empty());
-    match (&input.mtls_credential_id, input.mtls_credential_version) {
-        (Some(id), Some(version)) => validate_mtls_binding(&mut tx, id, version, &user_id).await?,
-        (None, None) if !mtls_required => (),
-        _ => {
-            return Err(ApiError::bad_request(
-                "matching user-owned mTLS credential ID and version required",
-            ));
-        }
-    }
-    let exists: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM node_assignments WHERE user_id = $1 AND node_id = $2",
-    )
-    .bind(&user_id)
-    .bind(&input.node_id)
-    .fetch_one(&mut *tx)
-    .await?;
-    if exists > 0 {
-        return Err(ApiError::new(
-            StatusCode::CONFLICT,
-            "already_assigned",
-            "user is already assigned to this node",
-        ));
-    }
-    let credential = generate_token();
-    let credential_hash = token_digest(&credential);
-    let credential_enc = state.secrets.encrypt(&credential)?;
-    let timestamp = now();
-    sqlx::query("INSERT INTO node_assignments (user_id, node_id, credential_hash, credential_enc, mtls_credential_id, mtls_credential_version, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7)")
-        .bind(&user_id).bind(&input.node_id).bind(credential_hash).bind(credential_enc)
-        .bind(&input.mtls_credential_id).bind(input.mtls_credential_version).bind(timestamp).execute(&mut *tx).await?;
-    let next_revision = revision + 1;
-    sqlx::query("UPDATE users SET revision = $1, updated_at = $2 WHERE id = $3 AND revision = $4")
-        .bind(next_revision)
-        .bind(timestamp)
-        .bind(&user_id)
-        .bind(revision)
-        .execute(&mut *tx)
-        .await?;
-    sqlx::query("INSERT INTO audit_records (id, actor, action, entity_type, entity_id, detail_json, created_at) VALUES ($1, 'admin', 'user.assigned', 'user', $2, $3, $4)")
-        .bind(Uuid::new_v4().to_string()).bind(&user_id).bind(json!({"node_id": input.node_id, "revision": next_revision})).bind(timestamp).execute(&mut *tx).await?;
-    tx.commit().await?;
-    Ok((
-        StatusCode::CREATED,
-        Json(
-            json!({"user_id": user_id, "node_id": input.node_id, "revision": next_revision, "hy2_credential": credential, "note": "Credential is shown once here; rotate it to replace it later."}),
-        ),
-    ))
+    Err(legacy_assignment_error())
 }
 
 pub async fn update_assignment_client_certificate(
@@ -392,52 +327,19 @@ pub async fn update_assignment_client_certificate(
 }
 
 pub async fn unassign(
-    State(state): State<AppState>,
-    Path((user_id, node_id)): Path<(String, String)>,
-    Json(input): Json<RevisionRequest>,
+    State(_state): State<AppState>,
+    Path((_user_id, _node_id)): Path<(String, String)>,
+    Json(_input): Json<RevisionRequest>,
 ) -> Result<Json<Value>, ApiError> {
-    let mut tx = db::begin_write(&state.pool).await?;
-    let user = sqlx::query("SELECT revision FROM users WHERE id = $1")
-        .bind(&user_id)
-        .fetch_optional(&mut *tx)
-        .await?
-        .ok_or_else(|| ApiError::not_found("user"))?;
-    let revision: i64 = user.get("revision");
-    if revision != input.expected_revision {
-        return Err(ApiError::conflict(format!(
-            "user revision is {revision}; reload before editing"
-        )));
-    }
-    let deleted = sqlx::query("DELETE FROM node_assignments WHERE user_id = $1 AND node_id = $2")
-        .bind(&user_id)
-        .bind(&node_id)
-        .execute(&mut *tx)
-        .await?;
-    if deleted.rows_affected() == 0 {
-        return Err(ApiError::not_found("node assignment"));
-    }
-    let next_revision = revision + 1;
-    sqlx::query("UPDATE users SET revision = $1, updated_at = $2 WHERE id = $3 AND revision = $4")
-        .bind(next_revision)
-        .bind(now())
-        .bind(&user_id)
-        .bind(revision)
-        .execute(&mut *tx)
-        .await?;
-    enqueue_job_with_payload_in_tx(
-        &mut tx,
-        "kick",
-        Some(&node_id),
-        None,
-        json!({"user_id": user_id,"kick_reason":"unassigned"}),
+    Err(legacy_assignment_error())
+}
+
+fn legacy_assignment_error() -> ApiError {
+    ApiError::new(
+        StatusCode::CONFLICT,
+        "authorization_groups_required",
+        "Direct user-to-node assignments are disabled; manage access through authorization groups.",
     )
-    .await?;
-    sqlx::query("INSERT INTO audit_records (id, actor, action, entity_type, entity_id, detail_json, created_at) VALUES ($1, 'admin', 'user.unassigned', 'user', $2, $3, $4)")
-        .bind(Uuid::new_v4().to_string()).bind(&user_id).bind(json!({"node_id": node_id, "revision": next_revision})).bind(now()).execute(&mut *tx).await?;
-    tx.commit().await?;
-    Ok(Json(
-        json!({"user_id": user_id, "node_id": node_id, "revision": next_revision, "kick_queued": true}),
-    ))
 }
 
 pub async fn rotate_credentials(
@@ -569,9 +471,9 @@ pub async fn usage(
         || user
             .get::<Option<i64>, _>("quota_bytes")
             .is_some_and(|quota| user.get::<i64, _>("usage_bytes") >= quota);
-    let pending_rows = sqlx::query("SELECT id, node_id, status, stage, updated_at FROM jobs WHERE kind = 'kick' AND node_id IS NOT NULL AND (status IN ('queued', 'running') OR (status = 'failed' AND $1 = TRUE)) AND payload_json = $2 ORDER BY created_at")
+    let pending_rows = sqlx::query("SELECT id, node_id, status, stage, updated_at FROM jobs WHERE kind = 'kick' AND node_id IS NOT NULL AND (status IN ('queued', 'running') OR (status = 'failed' AND $1 = TRUE)) AND payload_json->>'user_id' = $2 ORDER BY created_at")
         .bind(is_restricted)
-        .bind(json!({"user_id": user_id}))
+        .bind(&user_id)
         .fetch_all(&state.pool)
         .await?;
     let pending_revocations: Vec<Value> = pending_rows
@@ -639,12 +541,37 @@ async fn user_json(state: &AppState, row: &sqlx::postgres::PgRow) -> Result<Valu
     .bind(&id)
     .fetch_all(&state.pool)
     .await?;
-    let assigned: Vec<Value> = assignments.iter().map(|assignment| json!({"node_id": assignment.get::<String, _>("node_id"), "created_at": assignment.get::<chrono::DateTime<chrono::Utc>, _>("created_at"), "mtls_credential_id": assignment.get::<Option<String>,_>("mtls_credential_id"), "mtls_credential_version": assignment.get::<Option<i64>,_>("mtls_credential_version")})).collect();
+    let mut assigned = Vec::with_capacity(assignments.len());
+    for assignment in assignments {
+        let node_id: String = assignment.get("node_id");
+        let source_groups = sqlx::query("SELECT g.id,g.name FROM authorization_group_users gu JOIN authorization_group_nodes gn ON gn.group_id=gu.group_id JOIN authorization_groups g ON g.id=gu.group_id WHERE gu.user_id=$1 AND gn.node_id=$2 ORDER BY lower(g.name) COLLATE \"C\",g.name COLLATE \"C\",g.id")
+            .bind(&id)
+            .bind(&node_id)
+            .fetch_all(&state.pool)
+            .await?
+            .iter()
+            .map(|source| json!({"id":source.get::<String,_>("id"),"name":source.get::<String,_>("name")}))
+            .collect::<Vec<_>>();
+        assigned.push(json!({
+            "node_id":node_id,
+            "created_at":assignment.get::<chrono::DateTime<chrono::Utc>,_>("created_at"),
+            "mtls_credential_id":assignment.get::<Option<String>,_>("mtls_credential_id"),
+            "mtls_credential_version":assignment.get::<Option<i64>,_>("mtls_credential_version"),
+            "source_groups":source_groups,
+        }));
+    }
+    let authorization_groups = sqlx::query("SELECT g.id,g.name,g.revision FROM authorization_group_users gu JOIN authorization_groups g ON g.id=gu.group_id WHERE gu.user_id=$1 ORDER BY lower(g.name) COLLATE \"C\",g.name COLLATE \"C\",g.id")
+        .bind(&id)
+        .fetch_all(&state.pool)
+        .await?
+        .iter()
+        .map(|group| json!({"id":group.get::<String,_>("id"),"name":group.get::<String,_>("name"),"revision":group.get::<i64,_>("revision")}))
+        .collect::<Vec<_>>();
     Ok(json!({
         "id": id, "name": row.get::<String, _>("name"), "enabled": row.get::<bool, _>("enabled"),
         "expires_at": row.get::<Option<chrono::DateTime<chrono::Utc>>, _>("expires_at"), "quota_bytes": row.get::<Option<i64>, _>("quota_bytes"),
         "usage_bytes": row.get::<i64, _>("usage_bytes"), "revision": row.get::<i64, _>("revision"),
-        "quota_reset_at": row.get::<Option<chrono::DateTime<chrono::Utc>>, _>("quota_reset_at"), "assignments": assigned,
+        "quota_reset_at": row.get::<Option<chrono::DateTime<chrono::Utc>>, _>("quota_reset_at"), "assignments": assigned, "authorization_groups":authorization_groups,
         "created_at": row.get::<chrono::DateTime<chrono::Utc>, _>("created_at"), "updated_at": row.get::<chrono::DateTime<chrono::Utc>, _>("updated_at")
     }))
 }

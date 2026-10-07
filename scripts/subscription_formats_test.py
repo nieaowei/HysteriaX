@@ -26,13 +26,23 @@ def fetch(base, path, ua=None):
 
 def run(base, admin, database, temp, advanced_token, revoked_token, advanced_user_id, empty_token):
     def api(path, payload=None, method=None, expected=200):
-        data = None if payload is None else json.dumps(payload).encode()
-        req = urllib.request.Request(base + path, data=data, method=method,
-                                     headers={"Authorization": f"Bearer {admin}", "Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=10) as response:
-            if response.status != expected:
-                raise RuntimeError("fixture API returned an unexpected status")
-            return json.load(response)
+        from credential_test_fixtures import request_with_group_assignment
+
+        def raw_request(base, path, token, method, payload):
+            data = None if payload is None else json.dumps(payload).encode()
+            req = urllib.request.Request(base + path, data=data, method=method,
+                                         headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"})
+            try:
+                with urllib.request.urlopen(req, timeout=10) as response:
+                    return response.status, response.read()
+            except urllib.error.HTTPError as error:
+                return error.code, error.read()
+
+        code, body = request_with_group_assignment(raw_request, base, path, admin,
+                                                   method or ("POST" if payload is not None else "GET"), payload)
+        if code != expected:
+            raise RuntimeError(f"fixture API returned HTTP {code}, expected {expected}")
+        return json.loads(body) if body else None
 
     def expect(token, query="", ua=None, status=200, mime=None):
         code, body, headers = fetch(base, f"/sub/{token}" + query, ua)

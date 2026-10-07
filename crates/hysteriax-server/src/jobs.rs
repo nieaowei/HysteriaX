@@ -282,6 +282,7 @@ async fn succeed(pool: &PgPool, job: &JobInput, output: JobOutput) -> Result<(),
         }
         sqlx::query("INSERT INTO audit_records (id, actor, action, entity_type, entity_id, detail_json, created_at) VALUES ($1, 'admin', 'node.deleted', 'node', $2, $3, $4)")
                 .bind(uuid::Uuid::new_v4().to_string()).bind(node_id).bind(json!({"job_id": job.id, "remote_uninstall": true})).bind(timestamp).execute(&mut *tx).await?;
+        crate::api::authorization_groups::before_node_delete(&mut tx, node_id, timestamp).await?;
         sqlx::query("DELETE FROM nodes WHERE id = $1 AND state = 'deleting'")
             .bind(node_id)
             .execute(&mut *tx)

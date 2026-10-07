@@ -274,7 +274,7 @@ pub async fn create(
     Ok((
         StatusCode::CREATED,
         Json(json!({
-            "node": {"id": id, "name": input.name.trim(), "revision": 1, "state": "new", "traffic_stats_port": input.traffic_stats_port, "proxy_probe_url": proxy_probe_url},
+            "node": {"id": id, "name": input.name.trim(), "revision": 1, "state": "new", "traffic_stats_port": input.traffic_stats_port, "proxy_probe_url": proxy_probe_url, "mtls_required": input.config.get("tls").and_then(Value::as_object).and_then(|tls| tls.get("clientCA")).and_then(Value::as_str).is_some_and(|value| !value.trim().is_empty())},
             "node_auth_token": token,
             "dns_allocation": dns_result,
             "note": "The node token is shown once here and is stored encrypted for server configuration generation."
@@ -581,6 +581,7 @@ pub async fn remove_record(
             .bind(&id)
             .fetch_one(&mut *tx)
             .await?;
+    crate::api::authorization_groups::before_node_delete(&mut tx, &id, now()).await?;
     // Child configuration, assignments, monitoring data and kick obligations
     // cascade; jobs retain their historical node ID, name snapshot and events.
     sqlx::query("DELETE FROM nodes WHERE id=$1")
@@ -649,6 +650,7 @@ pub async fn delete(
     if never_installed {
         cancel_queued_node_jobs_in_tx(&mut tx, &id).await?;
         cancel_running_node_jobs_in_tx(&mut tx, &id).await?;
+        crate::api::authorization_groups::before_node_delete(&mut tx, &id, now()).await?;
         sqlx::query("DELETE FROM nodes WHERE id = $1 AND desired_revision = $2")
             .bind(&id)
             .bind(expected)
@@ -844,6 +846,12 @@ async fn node_json(state: &AppState, row: &sqlx::postgres::PgRow) -> Result<Valu
     let config_enc: String = row.get("desired_config_enc");
     let config: Value = serde_json::from_str(&state.secrets.decrypt(&config_enc)?)
         .map_err(|_| ApiError::internal())?;
+    let mtls_required = config
+        .get("tls")
+        .and_then(Value::as_object)
+        .and_then(|tls| tls.get("clientCA"))
+        .and_then(Value::as_str)
+        .is_some_and(|value| !value.trim().is_empty());
     let node_id: String = row.get("id");
     let last_sample_at: Option<chrono::DateTime<chrono::Utc>> = row.get("last_sample_at");
     let data_freshness = match last_sample_at.as_ref() {
@@ -890,7 +898,7 @@ async fn node_json(state: &AppState, row: &sqlx::postgres::PgRow) -> Result<Valu
         "dns_binding": crate::api::dns::binding_summary(&state.pool, &node_id).await?,
         "public": {"host": row.get::<String, _>("public_host"), "port": row.get::<i32, _>("public_port"), "listen_addr": row.get::<String, _>("listen_addr"), "tls_sni": row.get::<Option<String>, _>("tls_sni"), "skip_cert_verify": row.get::<bool, _>("tls_skip_verify")},
         "traffic_stats_port": traffic_stats_port,
-        "config": config, "yaml_preview": yaml_preview,
+        "config": config, "yaml_preview": yaml_preview, "mtls_required": mtls_required,
         "revision": row.get::<i64, _>("desired_revision"), "deployed_revision": row.get::<Option<i64>, _>("deployed_revision"),
         "state": row.get::<String, _>("state"), "last_seen_at": row.get::<Option<chrono::DateTime<chrono::Utc>>, _>("last_seen_at"),
         "proxy_probe_url": row.get::<Option<String>, _>("proxy_probe_url"),

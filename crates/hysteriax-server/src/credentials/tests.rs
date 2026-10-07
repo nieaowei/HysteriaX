@@ -608,7 +608,31 @@ async fn user_identity_scope_archiving_and_unreferenced_deletion_are_enforced() 
     let ssh = create(&state, "ssh_password", json!({"secret":"unused"})).await;
     let node = node(&state, "Scope node", &ssh, json!({})).await;
     let assignment = |user: String| {
-        crate::api::users::assign(State(state.clone()),Path(user),Json(serde_json::from_value(json!({"expected_revision":1,"node_id":node,"mtls_credential_id":identity,"mtls_credential_version":1})).unwrap()))
+        let state = state.clone();
+        let node = node.clone();
+        let identity = identity.clone();
+        async move {
+            let draft = json!({
+                "action":"create",
+                "name":format!("mTLS {user}"),
+                "user_ids":[user],
+                "node_ids":[node],
+                "mtls_bindings":[{"user_id":user,"node_id":node,"credential_id":identity,"credential_version":1}],
+            });
+            let Json(preview) = crate::api::authorization_groups::preview_create(
+                State(state.clone()),
+                Json(serde_json::from_value(draft.clone()).unwrap()),
+            )
+            .await?;
+            let mut request = draft;
+            request.as_object_mut().unwrap().remove("action");
+            request["preview_token"] = preview["preview_token"].clone();
+            crate::api::authorization_groups::create(
+                State(state),
+                Json(serde_json::from_value(request).unwrap()),
+            )
+            .await
+        }
     };
     assert_eq!(
         assignment(other.clone()).await.unwrap_err().status,
