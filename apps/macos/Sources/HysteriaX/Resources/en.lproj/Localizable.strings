@@ -1196,3 +1196,7 @@
 "此前请求已创建节点，令牌不会重复显示。" = "The previous request already created the node. Its token will not be shown again.";
 "（已归档，当前使用）" = " (archived, currently used)";
 "{0}：{1}" = "{0}: {1}";
+"当前引用对象数" = "Current referencing objects";
+"引用明细条数" = "Reference entries";
+"统计当前引用对象，同一节点只计一次；不含历史配置和待执行更新批次。" = "Counts current referencing objects, counting each node once. Excludes historical configurations and pending update batches.";
+"包含当前引用、历史配置和待执行更新批次；同一对象的不同引用位置分别计数。" = "Includes current references, historical configurations and pending update batches. Different reference locations within the same object are counted separately.";

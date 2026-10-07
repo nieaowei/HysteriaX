@@ -81,7 +81,10 @@ struct CredentialsView: View {
                     TableColumn(L10n.text("名称"), value: \.name)
                     TableColumn(L10n.text("类型"), value: \.typeTitle)
                     TableColumn(L10n.text("状态"), value: \.statusTitle)
-                    TableColumn(L10n.text("引用")) { entry in Text(entry.isManaged ? String(entry.referenceCount ?? 0) : "—") }
+                    TableColumn(L10n.text("当前引用对象数")) { entry in
+                        Text(entry.isManaged ? String(entry.referenceCount ?? 0) : "—")
+                            .help(L10n.text("统计当前引用对象，同一节点只计一次；不含历史配置和待执行更新批次。"))
+                    }
                     TableColumn(L10n.text("到期")) { entry in Text(entry.expiresAt.map { DateDisplayText.local($0) } ?? L10n.text("未知")) }
                 }
                 .frame(minHeight: 180)
@@ -125,7 +128,8 @@ struct CredentialsView: View {
                     detailMetric(L10n.text("类型"), value: entry.typeTitle)
                     if entry.isManaged {
                         detailMetric(L10n.text("最新版本"), value: "v\(detail?.latestVersion ?? entry.latestVersion)")
-                        detailMetric(L10n.text("引用"), value: String(detail?.references.count ?? entry.referenceCount ?? 0))
+                        detailMetric(L10n.text("引用明细条数"), value: detail.map { String($0.references.count) } ?? "—")
+                            .help(L10n.text("包含当前引用、历史配置和待执行更新批次；同一对象的不同引用位置分别计数。"))
                     }
                     detailMetric(L10n.text("到期时间"), value: entry.expiresAt.map { DateDisplayText.local($0) } ?? L10n.text("未知"))
                     if let userID = entry.ownerUserId {
@@ -167,8 +171,18 @@ struct CredentialsView: View {
             Text(entry.name).font(.headline).lineLimit(2).textSelection(.enabled)
             Text(entry.statusTitle)
                 .font(.caption.weight(.medium))
+                .foregroundStyle(credentialStatusColor(entry.status))
                 .padding(.horizontal, 8).padding(.vertical, 3)
-                .background(.quaternary, in: Capsule())
+                .background(credentialStatusColor(entry.status).opacity(0.12), in: Capsule())
+        }
+    }
+
+    private func credentialStatusColor(_ status: String) -> Color {
+        switch status {
+        case "active": .green
+        case "expiring": .orange
+        case "expired", "quota_exhausted": .red
+        default: .secondary
         }
     }
 
@@ -178,13 +192,9 @@ struct CredentialsView: View {
                 Button(L10n.text("发布新版本")) { replacing = detail }
                     .disabled(detail.archived)
                 Button(L10n.text("编辑信息")) { editing = detail }
-                Menu {
-                    Button(L10n.text("删除凭据"), role: .destructive) { deleting = true }
-                        .disabled(!detail.references.isEmpty)
-                } label: { Image(systemName: "ellipsis") }
-                .menuIndicator(.hidden)
-                .help(L10n.text("更多操作"))
-                .accessibilityLabel(L10n.text("更多凭据操作"))
+                Button(L10n.text("删除凭据"), role: .destructive) { deleting = true }
+                    .disabled(!detail.references.isEmpty)
+                    .accessibilityIdentifier("credential.delete")
             }
             .fixedSize()
             .disabled(!store.isConnected)

@@ -13,8 +13,6 @@ struct DNSRecordDetailView: View {
     var onDelete: () -> Void
     var onBind: () -> Void
     var onRetry: () -> Void
-    var onOpenJobs: () -> Void
-    var onOpenAudit: () -> Void
     var onOpenNode: (String) -> Void
 
     private var canAct: Bool { isConnected && !busy }
@@ -140,16 +138,6 @@ struct DNSRecordDetailView: View {
                 Button(L10n.text("绑定节点…"), systemImage: "server.rack", action: onBind)
                     .disabled(!canAct || !record.supportsEditing || record.proxied || record.state != "synced" || record.boundNodeId != nil)
                 if busy { ProgressView().controlSize(.small) }
-                Menu {
-                    Button(L10n.text("任务记录"), systemImage: "clock.arrow.circlepath", action: onOpenJobs)
-                    Button(L10n.text("审计记录"), systemImage: "list.clipboard", action: onOpenAudit)
-                } label: {
-                    Label(L10n.text("更多操作"), systemImage: "ellipsis.circle")
-                        .labelStyle(.iconOnly)
-                }
-                .menuStyle(.borderlessButton)
-                .fixedSize()
-                .accessibilityIdentifier("dns.record.more")
                 Button(L10n.text("删除记录…"), role: .destructive, action: onDelete)
                     .disabled(!canAct || !record.supportsEditing || record.boundNodeId != nil || record.desired != nil)
                     .accessibilityIdentifier("dns.record.delete")

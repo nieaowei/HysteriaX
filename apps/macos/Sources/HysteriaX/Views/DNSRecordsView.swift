@@ -151,8 +151,6 @@ struct DNSRecordsView: View {
             onDelete: { deleting = record },
             onBind: { bindingRecord = record },
             onRetry: { if let failedJob { run { try await store.retryDNSJob(failedJob) } } },
-            onOpenJobs: { store.requestedSection = "jobs" },
-            onOpenAudit: { store.requestedSection = "audit" },
             onOpenNode: onOpenNode
         )
         .sheet(item: $bindingRecord) { DNSRecordBindingPicker(store: store, record: $0) }
