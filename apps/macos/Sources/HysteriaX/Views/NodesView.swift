@@ -571,11 +571,10 @@ private struct NodeFormView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            Text(L10n.text("添加节点")).font(.title.bold())
             if createdNodeID != nil {
-                ContentUnavailableView(L10n.text("节点已创建"), systemImage: "checkmark.circle", description: Text(L10n.text("节点认证令牌：\n{0}\n请将令牌保存在安全位置，并在代理配置页设置 TLS 证书后再部署。", String(describing: (createdToken ?? L10n.text("此前请求已创建节点，令牌不会重复显示。"))))))
-                HStack { Spacer(); Button(L10n.text("完成")) { dismiss() }.keyboardShortcut(.defaultAction) }
+                NodeCreatedView(name: name, token: createdToken) { dismiss() }
             } else {
+                Text(L10n.text("添加节点")).font(.title.bold())
                 Form {
                     Section(L10n.text("SSH 连接")) {
                         TextField(L10n.text("节点名称"), text: $name)
@@ -630,8 +629,9 @@ private struct NodeFormView: View {
                 }
             }
         }
-        .padding(24)
-        .frame(width: 640, height: createdNodeID == nil ? 660 : 360)
+        .padding(createdNodeID == nil ? 24 : 0)
+        .frame(width: 640)
+        .frame(height: createdNodeID == nil ? 660 : nil)
         .task { await store.refreshDNS() }
     }
 

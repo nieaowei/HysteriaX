@@ -1339,3 +1339,17 @@
 "在左侧选择授权组，查看成员和节点。" = "Select a group on the left to view its members and nodes.";
 "排序" = "Sort";
 "调整授权组列表宽度" = "Resize the authorization group list";
+
+"节点添加成功" = "Node added successfully";
+
+"节点认证令牌" = "Node authentication token";
+
+"已复制" = "Copied";
+
+"复制令牌" = "Copy token";
+
+"令牌仅显示一次，请复制并保存在安全位置。" = "This token is shown only once. Copy it and store it securely.";
+
+"下一步：配置 TLS 证书" = "Next: Configure TLS certificates";
+
+"节点尚未部署。请在代理配置页设置 TLS 证书，然后部署节点。" = "The node has not been deployed. Set up TLS certificates in Proxy Configuration, then deploy the node.";
