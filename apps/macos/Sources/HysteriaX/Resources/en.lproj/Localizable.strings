@@ -1353,3 +1353,7 @@
 "下一步：配置 TLS 证书" = "Next: Configure TLS certificates";
 
 "节点尚未部署。请在代理配置页设置 TLS 证书，然后部署节点。" = "The node has not been deployed. Set up TLS certificates in Proxy Configuration, then deploy the node.";
+
+"编辑名称" = "Edit name";
+
+"管理节点" = "Manage nodes";

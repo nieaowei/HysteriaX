@@ -49,6 +49,20 @@ struct AuthorizationGroupEditorView: View {
     private var canEditNodes: Bool { intent == .create || intent == .nodes }
     private var isReadyToSave: Bool { preview != nil && preview?.missingMtls.isEmpty == true && !isSaving && !isPreviewing }
 
+    private var editorSize: CGSize {
+        let hasDetails = preview != nil || !requiredMTLSPairs.isEmpty || receipt != nil
+        switch intent {
+        case .create:
+            return CGSize(width: 760, height: 560)
+        case .users:
+            return CGSize(width: 880, height: 620)
+        case .rename:
+            return CGSize(width: 560, height: hasDetails ? 480 : 340)
+        case .nodes:
+            return CGSize(width: 680, height: hasDetails ? 580 : 380)
+        }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text(receipt == nil ? title : L10n.text("授权组已更新"))
@@ -103,7 +117,7 @@ struct AuthorizationGroupEditorView: View {
             }
         }
         .padding(24)
-        .frame(width: intent == .users ? 960 : 760, height: intent == .users ? 680 : 560)
+        .frame(width: editorSize.width, height: editorSize.height)
         .interactiveDismissDisabled(isSaving || (intent == .users && !memberChanges.changed.isEmpty))
         .sheet(isPresented: $selectingUsers) {
             AuthorizationMultiSelectSheet(

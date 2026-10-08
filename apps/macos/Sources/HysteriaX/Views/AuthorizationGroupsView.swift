@@ -4,6 +4,7 @@ struct AuthorizationGroupsView: View {
     @Bindable var store: ManagementStore
     @Bindable var pageState: AuthorizationPageState
     var onOpenUser: (String) -> Void
+    var onOpenNode: (String) -> Void = { _ in }
 
     @State private var detailTab = "members"
     @State private var groupListWidth: CGFloat = 200
@@ -221,17 +222,16 @@ struct AuthorizationGroupsView: View {
 
     private func groupActions(_ group: AuthorizationGroupSummary) -> some View {
         HStack(spacing: 8) {
-            Button(L10n.text("管理用户…"), systemImage: "person.2") {
-                pageState.groupEditorTarget = AuthorizationGroupEditorTarget(group: group, intent: .users)
+            Button(L10n.text("编辑名称")) {
+                pageState.groupEditorTarget = AuthorizationGroupEditorTarget(group: group, intent: .rename)
             }
-            .accessibilityIdentifier("authorizationGroups.manageMembers")
-            Menu {
-                Button(L10n.text("编辑名称…")) { pageState.groupEditorTarget = AuthorizationGroupEditorTarget(group: group, intent: .rename) }
-                Button(L10n.text("管理节点…")) { pageState.groupEditorTarget = AuthorizationGroupEditorTarget(group: group, intent: .nodes) }
-                Divider()
-                Button(L10n.text("删除授权组…"), role: .destructive) { prepareDeletion(group) }
-            } label: { Image(systemName: "ellipsis") }
-            .accessibilityLabel(L10n.text("更多授权组操作"))
+            .accessibilityIdentifier("authorizationGroups.rename")
+            Button(L10n.text("管理节点")) {
+                pageState.groupEditorTarget = AuthorizationGroupEditorTarget(group: group, intent: .nodes)
+            }
+            .accessibilityIdentifier("authorizationGroups.manageNodes")
+            Button(L10n.text("删除授权组"), role: .destructive) { prepareDeletion(group) }
+                .accessibilityIdentifier("authorizationGroups.delete")
         }
         .controlSize(.small)
         .disabled(!store.isConnected)
@@ -246,13 +246,23 @@ struct AuthorizationGroupsView: View {
                 }
                 ForEach(Array(group.nodeIds.sorted().enumerated()), id: \.element) { index, nodeID in
                     if index > 0 { Divider() }
-                    HStack(spacing: 10) {
-                        Image(systemName: "server.rack").foregroundStyle(.secondary)
-                        Text(store.nodes.first(where: { $0.id == nodeID })?.name ?? nodeID)
-                        Spacer()
-                        Text(nodeID.prefix(8)).font(.caption.monospaced()).foregroundStyle(.secondary)
+                    Button {
+                        onOpenNode(nodeID)
+                    } label: {
+                        HStack(spacing: 10) {
+                            Image(systemName: "server.rack").foregroundStyle(.secondary)
+                            Text(store.nodes.first(where: { $0.id == nodeID })?.name ?? nodeID)
+                                .foregroundStyle(Color.accentColor)
+                            Spacer()
+                            Text(nodeID.prefix(8)).font(.caption.monospaced()).foregroundStyle(.secondary)
+                            Image(systemName: "chevron.right").font(.caption).foregroundStyle(.secondary)
+                        }
+                        .padding(.vertical, 8)
+                        .contentShape(Rectangle())
                     }
-                    .padding(.vertical, 8)
+                    .buttonStyle(.plain)
+                    .disabled(!store.nodes.contains { $0.id == nodeID })
+                    .accessibilityIdentifier("authorizationGroups.node.\(nodeID)")
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)

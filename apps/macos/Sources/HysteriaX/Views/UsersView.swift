@@ -6,6 +6,7 @@ struct UsersView: View {
     @Bindable var store: ManagementStore
     var initialSelection: String? = nil
     var onInitialSelectionHandled: () -> Void = {}
+    var onOpenNode: (String) -> Void = { _ in }
 
     @SceneStorage("authorizationManagement.tab") private var selectedTab = "users"
     @State private var pageState = AuthorizationPageState()
@@ -13,11 +14,11 @@ struct UsersView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             if store.supportsAuthorizationGroups && selectedTab == "groups" {
-                AuthorizationGroupsView(store: store, pageState: pageState) { userID in
+                AuthorizationGroupsView(store: store, pageState: pageState, onOpenUser: { userID in
                     selectedTab = "users"
                     pageState.userSearchText = ""
                     pageState.selectedUserID = userID
-                }
+                }, onOpenNode: onOpenNode)
             } else {
                 UserDirectoryView(store: store, pageState: pageState) { groupID in
                     selectedTab = "groups"

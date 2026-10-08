@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		C8ACB50E7F1842A39507AB10 /* Views/NodeCreatedView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C8ACB50E7F1842A39507AB11 /* Views/NodeCreatedView.swift */; };
 		F11E00000000000000000001 /* Models/AuthorizationPageState.swift in Sources */ = {isa = PBXBuildFile; fileRef = F11F00000000000000000001 /* Models/AuthorizationPageState.swift */; };
 		F11E00000000000000000002 /* Stores/AuthorizationGroupStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F11F00000000000000000002 /* Stores/AuthorizationGroupStore.swift */; };
 		F11E00000000000000000003 /* Views/AuthorizationGroupsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F11F00000000000000000003 /* Views/AuthorizationGroupsView.swift */; };
@@ -83,6 +84,7 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		C8ACB50E7F1842A39507AB11 /* Views/NodeCreatedView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/NodeCreatedView.swift; sourceTree = "<group>"; };
 		F11F00000000000000000001 /* Models/AuthorizationPageState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models/AuthorizationPageState.swift; sourceTree = "<group>"; };
 		F11F00000000000000000002 /* Stores/AuthorizationGroupStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Stores/AuthorizationGroupStore.swift; sourceTree = "<group>"; };
 		F11F00000000000000000003 /* Views/AuthorizationGroupsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/AuthorizationGroupsView.swift; sourceTree = "<group>"; };
@@ -240,6 +242,7 @@
 				000000000000000000001801 /* Views/SSHHostFingerprintChangeView.swift */,
 				000000000000000000001800 /* Models/SSHHostFingerprintChange.swift */,
 				000000000000000000001900 /* Models/PublicPortDraft.swift */,
+				C8ACB50E7F1842A39507AB11 /* Views/NodeCreatedView.swift */,
 				000000000000000000001008 /* Views/NodesView.swift */,
 				000000000000000000001009 /* Views/OverviewView.swift */,
 				00000000000000000000100A /* Views/SettingsView.swift */,
@@ -401,6 +404,7 @@
 				000000000000000000002801 /* Views/SSHHostFingerprintChangeView.swift in Sources */,
 				000000000000000000002800 /* Models/SSHHostFingerprintChange.swift in Sources */,
 				000000000000000000002900 /* Models/PublicPortDraft.swift in Sources */,
+				C8ACB50E7F1842A39507AB10 /* Views/NodeCreatedView.swift in Sources */,
 				000000000000000000002008 /* Views/NodesView.swift in Sources */,
 				000000000000000000002009 /* Views/OverviewView.swift in Sources */,
 				00000000000000000000200A /* Views/SettingsView.swift in Sources */,
