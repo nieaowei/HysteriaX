@@ -193,6 +193,7 @@ struct CredentialsView: View {
                     .disabled(detail.archived)
                 Button(L10n.text("编辑信息")) { editing = detail }
                 Button(L10n.text("删除凭据"), role: .destructive) { deleting = true }
+                    .foregroundStyle(.red)
                     .disabled(!detail.references.isEmpty)
                     .accessibilityIdentifier("credential.delete")
             }

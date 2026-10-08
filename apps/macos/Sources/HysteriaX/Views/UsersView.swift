@@ -335,6 +335,7 @@ private struct UserDirectoryView: View {
                     .accessibilityIdentifier("users.actions.toggleEnabled")
                 Divider()
                 Button(L10n.text("删除用户…"), role: .destructive) { showingDeleteConfirmation = true }
+                    .foregroundStyle(.red)
                     .accessibilityLabel(L10n.text("删除用户"))
                     .accessibilityIdentifier("users.actions.delete")
             }

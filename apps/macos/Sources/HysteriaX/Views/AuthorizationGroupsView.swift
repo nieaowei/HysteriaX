@@ -231,6 +231,7 @@ struct AuthorizationGroupsView: View {
             }
             .accessibilityIdentifier("authorizationGroups.manageNodes")
             Button(L10n.text("删除授权组"), role: .destructive) { prepareDeletion(group) }
+                .foregroundStyle(.red)
                 .accessibilityIdentifier("authorizationGroups.delete")
         }
         .controlSize(.small)

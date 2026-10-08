@@ -131,14 +131,15 @@ struct DNSRecordDetailView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             HStack(spacing: 8) {
-                Button(L10n.text("编辑…"), systemImage: "pencil", action: onEdit)
+                Button(L10n.text("编辑"), action: onEdit)
                     .disabled(!canAct || !record.supportsEditing || record.desired != nil)
-                Button(L10n.text("检查解析"), systemImage: "arrow.triangle.2.circlepath", action: onCheck)
+                Button(L10n.text("检查解析"), action: onCheck)
                     .disabled(!canAct || !record.supportsEditing || record.state != "synced")
-                Button(L10n.text("绑定节点…"), systemImage: "server.rack", action: onBind)
+                Button(L10n.text("绑定节点"), action: onBind)
                     .disabled(!canAct || !record.supportsEditing || record.proxied || record.state != "synced" || record.boundNodeId != nil)
                 if busy { ProgressView().controlSize(.small) }
-                Button(L10n.text("删除记录…"), role: .destructive, action: onDelete)
+                Button(L10n.text("删除记录"), role: .destructive, action: onDelete)
+                    .foregroundStyle(.red)
                     .disabled(!canAct || !record.supportsEditing || record.boundNodeId != nil || record.desired != nil)
                     .accessibilityIdentifier("dns.record.delete")
             }

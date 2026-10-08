@@ -293,6 +293,7 @@ struct NodesView: View {
                 Button(L10n.text("回滚")) { run(node, action: "rollback") }.disabled(node.deployedRevision == nil || operationInProgress(node))
                 Divider()
                 Button(L10n.text("删除节点"), role: .destructive) { deletionNode = node; showingDeleteConfirmation = true }
+                    .foregroundStyle(.red)
                     .disabled(operationInProgress(node))
             }
         }
