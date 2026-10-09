@@ -27,14 +27,24 @@ import Foundation
         draft.hasExpiry = true
         draft.expiry = Date(timeIntervalSince1970: 1_800_000_000)
         let configured = try draft.package()
-        precondition(configured.quotaBytes == 1_500_000_000 && configured.trafficWarningPercent == 80)
+        precondition(configured.quotaBytes == 1_610_612_736 && configured.trafficWarningPercent == 80)
         let roundtrip = NodePackageDraft(configured)
         precondition(roundtrip.hasExpiry && roundtrip.quotaGB == "1.5")
-        let oneByte = try NodePackageDraft.bytes("0.000000001")
+        let oneByte = try NodePackageDraft.bytes("0.000000000931322574615478515625")
         precondition(oneByte == 1)
         let maximum = try NodePackageDraft.bytes(NodePackageDraft.gbText(Int64.max))
         precondition(maximum == Int64.max)
-        for invalid in ["-1", "invalid", "1junk", "1,5", "99999999999999999999"] {
+        for value: Int64 in [0, 1, 1023, 1024, 1_073_741_823, 1_073_741_824, Int64.max - 1] {
+            let restored = try TrafficUnits.bytes(TrafficUnits.gibText(value))
+            precondition(restored == value)
+        }
+        precondition(TrafficUnits.display(1024) == "1 KiB")
+        precondition(TrafficUnits.display(1_073_741_824) == "1 GiB")
+        let tiny = try TrafficUnits.bytes("0.0000000001")
+        precondition(tiny == 0)
+        do { _ = try TrafficUnits.bytes("8589934592"); preconditionFailure("overflow accepted") } catch { }
+
+        for invalid in ["-1", "invalid", "1junk", "1,5", "NaN", "inf", "1e10", "0.0000000000000000000000000000001", "99999999999999999999"] {
             do { _ = try NodePackageDraft.bytes(invalid); preconditionFailure("invalid amount accepted") }
             catch { }
         }

@@ -544,7 +544,7 @@ private struct UserDirectoryView: View {
     }
 
     private func formatBytes(_ bytes: Int64) -> String {
-        ByteCountFormatter.string(fromByteCount: bytes, countStyle: .binary)
+        TrafficUnits.display(bytes)
     }
 
     private func copyCurrentSubscription(_ user: UserSummary, format: SubscriptionFileFormat? = nil) {
@@ -895,8 +895,8 @@ private struct UserFormView: View {
                 TextField(L10n.text("用户名称"), text: $name)
                     .accessibilityLabel(L10n.text("用户名称"))
                     .accessibilityIdentifier("user.create.name")
-                TextField(L10n.text("总流量额度（GB，可留空）"), text: $quotaGB)
-                    .accessibilityLabel(L10n.text("总流量额度（GB，可留空）"))
+                TextField(L10n.text("总流量额度（GiB，可留空）"), text: $quotaGB)
+                    .accessibilityLabel(L10n.text("总流量额度（GiB，可留空）"))
                     .accessibilityIdentifier("user.create.quotaGB")
                 Toggle(L10n.text("设置到期时间"), isOn: $expiresAt)
                     .accessibilityLabel(L10n.text("设置到期时间"))
@@ -921,9 +921,9 @@ private struct UserFormView: View {
 
     private func save() {
         let quota: Int64?
-        if quotaGB.trimmingCharacters(in: .whitespaces).isEmpty { quota = nil }
-        else if let gigabytes = Double(quotaGB), gigabytes >= 0 { quota = Int64(gigabytes * 1_000_000_000) }
-        else { errorMessage = L10n.text("额度请输入有效的非负数字。"); return }
+        do {
+            quota = quotaGB.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : try TrafficUnits.bytes(quotaGB)
+        } catch { errorMessage = error.localizedDescription; return }
         isSaving = true
         Task {
             defer { isSaving = false }
@@ -961,7 +961,7 @@ private struct UserEditFormView: View {
                 ?? Date.now.addingTimeInterval(30 * 24 * 60 * 60)
         )
         _hasQuota = State(initialValue: user.quotaBytes != nil)
-        _quotaBytesText = State(initialValue: user.quotaBytes.map { String($0) } ?? "")
+        _quotaBytesText = State(initialValue: user.quotaBytes.map(TrafficUnits.gibText) ?? "")
     }
 
     var body: some View {
@@ -986,8 +986,8 @@ private struct UserEditFormView: View {
                     .accessibilityLabel(L10n.text("设置总流量额度"))
                     .accessibilityIdentifier("user.edit.hasQuota")
                 if hasQuota {
-                    TextField(L10n.text("总流量额度（字节）"), text: $quotaBytesText)
-                        .accessibilityLabel(L10n.text("总流量额度（字节）"))
+                    TextField(L10n.text("总流量额度（GiB）"), text: $quotaBytesText)
+                        .accessibilityLabel(L10n.text("总流量额度（GiB）"))
                         .accessibilityIdentifier("user.edit.quotaBytes")
                     Text(L10n.text("额度按所有节点累计的上下行流量计算。"))
                         .font(.caption)
@@ -1012,11 +1012,8 @@ private struct UserEditFormView: View {
     private func save() {
         let quota: Int64?
         if hasQuota {
-            guard let bytes = Int64(quotaBytesText.trimmingCharacters(in: .whitespacesAndNewlines)), bytes >= 0 else {
-                errorMessage = L10n.text("额度请输入有效的非负字节数。")
-                return
-            }
-            quota = bytes
+            do { quota = try TrafficUnits.bytes(quotaBytesText) }
+            catch { errorMessage = error.localizedDescription; return }
         } else {
             quota = nil
         }

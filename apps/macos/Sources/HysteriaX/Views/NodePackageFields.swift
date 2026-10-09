@@ -11,7 +11,7 @@ struct NodePackageFields: View {
         }
         Toggle(L10n.text("设置流量额度"), isOn: $draft.hasQuota)
         if draft.hasQuota {
-            TextField(L10n.text("套餐额度（GB）"), text: $draft.quotaGB)
+            TextField(L10n.text("套餐额度（GiB）"), text: $draft.quotaGB)
             Picker(L10n.text("计费周期"), selection: $draft.cycle) {
                 Text(L10n.text("固定套餐累计")).tag("fixed")
                 Text(L10n.text("每月重置")).tag("monthly")
@@ -30,7 +30,7 @@ struct NodePackageFields: View {
             }
             Stepper(L10n.text("已用 {0}% 时预警", String(describing: (draft.warningPercent))), value: $draft.warningPercent, in: 1...99)
         }
-        Text(L10n.text("到期或流量耗尽后自动限制此节点的代理，续期或重置后自动恢复。网卡统计包含其他服务流量，1 GB = 10亿字节，与供应商账单可能有差异。"))
+        Text(L10n.text("到期或流量耗尽后自动限制此节点的代理，续期或重置后自动恢复。网卡统计包含其他服务流量，1 GiB = 1,073,741,824 字节，与供应商账单可能有差异。"))
             .font(.callout).foregroundStyle(.secondary)
     }
 }
@@ -93,7 +93,7 @@ struct NodePackageManagementView: View {
             Button(L10n.text("保存套餐（立即生效）")) { savePackage() }
                 .disabled(isSaving || !store.isConnected || detail.package == nil)
         }
-        TextField(L10n.text("已有用量 / 校正用量（GB）"), text: $usageGB)
+        TextField(L10n.text("已有用量 / 校正用量（GiB）"), text: $usageGB)
         HStack {
             Spacer()
             Button(L10n.text("校正用量")) { updateUsage(reset: false) }

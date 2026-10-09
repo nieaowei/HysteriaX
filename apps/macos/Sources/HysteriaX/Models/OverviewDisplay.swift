@@ -45,6 +45,6 @@ enum OverviewDisplay {
         default: issue.reason
         }
     }
-    static func bytes(_ value: Int64) -> String { ByteCountFormatter.string(fromByteCount: value, countStyle: .decimal) }
+    static func bytes(_ value: Int64) -> String { TrafficUnits.display(value) }
     static func milliseconds(_ value: Double?) -> String { value.map { String(format: "%.0f ms", $0) } ?? "—" }
 }

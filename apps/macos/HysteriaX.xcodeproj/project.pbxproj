@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		F11E0000000000000000000E /* Models/TrafficUnits.swift in Sources */ = {isa = PBXBuildFile; fileRef = F11F0000000000000000000E /* Models/TrafficUnits.swift */; };
 		C8ACB50E7F1842A39507AB10 /* Views/NodeCreatedView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C8ACB50E7F1842A39507AB11 /* Views/NodeCreatedView.swift */; };
 		F11E00000000000000000001 /* Models/AuthorizationPageState.swift in Sources */ = {isa = PBXBuildFile; fileRef = F11F00000000000000000001 /* Models/AuthorizationPageState.swift */; };
 		F11E00000000000000000002 /* Stores/AuthorizationGroupStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F11F00000000000000000002 /* Stores/AuthorizationGroupStore.swift */; };
@@ -84,6 +85,7 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		F11F0000000000000000000E /* Models/TrafficUnits.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models/TrafficUnits.swift; sourceTree = "<group>"; };
 		C8ACB50E7F1842A39507AB11 /* Views/NodeCreatedView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/NodeCreatedView.swift; sourceTree = "<group>"; };
 		F11F00000000000000000001 /* Models/AuthorizationPageState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models/AuthorizationPageState.swift; sourceTree = "<group>"; };
 		F11F00000000000000000002 /* Stores/AuthorizationGroupStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Stores/AuthorizationGroupStore.swift; sourceTree = "<group>"; };
@@ -180,6 +182,7 @@
 		000000000000000000003001 /* Sources/HysteriaX */ = {
 			isa = PBXGroup;
 			children = (
+				F11F0000000000000000000E /* Models/TrafficUnits.swift */,
 				F11F00000000000000000001 /* Models/AuthorizationPageState.swift */,
 				F11F00000000000000000002 /* Stores/AuthorizationGroupStore.swift */,
 				F11F00000000000000000003 /* Views/AuthorizationGroupsView.swift */,
@@ -343,6 +346,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				F11E0000000000000000000E /* Models/TrafficUnits.swift in Sources */,
 				F11E00000000000000000001 /* Models/AuthorizationPageState.swift in Sources */,
 				F11E00000000000000000002 /* Stores/AuthorizationGroupStore.swift in Sources */,
 				F11E00000000000000000003 /* Views/AuthorizationGroupsView.swift in Sources */,

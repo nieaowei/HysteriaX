@@ -28,21 +28,9 @@ struct NodePackageDraft {
         warningPercent = package.trafficWarningPercent
     }
 
-    static func gbText(_ bytes: Int64) -> String {
-        NSDecimalNumber(decimal: Decimal(bytes) / 1_000_000_000).stringValue
-    }
+    static func gbText(_ bytes: Int64) -> String { TrafficUnits.gibText(bytes) }
 
-    static func bytes(_ text: String) throws -> Int64 {
-        let normalized = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard normalized.count <= 64,
-              normalized.range(of: #"^[0-9]+(?:\.[0-9]{1,9})?$"#, options: .regularExpression) != nil,
-              let gb = Decimal(string: normalized, locale: Locale(identifier: "en_US_POSIX")), gb >= 0 else {
-            throw APIClientError.server(L10n.text("流量须为非负 GB 数值，使用小数点。"))
-        }
-        let bytes = gb * 1_000_000_000
-        guard bytes <= Decimal(Int64.max) else { throw APIClientError.server(L10n.text("流量数值过大。")) }
-        return NSDecimalNumber(decimal: bytes).int64Value
-    }
+    static func bytes(_ text: String) throws -> Int64 { try TrafficUnits.bytes(text) }
 
     func package() throws -> NodePackage {
         let quota = hasQuota ? try Self.bytes(quotaGB) : nil
@@ -85,19 +73,13 @@ enum PackageDisplay {
     }
     static func listUsage(_ package: NodePackage?, _ usage: NodePackageUsage?) -> String {
         guard let quota = package?.quotaBytes else { return L10n.text("不限流量") }
-        let used = usage.map { twoDecimalGB($0.usageBytes) } ?? "—"
-        return "\(used) / \(twoDecimalGB(quota)) GB"
-    }
-
-    private static func twoDecimalGB(_ bytes: Int64) -> String {
-        (Decimal(bytes) / 1_000_000_000).formatted(
-            .number.precision(.fractionLength(2)).grouping(.never).locale(Locale(identifier: "en_US_POSIX"))
-        )
+        let used = usage.map { TrafficUnits.fixedGiB($0.usageBytes) } ?? "—"
+        return "\(used) / \(TrafficUnits.fixedGiB(quota)) GiB"
     }
 
     static func usage(_ package: NodePackage?, _ usage: NodePackageUsage?) -> String {
         guard let quota = package?.quotaBytes else { return L10n.text("不限流量") }
-        let used = usage.map { NodePackageDraft.gbText($0.usageBytes) } ?? "—"
-        return "\(used) / \(NodePackageDraft.gbText(quota)) GB"
+        let used = usage.map { TrafficUnits.fixedGiB($0.usageBytes) } ?? "—"
+        return "\(used) / \(TrafficUnits.fixedGiB(quota)) GiB"
     }
 }

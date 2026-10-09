@@ -683,7 +683,7 @@ private struct NodeFormView: View {
                     Section(L10n.text("有效期与流量套餐")) {
                         if store.supportsNodePackages {
                             NodePackageFields(draft: $packageDraft)
-                            if packageDraft.hasQuota { TextField(L10n.text("已有用量（GB）"), text: $initialUsageGB) }
+                            if packageDraft.hasQuota { TextField(L10n.text("已有用量（GiB）"), text: $initialUsageGB) }
                         } else { Text(L10n.text("升级管理服务后可设置有效期和流量套餐。")).foregroundStyle(.secondary) }
                     }
                     Section(L10n.text("公开连接")) {

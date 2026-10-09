@@ -11,11 +11,11 @@ struct QuotaProgressView: View {
     }
 
     private var usageText: String {
-        usageBytes.map { ByteCountFormatter.string(fromByteCount: $0, countStyle: .file) } ?? "—"
+        usageBytes.map { TrafficUnits.display($0) } ?? "—"
     }
 
     private var quotaText: String {
-        quotaBytes.map { ByteCountFormatter.string(fromByteCount: $0, countStyle: .file) } ?? L10n.text("不限")
+        quotaBytes.map { TrafficUnits.display($0) } ?? L10n.text("不限")
     }
 
     var body: some View {
