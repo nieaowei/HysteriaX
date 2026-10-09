@@ -54,6 +54,14 @@ class API:
             raise RuntimeError(f"{method} {route}: HTTP {error.code}: {message}") from None
 
     def get(self, path, **kwargs):
+        if path == "/api/v1/jobs":
+            items, page = [], 1
+            while True:
+                result = self.request("GET", f"{path}?page={page}&page_size=200", **kwargs)
+                items.extend(result["items"])
+                if result["page"] * result["page_size"] >= result["total"]:
+                    return items
+                page += 1
         return self.request("GET", path, **kwargs)
 
     def write(self, method, path, body):

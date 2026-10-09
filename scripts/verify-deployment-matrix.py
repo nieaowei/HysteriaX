@@ -270,6 +270,14 @@ def main():
                 )
 
                 def expect(path, method="GET", payload=None, expected_status=(200, 201, 202)):
+                    if path == "/api/v1/jobs" and method == "GET":
+                        items, page = [], 1
+                        while True:
+                            result = expect(f"{path}?page={page}&page_size=200")
+                            items.extend(result["items"])
+                            if result["page"] * result["page_size"] >= result["total"]:
+                                return items
+                            page += 1
                     status, body = request(base, path, admin, method, payload)
                     if status not in expected_status:
                         raise RuntimeError(f"{method} {path} returned HTTP {status}: {body[:500]!r}")

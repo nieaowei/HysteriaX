@@ -320,6 +320,94 @@ pub async fn list_records(
             .collect(),
     ))
 }
+#[derive(Default, Deserialize)]
+pub(crate) struct RecordsPageQuery {
+    page: Option<i64>,
+    page_size: Option<i64>,
+    zone_id: Option<String>,
+    connection_id: Option<String>,
+    q: Option<String>,
+    sort: Option<String>,
+    order: Option<String>,
+}
+
+impl RecordsPageQuery {
+    fn validate(&self) -> Result<(i64, i64, &str, &str), ApiError> {
+        let page = self.page.unwrap_or(1);
+        let size = self.page_size.unwrap_or(50);
+        if page < 1 || !(1..=200).contains(&size) {
+            return Err(ApiError::bad_request(
+                "page must be positive and page_size must be between 1 and 200",
+            ));
+        }
+        let sort = match self.sort.as_deref().unwrap_or("name") {
+            "name" => "r.name",
+            "content" => "r.content",
+            _ => return Err(ApiError::bad_request("invalid DNS record sort field")),
+        };
+        let order = match self.order.as_deref().unwrap_or("asc") {
+            "asc" => "ASC",
+            "desc" => "DESC",
+            _ => return Err(ApiError::bad_request("invalid DNS record sort order")),
+        };
+        Ok((page, size, sort, order))
+    }
+}
+
+pub(crate) async fn list_records_page(
+    State(state): State<AppState>,
+    Query(query): Query<RecordsPageQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let (requested_page, page_size, sort, order) = query.validate()?;
+    let zone = query.zone_id.as_deref().filter(|value| !value.is_empty());
+    let connection = query
+        .connection_id
+        .as_deref()
+        .filter(|value| !value.is_empty());
+    let search = query.q.as_deref().unwrap_or("").trim();
+    let filter = "($1::text IS NULL OR r.zone_id=$1) AND ($2::text IS NULL OR z.connection_id=$2) AND ($3 = '' OR strpos(lower(r.name),lower($3)) > 0 OR strpos(lower(r.content),lower($3)) > 0 OR strpos(lower(r.id),lower($3)) > 0) AND (r.deleted_at IS NULL OR EXISTS(SELECT 1 FROM dns_bindings b WHERE b.record_ids ? r.id))";
+    let mut tx = state.pool.begin().await?;
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+        .execute(&mut *tx)
+        .await?;
+    let total: i64 = sqlx::query_scalar(&format!(
+        "SELECT count(*) FROM dns_records r JOIN dns_zones z ON z.id=r.zone_id WHERE {filter}"
+    ))
+    .bind(zone)
+    .bind(connection)
+    .bind(search)
+    .fetch_one(&mut *tx)
+    .await?;
+    let page = requested_page.min(((total + page_size - 1) / page_size).max(1));
+    let order_by = if sort == "r.name" {
+        format!("r.name COLLATE \"C\" {order}, r.record_type COLLATE \"C\" {order}, r.id {order}")
+    } else {
+        format!(
+            "r.content COLLATE \"C\" {order}, r.name COLLATE \"C\" {order}, r.record_type COLLATE \"C\" {order}, r.id {order}"
+        )
+    };
+    // Preserve the complete directory's visibility and node-binding rules.
+    let rows = sqlx::query(&format!("SELECT r.*,(SELECT n.id FROM nodes n WHERE EXISTS(SELECT 1 FROM dns_bindings b WHERE b.node_id=n.id AND b.record_ids ? r.id) OR n.published_connection->>'public_host'=r.name LIMIT 1) AS bound_node_id FROM dns_records r JOIN dns_zones z ON z.id=r.zone_id WHERE {filter} ORDER BY {order_by} LIMIT $4 OFFSET $5"))
+        .bind(zone).bind(connection).bind(search).bind(page_size).bind((page - 1) * page_size)
+        .fetch_all(&mut *tx).await?;
+    tx.commit().await?;
+    let items: Vec<Value> = rows
+        .iter()
+        .map(|row| {
+            let mut record = dns::record_json(row);
+            record["bound_node_id"] = json!(row.get::<Option<String>, _>("bound_node_id"));
+            record
+        })
+        .collect();
+    Ok(Json(
+        json!({"items":items,"total":total,"page":page,"page_size":page_size}),
+    ))
+}
+
+#[cfg(test)]
+#[path = "dns_pagination_tests.rs"]
+mod pagination_tests;
+
 pub async fn get_record(
     State(state): State<AppState>,
     Path(id): Path<String>,

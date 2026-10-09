@@ -73,6 +73,10 @@ extension ManagementStore {
         await refresh()
     }
 
+    func dnsRecordsPage(page: Int, pageSize: Int, connectionID: String, zoneID: String, query: String, sort: String, order: String) async throws -> DNSRecordsPage {
+        try await requireConnectedAPI().get(APIEndpoints.listDNSRecordsPage(page: page, pageSize: pageSize, connectionId: connectionID.isEmpty ? nil : connectionID, zoneId: zoneID.isEmpty ? nil : zoneID, q: query, sort: sort, order: order))
+    }
+
     func dnsRecordDetail(_ id: String) async throws -> DNSRecord {
         try await requireConnectedAPI().get(APIEndpoints.getDNSRecord(id: id))
     }

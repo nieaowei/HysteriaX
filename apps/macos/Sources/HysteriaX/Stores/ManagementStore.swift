@@ -275,6 +275,10 @@ final class ManagementStore {
         await refresh()
     }
 
+    func nodesPage(page: Int, pageSize: Int, query: String, sort: String, order: String) async throws -> NodesPage {
+        try await requireConnectedAPI().get(APIEndpoints.listNodesPage(page: page, pageSize: pageSize, q: query, stateMatches: NodeDisplayText.matchingStates(query), sort: sort, order: order))
+    }
+
     func nodeDetail(_ nodeID: String) async throws -> NodeDetail {
         let api = try requireConnectedAPI()
         return try await api.get(APIEndpoints.getNode(id: nodeID))
@@ -285,6 +289,19 @@ final class ManagementStore {
         guard supportsJobRetryLinks else { throw APIClientError.server(L10n.text("请先更新管理服务以支持关联重试。")) }
         let _: JobReceipt = try await client.post(APIEndpoints.retryJob(id: job.id), body: RevisionRequest(expectedRevision: node.revision))
         await refresh()
+    }
+
+    func usersPage(page: Int, pageSize: Int, query: String, order: String) async throws -> UsersPage {
+        try await requireConnectedAPI().get(APIEndpoints.listUsersPage(page: page, pageSize: pageSize, q: query, sort: "name", order: order))
+    }
+
+    func auditPage(page: Int, pageSize: Int, query: String, sort: String, order: String) async throws -> AuditPage {
+        let matches = AuditDisplayText.searchMatches(query)
+        return try await requireConnectedAPI().get(APIEndpoints.listAuditRecords(page: page, pageSize: pageSize, q: query, sort: sort, order: order, actionMatches: matches.actions, entityTypeMatches: matches.entityTypes, actorMatches: matches.actors))
+    }
+
+    func jobsPage(page: Int, pageSize: Int, query: String, sort: String, order: String) async throws -> JobsPage {
+        try await requireConnectedAPI().get(APIEndpoints.listJobs(page: page, pageSize: pageSize, q: query, sort: sort, order: order))
     }
 
     func jobDetail(_ jobID: String) async throws -> JobDetailResponse {
@@ -621,8 +638,8 @@ final class ManagementStore {
         async let loadedCredentials: [CredentialSummary] = client.get(APIEndpoints.listCredentials)
         async let loadedNodes: [NodeSummary] = client.get(APIEndpoints.listNodes)
         async let loadedUsers: [UserSummary] = client.get(APIEndpoints.listUsers)
-        async let loadedJobs: [JobSummary] = client.get(APIEndpoints.listJobs)
-        async let loadedAudit: [AuditSummary] = client.get(APIEndpoints.listAuditRecords)
+        async let loadedJobs: JobsPage = client.get(APIEndpoints.listJobs(pageSize: 200))
+        async let loadedAudit: AuditPage = client.get(APIEndpoints.listAuditRecords(pageSize: 200))
         async let loadedAdminTokens: [AdminTokenSummary] = client.get(APIEndpoints.listAdminTokens)
         let tokens = try await loadedAdminTokens
         let monitoring = await loadedMonitoring
@@ -630,8 +647,8 @@ final class ManagementStore {
             credentials: loadedCredentials,
             nodes: loadedNodes,
             users: loadedUsers,
-            jobs: loadedJobs,
-            auditRecords: loadedAudit,
+            jobs: loadedJobs.items,
+            auditRecords: loadedAudit.items,
             updatedAt: Date(),
             serverMonitoring: monitoring.value ?? serverMonitoring,
             overview: overview

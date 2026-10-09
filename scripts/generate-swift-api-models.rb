@@ -51,12 +51,12 @@ response_models = %w[
   AuthorizationGroupReference AuthorizationGroupSource AuthorizationGroupSummary AuthorizationPair AuthorizationMTLSBinding
   AuthorizationChangePreview AuthorizationCreatedCredential AuthorizationGroupMutationResponse
   UserAuthorizationGroupsMutationResponse
-  DNSConnection DNSZone DNSRecord PublishedConnection DNSBinding DNSBindingResponse DNSActionReceipt DNSCredentialBatchItem
-  CredentialSummary CredentialDetail CredentialVersion CredentialReference CredentialReceipt
+  DNSConnection DNSZone DNSRecord DNSRecordsPage PublishedConnection DNSBinding DNSBindingResponse DNSActionReceipt DNSCredentialBatchItem
+  CredentialSummary CredentialsPage CredentialDetail CredentialVersion CredentialReference CredentialReceipt
   CredentialBatch CredentialBatchItem CredentialBatchReceipt
   NodePackage NodePackageUsage NodeAlert NodeUsageUpdateResponse
-  NodeSummary NodeSSHDetail NodeConnectionDetail NodeDetail
-  AssignmentInfo UserSummary JobOutcome JobResult JobSummary AuditSummary
+  NodeSummary NodesPage NodeSSHDetail NodeConnectionDetail NodeDetail
+  AssignmentInfo UserSummary UsersPage JobOutcome JobResult JobSummary JobsPage AuditSummary AuditPage
   NodeResource ResourceReceipt AssignmentReceipt SubscriptionReceipt
   AssignmentMutationResponse
   RotatedCredential RotatedCredentials JobReceipt

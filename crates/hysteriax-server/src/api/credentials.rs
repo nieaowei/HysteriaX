@@ -1,6 +1,6 @@
 use axum::{
     Json,
-    extract::{Extension, Path, State},
+    extract::{Extension, Path, Query, State},
     http::StatusCode,
 };
 use chrono::{DateTime, Utc};
@@ -73,12 +73,21 @@ fn summary(row: &sqlx::postgres::PgRow) -> Value {
 }
 
 pub async fn list(State(state): State<AppState>) -> Result<Json<Vec<Value>>, ApiError> {
-    let rows = sqlx::query("SELECT c.*,v.metadata FROM credentials c JOIN credential_versions v ON v.credential_id=c.id AND v.version=c.latest_version ORDER BY lower(c.name) COLLATE \"C\",c.id").fetch_all(&state.pool).await?;
+    let mut connection = state.pool.acquire().await?;
+    Ok(Json(catalog_on(&state, &mut connection).await?))
+}
+
+// Managed and synthesized credentials share the same summaries and reference rules.
+async fn catalog_on(
+    state: &AppState,
+    connection: &mut sqlx::PgConnection,
+) -> Result<Vec<Value>, ApiError> {
+    let rows = sqlx::query("SELECT c.*,v.metadata FROM credentials c JOIN credential_versions v ON v.credential_id=c.id AND v.version=c.latest_version ORDER BY lower(c.name) COLLATE \"C\",c.id").fetch_all(&mut *connection).await?;
     let mut counts =
         std::collections::BTreeMap::<String, std::collections::BTreeSet<String>>::new();
     for node in
         sqlx::query("SELECT id,ssh_credential_id,desired_config_enc,deployed_config_enc FROM nodes")
-            .fetch_all(&state.pool)
+            .fetch_all(&mut *connection)
             .await?
     {
         let node_id: String = node.get("id");
@@ -101,9 +110,9 @@ pub async fn list(State(state): State<AppState>) -> Result<Json<Vec<Value>>, Api
             }
         }
     }
-    for row in sqlx::query("SELECT user_id,node_id,mtls_credential_id FROM node_assignments WHERE mtls_credential_id IS NOT NULL").fetch_all(&state.pool).await? { counts.entry(row.get("mtls_credential_id")).or_default().insert(format!("assignment:{}:{}",row.get::<String,_>("user_id"),row.get::<String,_>("node_id"))); }
+    for row in sqlx::query("SELECT user_id,node_id,mtls_credential_id FROM node_assignments WHERE mtls_credential_id IS NOT NULL").fetch_all(&mut *connection).await? { counts.entry(row.get("mtls_credential_id")).or_default().insert(format!("assignment:{}:{}",row.get::<String,_>("user_id"),row.get::<String,_>("node_id"))); }
     for connection in sqlx::query("SELECT id,credential_id FROM dns_connections")
-        .fetch_all(&state.pool)
+        .fetch_all(&mut *connection)
         .await?
     {
         counts
@@ -129,20 +138,127 @@ pub async fn list(State(state): State<AppState>) -> Result<Json<Vec<Value>>, Api
     for row in sqlx::query(
         "SELECT id,label,created_at,last_used_at,revoked_at FROM admin_tokens ORDER BY created_at",
     )
-    .fetch_all(&state.pool)
+    .fetch_all(&mut *connection)
     .await?
     {
         let id: String = row.get("id");
         entries.push(json!({"id":format!("admin:{id}"),"name":row.get::<String,_>("label"),"kind":"admin_token","status":if row.get::<Option<DateTime<Utc>>,_>("revoked_at").is_some(){"revoked"}else{"active"},"created_at":row.get::<DateTime<Utc>,_>("created_at"),"metadata":{"token_id":id,"last_used_at":row.get::<Option<DateTime<Utc>>,_>("last_used_at")},"revision":1,"latest_version":1,"archived":false}));
     }
-    for row in sqlx::query("SELECT s.id,s.user_id,s.created_at,s.revoked_at,u.name,u.enabled,u.expires_at,u.quota_bytes,u.usage_bytes FROM subscription_credentials s JOIN users u ON u.id=s.user_id ORDER BY s.created_at").fetch_all(&state.pool).await? {
+    for row in sqlx::query("SELECT s.id,s.user_id,s.created_at,s.revoked_at,u.name,u.enabled,u.expires_at,u.quota_bytes,u.usage_bytes FROM subscription_credentials s JOIN users u ON u.id=s.user_id ORDER BY s.created_at").fetch_all(&mut *connection).await? {
         entries.push(json!({"id":format!("subscription:{}",row.get::<String,_>("id")),"name":format!("{} · 订阅",row.get::<String,_>("name")),"kind":"subscription_token","owner_user_id":row.get::<String,_>("user_id"),"status":if row.get::<Option<DateTime<Utc>>,_>("revoked_at").is_some(){"revoked"}else{user_status(&row)},"expires_at":row.get::<Option<DateTime<Utc>>,_>("expires_at"),"created_at":row.get::<DateTime<Utc>,_>("created_at"),"metadata":{},"revision":1,"latest_version":1,"archived":false}));
     }
-    for row in sqlx::query("SELECT a.user_id,a.node_id,a.created_at,u.name,n.name node_name,u.revision,u.enabled,u.expires_at,u.quota_bytes,u.usage_bytes FROM node_assignments a JOIN users u ON u.id=a.user_id JOIN nodes n ON n.id=a.node_id ORDER BY a.created_at").fetch_all(&state.pool).await? {
+    for row in sqlx::query("SELECT a.user_id,a.node_id,a.created_at,u.name,n.name node_name,u.revision,u.enabled,u.expires_at,u.quota_bytes,u.usage_bytes FROM node_assignments a JOIN users u ON u.id=a.user_id JOIN nodes n ON n.id=a.node_id ORDER BY a.created_at").fetch_all(&mut *connection).await? {
         entries.push(json!({"id":format!("user:{}:{}",row.get::<String,_>("user_id"),row.get::<String,_>("node_id")),"name":format!("{} · {}",row.get::<String,_>("name"),row.get::<String,_>("node_name")),"kind":"user_credential","owner_user_id":row.get::<String,_>("user_id"),"status":user_status(&row),"expires_at":row.get::<Option<DateTime<Utc>>,_>("expires_at"),"created_at":row.get::<DateTime<Utc>,_>("created_at"),"metadata":{"node_id":row.get::<String,_>("node_id")},"revision":row.get::<i64,_>("revision"),"latest_version":1,"archived":false}));
     }
-    Ok(Json(entries))
+    Ok(entries)
 }
+
+#[derive(Default, Deserialize)]
+pub(crate) struct CredentialsPageQuery {
+    page: Option<i64>,
+    page_size: Option<i64>,
+    category: Option<String>,
+    kind: Option<String>,
+    q: Option<String>,
+    sort: Option<String>,
+    order: Option<String>,
+}
+
+impl CredentialsPageQuery {
+    fn validate(&self) -> Result<(i64, i64, &str, &str), ApiError> {
+        let page = self.page.unwrap_or(1);
+        let size = self.page_size.unwrap_or(50);
+        if page < 1 || !(1..=200).contains(&size) {
+            return Err(ApiError::bad_request(
+                "page must be positive and page_size must be between 1 and 200",
+            ));
+        }
+        match self.category.as_deref().unwrap_or("all") {
+            "all" | "operations" | "user" => {}
+            _ => return Err(ApiError::bad_request("invalid credential category")),
+        }
+        let sort = self.sort.as_deref().unwrap_or("name");
+        if !["name", "kind", "status", "created_at"].contains(&sort) {
+            return Err(ApiError::bad_request("invalid credential sort field"));
+        }
+        let order = self.order.as_deref().unwrap_or("asc");
+        if !["asc", "desc"].contains(&order) {
+            return Err(ApiError::bad_request("invalid credential sort order"));
+        }
+        Ok((page, size, sort, order))
+    }
+}
+
+pub(crate) async fn list_page(
+    State(state): State<AppState>,
+    Query(query): Query<CredentialsPageQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let (requested_page, page_size, sort, order) = query.validate()?;
+    let search = query.q.as_deref().unwrap_or("").trim().to_lowercase();
+    let kind = query.kind.as_deref().unwrap_or("");
+    let category = query.category.as_deref().unwrap_or("all");
+    // Aggregation includes synthetic entries and encrypted-config reference counts;
+    // one snapshot/connection keeps every source consistent, including a one-slot pool.
+    let mut tx = state.pool.begin().await?;
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+        .execute(&mut *tx)
+        .await?;
+    let catalog = catalog_on(&state, &mut tx).await?;
+    tx.commit().await?;
+    let mut entries: Vec<Value> = catalog
+        .into_iter()
+        .filter(|entry| {
+            let user_owned = !entry["owner_user_id"].is_null();
+            (category == "all" || user_owned == (category == "user"))
+                && (kind.is_empty() || entry["kind"].as_str() == Some(kind))
+                && (search.is_empty()
+                    || entry["name"]
+                        .as_str()
+                        .unwrap_or("")
+                        .to_lowercase()
+                        .contains(&search))
+        })
+        .collect();
+    if sort == "created_at" {
+        entries.sort_by_cached_key(|entry| {
+            (
+                entry["created_at"]
+                    .as_str()
+                    .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+                    .map(|value| value.with_timezone(&Utc)),
+                entry["name"].as_str().unwrap_or("").to_lowercase(),
+                entry["name"].as_str().unwrap_or("").to_owned(),
+                entry["id"].as_str().unwrap_or("").to_owned(),
+            )
+        });
+    } else {
+        entries.sort_by_cached_key(|entry| {
+            (
+                entry[sort].as_str().unwrap_or("").to_lowercase(),
+                entry["name"].as_str().unwrap_or("").to_lowercase(),
+                entry["name"].as_str().unwrap_or("").to_owned(),
+                entry["id"].as_str().unwrap_or("").to_owned(),
+            )
+        });
+    }
+    if order == "desc" {
+        entries.reverse();
+    }
+    let total = entries.len() as i64;
+    let page = requested_page.min(((total + page_size - 1) / page_size).max(1));
+    let items: Vec<Value> = entries
+        .into_iter()
+        .skip(((page - 1) * page_size) as usize)
+        .take(page_size as usize)
+        .collect();
+    Ok(Json(
+        json!({"items":items,"total":total,"page":page,"page_size":page_size}),
+    ))
+}
+
+#[cfg(test)]
+#[path = "credentials_pagination_tests.rs"]
+mod pagination_tests;
 
 fn user_status(row: &sqlx::postgres::PgRow) -> &'static str {
     if !row.get::<bool, _>("enabled") {

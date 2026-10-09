@@ -1,0 +1,33 @@
+{
+  "ready": true,
+  "image": "nieaowei/hysteriax-server:nodes-pagination-20261009-v1",
+  "image_id": "sha256:d0cd52f3f5a4c52193402425638b35d8b89fbc4dee15e8fb0ee75494fcd7a9c0",
+  "total_nodes": 6,
+  "users": 6,
+  "page_size": 2,
+  "page_count": 3,
+  "checks": [
+    "inventory",
+    "all_pages",
+    "no_duplicates",
+    "catalog_order",
+    "reverse_order",
+    "clamp",
+    "empty_search",
+    "id_name_host_search",
+    "localized_state_matches",
+    "detail_package_and_binding_metadata",
+    "sort_fields",
+    "invalid_page_size",
+    "users_dns_credentials_jobs_audit_overview_regression"
+  ],
+  "verified_at": "2026-10-09T16:34:56+08:00",
+  "service_url": "https://hysteriax.cc",
+  "container_health": "healthy",
+  "migration_version": 15,
+  "migration_success": true,
+  "index": "nodes_name_id_idx",
+  "binary_sha256": "cfc5f46891263c86d49cc88cf17890c34db3d5078f057bce300699eb7f0819c4",
+  "archive_sha256": "1c1e50ac8be6e1604417f75197dca5f697ce3260e0c783f0b402169b5d94a917",
+  "backup_directory": "/home/nieaowei/HysteriaX/backups/nodes-pagination-20261009-v1"
+}

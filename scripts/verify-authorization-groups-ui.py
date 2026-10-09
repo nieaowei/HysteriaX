@@ -40,7 +40,57 @@ final class AuthorizationFixtureProtocol: URLProtocol, @unchecked Sendable {
         let path = request.url!.path
         let folder = ProcessInfo.processInfo.environment["HYSTERIAX_AUTHORIZATION_FIXTURE_DIRECTORY"]!
         var data = paths[path].map { try! Data(contentsOf: URL(fileURLWithPath: folder + "/" + $0 + ".json")) } ?? Data(#"{"code":"fixture","message":"not available"}"#.utf8)
-        var status = paths[path] == nil ? 404 : 200
+        if ["/api/v1/jobs", "/api/v1/audit"].contains(path) {
+            data = Data(#"{"items":[],"total":0,"page":1,"page_size":200}"#.utf8)
+        }
+        if path == "/api/v1/users/page" {
+            let users = try! JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: folder + "/users.json"))) as! [[String: Any]]
+            let queryItems = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!.queryItems ?? []
+            let parameters = Dictionary(uniqueKeysWithValues: queryItems.map { ($0.name, $0.value ?? "") })
+            let query = (parameters["q"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let size = Int(parameters["page_size"] ?? "50")!
+            let filtered = users.filter { user in
+                query.isEmpty || (user["name"] as! String).localizedCaseInsensitiveContains(query) || (user["id"] as! String).localizedCaseInsensitiveContains(query)
+                    || (user["assignments"] as? [[String: Any]] ?? []).contains { ($0["node_id"] as? String ?? "").localizedCaseInsensitiveContains(query) }
+            }.sorted { left, right in
+                let lhs = left["name"] as! String, rhs = right["name"] as! String
+                if parameters["order"] == "desc" {
+                    return lhs == rhs ? (left["id"] as! String) > (right["id"] as! String) : lhs > rhs
+                }
+                return lhs == rhs ? (left["id"] as! String) < (right["id"] as! String) : lhs < rhs
+            }
+            let page = min(Int(parameters["page"] ?? "1")!, max(1, (filtered.count + size - 1) / size))
+            let items = Array(filtered.dropFirst((page - 1) * size).prefix(size))
+            data = try! JSONSerialization.data(withJSONObject: ["items": items, "total": filtered.count, "page": page, "page_size": size])
+        }
+        if path == "/api/v1/credentials/page" {
+            data = Data(#"{"items":[],"total":0,"page":1,"page_size":50}"#.utf8)
+        }
+        if request.url!.path == "/api/v1/nodes/page" {
+            let nodes = try! JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: folder + "/nodes.json"))) as! [[String: Any]]
+            let queryItems = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!.queryItems ?? []
+            let parameters = Dictionary(uniqueKeysWithValues: queryItems.map { ($0.name, $0.value ?? "") })
+            let query = (parameters["q"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let size = Int(parameters["page_size"] ?? "50")!
+            let matches = Set((parameters["state_matches"] ?? "").split(separator: ",").map(String.init))
+            func text(_ node: [String: Any], _ key: String) -> String {
+                if key == "ssh_host" { return (node["ssh"] as? [String: Any])?["host"] as? String ?? "" }
+                return node[key] as? String ?? ""
+            }
+            let filtered = nodes.filter { node in
+                query.isEmpty || ["name", "ssh_host", "id", "state"].contains { text(node, $0).localizedCaseInsensitiveContains(query) }
+                    || matches.contains(text(node, "state"))
+            }.sorted { left, right in
+                for key in [parameters["sort"] ?? "name", "name", "id"] {
+                    let lhs = text(left, key).lowercased(), rhs = text(right, key).lowercased()
+                    if lhs != rhs { return parameters["order"] == "desc" ? lhs > rhs : lhs < rhs }
+                }
+                return false
+            }
+            let page = min(Int(parameters["page"] ?? "1")!, max(1, (filtered.count + size - 1) / size))
+            data = try! JSONSerialization.data(withJSONObject: ["items": Array(filtered.dropFirst((page - 1) * size).prefix(size)), "total": filtered.count, "page": page, "page_size": size])
+        }
+        var status = paths[path] == nil && !["/api/v1/users/page", "/api/v1/credentials/page", "/api/v1/nodes/page"].contains(path) ? 404 : 200
         if path == "/api/v1/authorization-groups" && request.httpMethod == "POST" {
             let groupData = try! Data(contentsOf: URL(fileURLWithPath: folder + "/group.json"))
             var group = try! JSONSerialization.jsonObject(with: groupData) as! [String:Any]

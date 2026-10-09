@@ -1,0 +1,30 @@
+{
+  "ready": true,
+  "image": "nieaowei/hysteriax-server:jobs-pagination-20261009-1512",
+  "image_id": "sha256:56a37eeec1ca7b3faf6fb4004fc3ce7fe4c9f425fdcd7a866c96f380467ca8e9",
+  "nodes": 6,
+  "users": 6,
+  "total_jobs": 219,
+  "first_page_items": 25,
+  "second_page_items": 25,
+  "last_page": 9,
+  "checks": [
+    "inventory",
+    "pagination",
+    "no_overlap",
+    "clamp",
+    "empty_search",
+    "oldest_search",
+    "invalid_page_size"
+  ],
+  "verified_at": "2026-10-09T07:16:55+08:00",
+  "service_url": "https://hysteriax.cc",
+  "container_health": "healthy",
+  "migration_version": 11,
+  "migration_success": true,
+  "index": "jobs_created_id_idx",
+  "server_binary_sha256": "137a0a0ed62c1283ed4a7cfb8e6cee00cafaed437599a97d25fa27e6f6630c80",
+  "archive_sha256": "32e1021105f31854b3e922861a668aee33e22212a9f4211e5f632d8af7b8e51b",
+  "exported_image_config_digest": "sha256:9e2e792f54987b7efef94214bbcbc77f30524a6e55f2b1dfd21f0ca095c8a893",
+  "backup_directory": "/home/nieaowei/HysteriaX/backups/jobs-pagination-20261009-1512"
+}

@@ -1361,3 +1361,19 @@
 "编辑" = "Edit";
 
 "删除记录" = "Delete record";
+
+"共 {0} 项任务 · 第 {1} / {2} 页" = "{0} tasks · Page {1} of {2}";
+
+"每页条数" = "Rows per page";
+
+"共 {0} 条审计记录 · 第 {1} / {2} 页" = "{0} audit records · Page {1} of {2}";
+
+"共 {0} 个用户 · 第 {1} / {2} 页" = "{0} users · Page {1} of {2}";
+
+"共 {0} 条 DNS 记录 · 第 {1} / {2} 页" = "{0} DNS records · Page {1} of {2}";
+
+"没有匹配的 DNS 记录" = "No matching DNS records";
+
+"共 {0} 项凭据 · 第 {1} / {2} 页" = "{0} credentials · Page {1} of {2}";
+
+"共 {0} 个节点 · 第 {1} / {2} 页" = "{0} nodes · Page {1} of {2}";

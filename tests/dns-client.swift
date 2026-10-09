@@ -5,6 +5,11 @@ struct DNSClientTests {
     static func main() throws {
         let zone = try JSONDecoder().decode(DNSZone.self, from: Data(#"{"id":"zone","connection_id":"connection","provider_zone_id":"remote-zone","name":"example.test","enabled":true,"revision":1}"#.utf8))
         let records = try JSONDecoder().decode([DNSRecord].self, from: Data(#"[{"id":"a","zone_id":"zone","name":"hk.example.test","record_type":"A","content":"8.8.8.8","ttl":1,"proxied":false,"origin":"external","revision":1,"state":"synced","resolution_status":"verified","updated_at":"2026-10-06T00:00:00Z"},{"id":"aaaa","zone_id":"zone","name":"hk.example.test","record_type":"AAAA","content":"2606:4700:4700::1111","ttl":300,"proxied":false,"origin":"hysteriax","revision":1,"state":"synced","resolution_status":"unchecked","updated_at":"2026-10-06T00:00:00Z"}]"#.utf8))
+        let page = try JSONDecoder().decode(DNSRecordsPage.self, from: Data(#"{"items":[{"id":"a","zone_id":"zone","name":"hk.example.test","record_type":"A","content":"8.8.8.8","ttl":1,"proxied":false,"origin":"external","revision":1,"state":"synced","resolution_status":"verified","bound_node_id":"node","updated_at":"2026-10-06T00:00:00Z"}],"total":235,"page":3,"page_size":25}"#.utf8))
+        precondition(page.total == 235 && page.page == 3 && page.pageSize == 25 && page.items[0].boundNodeId == "node")
+        let pageEndpoint = APIEndpoints.listDNSRecordsPage(page: 3, pageSize: 25, connectionId: "connection", zoneId: "zone", q: "历史 %_&", sort: "content", order: "desc")
+        precondition(pageEndpoint.path == "api/v1/dns/records/page" && pageEndpoint.method == "GET")
+        precondition(pageEndpoint.queryParameters == ["page": "3", "page_size": "25", "connection_id": "connection", "zone_id": "zone", "q": "历史 %_&", "sort": "content", "order": "desc"])
         var draft = DNSAllocationDraft()
         let external = try draft.allocation(zones: [zone], records: records)
         precondition(external == nil)

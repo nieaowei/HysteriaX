@@ -64,7 +64,8 @@ final class FingerprintTransport: URLProtocol, @unchecked Sendable {
             if path.hasSuffix("/nodes/node-1") { return json(node) }
             if path.hasSuffix("/jobs/job-1") { return json(["job": job, "logs": []]) }
             if path.hasSuffix("/nodes") { return json([node]) }
-            if path.hasSuffix("/jobs") { return json([job]) }
+            if path.hasSuffix("/jobs") { return json(["items": [job], "total": 1, "page": 1, "page_size": 200]) }
+            if path.hasSuffix("/audit") { return json(["items": [], "total": 0, "page": 1, "page_size": 200]) }
             return json([])
         }
 

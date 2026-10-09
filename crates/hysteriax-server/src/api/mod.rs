@@ -63,6 +63,7 @@ pub fn router(state: AppState) -> Router {
             "/api/v1/dns/records",
             get(dns::list_records).post(dns::create_record),
         )
+        .route("/api/v1/dns/records/page", get(dns::list_records_page))
         .route(
             "/api/v1/dns/records/{id}",
             get(dns::get_record)
@@ -77,6 +78,7 @@ pub fn router(state: AppState) -> Router {
                 .delete(dns::unbind),
         )
         .route("/api/v1/nodes", get(nodes::list).post(nodes::create))
+        .route("/api/v1/nodes/page", get(nodes::list_page))
         .route(
             "/api/v1/nodes/{id}/record",
             axum::routing::delete(nodes::remove_record),
@@ -102,6 +104,7 @@ pub fn router(state: AppState) -> Router {
             delete(resources::delete),
         )
         .route("/api/v1/users", get(users::list).post(users::create))
+        .route("/api/v1/users/page", get(users::list_page))
         .route(
             "/api/v1/users/{id}",
             get(users::get).patch(users::patch).delete(users::delete),
@@ -166,6 +169,7 @@ pub fn router(state: AppState) -> Router {
             "/api/v1/credentials",
             get(credentials::list).post(credentials::create),
         )
+        .route("/api/v1/credentials/page", get(credentials::list_page))
         .route(
             "/api/v1/credentials/{id}",
             get(credentials::get)
@@ -405,12 +409,82 @@ struct JobSummary {
     retry_job_id: Option<String>,
 }
 
-async fn list_jobs(State(state): State<AppState>) -> Result<Json<Vec<JobSummary>>, ApiError> {
-    let rows = sqlx::query("SELECT j.*, (SELECT child.id FROM jobs child WHERE child.retry_of_job_id=j.id) retry_job_id FROM jobs j ORDER BY created_at DESC LIMIT 200")
-        .fetch_all(&state.pool)
-        .await?;
-    Ok(Json(rows.iter().map(job_summary).collect()))
+#[derive(Default, Deserialize)]
+struct JobsQuery {
+    page: Option<i64>,
+    page_size: Option<i64>,
+    q: Option<String>,
+    sort: Option<String>,
+    order: Option<String>,
 }
+
+#[derive(Serialize)]
+struct JobsPage {
+    items: Vec<JobSummary>,
+    total: i64,
+    page: i64,
+    page_size: i64,
+}
+
+impl JobsQuery {
+    fn validate(&self) -> Result<(i64, i64, &str, &str), ApiError> {
+        let page = self.page.unwrap_or(1);
+        let page_size = self.page_size.unwrap_or(50);
+        if page < 1 || !(1..=200).contains(&page_size) {
+            return Err(ApiError::bad_request(
+                "page must be positive and page_size must be between 1 and 200",
+            ));
+        }
+        let sort = match self.sort.as_deref().unwrap_or("created_at") {
+            "created_at" => "j.created_at",
+            "node" => "COALESCE(j.resource_name, j.node_name, j.node_id, '')",
+            "kind" => "j.kind",
+            "stage" => "j.stage",
+            "status" => "j.status",
+            _ => return Err(ApiError::bad_request("invalid job sort field")),
+        };
+        let order = match self.order.as_deref().unwrap_or("desc") {
+            "asc" => "ASC",
+            "desc" => "DESC",
+            _ => return Err(ApiError::bad_request("invalid job sort order")),
+        };
+        Ok((page, page_size, sort, order))
+    }
+}
+
+async fn list_jobs(
+    State(state): State<AppState>,
+    Query(query): Query<JobsQuery>,
+) -> Result<Json<JobsPage>, ApiError> {
+    let (requested_page, page_size, sort, order) = query.validate()?;
+    let search = query.q.as_deref().unwrap_or("").trim();
+    // A literal substring search: '%' and '_' must not become SQL wildcards.
+    let filter = "($1 = '' OR strpos(lower(concat_ws(' ', j.id, j.kind, j.stage, j.status, j.node_name, j.node_id, j.resource_name, j.resource_id, j.error_message)), lower($1)) > 0)";
+    let mut tx = state.pool.begin().await?;
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+        .execute(&mut *tx)
+        .await?;
+    let total: i64 = sqlx::query_scalar(&format!("SELECT count(*) FROM jobs j WHERE {filter}"))
+        .bind(search)
+        .fetch_one(&mut *tx)
+        .await?;
+    let page_count = ((total + page_size - 1) / page_size).max(1);
+    let page = requested_page.min(page_count);
+    // Only validated SQL fragments are interpolated; all user values are bound.
+    let rows = sqlx::query(&format!("SELECT j.*, (SELECT child.id FROM jobs child WHERE child.retry_of_job_id=j.id) retry_job_id FROM jobs j WHERE {filter} ORDER BY {sort} {order}, j.id {order} LIMIT $2 OFFSET $3"))
+        .bind(search).bind(page_size).bind((page - 1) * page_size)
+        .fetch_all(&mut *tx).await?;
+    tx.commit().await?;
+    Ok(Json(JobsPage {
+        items: rows.iter().map(job_summary).collect(),
+        total,
+        page,
+        page_size,
+    }))
+}
+
+#[cfg(test)]
+mod jobs_pagination_tests;
 
 pub(crate) async fn get_job(
     State(state): State<AppState>,
@@ -459,17 +533,96 @@ async fn list_admin_tokens(State(state): State<AppState>) -> Result<Json<Vec<Val
     })).collect()))
 }
 
-async fn list_audit_records(State(state): State<AppState>) -> Result<Json<Vec<Value>>, ApiError> {
-    let rows = sqlx::query("SELECT id, actor, action, entity_type, entity_id, detail_json, created_at FROM audit_records ORDER BY created_at DESC LIMIT 500")
-        .fetch_all(&state.pool).await?;
-    Ok(Json(rows.iter().map(|row| json!({
+#[derive(Default, Deserialize)]
+struct AuditQuery {
+    page: Option<i64>,
+    page_size: Option<i64>,
+    q: Option<String>,
+    sort: Option<String>,
+    order: Option<String>,
+    action_matches: Option<String>,
+    entity_type_matches: Option<String>,
+    actor_matches: Option<String>,
+}
+
+impl AuditQuery {
+    fn validate(&self) -> Result<(i64, i64, &str, &str), ApiError> {
+        let page = self.page.unwrap_or(1);
+        let size = self.page_size.unwrap_or(50);
+        if page < 1 || !(1..=200).contains(&size) {
+            return Err(ApiError::bad_request(
+                "page must be positive and page_size must be between 1 and 200",
+            ));
+        }
+        let sort = match self.sort.as_deref().unwrap_or("created_at") {
+            "created_at" => "a.created_at",
+            "action" => "a.action",
+            "entity_type" => "a.entity_type",
+            "entity_id" => "a.entity_id",
+            "actor" => "a.actor",
+            _ => return Err(ApiError::bad_request("invalid audit sort field")),
+        };
+        let order = match self.order.as_deref().unwrap_or("desc") {
+            "asc" => "ASC",
+            "desc" => "DESC",
+            _ => return Err(ApiError::bad_request("invalid audit sort order")),
+        };
+        Ok((page, size, sort, order))
+    }
+}
+
+fn audit_matches(value: Option<&str>) -> Vec<&str> {
+    value
+        .unwrap_or("")
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .collect()
+}
+
+async fn list_audit_records(
+    State(state): State<AppState>,
+    Query(query): Query<AuditQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let (requested_page, page_size, sort, order) = query.validate()?;
+    let search = query.q.as_deref().unwrap_or("").trim();
+    let actions = audit_matches(query.action_matches.as_deref());
+    let entity_types = audit_matches(query.entity_type_matches.as_deref());
+    let actors = audit_matches(query.actor_matches.as_deref());
+    // The client resolves localized display labels to raw codes. All values remain bound.
+    let filter = "($1 = '' OR strpos(lower(concat_ws(' ', a.id, a.action, a.actor, a.entity_type, a.entity_id)), lower($1)) > 0 OR a.action = ANY($2) OR a.entity_type = ANY($3) OR a.actor = ANY($4))";
+    let mut tx = state.pool.begin().await?;
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+        .execute(&mut *tx)
+        .await?;
+    let total: i64 = sqlx::query_scalar(&format!(
+        "SELECT count(*) FROM audit_records a WHERE {filter}"
+    ))
+    .bind(search)
+    .bind(&actions)
+    .bind(&entity_types)
+    .bind(&actors)
+    .fetch_one(&mut *tx)
+    .await?;
+    let page = requested_page.min(((total + page_size - 1) / page_size).max(1));
+    let rows = sqlx::query(&format!("SELECT a.* FROM audit_records a WHERE {filter} ORDER BY {sort} {order}, a.id {order} LIMIT $5 OFFSET $6"))
+        .bind(search).bind(&actions).bind(&entity_types).bind(&actors).bind(page_size).bind((page - 1) * page_size)
+        .fetch_all(&mut *tx).await?;
+    tx.commit().await?;
+    let items: Vec<Value> = rows.iter().map(|row| json!({
         "id": row.get::<String, _>("id"), "actor": row.get::<String, _>("actor"),
         "action": row.get::<String, _>("action"), "entity_type": row.get::<String, _>("entity_type"),
         "entity_id": row.get::<String, _>("entity_id"),
         "detail": row.get::<Value, _>("detail_json"),
-        "created_at": row.get::<chrono::DateTime<chrono::Utc>, _>("created_at")
-    })).collect()))
+        "created_at": row.get::<DateTime<Utc>, _>("created_at")
+    })).collect();
+    Ok(Json(
+        json!({ "items": items, "total": total, "page": page, "page_size": page_size }),
+    ))
 }
+
+#[cfg(test)]
+mod audit_pagination_tests;
 
 #[derive(Deserialize)]
 struct CreateAdminToken {

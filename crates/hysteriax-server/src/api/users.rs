@@ -76,6 +76,82 @@ pub async fn list(State(state): State<AppState>) -> Result<Json<Vec<Value>>, Api
     Ok(Json(users))
 }
 
+#[derive(Default, Deserialize)]
+pub(crate) struct UsersPageQuery {
+    page: Option<i64>,
+    page_size: Option<i64>,
+    q: Option<String>,
+    sort: Option<String>,
+    order: Option<String>,
+}
+
+impl UsersPageQuery {
+    fn validate(&self) -> Result<(i64, i64, &str, &str), ApiError> {
+        let page = self.page.unwrap_or(1);
+        let size = self.page_size.unwrap_or(50);
+        if page < 1 || !(1..=200).contains(&size) {
+            return Err(ApiError::bad_request(
+                "page must be positive and page_size must be between 1 and 200",
+            ));
+        }
+        let sort = match self.sort.as_deref().unwrap_or("name") {
+            "name" => "lower(u.name) COLLATE \"C\", u.name COLLATE \"C\"",
+            "created_at" => "u.created_at",
+            _ => return Err(ApiError::bad_request("invalid user sort field")),
+        };
+        let order = match self.order.as_deref().unwrap_or("asc") {
+            "asc" => "ASC",
+            "desc" => "DESC",
+            _ => return Err(ApiError::bad_request("invalid user sort order")),
+        };
+        Ok((page, size, sort, order))
+    }
+}
+
+pub(crate) async fn list_page(
+    State(state): State<AppState>,
+    Query(query): Query<UsersPageQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let (requested_page, page_size, sort, order) = query.validate()?;
+    let search = query.q.as_deref().unwrap_or("").trim();
+    let filter = "($1 = '' OR strpos(lower(u.name), lower($1)) > 0 OR strpos(lower(u.id), lower($1)) > 0 OR EXISTS (SELECT 1 FROM node_assignments na WHERE na.user_id=u.id AND strpos(lower(na.node_id), lower($1)) > 0))";
+    let mut tx = state.pool.begin().await?;
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+        .execute(&mut *tx)
+        .await?;
+    let total: i64 = sqlx::query_scalar(&format!("SELECT count(*) FROM users u WHERE {filter}"))
+        .bind(search)
+        .fetch_one(&mut *tx)
+        .await?;
+    let page = requested_page.min(((total + page_size - 1) / page_size).max(1));
+    // Apply the direction to every name component, then use ID to break ties.
+    let order_by = if query.sort.as_deref().unwrap_or("name") == "name" {
+        format!("lower(u.name) COLLATE \"C\" {order}, u.name COLLATE \"C\" {order}, u.id {order}")
+    } else {
+        format!("{sort} {order}, u.id {order}")
+    };
+    let rows = sqlx::query(&format!(
+        "SELECT u.* FROM users u WHERE {filter} ORDER BY {order_by} LIMIT $2 OFFSET $3"
+    ))
+    .bind(search)
+    .bind(page_size)
+    .bind((page - 1) * page_size)
+    .fetch_all(&mut *tx)
+    .await?;
+    let mut items = Vec::with_capacity(rows.len());
+    for row in rows {
+        items.push(user_json_on(&mut tx, &row).await?);
+    }
+    tx.commit().await?;
+    Ok(Json(
+        json!({"items": items, "total": total, "page": page, "page_size": page_size}),
+    ))
+}
+
+#[cfg(test)]
+#[path = "users_pagination_tests.rs"]
+mod pagination_tests;
+
 pub async fn get(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -534,12 +610,20 @@ pub async fn reset_quota(
 }
 
 async fn user_json(state: &AppState, row: &sqlx::postgres::PgRow) -> Result<Value, ApiError> {
+    let mut connection = state.pool.acquire().await?;
+    user_json_on(&mut connection, row).await
+}
+
+async fn user_json_on(
+    connection: &mut sqlx::PgConnection,
+    row: &sqlx::postgres::PgRow,
+) -> Result<Value, ApiError> {
     let id: String = row.get("id");
     let assignments = sqlx::query(
         "SELECT node_id, mtls_credential_id, mtls_credential_version, created_at FROM node_assignments WHERE user_id = $1 ORDER BY node_id",
     )
     .bind(&id)
-    .fetch_all(&state.pool)
+    .fetch_all(&mut *connection)
     .await?;
     let mut assigned = Vec::with_capacity(assignments.len());
     for assignment in assignments {
@@ -547,7 +631,7 @@ async fn user_json(state: &AppState, row: &sqlx::postgres::PgRow) -> Result<Valu
         let source_groups = sqlx::query("SELECT g.id,g.name FROM authorization_group_users gu JOIN authorization_group_nodes gn ON gn.group_id=gu.group_id JOIN authorization_groups g ON g.id=gu.group_id WHERE gu.user_id=$1 AND gn.node_id=$2 ORDER BY lower(g.name) COLLATE \"C\",g.name COLLATE \"C\",g.id")
             .bind(&id)
             .bind(&node_id)
-            .fetch_all(&state.pool)
+            .fetch_all(&mut *connection)
             .await?
             .iter()
             .map(|source| json!({"id":source.get::<String,_>("id"),"name":source.get::<String,_>("name")}))
@@ -562,7 +646,7 @@ async fn user_json(state: &AppState, row: &sqlx::postgres::PgRow) -> Result<Valu
     }
     let authorization_groups = sqlx::query("SELECT g.id,g.name,g.revision FROM authorization_group_users gu JOIN authorization_groups g ON g.id=gu.group_id WHERE gu.user_id=$1 ORDER BY lower(g.name) COLLATE \"C\",g.name COLLATE \"C\",g.id")
         .bind(&id)
-        .fetch_all(&state.pool)
+        .fetch_all(&mut *connection)
         .await?
         .iter()
         .map(|group| json!({"id":group.get::<String,_>("id"),"name":group.get::<String,_>("name"),"revision":group.get::<i64,_>("revision")}))

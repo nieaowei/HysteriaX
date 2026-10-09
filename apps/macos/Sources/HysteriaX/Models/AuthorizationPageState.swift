@@ -8,6 +8,8 @@ import Observation
 final class AuthorizationPageState {
     var selectedUserID: String?
     var userSearchText = ""
+    var userPage = 1
+    var userPageSize = 50
     var userSortOrder = [KeyPathComparator<UserSummary>(\.name)]
 
     var selectedGroupID: String?

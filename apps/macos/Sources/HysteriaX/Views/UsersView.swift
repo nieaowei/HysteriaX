@@ -16,7 +16,6 @@ struct UsersView: View {
             if store.supportsAuthorizationGroups && selectedTab == "groups" {
                 AuthorizationGroupsView(store: store, pageState: pageState, onOpenUser: { userID in
                     selectedTab = "users"
-                    pageState.userSearchText = ""
                     pageState.selectedUserID = userID
                 }, onOpenNode: onOpenNode)
             } else {
@@ -43,7 +42,6 @@ struct UsersView: View {
         .task(id: initialSelection) {
             guard let initialSelection else { return }
             selectedTab = "users"
-            pageState.userSearchText = ""
             pageState.selectedUserID = initialSelection
             onInitialSelectionHandled()
         }
@@ -67,47 +65,76 @@ private struct UserDirectoryView: View {
     @State private var usageErrorMessage: String?
     @State private var usageLoadingUserID: String?
 
-    private var visibleUsers: [UserSummary] {
-        let query = pageState.userSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let filtered = store.users.filter { user in
-            query.isEmpty
-                || user.name.localizedStandardContains(query)
-                || user.id.localizedCaseInsensitiveContains(query)
+    @State private var pageResponse: UsersPage?
+    @State private var loadedPageKey: String?
+    @State private var isLoadingPage = false
+    @State private var pageError: String?
+    @State private var retryPageToken = UUID()
+
+    private var query: String { pageState.userSearchText.trimmingCharacters(in: .whitespacesAndNewlines) }
+    private var sortDirection: String { pageState.userSortOrder.first?.order == .reverse ? "desc" : "asc" }
+    private var pageKey: String { "\(store.serviceAddress)|\(pageState.userPage)|\(pageState.userPageSize)|\(query)|\(sortDirection)" }
+    private var pageRequestKey: String { "\(pageKey)|\(store.isConnected)|\(store.lastUpdated?.timeIntervalSince1970 ?? 0)|\(retryPageToken)" }
+    private var currentPageResponse: UsersPage? { loadedPageKey == pageKey ? pageResponse : nil }
+    private var totalUsers: Int { store.isConnected ? (currentPageResponse?.total ?? 0) : snapshotUsers.count }
+    private var pageCount: Int { max(1, (totalUsers + pageState.userPageSize - 1) / pageState.userPageSize) }
+    private var currentPage: Int { store.isConnected ? pageState.userPage : min(pageState.userPage, pageCount) }
+    private var selectedUser: UserSummary? {
+        store.users.first { $0.id == pageState.selectedUserID } ?? visibleUsers.first { $0.id == pageState.selectedUserID }
+    }
+
+    private var snapshotUsers: [UserSummary] {
+        store.users.filter { user in
+            query.isEmpty || user.name.localizedStandardContains(query) || user.id.localizedCaseInsensitiveContains(query)
                 || user.assignments.contains { $0.nodeID.localizedCaseInsensitiveContains(query) }
-        }
-        return filtered.sorted(using: pageState.userSortOrder)
+        }.sorted(using: pageState.userSortOrder)
+    }
+
+    private var visibleUsers: [UserSummary] {
+        if store.isConnected { return currentPageResponse?.items ?? [] }
+        return Array(snapshotUsers.dropFirst((currentPage - 1) * pageState.userPageSize).prefix(pageState.userPageSize))
     }
 
     var body: some View {
-        MainVerticalSplitView(hasDetail: store.users.contains { $0.id == pageState.selectedUserID }) {
-            Table(visibleUsers, selection: $pageState.selectedUserID, sortOrder: $pageState.userSortOrder) {
-                TableColumn(L10n.text("名称"), value: \.name) { user in
-                    Text(user.name)
-                        .accessibilityLabel(user.name)
-                        .accessibilityIdentifier("users.row.\(user.id)")
+        MainVerticalSplitView(hasDetail: selectedUser != nil) {
+            VStack(spacing: 0) {
+                Table(visibleUsers, selection: $pageState.selectedUserID, sortOrder: $pageState.userSortOrder) {
+                    TableColumn(L10n.text("名称"), value: \.name) { user in
+                        Text(user.name)
+                            .accessibilityLabel(user.name)
+                            .accessibilityIdentifier("users.row.\(user.id)")
+                    }
+                    TableColumn(L10n.text("状态")) { user in
+                        Text(user.enabled ? L10n.text("启用") : L10n.text("已停用"))
+                            .accessibilityLabel(user.enabled ? L10n.text("启用") : L10n.text("已停用"))
+                            .accessibilityIdentifier("users.status.\(user.id)")
+                    }
+                    TableColumn(L10n.text("用量 / 额度")) { user in
+                        QuotaProgressView(usageBytes: user.usageBytes, quotaBytes: user.quotaBytes)
+                    }
+                    .width(min: 180, ideal: 220)
+                    TableColumn(L10n.text("节点")) { user in Text("\(user.assignments.count)") }
+                    TableColumn(L10n.text("到期")) { user in Text(user.expiresAt.map { DateDisplayText.local($0) } ?? L10n.text("不限")) }
                 }
-                TableColumn(L10n.text("状态")) { user in
-                    Text(user.enabled ? L10n.text("启用") : L10n.text("已停用"))
-                        .accessibilityLabel(user.enabled ? L10n.text("启用") : L10n.text("已停用"))
-                        .accessibilityIdentifier("users.status.\(user.id)")
+                .frame(minHeight: 180)
+                .overlay {
+                    if visibleUsers.isEmpty {
+                        if isLoadingPage || (store.isConnected && currentPageResponse == nil && pageError == nil) {
+                            ProgressView()
+                        } else if pageError == nil {
+                            if query.isEmpty {
+                                ContentUnavailableView(L10n.text("还没有用户"), systemImage: "person.2", description: Text(L10n.text("添加用户后可以分配节点并生成订阅。")))
+                            } else {
+                                ContentUnavailableView(L10n.text("没有匹配的用户"), systemImage: "magnifyingglass")
+                            }
+                        }
+                    }
                 }
-                TableColumn(L10n.text("用量 / 额度")) { user in
-                    QuotaProgressView(usageBytes: user.usageBytes, quotaBytes: user.quotaBytes)
-                }
-                .width(min: 180, ideal: 220)
-                TableColumn(L10n.text("节点")) { user in Text("\(user.assignments.count)") }
-                TableColumn(L10n.text("到期")) { user in Text(user.expiresAt.map { DateDisplayText.local($0) } ?? L10n.text("不限")) }
-            }
-            .frame(minHeight: 180)
-            .overlay {
-                if store.users.isEmpty {
-                    ContentUnavailableView(L10n.text("还没有用户"), systemImage: "person.2", description: Text(L10n.text("添加用户后可以分配节点并生成订阅。")))
-                } else if visibleUsers.isEmpty {
-                    ContentUnavailableView(L10n.text("没有匹配的用户"), systemImage: "magnifyingglass")
-                }
+                Divider()
+                paginationControls
             }
         } detail: {
-            if let user = store.users.first(where: { $0.id == pageState.selectedUserID }) {
+            if let user = selectedUser {
                 userDetailPane(user)
                     .id(user.id)
                     .accessibilityElement(children: .contain)
@@ -122,13 +149,21 @@ private struct UserDirectoryView: View {
             }
         }
         .searchable(text: $pageState.userSearchText, placement: .toolbar, prompt: L10n.text("搜索用户"))
-        .onChange(of: pageState.userSearchText) { _, _ in pageState.selectedUserID = nil }
+        .onChange(of: pageState.userSearchText) { _, _ in resetPage() }
+        .onChange(of: pageState.userSortOrder) { _, _ in resetPage() }
+        .onChange(of: pageState.userPageSize) { _, _ in resetPage() }
+        .onChange(of: store.serviceAddress) { _, _ in
+            resetPage()
+            pageResponse = nil
+            loadedPageKey = nil
+        }
+        .task(id: pageRequestKey) { await loadPage() }
         .onChange(of: pageState.selectedUserID) { _, _ in
             selectedUsage = nil
             usageErrorMessage = nil
             usageLoadingUserID = nil
         }
-        .task(id: "\(pageState.selectedUserID ?? "")|\(store.isConnected)") {
+        .task(id: "\(store.serviceAddress)|\(pageState.selectedUserID ?? "")|\(store.isConnected)") {
             guard store.isConnected, let selectedUserID = pageState.selectedUserID else {
                 selectedUsage = nil
                 usageErrorMessage = nil
@@ -147,7 +182,7 @@ private struct UserDirectoryView: View {
             }
         }
         .sheet(isPresented: $showingEditUser) {
-            if let user = store.users.first(where: { $0.id == pageState.selectedUserID }) {
+            if let user = selectedUser {
                 UserEditFormView(store: store, user: user)
             }
         }
@@ -169,7 +204,7 @@ private struct UserDirectoryView: View {
         }
         .confirmationDialog(L10n.text("删除用户？"), isPresented: $showingDeleteConfirmation, titleVisibility: .visible) {
             Button(L10n.text("删除用户"), role: .destructive) {
-                if let user = store.users.first(where: { $0.id == pageState.selectedUserID }) { delete(user) }
+                if let user = selectedUser { delete(user) }
             }
         } message: {
             Text(L10n.text("用户的订阅和节点凭据会撤销，并排队断开在线设备。"))
@@ -177,6 +212,65 @@ private struct UserDirectoryView: View {
         .alert(alertTitle, isPresented: Binding(get: { alertMessage != nil }, set: { if !$0 { alertMessage = nil } })) {
             Button(L10n.text("好"), role: .cancel) { alertMessage = nil }
         } message: { Text(alertMessage ?? "") }
+    }
+
+    private var paginationControls: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if let pageError {
+                HStack {
+                    Text(pageError).foregroundStyle(.red).textSelection(.enabled)
+                    Button(L10n.text("重试")) { retryPageToken = UUID() }
+                }.font(.caption)
+            }
+            HStack(spacing: 12) {
+                if !store.isConnected {
+                    Label(L10n.text("离线快照"), systemImage: "wifi.slash").foregroundStyle(.secondary)
+                }
+                if currentPageResponse != nil || !store.isConnected {
+                    Text(L10n.text("共 {0} 个用户 · 第 {1} / {2} 页", String(totalUsers), String(currentPage), String(pageCount)))
+                        .foregroundStyle(.secondary).monospacedDigit()
+                }
+                if isLoadingPage { ProgressView().controlSize(.small) }
+                Spacer(minLength: 0)
+                Picker(L10n.text("每页条数"), selection: $pageState.userPageSize) {
+                    ForEach([25, 50, 100], id: \.self) { Text(String($0)).tag($0) }
+                }.fixedSize().accessibilityIdentifier("users.pageSize")
+                Button(L10n.text("上一页")) { changePage(currentPage - 1) }
+                    .disabled(currentPage <= 1 || isLoadingPage || (store.isConnected && currentPageResponse == nil))
+                    .accessibilityIdentifier("users.previousPage")
+                Button(L10n.text("下一页")) { changePage(currentPage + 1) }
+                    .disabled(currentPage >= pageCount || isLoadingPage || (store.isConnected && currentPageResponse == nil))
+                    .accessibilityIdentifier("users.nextPage")
+            }.font(.callout)
+        }
+        .padding(.horizontal, 12).padding(.vertical, 8)
+        .accessibilityIdentifier("users.pagination")
+    }
+
+    private func changePage(_ page: Int) {
+        pageState.userPage = page
+        pageState.selectedUserID = nil
+    }
+
+    private func resetPage() { changePage(1) }
+
+    private func loadPage() async {
+        let requestKey = pageRequestKey
+        guard store.isConnected else { isLoadingPage = false; pageError = nil; return }
+        isLoadingPage = true
+        pageError = nil
+        defer { if requestKey == pageRequestKey { isLoadingPage = false } }
+        do {
+            if !query.isEmpty { try await Task.sleep(for: .milliseconds(250)) }
+            let response = try await store.usersPage(page: pageState.userPage, pageSize: pageState.userPageSize, query: query, order: sortDirection)
+            guard !Task.isCancelled, requestKey == pageRequestKey else { return }
+            pageState.userPage = response.page
+            pageResponse = response
+            loadedPageKey = pageKey
+        } catch {
+            guard !Task.isCancelled, requestKey == pageRequestKey else { return }
+            pageError = error.localizedDescription
+        }
     }
 
     private func openCreatedUserGroups() {
@@ -579,15 +673,16 @@ private struct UserDirectoryView: View {
     }
 
     private func loadUsage(_ userID: String) async {
+        let service = store.serviceAddress
         usageLoadingUserID = userID
         usageErrorMessage = nil
         do {
             let response = try await store.userUsage(userID)
-            guard !Task.isCancelled, pageState.selectedUserID == userID else { return }
+            guard !Task.isCancelled, pageState.selectedUserID == userID, store.serviceAddress == service else { return }
             selectedUsage = response
             usageLoadingUserID = nil
         } catch {
-            guard !Task.isCancelled, pageState.selectedUserID == userID else { return }
+            guard !Task.isCancelled, pageState.selectedUserID == userID, store.serviceAddress == service else { return }
             usageErrorMessage = error.localizedDescription
             usageLoadingUserID = nil
         }

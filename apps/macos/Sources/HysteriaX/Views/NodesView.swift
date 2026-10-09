@@ -20,92 +20,132 @@ struct NodesView: View {
     @State private var deletionNode: NodeSummary?
     @State private var showingRecordRemovalConfirmation = false
 
-    private var visibleNodes: [NodeSummary] {
-        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let filtered = store.nodes.filter { node in
-            query.isEmpty
-                || node.name.localizedStandardContains(query)
+    @State private var page = 1
+    @State private var pageSize = 50
+    @State private var pageResponse: NodesPage?
+    @State private var loadedPageKey: String?
+    @State private var isLoadingPage = false
+    @State private var pageError: String?
+    @State private var retryPageToken = UUID()
+
+    private var query: String { searchText.trimmingCharacters(in: .whitespacesAndNewlines) }
+    private var sortField: String {
+        switch sortOrder.first?.keyPath {
+        case \NodeSummary.displayHost: "ssh_host"
+        case \NodeSummary.localizedState: "state"
+        default: "name"
+        }
+    }
+    private var sortDirection: String { sortOrder.first?.order == .reverse ? "desc" : "asc" }
+    private var pageKey: String { "\(store.serviceAddress)|\(page)|\(pageSize)|\(query)|\(sortField)|\(sortDirection)|\(L10n.locale.identifier)" }
+    private var pageRequestKey: String { "\(pageKey)|\(store.isConnected)|\(store.lastUpdated?.timeIntervalSince1970 ?? 0)|\(retryPageToken)" }
+    private var currentPageResponse: NodesPage? { loadedPageKey == pageKey ? pageResponse : nil }
+    private var totalNodes: Int { store.isConnected ? (currentPageResponse?.total ?? 0) : snapshotNodes.count }
+    private var pageCount: Int { max(1, (totalNodes + pageSize - 1) / pageSize) }
+    private var currentPage: Int { store.isConnected ? page : min(page, pageCount) }
+    private var selectedNode: NodeSummary? {
+        let cached = store.nodes.first { $0.id == selection }
+        let paged = currentPageResponse?.items.first { $0.id == selection }
+        if let paged, paged.revision > (cached?.revision ?? -1) { return paged }
+        return cached ?? paged
+    }
+
+    private var snapshotNodes: [NodeSummary] {
+        store.nodes.filter { node in
+            query.isEmpty || node.name.localizedStandardContains(query)
                 || node.ssh?.host.localizedCaseInsensitiveContains(query) == true
                 || node.id.localizedCaseInsensitiveContains(query)
                 || node.state.localizedCaseInsensitiveContains(query)
                 || node.localizedState.localizedCaseInsensitiveContains(query)
-        }
-        return filtered.sorted(using: sortOrder)
+        }.sorted(using: sortOrder)
+    }
+    private var visibleNodes: [NodeSummary] {
+        if store.isConnected { return currentPageResponse?.items ?? [] }
+        return Array(snapshotNodes.dropFirst((currentPage - 1) * pageSize).prefix(pageSize))
     }
 
     var body: some View {
-        MainVerticalSplitView(hasDetail: store.nodes.contains { $0.id == selection }) {
-            Table(visibleNodes, selection: $selection, sortOrder: $sortOrder) {
-                TableColumn(L10n.text("名称"), value: \.name) { node in
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(node.name)
-                            .lineLimit(1)
-                            .help(node.name)
-                            .accessibilityLabel(node.name)
-                            .accessibilityIdentifier("nodes.row.\(node.id)")
-                        HStack(spacing: 4) {
-                            Text(L10n.text("目标 v{0}", String(node.revision)))
-                            Text("·")
-                            Text(node.deployedRevision.map { L10n.text("已部署 v{0}", String($0)) } ?? L10n.text("尚未部署"))
-                        }
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .monospacedDigit()
-                        .lineLimit(1)
-                    }
-                }
-                .width(min: 140, ideal: 180)
-                TableColumn(L10n.text("SSH 地址"), value: \.displayHost) { node in
-                    Text(node.displayHost)
-                        .monospaced()
-                        .textSelection(.enabled)
-                        .lineLimit(1)
-                        .help(node.ssh?.host ?? L10n.text("暂无 SSH 主机地址"))
-                }
-                .width(min: 110, ideal: 150)
-                TableColumn(L10n.text("状态"), value: \.localizedState) { node in
-                    Text(node.localizedState).foregroundStyle(node.stateColor)
-                }
-                .width(min: 90, ideal: 110)
-                TableColumn(L10n.text("套餐")) { node in
-                    VStack(alignment: .leading, spacing: 3) {
-                        QuotaProgressView(usageBytes: node.packageUsage?.usageBytes, quotaBytes: node.package?.quotaBytes)
-                        Text(PackageDisplay.expiry(node.package))
+        MainVerticalSplitView(hasDetail: selectedNode != nil) {
+            VStack(spacing: 0) {
+                Table(visibleNodes, selection: $selection, sortOrder: $sortOrder) {
+                    TableColumn(L10n.text("名称"), value: \.name) { node in
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(node.name)
+                                .lineLimit(1)
+                                .help(node.name)
+                                .accessibilityLabel(node.name)
+                                .accessibilityIdentifier("nodes.row.\(node.id)")
+                            HStack(spacing: 4) {
+                                Text(L10n.text("目标 v{0}", String(node.revision)))
+                                Text("·")
+                                Text(node.deployedRevision.map { L10n.text("已部署 v{0}", String($0)) } ?? L10n.text("尚未部署"))
+                            }
                             .font(.caption)
-                            .foregroundStyle(node.packageUsage?.restricted == true ? Color.red : Color.secondary)
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                            .lineLimit(1)
+                        }
                     }
+                    .width(min: 140, ideal: 180)
+                    TableColumn(L10n.text("SSH 地址"), value: \.displayHost) { node in
+                        Text(node.displayHost)
+                            .monospaced()
+                            .textSelection(.enabled)
+                            .lineLimit(1)
+                            .help(node.ssh?.host ?? L10n.text("暂无 SSH 主机地址"))
+                    }
+                    .width(min: 110, ideal: 150)
+                    TableColumn(L10n.text("状态"), value: \.localizedState) { node in
+                        Text(node.localizedState).foregroundStyle(node.stateColor)
+                    }
+                    .width(min: 90, ideal: 110)
+                    TableColumn(L10n.text("套餐")) { node in
+                        VStack(alignment: .leading, spacing: 3) {
+                            QuotaProgressView(usageBytes: node.packageUsage?.usageBytes, quotaBytes: node.package?.quotaBytes)
+                            Text(PackageDisplay.expiry(node.package))
+                                .font(.caption)
+                                .foregroundStyle(node.packageUsage?.restricted == true ? Color.red : Color.secondary)
+                        }
+                    }
+                    .width(min: 150, ideal: 180)
+                    TableColumn(L10n.text("采样")) { node in
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(store.isConnected ? node.localizedFreshness : L10n.text("离线缓存"))
+                                .foregroundStyle(store.isConnected ? node.freshnessColor : Color.secondary)
+                            if (node.openGaps ?? 0) > 0 || (node.pendingRevocations ?? 0) > 0 {
+                                Text(L10n.text("缺口 {0} · 待撤权 {1}", String(describing: (node.openGaps ?? 0)), String(describing: (node.pendingRevocations ?? 0))))
+                                    .font(.caption).foregroundStyle(.orange)
+                            } else {
+                                Text(DateDisplayText.local(node.lastSampleAt)).font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                    .width(min: 100, ideal: 130)
                 }
-                .width(min: 150, ideal: 180)
-                TableColumn(L10n.text("采样")) { node in
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(store.isConnected ? node.localizedFreshness : L10n.text("离线缓存"))
-                            .foregroundStyle(store.isConnected ? node.freshnessColor : Color.secondary)
-                        if (node.openGaps ?? 0) > 0 || (node.pendingRevocations ?? 0) > 0 {
-                            Text(L10n.text("缺口 {0} · 待撤权 {1}", String(describing: (node.openGaps ?? 0)), String(describing: (node.pendingRevocations ?? 0))))
-                                .font(.caption).foregroundStyle(.orange)
-                        } else {
-                            Text(DateDisplayText.local(node.lastSampleAt)).font(.caption).foregroundStyle(.secondary)
+                .frame(minHeight: 180)
+                .task(id: initialSelection) {
+                    guard let initialSelection else { return }
+                    selection = initialSelection
+                    onInitialSelectionHandled()
+                }
+                .overlay {
+                    if visibleNodes.isEmpty {
+                        if isLoadingPage || (store.isConnected && currentPageResponse == nil && pageError == nil) {
+                            ProgressView()
+                        } else if pageError == nil {
+                            if query.isEmpty {
+                                ContentUnavailableView(L10n.text("还没有节点"), systemImage: "server.rack", description: Text(L10n.text("添加一台服务器，填写 SSH 和公开连接信息。")))
+                            } else {
+                                ContentUnavailableView(L10n.text("没有匹配的节点"), systemImage: "magnifyingglass")
+                            }
                         }
                     }
                 }
-                .width(min: 100, ideal: 130)
-            }
-            .frame(minHeight: 180)
-            .task(id: initialSelection) {
-                guard let initialSelection else { return }
-                searchText = ""
-                selection = initialSelection
-                onInitialSelectionHandled()
-            }
-            .overlay {
-                if store.nodes.isEmpty {
-                    ContentUnavailableView(L10n.text("还没有节点"), systemImage: "server.rack", description: Text(L10n.text("添加一台服务器，填写 SSH 和公开连接信息。")))
-                } else if visibleNodes.isEmpty {
-                    ContentUnavailableView(L10n.text("没有匹配的节点"), systemImage: "magnifyingglass")
-                }
+                Divider()
+                paginationControls
             }
         } detail: {
-            if let node = store.nodes.first(where: { $0.id == selection }) {
+            if let node = selectedNode {
                 nodeDetailPane(node)
                     .id(node.id)
                     .accessibilityElement(children: .contain)
@@ -120,10 +160,17 @@ struct NodesView: View {
             }
         }
         .searchable(text: $searchText, prompt: L10n.text("搜索节点"))
-        .onChange(of: searchText) { _, _ in selection = nil }
+        .onChange(of: searchText) { _, _ in resetPage() }
+        .onChange(of: sortOrder) { _, _ in resetPage() }
+        .onChange(of: pageSize) { _, _ in resetPage() }
+        .onChange(of: L10n.locale.identifier) { _, _ in resetPage() }
+        .task(id: pageRequestKey) { await loadPage() }
         .onChange(of: store.serviceAddress) { _, _ in
             submittingActions = [:]
             submittedActions = [:]
+            resetPage()
+            pageResponse = nil
+            loadedPageKey = nil
         }
         .onChange(of: store.jobs.map(\.id)) { _, ids in
             let knownIDs = Set(ids)
@@ -171,8 +218,61 @@ struct NodesView: View {
         }
     }
 
+    private var paginationControls: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if let pageError {
+                HStack {
+                    Text(pageError).foregroundStyle(.red).textSelection(.enabled)
+                    Button(L10n.text("重试")) { retryPageToken = UUID() }
+                }.font(.caption)
+            }
+            HStack(spacing: 12) {
+                if !store.isConnected { Label(L10n.text("离线快照"), systemImage: "wifi.slash").foregroundStyle(.secondary) }
+                if currentPageResponse != nil || !store.isConnected {
+                    Text(L10n.text("共 {0} 个节点 · 第 {1} / {2} 页", String(totalNodes), String(currentPage), String(pageCount)))
+                        .foregroundStyle(.secondary).monospacedDigit()
+                }
+                if isLoadingPage { ProgressView().controlSize(.small) }
+                Spacer(minLength: 0)
+                Picker(L10n.text("每页条数"), selection: $pageSize) {
+                    ForEach([25, 50, 100], id: \.self) { Text(String($0)).tag($0) }
+                }.fixedSize().accessibilityIdentifier("nodes.pageSize")
+                Button(L10n.text("上一页")) { changePage(currentPage - 1) }
+                    .disabled(currentPage <= 1 || isLoadingPage || (store.isConnected && currentPageResponse == nil))
+                    .accessibilityIdentifier("nodes.previousPage")
+                Button(L10n.text("下一页")) { changePage(currentPage + 1) }
+                    .disabled(currentPage >= pageCount || isLoadingPage || (store.isConnected && currentPageResponse == nil))
+                    .accessibilityIdentifier("nodes.nextPage")
+            }.font(.callout)
+        }
+        .padding(.horizontal, 12).padding(.vertical, 8)
+        .accessibilityIdentifier("nodes.pagination")
+    }
+
+    private func changePage(_ page: Int) { self.page = page; selection = nil; detail = nil; detailError = nil }
+    private func resetPage() { changePage(1) }
+
+    private func loadPage() async {
+        let requestKey = pageRequestKey
+        guard store.isConnected else { isLoadingPage = false; pageError = nil; return }
+        isLoadingPage = true
+        pageError = nil
+        defer { if requestKey == pageRequestKey { isLoadingPage = false } }
+        do {
+            if !query.isEmpty { try await Task.sleep(for: .milliseconds(250)) }
+            let response = try await store.nodesPage(page: page, pageSize: pageSize, query: query, sort: sortField, order: sortDirection)
+            guard !Task.isCancelled, requestKey == pageRequestKey else { return }
+            page = response.page
+            pageResponse = response
+            loadedPageKey = pageKey
+        } catch {
+            guard !Task.isCancelled, requestKey == pageRequestKey else { return }
+            pageError = error.localizedDescription
+        }
+    }
+
     private var detailRequestKey: String {
-        let node = store.nodes.first { $0.id == selection }
+        let node = selectedNode
         return "\(store.serviceAddress):\(selection ?? ""):\(node?.revision ?? 0):\(store.isConnected)"
     }
 
@@ -514,24 +614,7 @@ private extension NodeSummary {
         return host
     }
 
-    var localizedState: String {
-        let labels = [
-            "new": L10n.text("未部署"),
-            "needs_fingerprint": L10n.text("待确认指纹"),
-            "fingerprint_changed": L10n.text("指纹已变更"),
-            "ready": L10n.text("待部署"),
-            "syncing": L10n.text("同步中"),
-            "deployed": L10n.text("已部署"),
-            "rolled_back": L10n.text("已回滚"),
-            "sync_failed": L10n.text("同步失败"),
-            "rollback_failed": L10n.text("回滚失败"),
-            "drift": L10n.text("远端配置已变更"),
-            "unreachable": L10n.text("无法连接"),
-            "deleting": L10n.text("卸载中"),
-            "delete_failed": L10n.text("卸载失败"),
-        ]
-        return labels[state] ?? state
-    }
+    var localizedState: String { NodeDisplayText.state(state) }
 
     var localizedFreshness: String {
         switch dataFreshness {

@@ -225,6 +225,20 @@ struct DNSRecord: Codable, Sendable, Identifiable {
     }
 }
 
+struct DNSRecordsPage: Codable, Sendable {
+    let items: [DNSRecord]
+    let total: Int
+    let page: Int
+    let pageSize: Int
+
+    enum CodingKeys: String, CodingKey {
+        case items
+        case total
+        case page
+        case pageSize = "page_size"
+    }
+}
+
 struct PublishedConnection: Codable, Sendable {
     let publicHost: String
     let publicPort: Int
@@ -342,6 +356,20 @@ struct CredentialSummary: Codable, Sendable, Identifiable {
         case metadata
         case createdAt = "created_at"
         case updatedAt = "updated_at"
+    }
+}
+
+struct CredentialsPage: Codable, Sendable {
+    let items: [CredentialSummary]
+    let total: Int
+    let page: Int
+    let pageSize: Int
+
+    enum CodingKeys: String, CodingKey {
+        case items
+        case total
+        case page
+        case pageSize = "page_size"
     }
 }
 
@@ -597,6 +625,20 @@ struct NodeSummary: Codable, Sendable, Identifiable {
     }
 }
 
+struct NodesPage: Codable, Sendable {
+    let items: [NodeSummary]
+    let total: Int
+    let page: Int
+    let pageSize: Int
+
+    enum CodingKeys: String, CodingKey {
+        case items
+        case total
+        case page
+        case pageSize = "page_size"
+    }
+}
+
 struct NodeSSHDetail: Codable, Sendable {
     let host: String
     let port: Int
@@ -729,6 +771,20 @@ struct UserSummary: Codable, Sendable, Identifiable {
     }
 }
 
+struct UsersPage: Codable, Sendable {
+    let items: [UserSummary]
+    let total: Int
+    let page: Int
+    let pageSize: Int
+
+    enum CodingKeys: String, CodingKey {
+        case items
+        case total
+        case page
+        case pageSize = "page_size"
+    }
+}
+
 struct JobOutcome: Codable, Sendable {
     let status: String?
     let fingerprint: String?
@@ -801,6 +857,20 @@ struct JobSummary: Codable, Sendable, Identifiable {
     }
 }
 
+struct JobsPage: Codable, Sendable {
+    let items: [JobSummary]
+    let total: Int
+    let page: Int
+    let pageSize: Int
+
+    enum CodingKeys: String, CodingKey {
+        case items
+        case total
+        case page
+        case pageSize = "page_size"
+    }
+}
+
 struct AuditSummary: Codable, Sendable, Identifiable {
     let id: String
     let actor: String
@@ -818,6 +888,20 @@ struct AuditSummary: Codable, Sendable, Identifiable {
         case entityID = "entity_id"
         case createdAt = "created_at"
         case detail
+    }
+}
+
+struct AuditPage: Codable, Sendable {
+    let items: [AuditSummary]
+    let total: Int
+    let page: Int
+    let pageSize: Int
+
+    enum CodingKeys: String, CodingKey {
+        case items
+        case total
+        case page
+        case pageSize = "page_size"
     }
 }
 

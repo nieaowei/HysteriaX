@@ -97,6 +97,98 @@ pub async fn list(State(state): State<AppState>) -> Result<Json<Vec<Value>>, Api
     Ok(Json(values))
 }
 
+#[derive(Default, Deserialize)]
+pub(crate) struct NodesPageQuery {
+    page: Option<i64>,
+    page_size: Option<i64>,
+    q: Option<String>,
+    state_matches: Option<String>,
+    sort: Option<String>,
+    order: Option<String>,
+}
+
+impl NodesPageQuery {
+    fn validate(&self) -> Result<(i64, i64, &str, &str), ApiError> {
+        let page = self.page.unwrap_or(1);
+        let size = self.page_size.unwrap_or(50);
+        if page < 1 || !(1..=200).contains(&size) {
+            return Err(ApiError::bad_request(
+                "page must be positive and page_size must be between 1 and 200",
+            ));
+        }
+        let sort = self.sort.as_deref().unwrap_or("name");
+        if !["name", "ssh_host", "state", "created_at"].contains(&sort) {
+            return Err(ApiError::bad_request("invalid node sort field"));
+        }
+        let order = match self.order.as_deref().unwrap_or("asc") {
+            "asc" => "ASC",
+            "desc" => "DESC",
+            _ => return Err(ApiError::bad_request("invalid node sort order")),
+        };
+        Ok((page, size, sort, order))
+    }
+}
+
+pub(crate) async fn list_page(
+    State(state): State<AppState>,
+    Query(query): Query<NodesPageQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let (requested_page, page_size, sort, order) = query.validate()?;
+    let search = query.q.as_deref().unwrap_or("").trim();
+    let states: Vec<&str> = query
+        .state_matches
+        .as_deref()
+        .unwrap_or("")
+        .split(',')
+        .map(str::trim)
+        .filter(|state| !state.is_empty())
+        .collect();
+    let filter = "($1 = '' OR strpos(lower(n.name), lower($1)) > 0 OR strpos(lower(n.ssh_host), lower($1)) > 0 OR strpos(lower(n.id), lower($1)) > 0 OR strpos(lower(n.state), lower($1)) > 0 OR n.state = ANY($2))";
+    let mut tx = state.pool.begin().await?;
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+        .execute(&mut *tx)
+        .await?;
+    let total: i64 = sqlx::query_scalar(&format!("SELECT count(*) FROM nodes n WHERE {filter}"))
+        .bind(search)
+        .bind(&states)
+        .fetch_one(&mut *tx)
+        .await?;
+    let page = requested_page.min(((total + page_size - 1) / page_size).max(1));
+    let order_by = match sort {
+        "name" => format!(
+            "lower(n.name) COLLATE \"C\" {order}, n.name COLLATE \"C\" {order}, n.id {order}"
+        ),
+        "ssh_host" => format!(
+            "lower(n.ssh_host) COLLATE \"C\" {order}, n.ssh_host COLLATE \"C\" {order}, n.name COLLATE \"C\" {order}, n.id {order}"
+        ),
+        "state" => format!("n.state {order}, n.name COLLATE \"C\" {order}, n.id {order}"),
+        _ => format!("n.created_at {order}, n.id {order}"),
+    };
+    let rows = sqlx::query(&format!(
+        "SELECT n.* FROM nodes n WHERE {filter} ORDER BY {order_by} LIMIT $3 OFFSET $4"
+    ))
+    .bind(search)
+    .bind(&states)
+    .bind(page_size)
+    .bind((page - 1) * page_size)
+    .fetch_all(&mut *tx)
+    .await?;
+    // Count/base rows share a snapshot. Release it before the existing live telemetry,
+    // resource and binding readers acquire connections (also works with a one-slot pool).
+    tx.commit().await?;
+    let mut items = Vec::with_capacity(rows.len());
+    for row in rows {
+        items.push(node_json(&state, &row).await?);
+    }
+    Ok(Json(
+        json!({"items":items,"total":total,"page":page,"page_size":page_size}),
+    ))
+}
+
+#[cfg(test)]
+#[path = "nodes_pagination_tests.rs"]
+mod pagination_tests;
+
 pub async fn get(
     State(state): State<AppState>,
     Path(id): Path<String>,

@@ -29,19 +29,42 @@ struct JobsView: View {
     @State private var confirmedFingerprintJobID: String?
     @State private var actionError: String?
 
-    private var visibleJobs: [JobSummary] {
-        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let filtered = store.jobs.filter { job in
-            query.isEmpty
-                || job.id.localizedCaseInsensitiveContains(query)
-                || job.kind.localizedCaseInsensitiveContains(query)
-                || job.stage.localizedCaseInsensitiveContains(query)
-                || job.status.localizedCaseInsensitiveContains(query)
-                || (job.nodeName?.localizedCaseInsensitiveContains(query) ?? false)
-                || (job.nodeID?.localizedCaseInsensitiveContains(query) ?? false)
-                || (job.errorMessage?.localizedCaseInsensitiveContains(query) ?? false)
+    @State private var page = 1
+    @State private var pageSize = 50
+    @State private var pageResponse: JobsPage?
+    @State private var loadedPageKey: String?
+    @State private var isLoadingPage = false
+    @State private var pageError: String?
+    @State private var retryPageToken = UUID()
+
+    private var query: String { searchText.trimmingCharacters(in: .whitespacesAndNewlines) }
+    private var sortField: String {
+        switch sortOrder.first?.keyPath {
+        case \JobSummary.displayNodeName: "node"
+        case \JobSummary.localizedKind: "kind"
+        case \JobSummary.localizedStage: "stage"
+        case \JobSummary.localizedStatus: "status"
+        default: "created_at"
         }
-        return filtered.sorted(using: sortOrder)
+    }
+    private var sortDirection: String { sortOrder.first?.order == .forward ? "asc" : "desc" }
+    private var pageKey: String { "\(store.serviceAddress)|\(page)|\(pageSize)|\(query)|\(sortField)|\(sortDirection)" }
+    private var pageRequestKey: String { "\(pageKey)|\(store.isConnected)|\(store.lastUpdated?.timeIntervalSince1970 ?? 0)|\(retryPageToken)" }
+    private var currentPageResponse: JobsPage? { loadedPageKey == pageKey ? pageResponse : nil }
+    private var totalJobs: Int { store.isConnected ? (currentPageResponse?.total ?? 0) : snapshotJobs.count }
+    private var pageCount: Int { max(1, (totalJobs + pageSize - 1) / pageSize) }
+    private var currentPage: Int { store.isConnected ? page : min(page, pageCount) }
+
+    private var snapshotJobs: [JobSummary] {
+        store.jobs.filter { job in
+            query.isEmpty || [job.id, job.kind, job.stage, job.status, job.nodeName, job.nodeID, job.resourceName, job.resourceId, job.errorMessage]
+                .compactMap { $0 }.contains { $0.localizedCaseInsensitiveContains(query) }
+        }.sorted(using: sortOrder)
+    }
+
+    private var visibleJobs: [JobSummary] {
+        if store.isConnected { return currentPageResponse?.items ?? [] }
+        return Array(snapshotJobs.dropFirst((currentPage - 1) * pageSize).prefix(pageSize))
     }
 
     private var selectedJob: JobSummary? {
@@ -50,32 +73,41 @@ struct JobsView: View {
 
     private var detailRequestKey: String {
         guard let selectedJobID else { return "none" }
-        let updatedAt = store.jobs.first { $0.id == selectedJobID }?.updatedAt ?? "detail"
-        return "\(selectedJobID):\(updatedAt):\(store.isConnected)"
+        let updatedAt = visibleJobs.first { $0.id == selectedJobID }?.updatedAt ?? store.jobs.first { $0.id == selectedJobID }?.updatedAt ?? "detail"
+        return "\(store.serviceAddress):\(selectedJobID):\(updatedAt):\(store.isConnected):\(store.lastUpdated?.timeIntervalSince1970 ?? 0)"
     }
 
     var body: some View {
         MainVerticalSplitView(hasDetail: selectedJob != nil) {
-            Table(visibleJobs, selection: $selectedJobID, sortOrder: $sortOrder) {
-                TableColumn(L10n.text("节点"), value: \.displayNodeName)
-                TableColumn(L10n.text("类型"), value: \.localizedKind)
-                TableColumn(L10n.text("阶段"), value: \.localizedStage)
-                TableColumn(L10n.text("状态"), value: \.localizedStatus)
-                TableColumn(L10n.text("创建时间")) { job in Text(DateDisplayText.local(job.createdAt)) }
+            VStack(spacing: 0) {
+                Table(visibleJobs, selection: $selectedJobID, sortOrder: $sortOrder) {
+                    TableColumn(L10n.text("节点"), value: \.displayNodeName)
+                    TableColumn(L10n.text("类型"), value: \.localizedKind)
+                    TableColumn(L10n.text("阶段"), value: \.localizedStage)
+                    TableColumn(L10n.text("状态"), value: \.localizedStatus)
+                    TableColumn(L10n.text("创建时间"), value: \.createdAt) { job in Text(DateDisplayText.local(job.createdAt)) }
+                }
+                .frame(minHeight: 140)
+                .overlay {
+                    if visibleJobs.isEmpty {
+                        if isLoadingPage || (store.isConnected && currentPageResponse == nil && pageError == nil) {
+                            ProgressView()
+                        } else if pageError == nil {
+                            if query.isEmpty {
+                                ContentUnavailableView(L10n.text("暂无任务"), systemImage: "list.bullet.rectangle", description: Text(L10n.text("发起节点操作后，任务会显示在这里。")))
+                            } else {
+                                ContentUnavailableView(L10n.text("没有匹配的任务"), systemImage: "magnifyingglass")
+                            }
+                        }
+                    }
+                }
+                Divider()
+                paginationControls
             }
-            .frame(minHeight: 180)
             .task(id: initialSelection) {
                 guard let initialSelection else { return }
-                searchText = ""
                 selectedJobID = initialSelection
                 onInitialSelectionHandled()
-            }
-            .overlay {
-                if store.jobs.isEmpty {
-                    ContentUnavailableView(L10n.text("暂无任务"), systemImage: "list.bullet.rectangle", description: Text(L10n.text("发起节点操作后，任务会显示在这里。")))
-                } else if visibleJobs.isEmpty {
-                    ContentUnavailableView(L10n.text("没有匹配的任务"), systemImage: "magnifyingglass")
-                }
             }
         } detail: {
             if let job = selectedJob {
@@ -85,11 +117,79 @@ struct JobsView: View {
             }
         }
         .searchable(text: $searchText, prompt: L10n.text("搜索任务"))
-        .onChange(of: searchText) { _, _ in selectedJobID = nil }
+        .onChange(of: searchText) { _, _ in resetPage() }
+        .onChange(of: sortOrder) { _, _ in resetPage() }
+        .onChange(of: pageSize) { _, _ in resetPage() }
+        .onChange(of: page) { _, _ in selectedJobID = nil; selectedJobDetail = nil }
+        .onChange(of: store.serviceAddress) { _, _ in
+            resetPage()
+            pageResponse = nil
+            loadedPageKey = nil
+            selectedJobDetail = nil
+        }
+        .task(id: pageRequestKey) { await loadPage() }
         .task(id: detailRequestKey) { await loadSelectedJobDetail() }
         .alert(L10n.text("任务操作失败"), isPresented: Binding(get: { actionError != nil }, set: { if !$0 { actionError = nil } })) {
             Button(L10n.text("好"), role: .cancel) { actionError = nil }
         } message: { Text(JobDisplayText.errorMessage(actionError ?? "")) }
+    }
+
+    private var paginationControls: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if let pageError {
+                HStack {
+                    Text(pageError).foregroundStyle(.red).textSelection(.enabled)
+                    Button(L10n.text("重试")) { retryPageToken = UUID() }
+                }.font(.caption)
+            }
+            HStack(spacing: 12) {
+                if !store.isConnected {
+                    Label(L10n.text("离线快照"), systemImage: "wifi.slash").foregroundStyle(.secondary)
+                }
+                if currentPageResponse != nil || !store.isConnected {
+                    Text(L10n.text("共 {0} 项任务 · 第 {1} / {2} 页", String(totalJobs), String(currentPage), String(pageCount)))
+                        .foregroundStyle(.secondary).monospacedDigit()
+                }
+                if isLoadingPage { ProgressView().controlSize(.small) }
+                Spacer(minLength: 0)
+                Picker(L10n.text("每页条数"), selection: $pageSize) {
+                    ForEach([25, 50, 100], id: \.self) { Text(String($0)).tag($0) }
+                }.fixedSize()
+                Button(L10n.text("上一页")) { page = currentPage - 1 }
+                    .disabled(currentPage <= 1 || isLoadingPage || (store.isConnected && currentPageResponse == nil))
+                    .accessibilityIdentifier("jobs.previousPage")
+                Button(L10n.text("下一页")) { page = currentPage + 1 }
+                    .disabled(currentPage >= pageCount || isLoadingPage || (store.isConnected && currentPageResponse == nil))
+                    .accessibilityIdentifier("jobs.nextPage")
+            }.font(.callout)
+        }
+        .padding(.horizontal, 12).padding(.vertical, 8)
+        .accessibilityIdentifier("jobs.pagination")
+    }
+
+    private func resetPage() {
+        page = 1
+        selectedJobID = nil
+        selectedJobDetail = nil
+    }
+
+    private func loadPage() async {
+        let requestKey = pageRequestKey
+        guard store.isConnected else { isLoadingPage = false; pageError = nil; return }
+        isLoadingPage = true
+        pageError = nil
+        defer { if requestKey == pageRequestKey { isLoadingPage = false } }
+        do {
+            if !query.isEmpty { try await Task.sleep(for: .milliseconds(250)) }
+            let response = try await store.jobsPage(page: page, pageSize: pageSize, query: query, sort: sortField, order: sortDirection)
+            guard !Task.isCancelled, requestKey == pageRequestKey else { return }
+            page = response.page
+            pageResponse = response
+            loadedPageKey = pageKey
+        } catch {
+            guard !Task.isCancelled, requestKey == pageRequestKey else { return }
+            pageError = error.localizedDescription
+        }
     }
 
     private func jobDetailPane(_ job: JobSummary) -> some View {
@@ -286,15 +386,20 @@ struct JobsView: View {
     }
 
     private func loadSelectedJobDetail() async {
+        let requestKey = detailRequestKey
         guard let selectedJobID, store.isConnected else {
             selectedJobDetail = nil
+            isLoadingJobDetail = false
             return
         }
         isLoadingJobDetail = true
-        defer { isLoadingJobDetail = false }
+        defer { if requestKey == detailRequestKey { isLoadingJobDetail = false } }
         do {
-            selectedJobDetail = try await store.jobDetail(selectedJobID)
+            let detail = try await store.jobDetail(selectedJobID)
+            guard !Task.isCancelled, requestKey == detailRequestKey else { return }
+            selectedJobDetail = detail
         } catch {
+            guard !Task.isCancelled, requestKey == detailRequestKey else { return }
             selectedJobDetail = nil
             actionError = error.localizedDescription
         }

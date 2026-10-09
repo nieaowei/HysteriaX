@@ -1,0 +1,40 @@
+{
+  "ready": true,
+  "image": "nieaowei/hysteriax-server:dns-records-pagination-20261009-1552",
+  "image_id": "sha256:f587105a5fee87275b9c347f29e50d787bc1537996169271f1e089404c126f76",
+  "nodes": 6,
+  "users": 6,
+  "connections": 1,
+  "zones": 2,
+  "total_records": 19,
+  "page_size": 2,
+  "page_count": 10,
+  "checks": [
+    "inventory",
+    "all_pages",
+    "no_duplicates",
+    "reverse_order",
+    "clamp",
+    "empty_search",
+    "zone_filter",
+    "connection_filter",
+    "combined_filters",
+    "id_name_content_search",
+    "detail_metadata",
+    "content_sort",
+    "invalid_page_size",
+    "users_jobs_audit_overview_regression"
+  ],
+  "verified_at": "2026-10-09T07:56:23+08:00",
+  "service_url": "https://hysteriax.cc",
+  "container_health": "healthy",
+  "migration_version": 14,
+  "migration_success": true,
+  "indexes": [
+    "dns_records_name_type_id_idx",
+    "dns_records_zone_name_type_id_idx"
+  ],
+  "binary_sha256": "3eb5b70e10281b8f4333a4e51e7f3f6f8900ace8e8023e0846e1903a36323f7f",
+  "archive_sha256": "ea43ae51687db454c99702e6ff5ed78ce231ae8d52488d0ba780451c6b29f9f0",
+  "backup_directory": "/home/nieaowei/HysteriaX/backups/dns-records-pagination-20261009-1552"
+}

@@ -258,6 +258,14 @@ def main():
                 )
 
                 def expect(path, method="GET", payload=None, statuses=(200, 201, 202), auth=True):
+                    if path == "/api/v1/jobs" and method == "GET":
+                        items, page = [], 1
+                        while True:
+                            result = expect(f"{path}?page={page}&page_size=200", auth=auth)
+                            items.extend(result["items"])
+                            if result["page"] * result["page_size"] >= result["total"]:
+                                return items
+                            page += 1
                     status, body = request(base, path, admin if auth else None, method, payload)
                     if status not in statuses:
                         raise RuntimeError(

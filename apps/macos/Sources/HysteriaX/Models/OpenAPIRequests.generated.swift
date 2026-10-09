@@ -841,6 +841,9 @@ struct APIOperation<Request: Sendable, Response: Sendable>: Sendable {
 enum APIEndpoints {
     static let listCredentials: APIOperation<NoRequest, [CredentialSummary]> = APIOperation<NoRequest, [CredentialSummary]>(method: "GET", path: "api/v1/credentials", queryParameters: [:])
     static let createCredential: APIOperation<CredentialCreateRequest, CredentialReceipt> = APIOperation<CredentialCreateRequest, CredentialReceipt>(method: "POST", path: "api/v1/credentials", queryParameters: [:])
+    static func listCredentialsPage(page: Int? = nil, pageSize: Int? = nil, category: String? = nil, kind: String? = nil, q: String? = nil, sort: String? = nil, order: String? = nil) -> APIOperation<NoRequest, CredentialsPage> {
+        APIOperation(method: "GET", path: "api/v1/credentials/page", queryParameters: ["page": page.map { String($0) }, "page_size": pageSize.map { String($0) }, "category": category.map { String($0) }, "kind": kind.map { String($0) }, "q": q.map { String($0) }, "sort": sort.map { String($0) }, "order": order.map { String($0) }].compactMapValues { $0 })
+    }
     static func getCredential(id: String) -> APIOperation<NoRequest, CredentialDetail> {
         APIOperation(method: "GET", path: "api/v1/credentials/\(id)", queryParameters: [:])
     }
@@ -868,6 +871,9 @@ enum APIEndpoints {
     }
     static let listNodes: APIOperation<NoRequest, [NodeSummary]> = APIOperation<NoRequest, [NodeSummary]>(method: "GET", path: "api/v1/nodes", queryParameters: [:])
     static let createNode: APIOperation<NodeCreateRequest, CreatedEntity> = APIOperation<NodeCreateRequest, CreatedEntity>(method: "POST", path: "api/v1/nodes", queryParameters: [:])
+    static func listNodesPage(page: Int? = nil, pageSize: Int? = nil, q: String? = nil, stateMatches: String? = nil, sort: String? = nil, order: String? = nil) -> APIOperation<NoRequest, NodesPage> {
+        APIOperation(method: "GET", path: "api/v1/nodes/page", queryParameters: ["page": page.map { String($0) }, "page_size": pageSize.map { String($0) }, "q": q.map { String($0) }, "state_matches": stateMatches.map { String($0) }, "sort": sort.map { String($0) }, "order": order.map { String($0) }].compactMapValues { $0 })
+    }
     static func getNode(id: String) -> APIOperation<NoRequest, NodeDetail> {
         APIOperation(method: "GET", path: "api/v1/nodes/\(id)", queryParameters: [:])
     }
@@ -906,6 +912,9 @@ enum APIEndpoints {
     }
     static let listUsers: APIOperation<NoRequest, [UserSummary]> = APIOperation<NoRequest, [UserSummary]>(method: "GET", path: "api/v1/users", queryParameters: [:])
     static let createUser: APIOperation<UserCreateRequest, CreatedEntity> = APIOperation<UserCreateRequest, CreatedEntity>(method: "POST", path: "api/v1/users", queryParameters: [:])
+    static func listUsersPage(page: Int? = nil, pageSize: Int? = nil, q: String? = nil, sort: String? = nil, order: String? = nil) -> APIOperation<NoRequest, UsersPage> {
+        APIOperation(method: "GET", path: "api/v1/users/page", queryParameters: ["page": page.map { String($0) }, "page_size": pageSize.map { String($0) }, "q": q.map { String($0) }, "sort": sort.map { String($0) }, "order": order.map { String($0) }].compactMapValues { $0 })
+    }
     static func getUser(id: String) -> APIOperation<NoRequest, UserSummary> {
         APIOperation(method: "GET", path: "api/v1/users/\(id)", queryParameters: [:])
     }
@@ -960,7 +969,9 @@ enum APIEndpoints {
     static func resetUserQuota(id: String) -> APIOperation<RevisionRequest, QuotaResetResponse> {
         APIOperation(method: "POST", path: "api/v1/users/\(id)/quota/reset", queryParameters: [:])
     }
-    static let listJobs: APIOperation<NoRequest, [JobSummary]> = APIOperation<NoRequest, [JobSummary]>(method: "GET", path: "api/v1/jobs", queryParameters: [:])
+    static func listJobs(page: Int? = nil, pageSize: Int? = nil, q: String? = nil, sort: String? = nil, order: String? = nil) -> APIOperation<NoRequest, JobsPage> {
+        APIOperation(method: "GET", path: "api/v1/jobs", queryParameters: ["page": page.map { String($0) }, "page_size": pageSize.map { String($0) }, "q": q.map { String($0) }, "sort": sort.map { String($0) }, "order": order.map { String($0) }].compactMapValues { $0 })
+    }
     static let getServerMonitoring: APIOperation<NoRequest, ServerMonitoring> = APIOperation<NoRequest, ServerMonitoring>(method: "GET", path: "api/v1/server/monitoring", queryParameters: [:])
     static let getAPIVersion: APIOperation<NoRequest, APIVersion> = APIOperation<NoRequest, APIVersion>(method: "GET", path: "api/v1/version", queryParameters: [:])
     static func getJob(id: String) -> APIOperation<NoRequest, JobDetailResponse> {
@@ -973,7 +984,9 @@ enum APIEndpoints {
         APIOperation(method: "GET", path: "api/v1/jobs/\(id)/events", queryParameters: [:])
     }
     static let streamEvents: APIOperation<NoRequest, NoResponse> = APIOperation<NoRequest, NoResponse>(method: "GET", path: "api/v1/events", queryParameters: [:])
-    static let listAuditRecords: APIOperation<NoRequest, [AuditSummary]> = APIOperation<NoRequest, [AuditSummary]>(method: "GET", path: "api/v1/audit", queryParameters: [:])
+    static func listAuditRecords(page: Int? = nil, pageSize: Int? = nil, q: String? = nil, sort: String? = nil, order: String? = nil, actionMatches: String? = nil, entityTypeMatches: String? = nil, actorMatches: String? = nil) -> APIOperation<NoRequest, AuditPage> {
+        APIOperation(method: "GET", path: "api/v1/audit", queryParameters: ["page": page.map { String($0) }, "page_size": pageSize.map { String($0) }, "q": q.map { String($0) }, "sort": sort.map { String($0) }, "order": order.map { String($0) }, "action_matches": actionMatches.map { String($0) }, "entity_type_matches": entityTypeMatches.map { String($0) }, "actor_matches": actorMatches.map { String($0) }].compactMapValues { $0 })
+    }
     static let listAdminTokens: APIOperation<NoRequest, [AdminTokenSummary]> = APIOperation<NoRequest, [AdminTokenSummary]>(method: "GET", path: "api/v1/admin/tokens", queryParameters: [:])
     static let createAdminToken: APIOperation<CreateAdminTokenRequest, AdminTokenReceipt> = APIOperation<CreateAdminTokenRequest, AdminTokenReceipt>(method: "POST", path: "api/v1/admin/tokens", queryParameters: [:])
     static func revokeAdminToken(id: String) -> APIOperation<NoRequest, NoResponse> {
@@ -1019,6 +1032,9 @@ enum APIEndpoints {
         APIOperation(method: "GET", path: "api/v1/dns/records", queryParameters: ["zone_id": zoneId.map { String($0) }].compactMapValues { $0 })
     }
     static let createDNSRecord: APIOperation<DNSRecordCreateRequest, DNSActionReceipt> = APIOperation<DNSRecordCreateRequest, DNSActionReceipt>(method: "POST", path: "api/v1/dns/records", queryParameters: [:])
+    static func listDNSRecordsPage(page: Int? = nil, pageSize: Int? = nil, connectionId: String? = nil, zoneId: String? = nil, q: String? = nil, sort: String? = nil, order: String? = nil) -> APIOperation<NoRequest, DNSRecordsPage> {
+        APIOperation(method: "GET", path: "api/v1/dns/records/page", queryParameters: ["page": page.map { String($0) }, "page_size": pageSize.map { String($0) }, "connection_id": connectionId.map { String($0) }, "zone_id": zoneId.map { String($0) }, "q": q.map { String($0) }, "sort": sort.map { String($0) }, "order": order.map { String($0) }].compactMapValues { $0 })
+    }
     static func getDNSRecord(id: String) -> APIOperation<NoRequest, DNSRecord> {
         APIOperation(method: "GET", path: "api/v1/dns/records/\(id)", queryParameters: [:])
     }

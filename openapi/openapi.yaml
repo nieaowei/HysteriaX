@@ -49,6 +49,27 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/CredentialCreate'
+  /credentials/page:
+    get:
+      operationId: listCredentialsPage
+      summary: Search and paginate the unified credential catalog
+      x-swift-include-optional-query: true
+      parameters:
+        - { name: page, in: query, schema: { type: integer, minimum: 1, default: 1 } }
+        - { name: page_size, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+        - { name: category, in: query, schema: { type: string, enum: [all, operations, user], default: all } }
+        - { name: kind, in: query, schema: { type: string } }
+        - { name: q, in: query, description: Case-insensitive literal substring of the credential name., schema: { type: string } }
+        - { name: sort, in: query, schema: { type: string, enum: [name, kind, status, created_at], default: name } }
+        - { name: order, in: query, schema: { type: string, enum: [asc, desc], default: asc } }
+      responses:
+        '200':
+          description: "Unified managed and synthetic credential page. Archived/revoked entries remain visible; reference counts and metadata follow the complete catalog. Stable name/ID tie breaking; out-of-range pages are clamped, empty results use page 1."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CredentialsPage' }
+        '400':
+          description: Invalid pagination or filtering parameters
   /credentials/{id}:
     get:
       operationId: getCredential
@@ -275,6 +296,26 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/CreatedEntity' }
         '400': { $ref: '#/components/responses/Error' }
+  /nodes/page:
+    get:
+      operationId: listNodesPage
+      summary: Search and paginate nodes
+      x-swift-include-optional-query: true
+      parameters:
+        - { name: page, in: query, schema: { type: integer, minimum: 1, default: 1 } }
+        - { name: page_size, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+        - { name: q, in: query, description: "Literal case-insensitive substring across node names, SSH hosts, IDs and states.", schema: { type: string } }
+        - { name: state_matches, in: query, description: "Comma-separated raw states whose localized labels match q; ORed with substring search.", schema: { type: string } }
+        - { name: sort, in: query, schema: { type: string, enum: [name, ssh_host, state, created_at], default: name } }
+        - { name: order, in: query, schema: { type: string, enum: [asc, desc], default: asc } }
+      responses:
+        '200':
+          description: "Node page with stable name/ID tie breaking, full summary fields and live telemetry. Out-of-range pages are clamped; empty results use page 1."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/NodesPage' }
+        '400':
+          description: Invalid pagination or sort parameters
   /nodes/{id}:
     parameters:
       - $ref: '#/components/parameters/Id'
@@ -496,6 +537,25 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/CreatedEntity' }
+  /users/page:
+    get:
+      operationId: listUsersPage
+      summary: Search and paginate the user directory
+      x-swift-include-optional-query: true
+      parameters:
+        - { name: page, in: query, schema: { type: integer, minimum: 1, default: 1 } }
+        - { name: page_size, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+        - { name: q, in: query, description: "Literal case-insensitive substring across user names, user IDs and assigned node IDs.", schema: { type: string } }
+        - { name: sort, in: query, schema: { type: string, enum: [name, created_at], default: name } }
+        - { name: order, in: query, schema: { type: string, enum: [asc, desc], default: asc } }
+      responses:
+        '200':
+          description: "User page with stable name/ID ordering and full authorization metadata. Out-of-range pages are clamped to the last page; empty results use page 1."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UsersPage' }
+        '400':
+          description: Invalid pagination or sort parameters
   /users/{id}:
     parameters:
       - $ref: '#/components/parameters/Id'
@@ -826,15 +886,22 @@ paths:
   /jobs:
     get:
       operationId: listJobs
-      summary: List jobs
+      summary: Search and paginate all jobs
+      x-swift-include-optional-query: true
+      parameters:
+        - { name: page, in: query, schema: { type: integer, minimum: 1, default: 1 } }
+        - { name: page_size, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+        - { name: q, in: query, description: "Case-insensitive literal substring across task IDs, node/resource names and IDs, kind, stage, status and errors.", schema: { type: string } }
+        - { name: sort, in: query, schema: { type: string, enum: [created_at, node, kind, stage, status], default: created_at } }
+        - { name: order, in: query, schema: { type: string, enum: [asc, desc], default: desc } }
       responses:
         '200':
-          description: Recent jobs
+          description: Jobs page; out-of-range pages are clamped to the last page, with page 1 for empty results. Sorting uses the job ID as a stable tie breaker.
           content:
             application/json:
-              schema:
-                type: array
-                items: { $ref: '#/components/schemas/JobSummary' }
+              schema: { $ref: '#/components/schemas/JobsPage' }
+        '400':
+          description: Invalid pagination or sort parameters
   /server/monitoring:
     get:
       operationId: getServerMonitoring
@@ -933,15 +1000,25 @@ paths:
   /audit:
     get:
       operationId: listAuditRecords
-      summary: List audit records
+      summary: Search and paginate all audit records
+      x-swift-include-optional-query: true
+      parameters:
+        - { name: page, in: query, schema: { type: integer, minimum: 1, default: 1 } }
+        - { name: page_size, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+        - { name: q, in: query, description: "Literal case-insensitive substring across IDs, action, actor and entity type.", schema: { type: string } }
+        - { name: sort, in: query, schema: { type: string, enum: [created_at, action, entity_type, entity_id, actor], default: created_at } }
+        - { name: order, in: query, schema: { type: string, enum: [asc, desc], default: desc } }
+        - { name: action_matches, in: query, description: "Comma-separated raw action codes whose localized labels match q; ORed with the substring search.", schema: { type: string } }
+        - { name: entity_type_matches, in: query, description: "Comma-separated raw entity types whose localized labels match q; ORed with the substring search.", schema: { type: string } }
+        - { name: actor_matches, in: query, description: "Comma-separated raw actors whose localized labels match q; ORed with the substring search.", schema: { type: string } }
       responses:
         '200':
-          description: Recent audit records
+          description: "Audit page with stable ID tie breaking. Out-of-range pages are clamped to the last page; empty results use page 1."
           content:
             application/json:
-              schema:
-                type: array
-                items: { $ref: '#/components/schemas/AuditSummary' }
+              schema: { $ref: '#/components/schemas/AuditPage' }
+        '400':
+          description: Invalid pagination or sort parameters
   /admin/tokens:
     get:
       operationId: listAdminTokens
@@ -1380,6 +1457,28 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/DNSRecordCreate'
+  /dns/records/page:
+    get:
+      operationId: listDNSRecordsPage
+      summary: Search and paginate DNS records
+      tags: [DNS]
+      x-swift-include-optional-query: true
+      parameters:
+        - { name: page, in: query, schema: { type: integer, minimum: 1, default: 1 } }
+        - { name: page_size, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+        - { name: connection_id, in: query, schema: { type: string } }
+        - { name: zone_id, in: query, schema: { type: string } }
+        - { name: q, in: query, description: "Literal case-insensitive substring across record names, content and IDs.", schema: { type: string } }
+        - { name: sort, in: query, schema: { type: string, enum: [name, content], default: name } }
+        - { name: order, in: query, schema: { type: string, enum: [asc, desc], default: asc } }
+      responses:
+        '200':
+          description: "DNS record page with stable name/type/ID tie breaking. Bound deleted records remain visible. Out-of-range pages are clamped; empty results use page 1."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DNSRecordsPage' }
+        '400':
+          description: Invalid pagination or sort parameters
   /dns/records/{id}:
     get:
       operationId: getDNSRecord
@@ -1971,6 +2070,14 @@ components:
         revocation_job_ids:
           type: array
           items: { type: string, format: uuid }
+    NodesPage:
+      type: object
+      required: [items, total, page, page_size]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/NodeSummary' } }
+        total: { type: integer, minimum: 0 }
+        page: { type: integer, minimum: 1 }
+        page_size: { type: integer, minimum: 1, maximum: 200 }
     NodeSummary:
       type: object
       required: [id, name, revision, state]
@@ -2091,6 +2198,14 @@ components:
         source_groups:
           type: array
           items: { $ref: '#/components/schemas/AuthorizationGroupSource' }
+    UsersPage:
+      type: object
+      required: [items, total, page, page_size]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/UserSummary' } }
+        total: { type: integer, minimum: 0 }
+        page: { type: integer, minimum: 1 }
+        page_size: { type: integer, minimum: 1, maximum: 200 }
     UserSummary:
       type: object
       required: [id, name, enabled, expires_at, quota_bytes, usage_bytes, revision, quota_reset_at, assignments, created_at, updated_at]
@@ -2152,6 +2267,14 @@ components:
         stage: { type: string }
         result: { $ref: '#/components/schemas/JobOutcome' }
       additionalProperties: true
+    JobsPage:
+      type: object
+      required: [items, total, page, page_size]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/JobSummary' } }
+        total: { type: integer, minimum: 0 }
+        page: { type: integer, minimum: 1 }
+        page_size: { type: integer, minimum: 1, maximum: 200 }
     JobSummary:
       type: object
       required: [id, kind, status, stage, attempts, created_at, updated_at]
@@ -2185,6 +2308,14 @@ components:
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
         finished_at: { type: [string, 'null'], format: date-time }
+    AuditPage:
+      type: object
+      required: [items, total, page, page_size]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/AuditSummary' } }
+        total: { type: integer, minimum: 0 }
+        page: { type: integer, minimum: 1 }
+        page_size: { type: integer, minimum: 1, maximum: 200 }
     AuditSummary:
       type: object
       required: [id, actor, action, entity_type, entity_id, created_at]
@@ -2779,6 +2910,14 @@ components:
           type: object
           additionalProperties: true
           writeOnly: true
+    CredentialsPage:
+      type: object
+      required: [items, total, page, page_size]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/CredentialSummary' } }
+        total: { type: integer, minimum: 0 }
+        page: { type: integer, minimum: 1 }
+        page_size: { type: integer, minimum: 1, maximum: 200 }
     CredentialSummary:
       type: object
       required:
@@ -3179,6 +3318,14 @@ components:
           type:
           - string
           - 'null'
+    DNSRecordsPage:
+      type: object
+      required: [items, total, page, page_size]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/DNSRecord' } }
+        total: { type: integer, minimum: 0 }
+        page: { type: integer, minimum: 1 }
+        page_size: { type: integer, minimum: 1, maximum: 200 }
     DNSRecord:
       type: object
       required:

@@ -15,14 +15,42 @@ struct DNSRecordsView: View {
     @State private var busy = false
     @State private var sortOrder = [KeyPathComparator(\DNSRecord.name)]
 
-    private var visibleRecords: [DNSRecord] {
+    @State private var page = 1
+    @State private var pageSize = 50
+    @State private var pageResponse: DNSRecordsPage?
+    @State private var loadedPageKey: String?
+    @State private var isLoadingPage = false
+    @State private var pageError: String?
+    @State private var retryPageToken = UUID()
+
+    private var query: String { search.trimmingCharacters(in: .whitespacesAndNewlines) }
+    private var sortField: String { sortOrder.first?.keyPath == \DNSRecord.content ? "content" : "name" }
+    private var sortDirection: String { sortOrder.first?.order == .reverse ? "desc" : "asc" }
+    private var pageKey: String { "\(store.serviceAddress)|\(page)|\(pageSize)|\(connectionID)|\(zoneID)|\(query)|\(sortField)|\(sortDirection)" }
+    private var pageRequestKey: String { "\(pageKey)|\(store.isConnected)|\(store.supportsDNSManagement)|\(store.dnsUpdatedAt?.timeIntervalSince1970 ?? 0)|\(retryPageToken)" }
+    private var currentPageResponse: DNSRecordsPage? { loadedPageKey == pageKey ? pageResponse : nil }
+    private var totalRecords: Int { store.isConnected ? (currentPageResponse?.total ?? 0) : snapshotRecords.count }
+    private var pageCount: Int { max(1, (totalRecords + pageSize - 1) / pageSize) }
+    private var currentPage: Int { store.isConnected ? page : min(page, pageCount) }
+
+    private var snapshotRecords: [DNSRecord] {
         store.dnsRecords.filter { record in
             (zoneID.isEmpty || record.zoneId == zoneID) &&
             (connectionID.isEmpty || store.dnsZones.first(where: { $0.id == record.zoneId })?.connectionId == connectionID) &&
-            (search.isEmpty || record.name.localizedCaseInsensitiveContains(search) || record.content.localizedCaseInsensitiveContains(search))
+            (query.isEmpty || record.name.localizedCaseInsensitiveContains(query) || record.content.localizedCaseInsensitiveContains(query) || record.id.localizedCaseInsensitiveContains(query))
         }.sorted(using: sortOrder)
     }
-    private var selected: DNSRecord? { store.dnsRecords.first { $0.id == selection } }
+    private var visibleRecords: [DNSRecord] {
+        if store.isConnected { return currentPageResponse?.items ?? [] }
+        return Array(snapshotRecords.dropFirst((currentPage - 1) * pageSize).prefix(pageSize))
+    }
+    private var selected: DNSRecord? {
+        let cached = store.dnsRecords.first { $0.id == selection }
+        let paged = currentPageResponse?.items.first { $0.id == selection }
+        guard let cached else { return paged }
+        if let paged, paged.revision > cached.revision || (paged.revision == cached.revision && (DateDisplayText.parse(paged.updatedAt) ?? .distantPast) > (DateDisplayText.parse(cached.updatedAt) ?? .distantPast)) { return paged }
+        return cached
+    }
 
     var body: some View {
         if !store.supportsDNSManagement, store.isConnected {
@@ -33,6 +61,8 @@ struct DNSRecordsView: View {
                     VStack(spacing: 0) {
                         filters.padding(12)
                         recordsTable
+                        Divider()
+                        paginationControls
                     }
                 } detail: {
                     if let selected {
@@ -65,6 +95,20 @@ struct DNSRecordsView: View {
             }
             .alert(L10n.text("DNS 操作失败"), isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) { Button(L10n.text("好"), role: .cancel) { error = nil } } message: { Text(error ?? "") }
             .task { await store.refreshDNS(); openRequestedRecord() }
+            .task(id: pageRequestKey) { await loadPage() }
+            .onChange(of: connectionID) { _, _ in resetPage() }
+            .onChange(of: zoneID) { _, _ in resetPage() }
+            .onChange(of: search) { _, _ in resetPage() }
+            .onChange(of: sortOrder) { _, _ in resetPage() }
+            .onChange(of: pageSize) { _, _ in resetPage() }
+            .onChange(of: store.serviceAddress) { _, _ in
+                connectionID = ""
+                zoneID = ""
+                search = ""
+                resetPage()
+                pageResponse = nil
+                loadedPageKey = nil
+            }
             .onChange(of: store.requestedDNSRecordID) { _, _ in openRequestedRecord() }
         }
     }
@@ -117,7 +161,69 @@ struct DNSRecordsView: View {
         }
         .scrollIndicators(.automatic, axes: .horizontal)
         .overlay {
-            if records.isEmpty { ContentUnavailableView(L10n.text("暂无 DNS 记录"), systemImage: "network", description: Text(L10n.text("配置连接、启用域名区域并刷新记录，或直接创建记录。"))) }
+            if records.isEmpty {
+                if isLoadingPage || (store.isConnected && currentPageResponse == nil && pageError == nil) {
+                    ProgressView()
+                } else if pageError == nil {
+                    if query.isEmpty && connectionID.isEmpty && zoneID.isEmpty {
+                        ContentUnavailableView(L10n.text("暂无 DNS 记录"), systemImage: "network", description: Text(L10n.text("配置连接、启用域名区域并刷新记录，或直接创建记录。")))
+                    } else {
+                        ContentUnavailableView(L10n.text("没有匹配的 DNS 记录"), systemImage: "magnifyingglass")
+                    }
+                }
+            }
+        }
+    }
+
+    private var paginationControls: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if let pageError {
+                HStack {
+                    Text(pageError).foregroundStyle(.red).textSelection(.enabled)
+                    Button(L10n.text("重试")) { retryPageToken = UUID() }
+                }.font(.caption)
+            }
+            HStack(spacing: 12) {
+                if currentPageResponse != nil || !store.isConnected {
+                    Text(L10n.text("共 {0} 条 DNS 记录 · 第 {1} / {2} 页", String(totalRecords), String(currentPage), String(pageCount)))
+                        .foregroundStyle(.secondary).monospacedDigit()
+                }
+                if isLoadingPage { ProgressView().controlSize(.small) }
+                Spacer(minLength: 0)
+                Picker(L10n.text("每页条数"), selection: $pageSize) {
+                    ForEach([25, 50, 100], id: \.self) { Text(String($0)).tag($0) }
+                }.fixedSize().accessibilityIdentifier("dns.pageSize")
+                Button(L10n.text("上一页")) { changePage(currentPage - 1) }
+                    .disabled(currentPage <= 1 || isLoadingPage || (store.isConnected && currentPageResponse == nil))
+                    .accessibilityIdentifier("dns.previousPage")
+                Button(L10n.text("下一页")) { changePage(currentPage + 1) }
+                    .disabled(currentPage >= pageCount || isLoadingPage || (store.isConnected && currentPageResponse == nil))
+                    .accessibilityIdentifier("dns.nextPage")
+            }.font(.callout)
+        }
+        .padding(.horizontal, 12).padding(.vertical, 8)
+        .accessibilityIdentifier("dns.pagination")
+    }
+
+    private func changePage(_ page: Int) { self.page = page; selection = nil }
+    private func resetPage() { changePage(1) }
+
+    private func loadPage() async {
+        let requestKey = pageRequestKey
+        guard store.isConnected, store.supportsDNSManagement else { isLoadingPage = false; pageError = nil; return }
+        isLoadingPage = true
+        pageError = nil
+        defer { if requestKey == pageRequestKey { isLoadingPage = false } }
+        do {
+            if !query.isEmpty { try await Task.sleep(for: .milliseconds(250)) }
+            let response = try await store.dnsRecordsPage(page: page, pageSize: pageSize, connectionID: connectionID, zoneID: zoneID, query: query, sort: sortField, order: sortDirection)
+            guard !Task.isCancelled, requestKey == pageRequestKey else { return }
+            page = response.page
+            pageResponse = response
+            loadedPageKey = pageKey
+        } catch {
+            guard !Task.isCancelled, requestKey == pageRequestKey else { return }
+            pageError = error.localizedDescription
         }
     }
 
@@ -162,6 +268,6 @@ struct DNSRecordsView: View {
     }
     private func openRequestedRecord() {
         guard let id = store.requestedDNSRecordID else { return }
-        connectionID = ""; zoneID = ""; search = ""; selection = id; store.requestedDNSRecordID = nil
+        selection = id; store.requestedDNSRecordID = nil
     }
 }

@@ -36,8 +36,83 @@ final class DNSFixtureProtocol: URLProtocol, @unchecked Sendable {
         let paths = ["/api/v1/version":"version", "/api/v1/dns/connections":"connections", "/api/v1/dns/zones":"zones", "/api/v1/dns/records":"records", "/api/v1/dns/records/record-1":"record", "/api/v1/nodes":"nodes", "/api/v1/nodes/node-1":"node", "/api/v1/nodes/node-1/resources":"empty", "/api/v1/credentials":"credentials", "/api/v1/users":"empty", "/api/v1/jobs":"empty", "/api/v1/audit":"empty", "/api/v1/admin/tokens":"empty"]
         let name = paths[request.url!.path]
         let folder = ProcessInfo.processInfo.environment["HYSTERIAX_DNS_FIXTURE_DIRECTORY"]!
-        let data = name.map { try! Data(contentsOf: URL(fileURLWithPath: folder + "/" + $0 + ".json")) } ?? Data(#"{"code":"fixture","message":"not available"}"#.utf8)
-        let response = HTTPURLResponse(url: request.url!, statusCode: name == nil ? 404 : 200, httpVersion: "HTTP/1.1", headerFields: ["Content-Type":"application/json"])!
+        var data = name.map { try! Data(contentsOf: URL(fileURLWithPath: folder + "/" + $0 + ".json")) } ?? Data(#"{"code":"fixture","message":"not available"}"#.utf8)
+        if ["/api/v1/jobs", "/api/v1/audit"].contains(request.url!.path) {
+            data = Data(#"{"items":[],"total":0,"page":1,"page_size":200}"#.utf8)
+        }
+        if request.url!.path == "/api/v1/users/page" {
+            data = Data(#"{"items":[],"total":0,"page":1,"page_size":50}"#.utf8)
+        }
+        if request.url!.path == "/api/v1/dns/records/page" {
+            let records = try! JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: folder + "/records.json"))) as! [[String: Any]]
+            let zones = try! JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: folder + "/zones.json"))) as! [[String: Any]]
+            let queryItems = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!.queryItems ?? []
+            let parameters = Dictionary(uniqueKeysWithValues: queryItems.map { ($0.name, $0.value ?? "") })
+            let query = (parameters["q"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let size = Int(parameters["page_size"] ?? "50")!
+            let filtered = records.filter { record in
+                let zone = zones.first { ($0["id"] as! String) == (record["zone_id"] as! String) }
+                return (parameters["zone_id"] == nil || parameters["zone_id"] == record["zone_id"] as? String)
+                    && (parameters["connection_id"] == nil || parameters["connection_id"] == zone?["connection_id"] as? String)
+                    && (query.isEmpty || ["name", "content", "id"].contains { (record[$0] as! String).localizedCaseInsensitiveContains(query) })
+            }.sorted { left, right in
+                let keys = parameters["sort"] == "content" ? ["content", "name", "record_type", "id"] : ["name", "record_type", "id"]
+                for key in keys {
+                    let lhs = left[key] as! String, rhs = right[key] as! String
+                    if lhs != rhs { return parameters["order"] == "desc" ? lhs > rhs : lhs < rhs }
+                }
+                return false
+            }
+            let page = min(Int(parameters["page"] ?? "1")!, max(1, (filtered.count + size - 1) / size))
+            data = try! JSONSerialization.data(withJSONObject: ["items": Array(filtered.dropFirst((page - 1) * size).prefix(size)), "total": filtered.count, "page": page, "page_size": size])
+        }
+        if request.url!.path == "/api/v1/credentials/page" {
+            let entries = try! JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: folder + "/credentials.json"))) as! [[String: Any]]
+            let queryItems = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!.queryItems ?? []
+            let parameters = Dictionary(uniqueKeysWithValues: queryItems.map { ($0.name, $0.value ?? "") })
+            let query = (parameters["q"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let size = Int(parameters["page_size"] ?? "50")!
+            let filtered = entries.filter { entry in
+                let owned = entry["owner_user_id"] as? String != nil
+                let category = parameters["category"] ?? "all"
+                return (category == "all" || owned == (category == "user"))
+                    && (parameters["kind"] == nil || parameters["kind"] == entry["kind"] as? String)
+                    && (query.isEmpty || (entry["name"] as! String).localizedCaseInsensitiveContains(query))
+            }.sorted { left, right in
+                for key in [parameters["sort"] ?? "name", "name", "id"] {
+                    let lhs = (left[key] as? String ?? "").lowercased(), rhs = (right[key] as? String ?? "").lowercased()
+                    if lhs != rhs { return parameters["order"] == "desc" ? lhs > rhs : lhs < rhs }
+                }
+                return false
+            }
+            let page = min(Int(parameters["page"] ?? "1")!, max(1, (filtered.count + size - 1) / size))
+            data = try! JSONSerialization.data(withJSONObject: ["items": Array(filtered.dropFirst((page - 1) * size).prefix(size)), "total": filtered.count, "page": page, "page_size": size])
+        }
+        if request.url!.path == "/api/v1/nodes/page" {
+            let nodes = try! JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: folder + "/nodes.json"))) as! [[String: Any]]
+            let queryItems = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!.queryItems ?? []
+            let parameters = Dictionary(uniqueKeysWithValues: queryItems.map { ($0.name, $0.value ?? "") })
+            let query = (parameters["q"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let size = Int(parameters["page_size"] ?? "50")!
+            let matches = Set((parameters["state_matches"] ?? "").split(separator: ",").map(String.init))
+            func text(_ node: [String: Any], _ key: String) -> String {
+                if key == "ssh_host" { return (node["ssh"] as? [String: Any])?["host"] as? String ?? "" }
+                return node[key] as? String ?? ""
+            }
+            let filtered = nodes.filter { node in
+                query.isEmpty || ["name", "ssh_host", "id", "state"].contains { text(node, $0).localizedCaseInsensitiveContains(query) }
+                    || matches.contains(text(node, "state"))
+            }.sorted { left, right in
+                for key in [parameters["sort"] ?? "name", "name", "id"] {
+                    let lhs = text(left, key).lowercased(), rhs = text(right, key).lowercased()
+                    if lhs != rhs { return parameters["order"] == "desc" ? lhs > rhs : lhs < rhs }
+                }
+                return false
+            }
+            let page = min(Int(parameters["page"] ?? "1")!, max(1, (filtered.count + size - 1) / size))
+            data = try! JSONSerialization.data(withJSONObject: ["items": Array(filtered.dropFirst((page - 1) * size).prefix(size)), "total": filtered.count, "page": page, "page_size": size])
+        }
+        let response = HTTPURLResponse(url: request.url!, statusCode: name == nil && !["/api/v1/users/page", "/api/v1/dns/records/page", "/api/v1/credentials/page", "/api/v1/nodes/page"].contains(request.url!.path) ? 404 : 200, httpVersion: "HTTP/1.1", headerFields: ["Content-Type":"application/json"])!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: data)
         client?.urlProtocolDidFinishLoading(self)

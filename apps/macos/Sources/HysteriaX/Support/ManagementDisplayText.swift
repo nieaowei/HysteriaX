@@ -274,8 +274,8 @@ enum JobDisplayText {
 }
 
 enum AuditDisplayText {
-    static func action(_ value: String) -> String {
-        let labels = [
+    private static var actionLabels: [String: String] {
+        [
             "node.created": L10n.text("创建节点"),
             "node.updated": L10n.text("更新节点"),
             "node.restricted": L10n.text("限制节点代理"),
@@ -320,7 +320,19 @@ enum AuditDisplayText {
             "admin_token.created": L10n.text("创建管理员令牌"),
             "admin_token.revoked": L10n.text("撤销管理员令牌"),
         ]
-        return labels[value] ?? value
+    }
+
+    static func action(_ value: String) -> String { actionLabels[value] ?? value }
+
+    static func searchMatches(_ query: String) -> (actions: String?, entityTypes: String?, actors: String?) {
+        let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return (nil, nil, nil) }
+        func joined(_ values: [String]) -> String? { values.isEmpty ? nil : values.sorted().joined(separator: ",") }
+        return (
+            joined(actionLabels.filter { $0.value.localizedCaseInsensitiveContains(query) }.map(\.key)),
+            joined(["node", "user", "resource", "admin_token", "credential", "dns"].filter { entityType($0).localizedCaseInsensitiveContains(query) }),
+            joined(["admin", "system"].filter { actor($0).localizedCaseInsensitiveContains(query) })
+        )
     }
 
     static func entityType(_ value: String) -> String {
@@ -341,5 +353,35 @@ enum AuditDisplayText {
         case "system": L10n.text("系统")
         default: value
         }
+    }
+}
+
+
+enum NodeDisplayText {
+    private static var states: [String: String] {
+        [
+            "new": L10n.text("未部署"),
+            "needs_fingerprint": L10n.text("待确认指纹"),
+            "fingerprint_changed": L10n.text("指纹已变更"),
+            "ready": L10n.text("待部署"),
+            "syncing": L10n.text("同步中"),
+            "deployed": L10n.text("已部署"),
+            "rolled_back": L10n.text("已回滚"),
+            "sync_failed": L10n.text("同步失败"),
+            "rollback_failed": L10n.text("回滚失败"),
+            "drift": L10n.text("远端配置已变更"),
+            "unreachable": L10n.text("无法连接"),
+            "deleting": L10n.text("卸载中"),
+            "delete_failed": L10n.text("卸载失败"),
+        ]
+    }
+
+    static func state(_ value: String) -> String { states[value] ?? value }
+
+    static func matchingStates(_ query: String) -> String? {
+        let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return nil }
+        let matches = states.filter { $0.value.localizedCaseInsensitiveContains(query) }.map(\.key).sorted()
+        return matches.isEmpty ? nil : matches.joined(separator: ",")
     }
 }

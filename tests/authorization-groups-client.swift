@@ -37,6 +37,7 @@ private final class GroupFixtureProtocol: URLProtocol, @unchecked Sendable {
         else if method == "DELETE" { data = Data(receipt.utf8) }
         else if path == "/api/v1/version" { data = Data(#"{"api_version":"1.0.0","features":["authorization_groups"],"service_version":"fixture","hysteria_version":"fixture","mihomo_version":"fixture"}"#.utf8) }
         else if path == "/api/v1/authorization-groups" && Self.state.failGroups { status = 503; data = Data(#"{"error":{"code":"temporary","message":"groups unavailable"}}"#.utf8) }
+        else if ["/api/v1/jobs", "/api/v1/audit", "/api/v1/users/page"].contains(path) { data = Data(#"{"items":[],"total":0,"page":1,"page_size":50}"#.utf8) }
         else { data = Data("[]".utf8) }
         client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: "HTTP/1.1", headerFields: ["Content-Type":"application/json"])!, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: data)
@@ -88,8 +89,10 @@ struct AuthorizationGroupClientChecks {
         precondition(store.users.count == 1 && store.authorizationGroupsError != nil)
         let page = AuthorizationPageState()
         page.userSearchText = "Alice"; page.selectedUserID = "user"
+        page.userPage = 3; page.userPageSize = 25
         page.groupSearchText = "Migrated"; page.selectedGroupID = "migration-abc"
         precondition(page.userSearchText == "Alice" && page.selectedUserID == "user")
+        precondition(page.userPage == 3 && page.userPageSize == 25)
         checkMemberDrafts(user: oldUser)
         print("Authorization client checks passed: old service fallback, source decoding, personal mTLS wire shape, deletion receipt, isolated group errors and independent tab state.")
     }
