@@ -235,7 +235,8 @@
 "公开证书" = "Public certificate";
 "公开连接" = "Public connection";
 "公网 IPv4" = "Public IPv4";
-"公网 IPv6（可选）" = "Public IPv6 (optional)";
+"公网 IPv6" = "Public IPv6";
+"公网 IPv4 和 IPv6 至少填写一个，也可同时填写。" = "Enter at least one public IPv4 or IPv6 address, or both.";
 "公网入口与转发：{0}" = "Public ingress and forwarding: {0}";
 "公网地址与域名" = "Public address and domain";
 "公网探测健康 / 全部节点" = "Healthy public probes / All nodes";
@@ -395,8 +396,7 @@
 "域名格式：{0}-<节点 ID>.{1}" = "Domain format: {0}-<node ID>.{1}";
 "基本信息与 SSH" = "Basic information and SSH";
 "基本信息及 SSH 已保存。" = "Basic information and SSH saved.";
-"填入 SSH 地址作为 IPv4" = "Use SSH address as IPv4";
-"填入 SSH 地址作为 IPv6" = "Use SSH address as IPv6";
+"使用 SSH 地址" = "Use SSH address";
 "填写客户端 CA 后，分配用户时必须提供匹配的客户端证书和私钥。至少分配一位用户后再部署；健康检查会用该证书完成真实 Hysteria 连接，并在订阅中提供证书内容。" = "With a client CA configured, user assignments require a matching client certificate and private key. Assign at least one user before deployment. Health checks use the certificate for a real Hysteria connection, and subscriptions include its contents.";
 "备用出站" = "Fallback outbound";
 "复制引用" = "Copy reference";
@@ -1044,7 +1044,7 @@
 "请输入有效的 HTTPS 服务地址。" = "Enter a valid HTTPS service address.";
 "请输入有效的 IANA 时区，例如 Asia/Shanghai。" = "Enter a valid IANA time zone, such as Asia/Shanghai.";
 "请输入有效的 TTL。" = "Enter a valid TTL.";
-"请输入至少一个公网 IP。" = "Enter at least one public IP address.";
+"请输入至少一个公网 IPv4 或 IPv6 地址。" = "Enter at least one public IPv4 or IPv6 address.";
 "请返回节点列表重试删除。" = "Return to Nodes and retry deletion.";
 "请选择 SSH 凭据。" = "Choose an SSH credential.";
 "请选择 TLS 证书和私钥凭据。" = "Choose a TLS certificate and private key credential.";

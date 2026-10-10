@@ -16,6 +16,9 @@ struct DNSAllocationFields: View {
             Text(L10n.text("手动指定域名")).tag("manual")
             Text(L10n.text("选择已有记录")).tag("existing")
         }.accessibilityIdentifier("dns.allocation.mode")
+            .onChange(of: sshHost, initial: true) { previous, current in
+                draft.updateSSHAddress(from: previous, to: current)
+            }
         if draft.mode != "external" {
             Picker(L10n.text("域名区域"), selection: $draft.zoneID) {
                 Text(L10n.text("选择域名区域")).tag("")
@@ -40,12 +43,9 @@ struct DNSAllocationFields: View {
             }
             if draft.mode != "existing" {
                 TextField(L10n.text("公网 IPv4"), text: $draft.ipv4).accessibilityIdentifier("dns.allocation.ipv4")
-                TextField(L10n.text("公网 IPv6（可选）"), text: $draft.ipv6).accessibilityIdentifier("dns.allocation.ipv6")
-                if sshHost.contains(":"), !sshHost.contains(" ") {
-                    Button(L10n.text("填入 SSH 地址作为 IPv6")) { draft.ipv6 = sshHost }
-                } else if sshHost.split(separator: ".").count == 4, sshHost.split(separator: ".").allSatisfy({ UInt8($0) != nil }) {
-                    Button(L10n.text("填入 SSH 地址作为 IPv4")) { draft.ipv4 = sshHost }
-                }
+                TextField(L10n.text("公网 IPv6"), text: $draft.ipv6).accessibilityIdentifier("dns.allocation.ipv6")
+                Text(L10n.text("公网 IPv4 和 IPv6 至少填写一个，也可同时填写。"))
+                    .font(.caption).foregroundStyle(.secondary)
                 Text(L10n.text("域名分配后，在代理配置中设置 ACME 或已有 TLS 证书，再部署节点。")).font(.caption).foregroundStyle(.secondary)
             }
         }
