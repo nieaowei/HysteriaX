@@ -78,6 +78,155 @@ pub(crate) async fn node(state: &AppState, ssh: &str) -> String {
     result["node"]["id"].as_str().unwrap().into()
 }
 
+pub(crate) async fn allocated_node(state: &AppState, ssh: &str) -> (String, Vec<String>) {
+    let node = node(state, ssh).await;
+    let host = format!("node-{}.example.test", &node[..8]);
+    let input =
+        serde_json::from_value(json!({"idempotency_key":node,"zone_id":"zone","mode":"auto"}))
+            .unwrap();
+    let prepared = super::binding::Prepared {
+        hostname: host.clone(),
+        records: [("A", "8.8.8.8"), ("AAAA", "2606:4700:4700::1111")]
+            .into_iter()
+            .map(|(kind, content)| super::RecordInput {
+                name: host.clone(),
+                record_type: kind.into(),
+                content: content.into(),
+                ttl: 1,
+                proxied: false,
+            })
+            .collect(),
+        existing: vec![],
+    };
+    let mut tx = db::begin_write(&state.pool).await.unwrap();
+    let receipt = super::binding::bind_in_tx(
+        &mut tx,
+        &node,
+        &input,
+        &prepared,
+        &json!({"allocation":input}),
+    )
+    .await
+    .unwrap();
+    let ids: Vec<String> = serde_json::from_value(receipt["record_ids"].clone()).unwrap();
+    sqlx::query("UPDATE nodes SET public_host=$1 WHERE id=$2")
+        .bind(host)
+        .bind(&node)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    for id in &ids {
+        sqlx::query("UPDATE dns_records SET provider_record_id=$1,remote_snapshot=desired,desired=NULL,state='synced' WHERE id=$1").bind(id).execute(&mut *tx).await.unwrap();
+    }
+    sqlx::query("UPDATE dns_operations SET applied_at=now() WHERE job_id IN (SELECT id FROM jobs WHERE node_id=$1)").bind(&node).execute(&mut *tx).await.unwrap();
+    sqlx::query("UPDATE jobs SET status='succeeded' WHERE node_id=$1")
+        .bind(&node)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    (node, ids)
+}
+
+#[tokio::test]
+async fn node_deletion_and_record_removal_queue_owned_dns_cleanup() {
+    for record_only in [false, true] {
+        let (state, ssh, _, _) = fixture().await;
+        let (node, ids) = allocated_node(&state, &ssh).await;
+        if record_only {
+            api::nodes::remove_record(
+                State(state.clone()),
+                Path(node.clone()),
+                Query(api::nodes::RevisionQuery {
+                    expected_revision: Some(1),
+                }),
+            )
+            .await
+            .unwrap();
+        } else {
+            let (status, _) = api::nodes::delete(
+                State(state.clone()),
+                Path(node.clone()),
+                Query(api::nodes::RevisionQuery {
+                    expected_revision: Some(1),
+                }),
+            )
+            .await
+            .unwrap();
+            assert_eq!(status, axum::http::StatusCode::NO_CONTENT);
+        }
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM nodes WHERE id=$1")
+                .bind(&node)
+                .fetch_one(&state.pool)
+                .await
+                .unwrap(),
+            0
+        );
+        let cleanup = sqlx::query("SELECT j.status,j.node_id,o.payload,r.desired FROM jobs j JOIN dns_operations o ON o.job_id=j.id JOIN dns_records r ON r.id=o.resource_id WHERE j.kind='dns-record-delete'").fetch_all(&state.pool).await.unwrap();
+        assert_eq!(cleanup.len(), ids.len());
+        for row in cleanup {
+            assert_eq!(row.get::<String, _>("status"), "queued");
+            assert!(row.get::<Option<String>, _>("node_id").is_none());
+            assert!(
+                row.get::<Value, _>("payload")["baseline"]["name"]
+                    .as_str()
+                    .unwrap()
+                    .starts_with("node-")
+            );
+            assert_eq!(row.get::<Value, _>("desired"), json!({"delete":true}));
+        }
+    }
+}
+
+#[tokio::test]
+async fn node_dns_cleanup_preserves_external_selected_and_shared_records() {
+    let (state, ssh, _, _) = fixture().await;
+    let (node, ids) = allocated_node(&state, &ssh).await;
+    // A selected existing managed record has no creation job owned by this node.
+    sqlx::query("UPDATE jobs SET node_id=NULL WHERE resource_id=$1")
+        .bind(&ids[0])
+        .execute(&state.pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE dns_records SET origin='external' WHERE id=$1")
+        .bind(&ids[1])
+        .execute(&state.pool)
+        .await
+        .unwrap();
+    let mut tx = db::begin_write(&state.pool).await.unwrap();
+    super::binding::before_node_delete(&mut tx, &node)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM jobs WHERE kind='dns-record-delete'")
+            .fetch_one(&state.pool)
+            .await
+            .unwrap(),
+        0
+    );
+
+    let (owned, _) = allocated_node(&state, &ssh).await;
+    let other = node_request(&ssh, None);
+    let (_, Json(other)) = api::nodes::create(State(state.clone()), Json(other))
+        .await
+        .unwrap();
+    sqlx::query("UPDATE nodes SET published_connection=jsonb_build_object('public_host',(SELECT public_host FROM nodes WHERE id=$1)) WHERE id=$2").bind(&owned).bind(other["node"]["id"].as_str()).execute(&state.pool).await.unwrap();
+    let mut tx = db::begin_write(&state.pool).await.unwrap();
+    super::binding::before_node_delete(&mut tx, &owned)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM jobs WHERE kind='dns-record-delete'")
+            .fetch_one(&state.pool)
+            .await
+            .unwrap(),
+        0
+    );
+}
+
 #[tokio::test]
 async fn allocation_is_atomic_idempotent_and_does_not_configure_acme() {
     let (state, ssh, _, zone) = fixture().await;

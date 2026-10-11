@@ -283,6 +283,7 @@ async fn succeed(pool: &PgPool, job: &JobInput, output: JobOutput) -> Result<(),
         sqlx::query("INSERT INTO audit_records (id, actor, action, entity_type, entity_id, detail_json, created_at) VALUES ($1, 'admin', 'node.deleted', 'node', $2, $3, $4)")
                 .bind(uuid::Uuid::new_v4().to_string()).bind(node_id).bind(json!({"job_id": job.id, "remote_uninstall": true})).bind(timestamp).execute(&mut *tx).await?;
         crate::api::authorization_groups::before_node_delete(&mut tx, node_id, timestamp).await?;
+        crate::dns::binding::before_node_delete(&mut tx, node_id).await?;
         sqlx::query("DELETE FROM nodes WHERE id = $1 AND state = 'deleting'")
             .bind(node_id)
             .execute(&mut *tx)
@@ -1022,6 +1023,55 @@ mod dns_job_tests {
             .await
             .unwrap(),
             Some(connection)
+        );
+    }
+
+    #[tokio::test]
+    async fn successful_uninstall_queues_dns_cleanup_once_after_removing_node() {
+        let (state, ssh, _, _) = crate::dns::tests::fixture().await;
+        let (node, ids) = crate::dns::tests::allocated_node(&state, &ssh).await;
+        sqlx::query("UPDATE nodes SET state='deleting',deployed_revision=1 WHERE id=$1")
+            .bind(&node)
+            .execute(&state.pool)
+            .await
+            .unwrap();
+        let mut tx = crate::db::begin_write(&state.pool).await.unwrap();
+        crate::api::enqueue_job_in_tx(&mut tx, "uninstall", Some(&node), Some(1))
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        let job = claim_next(&state.pool).await.unwrap().unwrap();
+        assert_eq!(job.kind, "uninstall");
+        for _ in 0..2 {
+            succeed(
+                &state.pool,
+                &job,
+                JobOutput {
+                    stage: "uninstalled".into(),
+                    result: json!({}),
+                    node_state: None,
+                    deployed_revision: None,
+                    deployed_config: None,
+                    deployed_sha256: None,
+                    published_connection: None,
+                    delete_node: true,
+                },
+            )
+            .await
+            .unwrap();
+        }
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM nodes WHERE id=$1")
+                .bind(&node)
+                .fetch_one(&state.pool)
+                .await
+                .unwrap(),
+            0
+        );
+        assert_eq!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM jobs WHERE kind='dns-record-delete' AND status='queued' AND node_id IS NULL").fetch_one(&state.pool).await.unwrap(), ids.len() as i64);
+        assert_eq!(
+            claim_next(&state.pool).await.unwrap().unwrap().kind,
+            "dns-record-delete"
         );
     }
 }

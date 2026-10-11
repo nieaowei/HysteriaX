@@ -674,6 +674,7 @@ pub async fn remove_record(
             .fetch_one(&mut *tx)
             .await?;
     crate::api::authorization_groups::before_node_delete(&mut tx, &id, now()).await?;
+    crate::dns::binding::before_node_delete(&mut tx, &id).await?;
     // Child configuration, assignments, monitoring data and kick obligations
     // cascade; jobs retain their historical node ID, name snapshot and events.
     sqlx::query("DELETE FROM nodes WHERE id=$1")
@@ -743,6 +744,7 @@ pub async fn delete(
         cancel_queued_node_jobs_in_tx(&mut tx, &id).await?;
         cancel_running_node_jobs_in_tx(&mut tx, &id).await?;
         crate::api::authorization_groups::before_node_delete(&mut tx, &id, now()).await?;
+        crate::dns::binding::before_node_delete(&mut tx, &id).await?;
         sqlx::query("DELETE FROM nodes WHERE id = $1 AND desired_revision = $2")
             .bind(&id)
             .bind(expected)

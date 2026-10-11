@@ -320,7 +320,12 @@ async fn write_record(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::{Json, Router, extract::State, http::StatusCode, routing::get};
+    use axum::{
+        Json, Router,
+        extract::{Path, State},
+        http::StatusCode,
+        routing::get,
+    };
     use std::sync::{
         Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
@@ -336,8 +341,33 @@ mod tests {
             json!({"success":true,"result":remote.records.lock().unwrap().clone(),"result_info":{"total_pages":1}}),
         )
     }
-    async fn read(State(remote): State<Remote>) -> Json<Value> {
-        Json(json!({"success":true,"result":remote.records.lock().unwrap()[0]}))
+    async fn read(
+        State(remote): State<Remote>,
+        Path(id): Path<String>,
+    ) -> (StatusCode, Json<Value>) {
+        match remote
+            .records
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|record| record["id"] == id)
+            .cloned()
+        {
+            Some(record) => (
+                StatusCode::OK,
+                Json(json!({"success":true,"result":record})),
+            ),
+            None => (StatusCode::NOT_FOUND, Json(json!({"success":false}))),
+        }
+    }
+    async fn delete(State(remote): State<Remote>, Path(id): Path<String>) -> Json<Value> {
+        remote
+            .records
+            .lock()
+            .unwrap()
+            .retain(|record| record["id"] != id);
+        remote.writes.fetch_add(1, Ordering::SeqCst);
+        Json(json!({"success":true,"result":{"id":id}}))
     }
     async fn create(
         State(remote): State<Remote>,
@@ -355,7 +385,10 @@ mod tests {
     async fn provider(remote: Remote) -> (Cloudflare, tokio::task::JoinHandle<()>) {
         let app = Router::new()
             .route("/zones/remote-zone/dns_records", get(list).post(create))
-            .route("/zones/remote-zone/dns_records/{id}", get(read))
+            .route(
+                "/zones/remote-zone/dns_records/{id}",
+                get(read).delete(delete),
+            )
             .with_state(remote);
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let provider = Cloudflare::with_base(
@@ -365,6 +398,68 @@ mod tests {
         .unwrap();
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         (provider, server)
+    }
+
+    #[tokio::test]
+    async fn deleted_node_cleanup_removes_remote_records_and_replays_safely() {
+        let (state, ssh, _, _) = crate::dns::tests::fixture().await;
+        let (node, ids) = crate::dns::tests::allocated_node(&state, &ssh).await;
+        let records = sqlx::query("SELECT id,remote_snapshot FROM dns_records")
+            .fetch_all(&state.pool)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|row| {
+                let mut record: Value = row.get("remote_snapshot");
+                record["id"] = json!(row.get::<String, _>("id"));
+                record
+            })
+            .collect();
+        let remote = Remote {
+            records: Arc::new(Mutex::new(records)),
+            writes: Arc::new(AtomicUsize::new(0)),
+        };
+        let (provider, server) = provider(remote.clone()).await;
+        let _ = crate::api::nodes::delete(
+            State(state.clone()),
+            Path(node),
+            axum::extract::Query(crate::api::nodes::RevisionQuery {
+                expected_revision: Some(1),
+            }),
+        )
+        .await
+        .unwrap();
+        let rows = sqlx::query("SELECT j.*,o.id AS operation_id,o.resource_id,o.payload FROM jobs j JOIN dns_operations o ON o.job_id=j.id WHERE j.kind='dns-record-delete'").fetch_all(&state.pool).await.unwrap();
+        for row in rows {
+            let job = JobInput {
+                id: row.get("id"),
+                kind: row.get("kind"),
+                node_id: None,
+                target_revision: None,
+                payload: row.get("payload_json"),
+                attempts: 1,
+            };
+            let operation: String = row.get("operation_id");
+            let id: String = row.get("resource_id");
+            let payload: Value = row.get("payload");
+            write_record(
+                &state.pool,
+                &provider,
+                &job,
+                &operation,
+                "record-delete",
+                &id,
+                &payload,
+            )
+            .await
+            .unwrap();
+            // An acknowledged operation can be replayed without provider access.
+            execute(&state.pool, &state.secrets, &job).await.unwrap();
+        }
+        assert!(remote.records.lock().unwrap().is_empty());
+        assert_eq!(remote.writes.load(Ordering::SeqCst), ids.len());
+        assert_eq!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM dns_records WHERE state='deleted' AND deleted_at IS NOT NULL AND desired IS NULL").fetch_one(&state.pool).await.unwrap(), ids.len() as i64);
+        server.abort();
     }
     #[tokio::test]
     async fn ambiguous_create_and_repeated_completion_never_duplicate_remote_record() {

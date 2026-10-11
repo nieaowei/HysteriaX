@@ -361,6 +361,67 @@ pub async fn queue_sync(tx: &mut Transaction<'_, Postgres>, node: &str) -> Resul
     Ok(())
 }
 
+/// Queue provider cleanup before the node's binding is lost to cascading deletion.
+pub(crate) async fn before_node_delete(
+    tx: &mut Transaction<'_, Postgres>,
+    node: &str,
+) -> Result<(), sqlx::Error> {
+    // Creation jobs retain their node IDs after deletion, providing ownership
+    // evidence without treating selected existing records as node-owned.
+    let records = sqlx::query(
+        "SELECT r.*,z.connection_id,c.credential_version FROM dns_bindings b \
+         JOIN dns_records r ON b.record_ids ? r.id \
+         JOIN dns_zones z ON z.id=r.zone_id \
+         JOIN dns_connections c ON c.id=z.connection_id \
+         WHERE b.node_id=$1 AND r.origin='hysteriax' AND r.deleted_at IS NULL \
+         AND EXISTS(SELECT 1 FROM dns_operations o JOIN jobs j ON j.id=o.job_id \
+                    WHERE o.resource_id=r.id AND o.action='record-create' AND j.node_id=$1) \
+         AND NOT EXISTS(SELECT 1 FROM nodes n WHERE n.id<>$1 AND \
+             (n.public_host=r.name OR n.published_connection->>'public_host'=r.name \
+              OR EXISTS(SELECT 1 FROM dns_bindings other WHERE other.node_id=n.id AND other.record_ids ? r.id)))",
+    )
+    .bind(node)
+    .fetch_all(&mut **tx)
+    .await?;
+    for record in records {
+        let id: String = record.get("id");
+        let name: String = record.get("name");
+        let connection: String = record.get("connection_id");
+        let key = format!("node-delete:{node}:{id}");
+        let receipt = super::enqueue(
+            tx,
+            super::Operation {
+                key: &key,
+                request: &json!({"node_id":node,"record_id":id,"action":"node-delete"}),
+                connection: &connection,
+                version: record.get("credential_version"),
+                resource_type: "dns_record",
+                resource: &id,
+                resource_name: &name,
+                resource_key: format!("dns-zone:{}", record.get::<String, _>("zone_id")),
+                action: "record-delete",
+                payload: json!({"baseline":record.get::<Option<Value>,_>("remote_snapshot")}),
+                // Cleanup must survive cancellation of all node jobs and must
+                // not require the deleted node to exist when it is claimed.
+                node: None,
+            },
+        )
+        .await
+        .map_err(|error| sqlx::Error::Protocol(error.message))?;
+        sqlx::query("UPDATE dns_records SET desired=$1,state='pending',revision=revision+1,updated_at=now() WHERE id=$2")
+            .bind(json!({"delete":true})).bind(&id).execute(&mut **tx).await?;
+        super::audit(
+            tx,
+            "node.cleanup_requested",
+            &id,
+            json!({"node_id":node,"job_id":receipt["job_id"]}),
+        )
+        .await
+        .map_err(|error| sqlx::Error::Protocol(error.to_string()))?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
