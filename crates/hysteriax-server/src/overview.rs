@@ -83,8 +83,54 @@ fn package_warning(kind: &str) -> &str {
 }
 
 pub async fn get(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
-    let Json(nodes) = crate::api::nodes::list(State(state.clone())).await?;
-    let Json(users) = crate::api::users::list(State(state.clone())).await?;
+    let mut nodes = Vec::new();
+    let mut page = 1;
+    loop {
+        let Json(result) = crate::api::nodes::list(
+            State(state.clone()),
+            Query(crate::api::nodes::NodesListQuery {
+                page: Some(page),
+                page_size: Some(200),
+                ..Default::default()
+            }),
+        )
+        .await?;
+        nodes.extend(
+            result["items"]
+                .as_array()
+                .ok_or_else(ApiError::internal)?
+                .iter()
+                .cloned(),
+        );
+        if page * 200 >= result["total"].as_i64().ok_or_else(ApiError::internal)? {
+            break;
+        }
+        page += 1;
+    }
+    let mut users = Vec::new();
+    let mut page = 1;
+    loop {
+        let Json(result) = crate::api::users::list(
+            State(state.clone()),
+            Query(crate::api::users::UsersListQuery {
+                page: Some(page),
+                page_size: Some(200),
+                ..Default::default()
+            }),
+        )
+        .await?;
+        users.extend(
+            result["items"]
+                .as_array()
+                .ok_or_else(ApiError::internal)?
+                .iter()
+                .cloned(),
+        );
+        if page * 200 >= result["total"].as_i64().ok_or_else(ApiError::internal)? {
+            break;
+        }
+        page += 1;
+    }
     let mut issues = Vec::new();
     let mut monitor_nodes = Vec::new();
     let mut risk_nodes = Vec::new();

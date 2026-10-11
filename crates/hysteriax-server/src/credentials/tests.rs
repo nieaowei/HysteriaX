@@ -131,7 +131,13 @@ async fn imports_never_return_secrets_and_versions_are_database_immutable() {
     let state = state().await;
     let secret = "credential-api-token-do-not-expose";
     let id = create(&state, "api_token", json!({"token":secret})).await;
-    let Json(list) = api::list(State(state.clone())).await.unwrap();
+    let Json(list) = api::list(
+        State(state.clone()),
+        axum::extract::Query(api::CredentialsListQuery::default()),
+    )
+    .await
+    .unwrap();
+    let list = list["items"].as_array().unwrap();
     let Json(detail) = api::get(State(state.clone()), Path(id.clone()))
         .await
         .unwrap();

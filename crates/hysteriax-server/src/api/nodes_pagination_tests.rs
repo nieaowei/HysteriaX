@@ -30,7 +30,7 @@ async fn fixture() -> AppState {
 async fn page(state: &AppState, query: Value) -> Value {
     tokio::time::timeout(
         std::time::Duration::from_secs(20),
-        list_page(
+        list(
             State(state.clone()),
             Query(serde_json::from_value(query).unwrap()),
         ),
@@ -96,11 +96,17 @@ async fn nodes_pagination_covers_all_nodes_with_stable_names_and_sorting() {
             235
         );
     }
-    let Json(catalog) = list(State(state.clone())).await.unwrap();
+    let Json(catalog) = list(State(state.clone()), Query(NodesListQuery::default()))
+        .await
+        .unwrap();
+    assert_eq!(catalog["total"], 235);
+    assert_eq!(catalog["page"], 1);
+    assert_eq!(catalog["page_size"], 50);
+    assert_eq!(catalog["items"].as_array().unwrap().len(), 50);
+    let Json(overview) = crate::overview::get(State(state.clone())).await.unwrap();
     assert_eq!(
-        catalog.len(),
-        235,
-        "all node consumers keep the complete catalog"
+        overview["node_count"], 235,
+        "overview must aggregate beyond the first page"
     );
 }
 
@@ -162,7 +168,7 @@ fn nodes_pagination_rejects_invalid_parameters() {
         json!({"sort":"ssh_secret_enc"}),
         json!({"order":"DESC;--"}),
     ] {
-        let query: NodesPageQuery = serde_json::from_value(value).unwrap();
+        let query: NodesListQuery = serde_json::from_value(value).unwrap();
         assert!(query.validate().is_err());
     }
 }

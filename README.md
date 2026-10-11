@@ -38,6 +38,8 @@ curl --fail https://manage.example.com/readyz
 
 Management endpoints are under `/api/v1` and require `Authorization: Bearer …`. The OpenAPI document is available at `/openapi.yaml`. A local API process can be started with `scripts/run.sh` after setting `DATABASE_URL`, `HYSTERIAX_ADMIN_TOKEN`, and `HYSTERIAX_MASTER_KEY`.
 
+Collection endpoints `/api/v1/nodes`, `/api/v1/users`, `/api/v1/dns/records`, and `/api/v1/credentials` always return `{ items, total, page, page_size }`. They default to page 1 with 50 items; `page_size` is limited to 200. Search, sorting, and filters apply with or without explicit paging parameters. For example: `/api/v1/users?page=2&page_size=50&q=Alice`. The former `/page` routes and full-array response mode have been removed. Callers that need an entire directory must traverse the pages.
+
 ## Client-aware subscriptions
 
 The macOS subscription menu copies the automatic URL by default. The same

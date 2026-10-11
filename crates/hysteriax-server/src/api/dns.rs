@@ -54,10 +54,6 @@ pub struct UpdateRecord {
     pub idempotency_key: String,
     pub record: RecordInput,
 }
-#[derive(Deserialize, Default)]
-pub struct RecordQuery {
-    pub zone_id: Option<String>,
-}
 #[derive(Deserialize)]
 pub struct RevisionQuery {
     pub expected_revision: i64,
@@ -304,24 +300,8 @@ pub async fn zone_for_write(
     Ok(row)
 }
 
-pub async fn list_records(
-    State(state): State<AppState>,
-    Query(query): Query<RecordQuery>,
-) -> Result<Json<Vec<Value>>, ApiError> {
-    let rows=sqlx::query("SELECT r.*,(SELECT n.id FROM nodes n WHERE EXISTS(SELECT 1 FROM dns_bindings b WHERE b.node_id=n.id AND b.record_ids ? r.id) OR n.published_connection->>'public_host'=r.name LIMIT 1) AS bound_node_id FROM dns_records r WHERE ($1::text IS NULL OR r.zone_id=$1) AND (r.deleted_at IS NULL OR EXISTS(SELECT 1 FROM dns_bindings b WHERE b.record_ids ? r.id)) ORDER BY r.name,r.record_type,r.id")
-        .bind(query.zone_id).fetch_all(&state.pool).await?;
-    Ok(Json(
-        rows.iter()
-            .map(|r| {
-                let mut v = dns::record_json(r);
-                v["bound_node_id"] = json!(r.get::<Option<String>, _>("bound_node_id"));
-                v
-            })
-            .collect(),
-    ))
-}
 #[derive(Default, Deserialize)]
-pub(crate) struct RecordsPageQuery {
+pub(crate) struct RecordsListQuery {
     page: Option<i64>,
     page_size: Option<i64>,
     zone_id: Option<String>,
@@ -331,7 +311,7 @@ pub(crate) struct RecordsPageQuery {
     order: Option<String>,
 }
 
-impl RecordsPageQuery {
+impl RecordsListQuery {
     fn validate(&self) -> Result<(i64, i64, &str, &str), ApiError> {
         let page = self.page.unwrap_or(1);
         let size = self.page_size.unwrap_or(50);
@@ -354,9 +334,9 @@ impl RecordsPageQuery {
     }
 }
 
-pub(crate) async fn list_records_page(
+pub(crate) async fn list_records(
     State(state): State<AppState>,
-    Query(query): Query<RecordsPageQuery>,
+    Query(query): Query<RecordsListQuery>,
 ) -> Result<Json<Value>, ApiError> {
     let (requested_page, page_size, sort, order) = query.validate()?;
     let zone = query.zone_id.as_deref().filter(|value| !value.is_empty());

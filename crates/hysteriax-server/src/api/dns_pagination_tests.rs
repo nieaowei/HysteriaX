@@ -12,7 +12,7 @@ async fn fixture() -> (AppState, String, String) {
 }
 
 async fn page(state: &AppState, query: Value) -> Value {
-    list_records_page(
+    list_records(
         State(state.clone()),
         Query(serde_json::from_value(query).unwrap()),
     )
@@ -82,10 +82,19 @@ async fn dns_pagination_covers_all_records_with_stable_sorting_and_filters() {
         page(&state, json!({"sort":"content","order":"desc"})).await["items"][0]["id"],
         "record-235"
     );
-    let Json(catalog) = list_records(State(state.clone()), Query(RecordQuery::default()))
+    let Json(catalog) = list_records(State(state.clone()), Query(RecordsListQuery::default()))
         .await
         .unwrap();
-    assert_eq!(catalog.len(), 235);
+    assert_eq!(catalog["total"], 235);
+    assert_eq!(catalog["items"].as_array().unwrap().len(), 50);
+    let Json(filtered) = list_records(
+        State(state.clone()),
+        Query(serde_json::from_value(json!({"zone_id": zone})).unwrap()),
+    )
+    .await
+    .unwrap();
+    assert_eq!(filtered["total"], 200);
+    assert_eq!(filtered["items"].as_array().unwrap().len(), 50);
 }
 
 #[tokio::test]
@@ -150,7 +159,7 @@ fn dns_pagination_rejects_invalid_parameters() {
         json!({"sort":"name;--"}),
         json!({"order":"ASC;--"}),
     ] {
-        let query: RecordsPageQuery = serde_json::from_value(value).unwrap();
+        let query: RecordsListQuery = serde_json::from_value(value).unwrap();
         assert!(query.validate().is_err());
     }
 }

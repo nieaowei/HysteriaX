@@ -15,6 +15,7 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
+import urllib.parse
 import uuid
 import yaml
 
@@ -54,13 +55,20 @@ class API:
             raise RuntimeError(f"{method} {route}: HTTP {error.code}: {message}") from None
 
     def get(self, path, **kwargs):
-        if path == "/api/v1/jobs":
+        parsed = urllib.parse.urlsplit(path)
+        if parsed.path in {"/api/v1/jobs", "/api/v1/nodes", "/api/v1/users", "/api/v1/credentials", "/api/v1/dns/records"}:
+            parameters = dict(urllib.parse.parse_qsl(parsed.query))
             items, page = [], 1
             while True:
-                result = self.request("GET", f"{path}?page={page}&page_size=200", **kwargs)
+                query = urllib.parse.urlencode(parameters | {"page": page, "page_size": 200})
+                result = self.request("GET", f"{parsed.path}?{query}", **kwargs)
+                if result["page"] != page:
+                    raise RuntimeError("collection changed during pagination")
                 items.extend(result["items"])
                 if result["page"] * result["page_size"] >= result["total"]:
                     return items
+                if not result["items"]:
+                    raise RuntimeError("empty page before the end of a collection")
                 page += 1
         return self.request("GET", path, **kwargs)
 

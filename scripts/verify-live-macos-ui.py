@@ -45,12 +45,29 @@ def request(base, token, path, method="GET"):
             return error.code, None
 
 
+
+def request_collection(base, token, path):
+    items, page = [], 1
+    while True:
+        status, result = request(base, token, f"{path}?page={page}&page_size=200")
+        if status != 200:
+            return status, result
+        if result["page"] != page:
+            raise RuntimeError("collection changed during pagination")
+        items.extend(result["items"])
+        if result["page"] * result["page_size"] >= result["total"]:
+            return status, items
+        if not result["items"]:
+            raise RuntimeError("empty page before the end of a collection")
+        page += 1
+
+
 def cleanup_test_user(base, token, name):
-    status, payload = request(base, token, "/api/v1/users")
+    status, payload = request_collection(base, token, "/api/v1/users")
     if status != 200:
         print(f"UI_TEST_CLEANUP=unable to list users; HTTP {status}")
         return False
-    users = payload if isinstance(payload, list) else payload.get("users", [])
+    users = payload
     matches = [user for user in users if user.get("name") == name]
     for user in matches:
         status, _ = request(
@@ -80,11 +97,9 @@ def main():
     if status != 200:
         raise SystemExit(f"Management service readiness failed: HTTP {status}")
 
-    status, nodes = request(base, token, "/api/v1/nodes")
+    status, nodes = request_collection(base, token, "/api/v1/nodes")
     if status != 200:
         raise SystemExit(f"Could not read nodes: HTTP {status}")
-    if isinstance(nodes, dict):
-        nodes = nodes.get("nodes", nodes.get("items", []))
     allowed_hosts = set(filter(None, os.environ.get("HYSTERIAX_UI_NODE_HOSTS", "").split(",")))
     deployed = sorted(
         (node for node in nodes if node.get("state") == "deployed" and (not allowed_hosts or node.get("ssh", {}).get("host") in allowed_hosts)),
@@ -223,7 +238,7 @@ schemes:
                 print(line.replace(token, "[redacted]"))
 
         cleanup_ok = cleanup_test_user(base, token, user_name)
-        status, entries = request(base, token, "/api/v1/credentials")
+        status, entries = request_collection(base, token, "/api/v1/credentials")
         if status == 200:
             for entry in entries:
                 if entry.get("name") in {"HX UI Credential " + user_name, "HX UI Credential Inline " + user_name}:

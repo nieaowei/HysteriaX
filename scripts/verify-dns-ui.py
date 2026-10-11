@@ -40,10 +40,10 @@ final class DNSFixtureProtocol: URLProtocol, @unchecked Sendable {
         if ["/api/v1/jobs", "/api/v1/audit"].contains(request.url!.path) {
             data = Data(#"{"items":[],"total":0,"page":1,"page_size":200}"#.utf8)
         }
-        if request.url!.path == "/api/v1/users/page" {
+        if request.url!.path == "/api/v1/users" {
             data = Data(#"{"items":[],"total":0,"page":1,"page_size":50}"#.utf8)
         }
-        if request.url!.path == "/api/v1/dns/records/page" {
+        if request.url!.path == "/api/v1/dns/records" {
             let records = try! JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: folder + "/records.json"))) as! [[String: Any]]
             let zones = try! JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: folder + "/zones.json"))) as! [[String: Any]]
             let queryItems = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!.queryItems ?? []
@@ -66,7 +66,7 @@ final class DNSFixtureProtocol: URLProtocol, @unchecked Sendable {
             let page = min(Int(parameters["page"] ?? "1")!, max(1, (filtered.count + size - 1) / size))
             data = try! JSONSerialization.data(withJSONObject: ["items": Array(filtered.dropFirst((page - 1) * size).prefix(size)), "total": filtered.count, "page": page, "page_size": size])
         }
-        if request.url!.path == "/api/v1/credentials/page" {
+        if request.url!.path == "/api/v1/credentials" {
             let entries = try! JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: folder + "/credentials.json"))) as! [[String: Any]]
             let queryItems = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!.queryItems ?? []
             let parameters = Dictionary(uniqueKeysWithValues: queryItems.map { ($0.name, $0.value ?? "") })
@@ -88,7 +88,7 @@ final class DNSFixtureProtocol: URLProtocol, @unchecked Sendable {
             let page = min(Int(parameters["page"] ?? "1")!, max(1, (filtered.count + size - 1) / size))
             data = try! JSONSerialization.data(withJSONObject: ["items": Array(filtered.dropFirst((page - 1) * size).prefix(size)), "total": filtered.count, "page": page, "page_size": size])
         }
-        if request.url!.path == "/api/v1/nodes/page" {
+        if request.url!.path == "/api/v1/nodes" {
             let nodes = try! JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: folder + "/nodes.json"))) as! [[String: Any]]
             let queryItems = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!.queryItems ?? []
             let parameters = Dictionary(uniqueKeysWithValues: queryItems.map { ($0.name, $0.value ?? "") })
@@ -112,7 +112,7 @@ final class DNSFixtureProtocol: URLProtocol, @unchecked Sendable {
             let page = min(Int(parameters["page"] ?? "1")!, max(1, (filtered.count + size - 1) / size))
             data = try! JSONSerialization.data(withJSONObject: ["items": Array(filtered.dropFirst((page - 1) * size).prefix(size)), "total": filtered.count, "page": page, "page_size": size])
         }
-        let response = HTTPURLResponse(url: request.url!, statusCode: name == nil && !["/api/v1/users/page", "/api/v1/dns/records/page", "/api/v1/credentials/page", "/api/v1/nodes/page"].contains(request.url!.path) ? 404 : 200, httpVersion: "HTTP/1.1", headerFields: ["Content-Type":"application/json"])!
+        let response = HTTPURLResponse(url: request.url!, statusCode: name == nil && !["/api/v1/users", "/api/v1/dns/records", "/api/v1/credentials", "/api/v1/nodes"].contains(request.url!.path) ? 404 : 200, httpVersion: "HTTP/1.1", headerFields: ["Content-Type":"application/json"])!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: data)
         client?.urlProtocolDidFinishLoading(self)

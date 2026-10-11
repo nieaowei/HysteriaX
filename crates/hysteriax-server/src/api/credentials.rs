@@ -72,11 +72,6 @@ fn summary(row: &sqlx::postgres::PgRow) -> Value {
     json!({"id":row.get::<String,_>("id"),"name":row.get::<String,_>("name"),"kind":row.get::<String,_>("kind"),"owner_user_id":row.get::<Option<String>,_>("owner_user_id"),"revision":row.get::<i64,_>("revision"),"latest_version":row.get::<i64,_>("latest_version"),"archived":archived,"reminder_at":reminder,"expires_at":expires,"days_remaining":days,"status":state,"metadata":metadata,"created_at":row.get::<DateTime<Utc>,_>("created_at"),"updated_at":row.get::<DateTime<Utc>,_>("updated_at")})
 }
 
-pub async fn list(State(state): State<AppState>) -> Result<Json<Vec<Value>>, ApiError> {
-    let mut connection = state.pool.acquire().await?;
-    Ok(Json(catalog_on(&state, &mut connection).await?))
-}
-
 // Managed and synthesized credentials share the same summaries and reference rules.
 async fn catalog_on(
     state: &AppState,
@@ -154,7 +149,7 @@ async fn catalog_on(
 }
 
 #[derive(Default, Deserialize)]
-pub(crate) struct CredentialsPageQuery {
+pub(crate) struct CredentialsListQuery {
     page: Option<i64>,
     page_size: Option<i64>,
     category: Option<String>,
@@ -164,7 +159,7 @@ pub(crate) struct CredentialsPageQuery {
     order: Option<String>,
 }
 
-impl CredentialsPageQuery {
+impl CredentialsListQuery {
     fn validate(&self) -> Result<(i64, i64, &str, &str), ApiError> {
         let page = self.page.unwrap_or(1);
         let size = self.page_size.unwrap_or(50);
@@ -189,9 +184,9 @@ impl CredentialsPageQuery {
     }
 }
 
-pub(crate) async fn list_page(
+pub(crate) async fn list(
     State(state): State<AppState>,
-    Query(query): Query<CredentialsPageQuery>,
+    Query(query): Query<CredentialsListQuery>,
 ) -> Result<Json<Value>, ApiError> {
     let (requested_page, page_size, sort, order) = query.validate()?;
     let search = query.q.as_deref().unwrap_or("").trim().to_lowercase();

@@ -51,19 +51,27 @@ final class OverviewTransport: URLProtocol, @unchecked Sendable {
                 let size = Int(parameters.first { $0.name == "page_size" }?.value ?? "50")!
                 return (200, try! JSONSerialization.data(withJSONObject: ["items": items, "total": items.count, "page": 1, "page_size": size]))
             }
-            if path == "/api/v1/nodes/page" {
+            if path == "/api/v1/nodes" {
                 nodesPageRequest = request
-                return (200, Data(#"{"items":[],"total":0,"page":1,"page_size":25}"#.utf8))
+                let parameters = URLComponents(url: url, resolvingAgainstBaseURL: false)!.queryItems ?? []
+                let size = Int(parameters.first { $0.name == "page_size" }?.value ?? "50")!
+                let requested = Int(parameters.first { $0.name == "page" }?.value ?? "1")!
+                let fixture = try! JSONSerialization.jsonObject(with: nodes) as! [[String: Any]]
+                let items: [[String: Any]] = size == 200 ? (1...235).map { index in
+                    var node = fixture[0]; node["id"] = "node-\(index)"; return node
+                } : []
+                let page = min(requested, max(1, (items.count + size - 1) / size))
+                return (200, try! JSONSerialization.data(withJSONObject: ["items": Array(items.dropFirst((page - 1) * size).prefix(size)), "total": items.count, "page": page, "page_size": size]))
             }
-            if path == "/api/v1/credentials/page" {
+            if path == "/api/v1/credentials" {
                 credentialsPageRequest = request
                 return (200, Data(#"{"items":[],"total":0,"page":1,"page_size":25}"#.utf8))
             }
-            if path == "/api/v1/dns/records/page" {
+            if path == "/api/v1/dns/records" {
                 dnsPageRequest = request
                 return (200, Data(#"{"items":[],"total":0,"page":1,"page_size":25}"#.utf8))
             }
-            if path == "/api/v1/users/page" {
+            if path == "/api/v1/users" {
                 usersRequest = request
                 return (200, Data(#"{"items":[],"total":0,"page":1,"page_size":25}"#.utf8))
             }
@@ -71,7 +79,6 @@ final class OverviewTransport: URLProtocol, @unchecked Sendable {
                 auditRequest = request
                 return (200, Data(#"{"items":[],"total":0,"page":1,"page_size":25}"#.utf8))
             }
-            if path.hasSuffix("nodes") { return (200, nodes) }
             return (200, Data("[]".utf8))
         }
     }
@@ -123,6 +130,7 @@ struct OverviewNetworkChecks {
         }
         await store.refresh()
         precondition(store.isConnected && store.supportsOverviewMonitoring && store.overview?.nodeCount == 1)
+        precondition(store.nodes.count == 235 && Set(store.nodes.map(\.id)).count == 235, "refresh must read all pages without duplicates")
         precondition(store.supportsJobRetryLinks && store.supportsNodeRecordRemoval)
         let removedNode = store.nodes[0]
         try await store.removeNodeRecord(removedNode)
@@ -143,25 +151,25 @@ struct OverviewNetworkChecks {
         let nodesPage = try await store.nodesPage(page: 3, pageSize: 25, query: nodeQuery, sort: "ssh_host", order: "desc")
         precondition(nodesPage.items.isEmpty && nodesPage.total == 0 && nodesPage.page == 1)
         let nodesRequest = OverviewTransport.responses.recordedNodesPage()!
-        precondition(nodesRequest.url!.path == "/api/v1/nodes/page" && nodesRequest.httpMethod == "GET")
+        precondition(nodesRequest.url!.path == "/api/v1/nodes" && nodesRequest.httpMethod == "GET")
         let nodesQuery = URLComponents(url: nodesRequest.url!, resolvingAgainstBaseURL: false)!.queryItems!
         precondition(Dictionary(uniqueKeysWithValues: nodesQuery.map { ($0.name, $0.value!) }) == ["page": "3", "page_size": "25", "q": nodeQuery, "state_matches": "unreachable", "sort": "ssh_host", "order": "desc"])
         let credentialsPage = try await store.credentialsPage(page: 3, pageSize: 25, category: "user", kind: "tls_identity", query: "历史 %_&", sort: "status", order: "desc")
         precondition(credentialsPage.items.isEmpty && credentialsPage.total == 0 && credentialsPage.page == 1)
         let credentialsRequest = OverviewTransport.responses.recordedCredentialsPage()!
-        precondition(credentialsRequest.url!.path == "/api/v1/credentials/page" && credentialsRequest.httpMethod == "GET")
+        precondition(credentialsRequest.url!.path == "/api/v1/credentials" && credentialsRequest.httpMethod == "GET")
         let credentialsQuery = URLComponents(url: credentialsRequest.url!, resolvingAgainstBaseURL: false)!.queryItems!
         precondition(Dictionary(uniqueKeysWithValues: credentialsQuery.map { ($0.name, $0.value!) }) == ["page": "3", "page_size": "25", "category": "user", "kind": "tls_identity", "q": "历史 %_&", "sort": "status", "order": "desc"])
         let dnsPage = try await store.dnsRecordsPage(page: 4, pageSize: 25, connectionID: "connection-1", zoneID: "zone-1", query: "历史 %_&", sort: "content", order: "desc")
         precondition(dnsPage.items.isEmpty && dnsPage.total == 0 && dnsPage.page == 1)
         let dnsRequest = OverviewTransport.responses.recordedDNSPage()!
-        precondition(dnsRequest.url!.path == "/api/v1/dns/records/page" && dnsRequest.httpMethod == "GET")
+        precondition(dnsRequest.url!.path == "/api/v1/dns/records" && dnsRequest.httpMethod == "GET")
         let dnsQuery = URLComponents(url: dnsRequest.url!, resolvingAgainstBaseURL: false)!.queryItems!
         precondition(Dictionary(uniqueKeysWithValues: dnsQuery.map { ($0.name, $0.value!) }) == ["page": "4", "page_size": "25", "connection_id": "connection-1", "zone_id": "zone-1", "q": "历史 %_&", "sort": "content", "order": "desc"])
         let users = try await store.usersPage(page: 3, pageSize: 25, query: "历史 %_&", order: "desc")
         precondition(users.items.isEmpty && users.total == 0 && users.page == 1 && users.pageSize == 25)
         let usersRequest = OverviewTransport.responses.recordedUsers()!
-        precondition(usersRequest.url!.path == "/api/v1/users/page" && usersRequest.httpMethod == "GET")
+        precondition(usersRequest.url!.path == "/api/v1/users" && usersRequest.httpMethod == "GET")
         let usersQuery = URLComponents(url: usersRequest.url!, resolvingAgainstBaseURL: false)!.queryItems!
         precondition(Dictionary(uniqueKeysWithValues: usersQuery.map { ($0.name, $0.value!) }) == ["page": "3", "page_size": "25", "q": "历史 %_&", "sort": "name", "order": "desc"])
         let auditQuery = AuditDisplayText.action("user.deleted")

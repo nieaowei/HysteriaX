@@ -25,7 +25,7 @@ async fn fixture() -> AppState {
 async fn page(state: &AppState, query: Value) -> Value {
     tokio::time::timeout(
         std::time::Duration::from_secs(10),
-        list_page(
+        list(
             State(state.clone()),
             Query(serde_json::from_value(query).unwrap()),
         ),
@@ -73,12 +73,13 @@ async fn users_pagination_covers_all_users_with_stable_names_and_clamps() {
         page(&state, json!({"sort":"created_at","order":"desc"})).await["items"][0]["id"],
         "user-235"
     );
-    let Json(catalog) = list(State(state.clone())).await.unwrap();
-    assert_eq!(
-        catalog.len(),
-        235,
-        "node/group catalogs and overview must still receive all users"
-    );
+    let Json(catalog) = list(State(state.clone()), Query(UsersListQuery::default()))
+        .await
+        .unwrap();
+    assert_eq!(catalog["total"], 235);
+    assert_eq!(catalog["page"], 1);
+    assert_eq!(catalog["page_size"], 50);
+    assert_eq!(catalog["items"].as_array().unwrap().len(), 50);
 }
 
 #[tokio::test]
@@ -123,7 +124,7 @@ fn users_pagination_rejects_invalid_parameters() {
         json!({"sort":"name; DROP TABLE users"}),
         json!({"order":"ASC;--"}),
     ] {
-        let query: UsersPageQuery = serde_json::from_value(value).unwrap();
+        let query: UsersListQuery = serde_json::from_value(value).unwrap();
         assert!(query.validate().is_err());
     }
 }

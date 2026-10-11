@@ -276,7 +276,7 @@ final class ManagementStore {
     }
 
     func nodesPage(page: Int, pageSize: Int, query: String, sort: String, order: String) async throws -> NodesPage {
-        try await requireConnectedAPI().get(APIEndpoints.listNodesPage(page: page, pageSize: pageSize, q: query, stateMatches: NodeDisplayText.matchingStates(query), sort: sort, order: order))
+        try await requireConnectedAPI().get(APIEndpoints.listNodes(page: page, pageSize: pageSize, q: query, stateMatches: NodeDisplayText.matchingStates(query), sort: sort, order: order))
     }
 
     func nodeDetail(_ nodeID: String) async throws -> NodeDetail {
@@ -292,7 +292,7 @@ final class ManagementStore {
     }
 
     func usersPage(page: Int, pageSize: Int, query: String, order: String) async throws -> UsersPage {
-        try await requireConnectedAPI().get(APIEndpoints.listUsersPage(page: page, pageSize: pageSize, q: query, sort: "name", order: order))
+        try await requireConnectedAPI().get(APIEndpoints.listUsers(page: page, pageSize: pageSize, q: query, sort: "name", order: order))
     }
 
     func auditPage(page: Int, pageSize: Int, query: String, sort: String, order: String) async throws -> AuditPage {
@@ -635,9 +635,9 @@ final class ManagementStore {
     private func loadData(using client: APIClient) async throws {
         let generation = serviceGeneration
         async let loadedMonitoring = fetchServerMonitoring(using: client)
-        async let loadedCredentials: [CredentialSummary] = client.get(APIEndpoints.listCredentials)
-        async let loadedNodes: [NodeSummary] = client.get(APIEndpoints.listNodes)
-        async let loadedUsers: [UserSummary] = client.get(APIEndpoints.listUsers)
+        async let loadedCredentials: [CredentialSummary] = client.collectPages { APIEndpoints.listCredentials(page: $0, pageSize: 200) }
+        async let loadedNodes: [NodeSummary] = client.collectPages { APIEndpoints.listNodes(page: $0, pageSize: 200) }
+        async let loadedUsers: [UserSummary] = client.collectPages { APIEndpoints.listUsers(page: $0, pageSize: 200) }
         async let loadedJobs: JobsPage = client.get(APIEndpoints.listJobs(pageSize: 200))
         async let loadedAudit: AuditPage = client.get(APIEndpoints.listAuditRecords(pageSize: 200))
         async let loadedAdminTokens: [AdminTokenSummary] = client.get(APIEndpoints.listAdminTokens)

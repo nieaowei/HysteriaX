@@ -30,7 +30,7 @@ extension ManagementStore {
             let client = try requireConnectedAPI()
             async let connections = client.get(APIEndpoints.listDNSConnections)
             async let zones = client.get(APIEndpoints.listDNSZones)
-            async let records = client.get(APIEndpoints.listDNSRecords())
+            async let records = client.collectPages { APIEndpoints.listDNSRecords(page: $0, pageSize: 200) }
             let snapshot = try await DNSDisplaySnapshot(connections: connections, zones: zones, records: records, updatedAt: Date())
             guard service == serviceAddress, dnsRequestGeneration == generation, !Task.isCancelled else { return }
             dnsConnections = snapshot.connections
@@ -74,7 +74,7 @@ extension ManagementStore {
     }
 
     func dnsRecordsPage(page: Int, pageSize: Int, connectionID: String, zoneID: String, query: String, sort: String, order: String) async throws -> DNSRecordsPage {
-        try await requireConnectedAPI().get(APIEndpoints.listDNSRecordsPage(page: page, pageSize: pageSize, connectionId: connectionID.isEmpty ? nil : connectionID, zoneId: zoneID.isEmpty ? nil : zoneID, q: query, sort: sort, order: order))
+        try await requireConnectedAPI().get(APIEndpoints.listDNSRecords(page: page, pageSize: pageSize, connectionId: connectionID.isEmpty ? nil : connectionID, zoneId: zoneID.isEmpty ? nil : zoneID, q: query, sort: sort, order: order))
     }
 
     func dnsRecordDetail(_ id: String) async throws -> DNSRecord {

@@ -18,6 +18,19 @@ enum APIClientError: LocalizedError {
     }
 }
 
+protocol APIPage: Decodable, Sendable {
+    associatedtype Item: Sendable
+    var items: [Item] { get }
+    var total: Int { get }
+    var page: Int { get }
+    var pageSize: Int { get }
+}
+
+extension NodesPage: APIPage {}
+extension UsersPage: APIPage {}
+extension CredentialsPage: APIPage {}
+extension DNSRecordsPage: APIPage {}
+
 actor APIClient {
     private let baseURL: URL
     private let token: String
@@ -40,6 +53,27 @@ actor APIClient {
     func get<Value: Decodable>(_ operation: APIOperation<NoRequest, Value>) async throws -> Value {
         try requireMethod(operation, expected: "GET")
         return try await send(operation, method: operation.method, body: Optional<Data>.none)
+    }
+
+    func collectPages<Page: APIPage>(
+        _ operation: @Sendable (Int) -> APIOperation<NoRequest, Page>
+    ) async throws -> [Page.Item] {
+        var items: [Page.Item] = []
+        var requestedPage = 1
+        while true {
+            try Task.checkCancellation()
+            let response = try await get(operation(requestedPage))
+            guard response.page == requestedPage, (1...200).contains(response.pageSize),
+                  response.total >= 0, response.items.count <= response.pageSize else {
+                throw APIClientError.invalidResponse
+            }
+            items.append(contentsOf: response.items)
+            if response.total == 0 || response.page > (response.total - 1) / response.pageSize {
+                return items
+            }
+            guard !response.items.isEmpty else { throw APIClientError.invalidResponse }
+            requestedPage += 1
+        }
     }
 
     func post<Input: Encodable & Sendable, Output: Decodable>(

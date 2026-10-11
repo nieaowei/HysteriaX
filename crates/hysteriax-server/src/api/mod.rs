@@ -63,7 +63,6 @@ pub fn router(state: AppState) -> Router {
             "/api/v1/dns/records",
             get(dns::list_records).post(dns::create_record),
         )
-        .route("/api/v1/dns/records/page", get(dns::list_records_page))
         .route(
             "/api/v1/dns/records/{id}",
             get(dns::get_record)
@@ -78,7 +77,6 @@ pub fn router(state: AppState) -> Router {
                 .delete(dns::unbind),
         )
         .route("/api/v1/nodes", get(nodes::list).post(nodes::create))
-        .route("/api/v1/nodes/page", get(nodes::list_page))
         .route(
             "/api/v1/nodes/{id}/record",
             axum::routing::delete(nodes::remove_record),
@@ -104,7 +102,6 @@ pub fn router(state: AppState) -> Router {
             delete(resources::delete),
         )
         .route("/api/v1/users", get(users::list).post(users::create))
-        .route("/api/v1/users/page", get(users::list_page))
         .route(
             "/api/v1/users/{id}",
             get(users::get).patch(users::patch).delete(users::delete),
@@ -169,7 +166,6 @@ pub fn router(state: AppState) -> Router {
             "/api/v1/credentials",
             get(credentials::list).post(credentials::create),
         )
-        .route("/api/v1/credentials/page", get(credentials::list_page))
         .route(
             "/api/v1/credentials/{id}",
             get(credentials::get)
@@ -888,6 +884,120 @@ mod tests {
             .unwrap();
         assert!(global.get::<Option<String>, _>("node_id").is_none());
         assert!(global.get::<Option<String>, _>("node_name").is_none());
+    }
+
+    #[tokio::test]
+    async fn collection_routes_always_paginate_without_page_suffix() {
+        use super::{AppState, Duration, StatusCode, Value, json, router, token_digest};
+
+        let pool = crate::db::test_pool().await;
+        let state = AppState::new(
+            pool,
+            crate::security::SecretBox::from_base64("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+                .unwrap(),
+        );
+        let token = "collection-route-test";
+        sqlx::query("INSERT INTO admin_tokens(id,token_hash,label,created_at) VALUES('admin',$1,'Test',now())")
+            .bind(token_digest(token)).execute(&state.pool).await.unwrap();
+        sqlx::query("INSERT INTO users(id,name,enabled,created_at,updated_at) SELECT 'user-'||i,'User '||i,true,now(),now() FROM generate_series(1,65) i")
+            .execute(&state.pool).await.unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let app = router(state);
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(10))
+            .build()
+            .unwrap();
+        for path in ["nodes", "users", "dns/records", "credentials"] {
+            let url = format!("{base}/api/v1/{path}");
+            let all = client.get(&url).bearer_auth(token).send().await.unwrap();
+            assert_eq!(all.status(), StatusCode::OK);
+            let all: Value = all.json().await.unwrap();
+            assert!(
+                all.is_object(),
+                "collection responses always use the page envelope"
+            );
+            assert_eq!(all["page"], 1);
+            assert_eq!(all["page_size"], 50);
+            let total = all["total"].as_u64().unwrap() as usize;
+            assert!(all["items"].as_array().unwrap().len() <= 50);
+            if path == "users" {
+                assert_eq!(total, 65);
+                assert_eq!(all["items"].as_array().unwrap().len(), 50);
+            }
+            for query in ["page=1", "page_size=25", "page=2&page_size=25"] {
+                let response = client
+                    .get(format!("{url}?{query}"))
+                    .bearer_auth(token)
+                    .send()
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), StatusCode::OK);
+                let page: Value = response.json().await.unwrap();
+                assert_eq!(page["total"], total);
+                let size = if query == "page=1" { 50 } else { 25 };
+                assert_eq!(page["page_size"], size);
+                assert!(page["items"].as_array().unwrap().len() <= size);
+                if path == "users" && query == "page=2&page_size=25" {
+                    assert_eq!(page["page"], 2);
+                    assert_eq!(page["items"].as_array().unwrap().len(), 25);
+                }
+            }
+            for query in ["page=0", "page_size=201", "sort=invalid"] {
+                assert_eq!(
+                    client
+                        .get(format!("{url}?{query}"))
+                        .bearer_auth(token)
+                        .send()
+                        .await
+                        .unwrap()
+                        .status(),
+                    StatusCode::BAD_REQUEST
+                );
+            }
+            assert_eq!(
+                client
+                    .get(format!("{url}/page?page=1"))
+                    .bearer_auth(token)
+                    .send()
+                    .await
+                    .unwrap()
+                    .status(),
+                StatusCode::NOT_FOUND
+            );
+            assert_eq!(
+                client
+                    .get(format!("{url}?page=1"))
+                    .send()
+                    .await
+                    .unwrap()
+                    .status(),
+                StatusCode::UNAUTHORIZED
+            );
+        }
+        let filtered = client
+            .get(format!("{base}/api/v1/dns/records?zone_id=missing"))
+            .bearer_auth(token)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(filtered.status(), StatusCode::OK);
+        let filtered: Value = filtered.json().await.unwrap();
+        assert_eq!(filtered["items"], json!([]));
+        assert_eq!(filtered["total"], 0);
+        let searched: Value = client
+            .get(format!("{base}/api/v1/users?q=User%2065"))
+            .bearer_auth(token)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(searched["total"], 1);
+        assert_eq!(searched["items"][0]["id"], "user-65");
+        server.abort();
     }
 
     #[test]

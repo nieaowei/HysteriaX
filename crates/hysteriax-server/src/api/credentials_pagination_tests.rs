@@ -24,7 +24,7 @@ async fn fixture() -> AppState {
 async fn page(state: &AppState, query: Value) -> Value {
     tokio::time::timeout(
         std::time::Duration::from_secs(10),
-        list_page(
+        list(
             State(state.clone()),
             Query(serde_json::from_value(query).unwrap()),
         ),
@@ -121,8 +121,12 @@ async fn credentials_pagination_filters_categories_preserves_metadata_and_never_
     let chronological = page(&state, json!({"sort":"created_at"})).await;
     assert_eq!(chronological["items"][0]["id"], "credential-002");
     assert_eq!(chronological["items"][1]["id"], "credential-003");
-    let Json(catalog) = list(State(state.clone())).await.unwrap();
-    assert_eq!(catalog.len(), 238);
+    let Json(catalog) = list(State(state.clone()), Query(CredentialsListQuery::default()))
+        .await
+        .unwrap();
+    assert_eq!(catalog["total"], 238);
+    let catalog = catalog["items"].as_array().unwrap();
+    assert_eq!(catalog.len(), 50);
     let expected = catalog
         .iter()
         .find(|entry| entry["id"] == "00000000-0000-4000-8000-000000000001")
@@ -156,7 +160,7 @@ fn credentials_pagination_rejects_invalid_parameters() {
         json!({"sort":"payload_enc"}),
         json!({"order":"ASC;--"}),
     ] {
-        let query: CredentialsPageQuery = serde_json::from_value(query).unwrap();
+        let query: CredentialsListQuery = serde_json::from_value(query).unwrap();
         assert!(query.validate().is_err());
     }
 }

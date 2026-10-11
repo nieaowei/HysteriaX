@@ -84,30 +84,17 @@ pub struct NodeAction {
     expected_revision: i64,
 }
 
-pub async fn list(State(state): State<AppState>) -> Result<Json<Vec<Value>>, ApiError> {
-    let rows = sqlx::query(
-        "SELECT * FROM nodes ORDER BY lower(name) COLLATE \"C\", name COLLATE \"C\", id",
-    )
-    .fetch_all(&state.pool)
-    .await?;
-    let mut values = Vec::with_capacity(rows.len());
-    for row in rows {
-        values.push(node_json(&state, &row).await?);
-    }
-    Ok(Json(values))
-}
-
 #[derive(Default, Deserialize)]
-pub(crate) struct NodesPageQuery {
-    page: Option<i64>,
-    page_size: Option<i64>,
-    q: Option<String>,
-    state_matches: Option<String>,
-    sort: Option<String>,
-    order: Option<String>,
+pub(crate) struct NodesListQuery {
+    pub(crate) page: Option<i64>,
+    pub(crate) page_size: Option<i64>,
+    pub(crate) q: Option<String>,
+    pub(crate) state_matches: Option<String>,
+    pub(crate) sort: Option<String>,
+    pub(crate) order: Option<String>,
 }
 
-impl NodesPageQuery {
+impl NodesListQuery {
     fn validate(&self) -> Result<(i64, i64, &str, &str), ApiError> {
         let page = self.page.unwrap_or(1);
         let size = self.page_size.unwrap_or(50);
@@ -129,9 +116,9 @@ impl NodesPageQuery {
     }
 }
 
-pub(crate) async fn list_page(
+pub(crate) async fn list(
     State(state): State<AppState>,
-    Query(query): Query<NodesPageQuery>,
+    Query(query): Query<NodesListQuery>,
 ) -> Result<Json<Value>, ApiError> {
     let (requested_page, page_size, sort, order) = query.validate()?;
     let search = query.q.as_deref().unwrap_or("").trim();

@@ -43,7 +43,7 @@ final class AuthorizationFixtureProtocol: URLProtocol, @unchecked Sendable {
         if ["/api/v1/jobs", "/api/v1/audit"].contains(path) {
             data = Data(#"{"items":[],"total":0,"page":1,"page_size":200}"#.utf8)
         }
-        if path == "/api/v1/users/page" {
+        if path == "/api/v1/users" {
             let users = try! JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: folder + "/users.json"))) as! [[String: Any]]
             let queryItems = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!.queryItems ?? []
             let parameters = Dictionary(uniqueKeysWithValues: queryItems.map { ($0.name, $0.value ?? "") })
@@ -63,10 +63,10 @@ final class AuthorizationFixtureProtocol: URLProtocol, @unchecked Sendable {
             let items = Array(filtered.dropFirst((page - 1) * size).prefix(size))
             data = try! JSONSerialization.data(withJSONObject: ["items": items, "total": filtered.count, "page": page, "page_size": size])
         }
-        if path == "/api/v1/credentials/page" {
+        if path == "/api/v1/credentials" {
             data = Data(#"{"items":[],"total":0,"page":1,"page_size":50}"#.utf8)
         }
-        if request.url!.path == "/api/v1/nodes/page" {
+        if request.url!.path == "/api/v1/nodes" {
             let nodes = try! JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: folder + "/nodes.json"))) as! [[String: Any]]
             let queryItems = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!.queryItems ?? []
             let parameters = Dictionary(uniqueKeysWithValues: queryItems.map { ($0.name, $0.value ?? "") })
@@ -90,7 +90,7 @@ final class AuthorizationFixtureProtocol: URLProtocol, @unchecked Sendable {
             let page = min(Int(parameters["page"] ?? "1")!, max(1, (filtered.count + size - 1) / size))
             data = try! JSONSerialization.data(withJSONObject: ["items": Array(filtered.dropFirst((page - 1) * size).prefix(size)), "total": filtered.count, "page": page, "page_size": size])
         }
-        var status = paths[path] == nil && !["/api/v1/users/page", "/api/v1/credentials/page", "/api/v1/nodes/page"].contains(path) ? 404 : 200
+        var status = paths[path] == nil && !["/api/v1/users", "/api/v1/credentials", "/api/v1/nodes"].contains(path) ? 404 : 200
         if path == "/api/v1/authorization-groups" && request.httpMethod == "POST" {
             let groupData = try! Data(contentsOf: URL(fileURLWithPath: folder + "/group.json"))
             var group = try! JSONSerialization.jsonObject(with: groupData) as! [String:Any]

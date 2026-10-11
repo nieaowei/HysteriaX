@@ -7,9 +7,21 @@ struct DNSClientTests {
         let records = try JSONDecoder().decode([DNSRecord].self, from: Data(#"[{"id":"a","zone_id":"zone","name":"hk.example.test","record_type":"A","content":"8.8.8.8","ttl":1,"proxied":false,"origin":"external","revision":1,"state":"synced","resolution_status":"verified","updated_at":"2026-10-06T00:00:00Z"},{"id":"aaaa","zone_id":"zone","name":"hk.example.test","record_type":"AAAA","content":"2606:4700:4700::1111","ttl":300,"proxied":false,"origin":"hysteriax","revision":1,"state":"synced","resolution_status":"unchecked","updated_at":"2026-10-06T00:00:00Z"}]"#.utf8))
         let page = try JSONDecoder().decode(DNSRecordsPage.self, from: Data(#"{"items":[{"id":"a","zone_id":"zone","name":"hk.example.test","record_type":"A","content":"8.8.8.8","ttl":1,"proxied":false,"origin":"external","revision":1,"state":"synced","resolution_status":"verified","bound_node_id":"node","updated_at":"2026-10-06T00:00:00Z"}],"total":235,"page":3,"page_size":25}"#.utf8))
         precondition(page.total == 235 && page.page == 3 && page.pageSize == 25 && page.items[0].boundNodeId == "node")
-        let pageEndpoint = APIEndpoints.listDNSRecordsPage(page: 3, pageSize: 25, connectionId: "connection", zoneId: "zone", q: "历史 %_&", sort: "content", order: "desc")
-        precondition(pageEndpoint.path == "api/v1/dns/records/page" && pageEndpoint.method == "GET")
+        let pageEndpoint = APIEndpoints.listDNSRecords(page: 3, pageSize: 25, connectionId: "connection", zoneId: "zone", q: "历史 %_&", sort: "content", order: "desc")
+        precondition(pageEndpoint.path == "api/v1/dns/records" && pageEndpoint.method == "GET")
         precondition(pageEndpoint.queryParameters == ["page": "3", "page_size": "25", "connection_id": "connection", "zone_id": "zone", "q": "历史 %_&", "sort": "content", "order": "desc"])
+        for parameters in [
+            APIEndpoints.listNodes().queryParameters,
+            APIEndpoints.listUsers().queryParameters,
+            APIEndpoints.listCredentials().queryParameters,
+            APIEndpoints.listDNSRecords().queryParameters,
+        ] {
+            precondition(parameters.isEmpty, "default list calls use server pagination defaults")
+        }
+        precondition(APIEndpoints.listNodes().queryParameters.isEmpty)
+        precondition(APIEndpoints.listUsers().queryParameters.isEmpty)
+        precondition(APIEndpoints.listCredentials().queryParameters.isEmpty)
+        precondition(APIEndpoints.listDNSRecords(zoneId: "zone").queryParameters == ["zone_id": "zone"])
         var draft = DNSAllocationDraft()
         var sshDraft = DNSAllocationDraft()
         sshDraft.updateSSHAddress(from: "", to: " 8.8.8.8 \n")
