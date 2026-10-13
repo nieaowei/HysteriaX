@@ -11,6 +11,8 @@ use sqlx::{PgPool, Row};
 use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
 
+mod summary;
+
 pub fn real_connections(value: Value, users: &BTreeSet<String>) -> Option<BTreeMap<String, i64>> {
     let object = value.as_object()?;
     let mut result = BTreeMap::new();
@@ -83,67 +85,32 @@ fn package_warning(kind: &str) -> &str {
 }
 
 pub async fn get(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
-    let mut nodes = Vec::new();
-    let mut page = 1;
-    loop {
-        let Json(result) = crate::api::nodes::list(
-            State(state.clone()),
-            Query(crate::api::nodes::NodesListQuery {
-                page: Some(page),
-                page_size: Some(200),
-                ..Default::default()
-            }),
-        )
-        .await?;
-        nodes.extend(
-            result["items"]
-                .as_array()
-                .ok_or_else(ApiError::internal)?
-                .iter()
-                .cloned(),
-        );
-        if page * 200 >= result["total"].as_i64().ok_or_else(ApiError::internal)? {
-            break;
-        }
-        page += 1;
-    }
-    let mut users = Vec::new();
-    let mut page = 1;
-    loop {
-        let Json(result) = crate::api::users::list(
-            State(state.clone()),
-            Query(crate::api::users::UsersListQuery {
-                page: Some(page),
-                page_size: Some(200),
-                ..Default::default()
-            }),
-        )
-        .await?;
-        users.extend(
-            result["items"]
-                .as_array()
-                .ok_or_else(ApiError::internal)?
-                .iter()
-                .cloned(),
-        );
-        if page * 200 >= result["total"].as_i64().ok_or_else(ApiError::internal)? {
-            break;
-        }
-        page += 1;
-    }
+    let summary::SummaryData {
+        nodes,
+        users,
+        node_states: states,
+        node_count,
+        quota_ids,
+        task,
+        failures,
+        generated_at: now,
+    } = summary::load(&state.pool).await?;
+    let mut quota_candidates = BTreeMap::new();
     let mut issues = Vec::new();
     let mut monitor_nodes = Vec::new();
-    let mut risk_nodes = Vec::new();
+    let mut risk_nodes = 0;
     let mut active_ids = BTreeSet::new();
     let mut connection_count = 0_i64;
     let mut covered = 0;
     let mut eligible = 0;
-    let mut states = BTreeMap::<String, usize>::new();
-    for node in &nodes {
+    for reading in &nodes {
+        let node = reading.summary(now)?;
         let id = node["id"].as_str().unwrap_or_default();
         let name = node["name"].as_str().unwrap_or_default();
         let status = node["state"].as_str().unwrap_or("unknown");
-        *states.entry(status.into()).or_default() += 1;
+        if quota_ids.iter().any(|ranked| ranked == id) {
+            quota_candidates.insert(id.to_owned(), node.clone());
+        }
         if matches!(
             status,
             "fingerprint_changed"
@@ -184,7 +151,7 @@ pub async fn get(State(state): State<AppState>) -> Result<Json<Value>, ApiError>
         let usage = &node["package_usage"];
         if usage["restricted"] == true || usage["alerts"].as_array().is_some_and(|a| !a.is_empty())
         {
-            risk_nodes.push(node.clone());
+            risk_nodes += 1;
             let warnings: Vec<_> = usage["alerts"]
                 .as_array()
                 .into_iter()
@@ -251,7 +218,6 @@ pub async fn get(State(state): State<AppState>) -> Result<Json<Value>, ApiError>
                 usage["sampled_at"].clone(),
             ));
         }
-        let online = sqlx::query("SELECT sampled_at,status,connections FROM online_samples WHERE node_id=$1 ORDER BY sampled_at DESC LIMIT 1").bind(id).fetch_optional(&state.pool).await?;
         let mut online_status = "unknown";
         let mut sampled_at: Option<DateTime<Utc>> = None;
         let mut node_users: Option<usize> = None;
@@ -261,19 +227,21 @@ pub async fn get(State(state): State<AppState>) -> Result<Json<Value>, ApiError>
         if is_eligible {
             eligible += 1;
         }
-        if let Some(row) = online {
-            let at: DateTime<Utc> = row.get("sampled_at");
+        if let Some(at) = reading.online_sampled_at {
             sampled_at = Some(at);
-            online_status = if Utc::now() - at > Duration::seconds(90) {
+            online_status = if now - at > Duration::seconds(90) {
                 "stale"
-            } else if row.get::<String, _>("status") == "ok" {
+            } else if reading.online_status.as_deref() == Some("ok") {
                 "fresh"
             } else {
                 "failed"
             };
             if online_status == "fresh" && is_eligible {
                 covered += 1;
-                let values: Value = row.get("connections");
+                let values = reading
+                    .online_connections
+                    .as_ref()
+                    .ok_or_else(ApiError::internal)?;
                 let map = values.as_object().cloned().unwrap_or_default();
                 node_users = Some(map.len());
                 let total = map.values().filter_map(Value::as_i64).sum::<i64>();
@@ -282,7 +250,6 @@ pub async fn get(State(state): State<AppState>) -> Result<Json<Value>, ApiError>
                 active_ids.extend(map.keys().cloned());
             }
         }
-        let probes = sqlx::query("SELECT revision,sampled_at,status,external_status,connection_ms,latency_ms,reason FROM proxy_probe_samples WHERE node_id=$1 ORDER BY sampled_at DESC LIMIT 8").bind(id).fetch_all(&state.pool).await?;
         let mut probe_status = "unknown";
         let mut inlet_status = "unknown";
         let mut probe_at: Option<DateTime<Utc>> = None;
@@ -290,42 +257,33 @@ pub async fn get(State(state): State<AppState>) -> Result<Json<Value>, ApiError>
         let mut connection_ms: Option<f64> = None;
         let mut external: Option<String> = None;
         let mut reason: Option<String> = None;
-        if let Some(last) = probes.first() {
-            let at: DateTime<Utc> = last.get("sampled_at");
+        if let Some(at) = reading.probe_sampled_at {
             probe_at = Some(at);
-            latency = last.get("latency_ms");
-            connection_ms = last.get("connection_ms");
-            external = last.get("external_status");
-            reason = last.get("reason");
-            let revision: i64 = last.get("revision");
-            inlet_status = if last.get::<String, _>("status") == "ok" {
+            latency = reading.probe_latency_ms;
+            connection_ms = reading.probe_connection_ms;
+            external = reading.probe_external_status.clone();
+            reason = reading.probe_reason.clone();
+            let revision = reading.probe_revision.ok_or_else(ApiError::internal)?;
+            inlet_status = if reading.probe_status.as_deref() == Some("ok") {
                 "ok"
-            } else if last.get::<String, _>("status") == "unconfigured" {
+            } else if reading.probe_status.as_deref() == Some("unconfigured") {
                 "unconfigured"
             } else {
                 "failed"
             };
-            let health: Option<String> = sqlx::query_scalar(
-                "SELECT health FROM monitoring_probe_state WHERE node_id=$1 AND revision=$2",
-            )
-            .bind(id)
-            .bind(revision)
-            .fetch_optional(&state.pool)
-            .await?;
+            let health = &reading.probe_health;
             let current = node["deployed_revision"].as_i64();
-            probe_status = if Utc::now() - at > Duration::seconds(180)
-                || current != Some(revision)
-                || !is_eligible
-            {
-                "unknown"
-            } else {
-                match health.as_deref() {
-                    Some("healthy") => "healthy",
-                    Some("failed") => "failed",
-                    Some("unconfigured") => "unconfigured",
-                    _ => "checking",
-                }
-            };
+            probe_status =
+                if now - at > Duration::seconds(180) || current != Some(revision) || !is_eligible {
+                    "unknown"
+                } else {
+                    match health.as_deref() {
+                        Some("healthy") => "healthy",
+                        Some("failed") => "failed",
+                        Some("unconfigured") => "unconfigured",
+                        _ => "checking",
+                    }
+                };
             if probe_status == "failed" {
                 issues.push(issue(
                     "node",
@@ -365,21 +323,16 @@ pub async fn get(State(state): State<AppState>) -> Result<Json<Value>, ApiError>
         monitor_nodes.push(json!({"node_id":id,"name":name,"deployment_state":status,"online_status":online_status,"online_users":node_users,"connections":node_connections,"online_sampled_at":sampled_at,"probe_status":probe_status,"inlet_status":if probe_status=="unknown"{"unknown"}else{inlet_status},"probe_sampled_at":probe_at,"latency_ms":latency,"connection_ms":connection_ms,"external_status":external,"reason":reason}));
     }
     for user in &users {
-        let id = user["id"].as_str().unwrap_or_default();
-        let name = user["name"].as_str().unwrap_or_default();
-        if let Some(expiry) = user["expires_at"]
-            .as_str()
-            .and_then(|v| v.parse::<DateTime<Utc>>().ok())
-            && user["enabled"] == true
-            && expiry <= Utc::now() + Duration::days(7)
+        if let Some(expiry) = user.expires_at
+            && expiry <= now + Duration::days(7)
         {
             issues.push(issue(
                 "user",
-                id,
-                name,
+                &user.id,
+                &user.name,
                 "expiry",
-                if expiry <= Utc::now() { 1 } else { 2 },
-                if expiry <= Utc::now() {
+                if expiry <= now { 1 } else { 2 },
+                if expiry <= now {
                     "用户已过期"
                 } else {
                     "用户将在 7 天内到期"
@@ -387,40 +340,21 @@ pub async fn get(State(state): State<AppState>) -> Result<Json<Value>, ApiError>
                 json!(expiry),
             ));
         }
-        if user["enabled"] == true
-            && user["quota_bytes"]
-                .as_i64()
-                .is_some_and(|q| user["usage_bytes"].as_i64().unwrap_or(0) >= q)
+        if user
+            .quota_bytes
+            .is_some_and(|quota| user.usage_bytes >= quota)
         {
             issues.push(issue(
                 "user",
-                id,
-                name,
+                &user.id,
+                &user.name,
                 "quota",
                 1,
                 "用户额度已耗尽",
-                user["updated_at"].clone(),
+                json!(user.updated_at),
             ));
         }
     }
-    let task = sqlx::query("SELECT count(*) FILTER(WHERE status='queued')::bigint queued,count(*) FILTER(WHERE status='running')::bigint running,count(*) FILTER(WHERE status='failed' AND finished_at>=now()-interval '24 hours')::bigint failed FROM jobs").fetch_one(&state.pool).await?;
-    // Follow only explicit retry links. Successful leaves resolve the reminder;
-    // failed leaves replace ancestors, while active/cancelled attempts keep it visible.
-    let failures = sqlx::query(r#"
-        WITH RECURSIVE attempts AS (
-            SELECT id,kind,node_name,status,error_message,finished_at,retry_of_job_id,
-                   error_message last_error,finished_at last_failure_at
-            FROM jobs WHERE status='failed' AND finished_at>=now()-interval '24 hours'
-            UNION ALL
-            SELECT child.id,child.kind,child.node_name,child.status,child.error_message,child.finished_at,child.retry_of_job_id,
-                   CASE WHEN child.status IN ('failed','rolled_back') THEN child.error_message ELSE a.last_error END,
-                   CASE WHEN child.status IN ('failed','rolled_back') THEN child.finished_at ELSE a.last_failure_at END
-            FROM jobs child JOIN attempts a ON child.retry_of_job_id=a.id
-        )
-        SELECT DISTINCT ON(a.id) a.id,COALESCE(a.node_name,a.kind) name,a.status,a.last_error error_message,a.last_failure_at finished_at
-        FROM attempts a WHERE a.status!='succeeded' AND NOT EXISTS(SELECT 1 FROM jobs child WHERE child.retry_of_job_id=a.id)
-        ORDER BY a.id,a.last_failure_at DESC
-    "#).fetch_all(&state.pool).await?;
     for job in failures {
         let status: String = job.get("status");
         let error: Option<String> = job.get("error_message");
@@ -454,29 +388,12 @@ pub async fn get(State(state): State<AppState>) -> Result<Json<Value>, ApiError>
         .filter_map(|v| v["entity_id"].as_str())
         .collect::<BTreeSet<_>>()
         .len();
-    let quota_rank: Vec<_> = nodes
+    let quota_rank: Vec<Value> = quota_ids
         .iter()
-        .filter(|n| n["package"]["quota_bytes"].as_i64().is_some_and(|q| q > 0))
-        .cloned()
-        .collect();
-    let mut quota_rank = quota_rank;
-    quota_rank.sort_by(|a, b| {
-        let ratio = |v: &Value| {
-            let quota = v["package"]["quota_bytes"].as_f64().unwrap_or(1.0);
-            if quota == 0.0 {
-                f64::INFINITY
-            } else {
-                v["package_usage"]["usage_bytes"]
-                    .as_f64()
-                    .map(|used| used / quota)
-                    .unwrap_or(-1.0)
-            }
-        };
-        ratio(b).total_cmp(&ratio(a))
-    });
-    quota_rank.truncate(5);
+        .map(|id| quota_candidates.remove(id).ok_or_else(ApiError::internal))
+        .collect::<Result<_, _>>()?;
     Ok(Json(
-        json!({"generated_at":Utc::now(),"node_count":nodes.len(),"node_states":states,"attention_nodes":attention,"risk_nodes":risk_nodes.len(),"queued_jobs":task.get::<i64,_>("queued"),"running_jobs":task.get::<i64,_>("running"),"failed_jobs_24h":task.get::<i64,_>("failed"),"online_users":if covered>0 {Some(active_ids.len())}else{None},"connections":if covered>0 {Some(connection_count)}else{None},"eligible_nodes":eligible,"covered_nodes":covered,"issues":issues,"nodes":monitor_nodes,"quota_rank":quota_rank}),
+        json!({"generated_at":now,"node_count":node_count,"node_states":states,"attention_nodes":attention,"risk_nodes":risk_nodes,"queued_jobs":task.get::<i64,_>("queued"),"running_jobs":task.get::<i64,_>("running"),"failed_jobs_24h":task.get::<i64,_>("failed"),"online_users":if covered>0 {Some(active_ids.len())}else{None},"connections":if covered>0 {Some(connection_count)}else{None},"eligible_nodes":eligible,"covered_nodes":covered,"issues":issues,"nodes":monitor_nodes,"quota_rank":quota_rank}),
     ))
 }
 

@@ -65,11 +65,11 @@ pub struct AssignmentCertificateUpdate {
 
 #[derive(Default, Deserialize)]
 pub(crate) struct UsersListQuery {
-    pub(crate) page: Option<i64>,
-    pub(crate) page_size: Option<i64>,
-    pub(crate) q: Option<String>,
-    pub(crate) sort: Option<String>,
-    pub(crate) order: Option<String>,
+    page: Option<i64>,
+    page_size: Option<i64>,
+    q: Option<String>,
+    sort: Option<String>,
+    order: Option<String>,
 }
 
 impl UsersListQuery {

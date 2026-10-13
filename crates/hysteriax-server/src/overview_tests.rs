@@ -2,7 +2,11 @@ use super::*;
 use base64::Engine;
 
 async fn fixture() -> (AppState, Vec<String>, String) {
-    let pool = crate::db::test_pool_with_max_connections(3).await;
+    fixture_with_connections(3).await
+}
+
+async fn fixture_with_connections(max_connections: u32) -> (AppState, Vec<String>, String) {
+    let pool = crate::db::test_pool_with_max_connections(max_connections).await;
     let key = base64::engine::general_purpose::STANDARD_NO_PAD.encode([7_u8; 32]);
     let state = AppState::new(pool, crate::security::SecretBox::from_base64(&key).unwrap());
     let mut nodes = Vec::new();
@@ -653,4 +657,232 @@ async fn retry_preserves_rollback_target_and_exposes_links_in_job_api() {
         retry_job(&state, "missing-job").await.unwrap_err().status,
         axum::http::StatusCode::NOT_FOUND
     );
+}
+
+thread_local! {
+    static SUMMARY_QUERY_COUNT: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+}
+
+async fn counted_summary(state: &AppState) -> (Value, usize) {
+    use tracing_subscriber::prelude::*;
+
+    struct QueryCounter;
+    impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for QueryCounter {
+        fn on_event(
+            &self,
+            event: &tracing::Event<'_>,
+            _: tracing_subscriber::layer::Context<'_, S>,
+        ) {
+            if event.metadata().target() == "sqlx::query" {
+                SUMMARY_QUERY_COUNT.with(|count| {
+                    if let Some(value) = count.get() {
+                        count.set(Some(value + 1));
+                    }
+                });
+            }
+        }
+    }
+    // A permanent dispatcher keeps SQLx DEBUG callsite interest stable while other
+    // tests run in parallel. Only this current-thread runtime's requests are counted.
+    static INIT: std::sync::Once = std::sync::Once::new();
+    INIT.call_once(|| {
+        let subscriber = tracing_subscriber::registry()
+            .with(QueryCounter)
+            .with(tracing_subscriber::filter::LevelFilter::DEBUG);
+        tracing::subscriber::set_global_default(subscriber).expect("install test query counter");
+    });
+    struct CounterGuard;
+    impl Drop for CounterGuard {
+        fn drop(&mut self) {
+            SUMMARY_QUERY_COUNT.with(|count| count.set(None));
+        }
+    }
+    let _guard = CounterGuard;
+    SUMMARY_QUERY_COUNT.with(|count| count.set(Some(0)));
+    let Json(value) = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        get(State(state.clone())),
+    )
+    .await
+    .expect("the overview must work with a single connection")
+    .unwrap();
+    (
+        value,
+        SUMMARY_QUERY_COUNT.with(|count| count.get().unwrap()),
+    )
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn summary_uses_constant_queries_and_ignores_unrelated_secrets_for_large_catalogs() {
+    let (state, nodes, _) = fixture_with_connections(1).await;
+    let (_, small_queries) = counted_summary(&state).await;
+    sqlx::query("INSERT INTO nodes(id,name,ssh_host,ssh_port,ssh_username,ssh_credential_id,ssh_credential_version,public_host,public_port,listen_addr,node_token_hash,node_token_enc,traffic_stats_secret_enc,desired_config_enc,desired_revision,deployed_revision,state,last_sample_at,created_at,updated_at) SELECT 'bulk-'||lpad(i::text,3,'0'),'Bulk '||lpad(i::text,3,'0'),n.ssh_host,n.ssh_port,n.ssh_username,n.ssh_credential_id,n.ssh_credential_version,n.public_host,n.public_port,n.listen_addr,'hash-'||i,'SECRET-MUST-NOT-BE-READ','SECRET-MUST-NOT-BE-READ','INVALID-CONFIG-MUST-NOT-BE-READ',1,1,'deployed',now(),now(),now() FROM generate_series(1,235) i CROSS JOIN nodes n WHERE n.id=$1")
+        .bind(&nodes[0]).execute(&state.pool).await.unwrap();
+    sqlx::query("INSERT INTO node_packages(node_id,period_id,config,usage_bytes,sampled_at,next_reset_at) SELECT id,id,'{\"quota_bytes\":1000}',right(id,3)::bigint,now(),CASE WHEN id='bulk-235' THEN now()-interval '1 day' ELSE NULL END FROM nodes WHERE id LIKE 'bulk-%'")
+        .execute(&state.pool).await.unwrap();
+    sqlx::query("UPDATE node_packages SET config=config || '{\"cycle\":\"monthly\"}' WHERE node_id='bulk-235'").execute(&state.pool).await.unwrap();
+    sqlx::query("UPDATE node_packages SET config='{\"quota_bytes\":2000}',usage_bytes=468 WHERE node_id='bulk-233'").execute(&state.pool).await.unwrap();
+    sqlx::query("INSERT INTO users(id,name,enabled,expires_at,quota_bytes,usage_bytes,created_at,updated_at) SELECT 'bulk-user-'||i,'Bulk user '||i,i=235,now()-interval '1 day',100,100,now(),now() FROM generate_series(1,235) i")
+        .execute(&state.pool).await.unwrap();
+    sqlx::query("INSERT INTO node_assignments(user_id,node_id,credential_hash,credential_enc,created_at) VALUES('bulk-user-235','bulk-235','bulk-user-hash','ASSIGNMENT-MUST-NOT-BE-READ',now())")
+        .execute(&state.pool).await.unwrap();
+    let (value, large_queries) = counted_summary(&state).await;
+    assert!(
+        (6..=10).contains(&small_queries),
+        "observed {small_queries} SQL statements"
+    );
+    eprintln!(
+        "Overview SQL statements: {small_queries} for 2 nodes, {large_queries} for 237 nodes"
+    );
+    assert_eq!(
+        small_queries, large_queries,
+        "query count must not grow with directory size"
+    );
+    assert_eq!(value["node_count"], 237);
+    assert_eq!(value["node_states"]["deployed"], 237);
+    assert_eq!(value["nodes"].as_array().unwrap().len(), 237);
+    let rank = value["quota_rank"].as_array().unwrap();
+    assert_eq!(
+        rank.iter()
+            .map(|node| node["id"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        vec!["bulk-233", "bulk-234", "bulk-232", "bulk-231", "bulk-230"]
+    );
+    for node in rank {
+        assert!(node["package"].is_object() && node["package_usage"].is_object());
+        for key in ["ssh", "config", "yaml_preview", "dns_binding"] {
+            assert!(node.get(key).is_none());
+        }
+    }
+    let user_issues: Vec<_> = value["issues"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|issue| issue["entity_type"] == "user")
+        .collect();
+    assert_eq!(user_issues.len(), 2);
+    assert!(
+        user_issues
+            .iter()
+            .all(|issue| issue["entity_id"] == "bulk-user-235")
+    );
+    assert!(!value.to_string().contains("MUST-NOT-BE-READ"));
+    let stored_usage: i64 =
+        sqlx::query_scalar("SELECT usage_bytes FROM node_packages WHERE node_id='bulk-235'")
+            .fetch_one(&state.pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        stored_usage, 235,
+        "the dashboard must not roll over billing records"
+    );
+}
+
+#[tokio::test]
+async fn summary_batches_latest_monitoring_and_preserves_package_and_warning_rules() {
+    let (state, nodes, user) = fixture_with_connections(1).await;
+    let first = &nodes[0];
+    let second = &nodes[1];
+    sqlx::query(
+        "UPDATE node_packages SET config=$1,usage_bytes=1000,sampled_at=now() WHERE node_id=$2",
+    )
+    .bind(json!({"quota_bytes":1000,"expires_at":Utc::now()-Duration::days(1)}))
+    .bind(first)
+    .execute(&state.pool)
+    .await
+    .unwrap();
+    sqlx::query("UPDATE node_packages SET config='{\"quota_bytes\":1000}',usage_bytes=900,sampled_at=now(),gap_reason='sample_gap' WHERE node_id=$1")
+        .bind(second).execute(&state.pool).await.unwrap();
+    sqlx::query("INSERT INTO node_alerts(id,node_id,kind,scope,active,created_at) VALUES('a',$1,'expired','test',true,'2000-01-01'),('b',$2,'traffic_warning','test',true,'2000-01-02'),('c',$2,'expiry_warning','test',true,'2000-01-03'),('inactive',$1,'expiring','test',false,'2000-01-01')")
+        .bind(first).bind(second).execute(&state.pool).await.unwrap();
+    sqlx::query("INSERT INTO jobs(id,node_id,kind,status,stage,payload_json,available_at,created_at,updated_at) VALUES('limit-failed',$1,'kick','failed','failed','{\"node_limit\":true}',now(),now(),now()),('other-failed',$1,'kick','failed','failed','{}',now(),now(),now()),('limit-pending',$1,'kick','queued','queued','{\"node_limit\":true}',now(),now(),now()),('other-pending',$1,'kick','queued','queued','{}',now(),now(),now())")
+        .bind(first).execute(&state.pool).await.unwrap();
+    sqlx::query("INSERT INTO data_gaps(id,node_id,opened_at,reason,resolved_at) VALUES('open',$1,now(),'test',NULL),('closed',$1,now(),'test',now())")
+        .bind(first).execute(&state.pool).await.unwrap();
+    for (node, status, counts) in [(first, "failed", 20), (second, "ok", 3)] {
+        sqlx::query("INSERT INTO online_samples(cycle_id,node_id,sampled_at,status,connections) VALUES($1,$2,now()-interval '1 minute','ok',$3),($4,$2,now(),$5,$6)")
+            .bind(Uuid::new_v4()).bind(node).bind(json!({&user:1}))
+            .bind(Uuid::new_v4()).bind(status).bind(json!({&user:counts}))
+            .execute(&state.pool).await.unwrap();
+    }
+    sqlx::query("INSERT INTO online_samples(cycle_id,node_id,sampled_at,status,connections) SELECT $1,node_id,sampled_at,'ok',$3 FROM online_samples WHERE node_id=$2 ORDER BY sampled_at DESC LIMIT 1")
+        .bind(Uuid::new_v4()).bind(second).bind(json!({&user:7})).execute(&state.pool).await.unwrap();
+    sqlx::query("INSERT INTO proxy_probe_samples(node_id,revision,status,external_status,connection_ms,latency_ms,sampled_at) VALUES($1,1,'failed','failed',20,NULL,now()-interval '1 minute'),($1,1,'ok','ok',10,15,now()),($2,2,'ok','ok',11,16,now())")
+        .bind(first).bind(second).execute(&state.pool).await.unwrap();
+    sqlx::query("INSERT INTO monitoring_probe_state(node_id,revision,health,sampled_at) VALUES($1,1,'healthy',now()),($2,2,'healthy',now())")
+        .bind(first).bind(second).execute(&state.pool).await.unwrap();
+    let Json(value) = get(State(state.clone())).await.unwrap();
+    assert_eq!(value["node_count"], 2);
+    assert_eq!(value["risk_nodes"], 2);
+    assert_eq!(value["attention_nodes"], 2);
+    assert_eq!(value["eligible_nodes"], 2);
+    assert_eq!(value["covered_nodes"], 1);
+    assert_eq!(value["online_users"], 1);
+    assert_eq!(value["connections"], 7);
+    let monitoring = value["nodes"].as_array().unwrap();
+    let first_monitor = monitoring
+        .iter()
+        .find(|node| node["node_id"] == *first)
+        .unwrap();
+    assert_eq!(first_monitor["online_status"], "failed");
+    assert_eq!(first_monitor["probe_status"], "healthy");
+    assert_eq!(first_monitor["latency_ms"], 15.0);
+    let second_monitor = monitoring
+        .iter()
+        .find(|node| node["node_id"] == *second)
+        .unwrap();
+    assert_eq!(
+        second_monitor["probe_status"], "unknown",
+        "an old deployed revision cannot use a newer probe"
+    );
+    let rank = value["quota_rank"].as_array().unwrap();
+    assert_eq!(rank.len(), 2);
+    for node in rank {
+        let (package, usage) =
+            crate::node_limits::snapshot(&state.pool, node["id"].as_str().unwrap())
+                .await
+                .unwrap();
+        assert_eq!(node["package"], package);
+        assert_eq!(node["package_usage"], usage);
+    }
+    let issues = value["issues"].as_array().unwrap();
+    assert!(
+        issues
+            .iter()
+            .any(|issue| issue["id"] == format!("node:{first}:sampling"))
+    );
+    assert!(issues.iter().any(
+        |issue| issue["id"] == format!("node:{first}:disconnect_failed") && issue["severity"] == 0
+    ));
+    assert!(
+        issues
+            .iter()
+            .any(|issue| issue["id"] == format!("node:{first}:revocation"))
+    );
+    let second_package = issues
+        .iter()
+        .find(|issue| issue["id"] == format!("node:{second}:package"))
+        .unwrap();
+    assert_eq!(
+        second_package["reason"],
+        "节点用量达到预警阈值、套餐即将到期"
+    );
+}
+
+#[tokio::test]
+async fn summary_of_empty_database_preserves_unknown_monitoring_and_zero_counts() {
+    let state = AppState::new(
+        crate::db::test_pool().await,
+        crate::security::SecretBox::from_base64("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+            .unwrap(),
+    );
+    let Json(value) = get(State(state)).await.unwrap();
+    assert_eq!(value["node_count"], 0);
+    assert_eq!(value["node_states"], json!({}));
+    assert_eq!(value["risk_nodes"], 0);
+    assert_eq!(value["queued_jobs"], 0);
+    assert!(value["online_users"].is_null() && value["connections"].is_null());
+    for key in ["issues", "nodes", "quota_rank"] {
+        assert_eq!(value[key], json!([]));
+    }
 }

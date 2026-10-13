@@ -206,16 +206,55 @@ fn reasons(package: &Package, usage: i64, now: DateTime<Utc>) -> Vec<&'static st
     }
     result
 }
-fn effective_usage(row: &sqlx::postgres::PgRow, now: DateTime<Utc>) -> i64 {
-    if row
-        .get::<Option<DateTime<Utc>>, _>("next_reset_at")
-        .is_some_and(|x| x <= now)
-    {
+fn effective_usage(
+    usage_bytes: i64,
+    next_reset_at: Option<DateTime<Utc>>,
+    now: DateTime<Utc>,
+) -> i64 {
+    if next_reset_at.is_some_and(|at| at <= now) {
         0
     } else {
-        row.get("usage_bytes")
+        usage_bytes
     }
 }
+
+#[derive(sqlx::FromRow)]
+pub(crate) struct PackageReading {
+    pub(crate) config: Value,
+    pub(crate) usage_bytes: i64,
+    pub(crate) next_reset_at: Option<DateTime<Utc>>,
+    pub(crate) interface: Option<String>,
+    pub(crate) sampled_at: Option<DateTime<Utc>>,
+    pub(crate) gap_reason: Option<String>,
+}
+
+// Both node details and the overview apply the same time-sensitive package rules.
+pub(crate) fn snapshot_from_reading(
+    reading: Option<&PackageReading>,
+    alerts: Vec<Value>,
+    failed: i64,
+    pending: i64,
+    now: DateTime<Utc>,
+) -> Result<(Value, Value)> {
+    let Some(row) = reading else {
+        return Ok((
+            json!(Package::default()),
+            json!({"usage_bytes": 0, "restricted": false, "reasons": [], "alerts": [], "freshness": "not_collected"}),
+        ));
+    };
+    let package: Package = serde_json::from_value(row.config.clone())?;
+    let usage = effective_usage(row.usage_bytes, row.next_reset_at, now);
+    let restrictions = reasons(&package, usage, now);
+    Ok((
+        json!(package),
+        json!({"usage_bytes": usage, "restricted": !restrictions.is_empty(), "reasons": restrictions,
+        "next_reset_at": next_reset(&package, now), "interface": row.interface,
+        "sampled_at": row.sampled_at, "gap_reason": row.gap_reason,
+        "freshness": if row.sampled_at.is_none() { "not_collected" } else if row.gap_reason.is_some() || row.sampled_at.is_some_and(|at| (now-at).num_seconds() > 30) { "stale" } else { "fresh" },
+        "pending_disconnects": pending, "failed_disconnects": if restrictions.is_empty() { 0 } else { failed }, "alerts": alerts}),
+    ))
+}
+
 pub async fn restricted(pool: &PgPool, id: &str) -> Result<bool> {
     let Some(row) = sqlx::query(
         "SELECT config, usage_bytes, next_reset_at FROM node_packages WHERE node_id = $1",
@@ -228,37 +267,25 @@ pub async fn restricted(pool: &PgPool, id: &str) -> Result<bool> {
     };
     let package: Package = serde_json::from_value(row.get("config"))?;
     let now = Utc::now();
-    Ok(!reasons(&package, effective_usage(&row, now), now).is_empty())
+    Ok(!reasons(
+        &package,
+        effective_usage(row.get("usage_bytes"), row.get("next_reset_at"), now),
+        now,
+    )
+    .is_empty())
 }
 pub async fn snapshot(pool: &PgPool, id: &str) -> Result<(Value, Value)> {
-    let Some(row) = sqlx::query("SELECT * FROM node_packages WHERE node_id = $1")
-        .bind(id)
-        .fetch_optional(pool)
-        .await?
-    else {
-        return Ok((
-            json!(Package::default()),
-            json!({"usage_bytes": 0, "restricted": false, "reasons": [], "alerts": [], "freshness": "not_collected"}),
-        ));
-    };
-    let package: Package = serde_json::from_value(row.get("config"))?;
+    let row = sqlx::query_as::<_, PackageReading>("SELECT config, usage_bytes, next_reset_at, interface, sampled_at, gap_reason FROM node_packages WHERE node_id = $1")
+        .bind(id).fetch_optional(pool).await?;
+    if row.is_none() {
+        return snapshot_from_reading(None, vec![], 0, 0, Utc::now());
+    }
     let now = Utc::now();
-    let usage = effective_usage(&row, now);
-    let restrictions = reasons(&package, usage, now);
-    let sampled: Option<DateTime<Utc>> = row.get("sampled_at");
-    let gap: Option<String> = row.get("gap_reason");
     let alerts = sqlx::query("SELECT id, kind, created_at FROM node_alerts WHERE node_id = $1 AND active ORDER BY created_at, id").bind(id).fetch_all(pool).await?;
     let alerts: Vec<Value> = alerts.iter().map(|r| json!({"id": r.get::<String,_>("id"), "kind": r.get::<String,_>("kind"), "created_at": r.get::<DateTime<Utc>,_>("created_at")})).collect();
     let failed: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM jobs WHERE node_id = $1 AND kind = 'kick' AND payload_json->>'node_limit' = 'true' AND status = 'failed'").bind(id).fetch_one(pool).await?;
     let pending: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM jobs WHERE node_id = $1 AND kind = 'kick' AND payload_json->>'node_limit' = 'true' AND status IN ('queued', 'running')").bind(id).fetch_one(pool).await?;
-    Ok((
-        json!(package),
-        json!({"usage_bytes": usage, "restricted": !restrictions.is_empty(), "reasons": restrictions,
-        "next_reset_at": next_reset(&package, now), "interface": row.get::<Option<String>,_>("interface"),
-        "sampled_at": sampled, "gap_reason": gap,
-        "freshness": if sampled.is_none() { "not_collected" } else if gap.is_some() || sampled.is_some_and(|x| (now-x).num_seconds() > 30) { "stale" } else { "fresh" },
-        "pending_disconnects": pending, "failed_disconnects": if restrictions.is_empty() { 0 } else { failed }, "alerts": alerts}),
-    ))
+    snapshot_from_reading(row.as_ref(), alerts, failed, pending, now)
 }
 
 async fn evaluate(tx: &mut Transaction<'_, Postgres>, id: &str, now: DateTime<Utc>) -> Result<()> {

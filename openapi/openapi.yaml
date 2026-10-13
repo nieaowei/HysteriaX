@@ -2683,6 +2683,7 @@ components:
           items:
             "$ref": "#/components/schemas/OverviewNode"
         quota_rank:
+          description: At most five nodes ranked by quota usage, including identity, deployment state, package and package usage summaries.
           type: array
           items:
             "$ref": "#/components/schemas/NodeSummary"
