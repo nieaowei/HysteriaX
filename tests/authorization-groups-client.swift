@@ -35,7 +35,7 @@ private final class GroupFixtureProtocol: URLProtocol, @unchecked Sendable {
         let data: Data
         if path.hasSuffix("/preview") { data = Data(preview.utf8) }
         else if method == "DELETE" { data = Data(receipt.utf8) }
-        else if path == "/api/v1/version" { data = Data(#"{"api_version":"1.0.0","features":["authorization_groups"],"service_version":"fixture","hysteria_version":"fixture","mihomo_version":"fixture"}"#.utf8) }
+        else if path == "/api/v1/version" { data = Data(#"{"api_version":"1.0.0","directory_generation":1,"features":["authorization_groups"],"service_version":"fixture","hysteria_version":"fixture","mihomo_version":"fixture"}"#.utf8) }
         else if path == "/api/v1/authorization-groups" && Self.state.failGroups { status = 503; data = Data(#"{"error":{"code":"temporary","message":"groups unavailable"}}"#.utf8) }
         else if ["/api/v1/jobs", "/api/v1/audit", "/api/v1/nodes", "/api/v1/users", "/api/v1/credentials", "/api/v1/dns/records"].contains(path) { data = Data(#"{"items":[],"total":0,"page":1,"page_size":50}"#.utf8) }
         else { data = Data("[]".utf8) }

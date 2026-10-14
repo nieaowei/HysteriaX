@@ -17,6 +17,20 @@ services:
       timeout: 5s
       retries: 12
 
+  redis:
+    image: redis:8-alpine
+    restart: unless-stopped
+    environment:
+      HYSTERIAX_REDIS_PASSWORD: ${HYSTERIAX_REDIS_PASSWORD:?run scripts/init-secrets.sh first}
+    command: [sh, -ec, 'exec redis-server --requirepass "$$HYSTERIAX_REDIS_PASSWORD" --maxmemory 64mb --maxmemory-policy allkeys-lru --appendonly yes']
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: [CMD-SHELL, 'REDISCLI_AUTH="$$HYSTERIAX_REDIS_PASSWORD" redis-cli ping | grep -q PONG']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   api:
     build: .
     image: "${HYSTERIAX_IMAGE:-hysteriax-server}:${HYSTERIAX_VERSION:-dev}"
@@ -24,14 +38,20 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     user: "${HYSTERIAX_UID:-1000}:${HYSTERIAX_GID:-1000}"
     environment:
       DATABASE_URL: postgresql://${HYSTERIAX_DB_USER:-hysteriax}:${HYSTERIAX_DB_PASSWORD}@postgres:5432/${POSTGRES_DB:-hysteriax}
+      HYSTERIAX_REDIS_URL: redis://:${HYSTERIAX_REDIS_PASSWORD}@redis:6379/0
       HYSTERIAX_LISTEN_ADDR: 0.0.0.0:8080
       HYSTERIAX_PUBLIC_URL: https://${HYSTERIAX_DOMAIN}
       HYSTERIAX_ADMIN_TOKEN: ${HYSTERIAX_ADMIN_TOKEN}
       HYSTERIAX_MASTER_KEY: ${HYSTERIAX_MASTER_KEY}
+      HYSTERIAX_ASSET_CACHE_DIR: /var/cache/hysteriax/assets
       RUST_LOG: info
+    volumes:
+      - ./data/assets:/var/cache/hysteriax/assets
     healthcheck:
       test: ["CMD", "curl", "--fail", "http://127.0.0.1:8080/readyz"]
       interval: 30s
@@ -55,6 +75,7 @@ services:
       - caddy_config:/config
 
 volumes:
+  redis_data:
   postgres_data:
   caddy_data:
   caddy_config:

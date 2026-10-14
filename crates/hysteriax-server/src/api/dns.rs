@@ -578,23 +578,54 @@ pub struct Unbind {
 }
 
 pub async fn binding_summary(pool: &sqlx::PgPool, node: &str) -> Result<Value, ApiError> {
-    let row=sqlx::query("SELECT b.*,n.published_connection FROM dns_bindings b JOIN nodes n ON n.id=b.node_id WHERE b.node_id=$1").bind(node).fetch_optional(pool).await?;
-    let Some(row) = row else {
-        return Ok(Value::Null);
-    };
-    let ids: Value = row.get("record_ids");
-    let mut records = Vec::new();
-    for id in ids.as_array().ok_or_else(ApiError::internal)? {
-        let record = sqlx::query("SELECT * FROM dns_records WHERE id=$1")
-            .bind(id.as_str().ok_or_else(ApiError::internal)?)
-            .fetch_one(pool)
-            .await?;
-        records.push(dns::record_json(&record));
-    }
-    Ok(
-        json!({"node_id":node,"zone_id":row.get::<String,_>("zone_id"),"hostname":row.get::<String,_>("hostname"),"record_ids":ids,"records":records,"revision":row.get::<i64,_>("revision"),"published_connection":row.get::<Option<Value>,_>("published_connection")}),
-    )
+    let mut connection = pool.acquire().await?;
+    Ok(bindings_on(&mut connection, &[node.to_owned()])
+        .await?
+        .remove(node)
+        .unwrap_or(Value::Null))
 }
+pub(crate) async fn bindings_on(
+    connection: &mut sqlx::PgConnection,
+    nodes: &[String],
+) -> Result<std::collections::BTreeMap<String, Value>, ApiError> {
+    let bindings=sqlx::query("SELECT b.*,n.published_connection FROM dns_bindings b JOIN nodes n ON n.id=b.node_id WHERE b.node_id=ANY($1)").bind(nodes).fetch_all(&mut *connection).await?;
+    let mut ids = std::collections::BTreeSet::new();
+    for binding in &bindings {
+        let values: Value = binding.get("record_ids");
+        for id in values.as_array().ok_or_else(ApiError::internal)? {
+            ids.insert(id.as_str().ok_or_else(ApiError::internal)?.to_owned());
+        }
+    }
+    let ids: Vec<String> = ids.into_iter().collect();
+    let rows = sqlx::query("SELECT * FROM dns_records WHERE id=ANY($1)")
+        .bind(&ids)
+        .fetch_all(connection)
+        .await?;
+    let records: std::collections::BTreeMap<String, Value> = rows
+        .iter()
+        .map(|row| (row.get("id"), dns::record_json(row)))
+        .collect();
+    let mut values = std::collections::BTreeMap::new();
+    for row in bindings {
+        let id: String = row.get("node_id");
+        let ids: Value = row.get("record_ids");
+        let selected: Vec<Value> = ids
+            .as_array()
+            .ok_or_else(ApiError::internal)?
+            .iter()
+            .map(|id| {
+                records
+                    .get(id.as_str().unwrap())
+                    .cloned()
+                    .ok_or_else(ApiError::internal)
+            })
+            .collect::<Result<_, _>>()?;
+        values.insert(id.clone(),json!({"node_id":id,"zone_id":row.get::<String,_>("zone_id"),"hostname":row.get::<String,_>("hostname"),"record_ids":ids,"records":selected,
+            "revision":row.get::<i64,_>("revision"),"published_connection":row.get::<Option<Value>,_>("published_connection")}));
+    }
+    Ok(values)
+}
+
 pub async fn get_binding(
     State(state): State<AppState>,
     Path(node): Path<String>,

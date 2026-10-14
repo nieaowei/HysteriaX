@@ -73,9 +73,9 @@ private struct UserDirectoryView: View {
 
     private var query: String { pageState.userSearchText.trimmingCharacters(in: .whitespacesAndNewlines) }
     private var sortDirection: String { pageState.userSortOrder.first?.order == .reverse ? "desc" : "asc" }
-    private var pageKey: String { "\(store.serviceAddress)|\(pageState.userPage)|\(pageState.userPageSize)|\(query)|\(sortDirection)" }
-    private var pageRequestKey: String { "\(pageKey)|\(store.isConnected)|\(store.lastUpdated?.timeIntervalSince1970 ?? 0)|\(retryPageToken)" }
-    private var currentPageResponse: UsersPage? { loadedPageKey == pageKey ? pageResponse : nil }
+    private var pageKey: String { store.listPageKey([String(pageState.userPage), String(pageState.userPageSize), query, sortDirection]) }
+    private var pageRequestKey: String { "\(pageKey)|\(store.isConnected)|\(store.dataRefreshToken)|\(retryPageToken)" }
+    private var currentPageResponse: UsersPage? { store.cachedListPage(pageKey, as: UsersPage.self) ?? (loadedPageKey == pageKey ? pageResponse : nil) }
     private var totalUsers: Int { store.isConnected ? (currentPageResponse?.total ?? 0) : snapshotUsers.count }
     private var pageCount: Int { max(1, (totalUsers + pageState.userPageSize - 1) / pageState.userPageSize) }
     private var currentPage: Int { store.isConnected ? pageState.userPage : min(pageState.userPage, pageCount) }
@@ -158,6 +158,7 @@ private struct UserDirectoryView: View {
             loadedPageKey = nil
         }
         .task(id: pageRequestKey) { await loadPage() }
+        .onDisappear { loadedPageKey = nil }
         .onChange(of: pageState.selectedUserID) { _, _ in
             selectedUsage = nil
             usageErrorMessage = nil
@@ -219,7 +220,7 @@ private struct UserDirectoryView: View {
             if let pageError {
                 HStack {
                     Text(pageError).foregroundStyle(.red).textSelection(.enabled)
-                    Button(L10n.text("重试")) { retryPageToken = UUID() }
+                    Button(L10n.text("重试")) { loadedPageKey = nil; retryPageToken = UUID() }
                 }.font(.caption)
             }
             HStack(spacing: 12) {
@@ -262,7 +263,7 @@ private struct UserDirectoryView: View {
         defer { if requestKey == pageRequestKey { isLoadingPage = false } }
         do {
             if !query.isEmpty { try await Task.sleep(for: .milliseconds(250)) }
-            let response = try await store.usersPage(page: pageState.userPage, pageSize: pageState.userPageSize, query: query, order: sortDirection)
+            let response = try await store.usersPage(page: pageState.userPage, pageSize: pageState.userPageSize, query: query, order: sortDirection, cacheKey: pageKey, revalidate: loadedPageKey != pageKey)
             guard !Task.isCancelled, requestKey == pageRequestKey else { return }
             pageState.userPage = response.page
             pageResponse = response

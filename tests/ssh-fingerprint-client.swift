@@ -42,7 +42,7 @@ final class FingerprintTransport: URLProtocol, @unchecked Sendable {
             if let retryID { job["retry_job_id"] = retryID }
             func json(_ value: Any, _ status: Int = 200) -> (Int, Data) { (status, try! JSONSerialization.data(withJSONObject: value)) }
             if path.hasSuffix("version") {
-                return json(["api_version": "1.0.0", "service_version": "test", "hysteria_version": "test", "mihomo_version": "test", "features": ["job_retry_links"]])
+                return json(["api_version": "1.0.0", "directory_generation":1, "service_version": "test", "hysteria_version": "test", "mihomo_version": "test", "features": ["job_retry_links"]])
             }
             if path.hasSuffix("server/monitoring") { return (503, Data()) }
             if path.hasSuffix("/nodes/node-1"), request.httpMethod == "PATCH" {

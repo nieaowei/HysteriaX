@@ -26,9 +26,9 @@ struct DNSRecordsView: View {
     private var query: String { search.trimmingCharacters(in: .whitespacesAndNewlines) }
     private var sortField: String { sortOrder.first?.keyPath == \DNSRecord.content ? "content" : "name" }
     private var sortDirection: String { sortOrder.first?.order == .reverse ? "desc" : "asc" }
-    private var pageKey: String { "\(store.serviceAddress)|\(page)|\(pageSize)|\(connectionID)|\(zoneID)|\(query)|\(sortField)|\(sortDirection)" }
+    private var pageKey: String { store.listPageKey([String(page), String(pageSize), connectionID, zoneID, query, sortField, sortDirection]) }
     private var pageRequestKey: String { "\(pageKey)|\(store.isConnected)|\(store.supportsDNSManagement)|\(store.dnsUpdatedAt?.timeIntervalSince1970 ?? 0)|\(retryPageToken)" }
-    private var currentPageResponse: DNSRecordsPage? { loadedPageKey == pageKey ? pageResponse : nil }
+    private var currentPageResponse: DNSRecordsPage? { store.cachedListPage(pageKey, as: DNSRecordsPage.self) ?? (loadedPageKey == pageKey ? pageResponse : nil) }
     private var totalRecords: Int { store.isConnected ? (currentPageResponse?.total ?? 0) : snapshotRecords.count }
     private var pageCount: Int { max(1, (totalRecords + pageSize - 1) / pageSize) }
     private var currentPage: Int { store.isConnected ? page : min(page, pageCount) }
@@ -94,8 +94,9 @@ struct DNSRecordsView: View {
                 Button(L10n.text("删除远端记录"), role: .destructive) { if let record = deleting { run { try await store.deleteDNSRecord(record) } }; deleting = nil }
             }
             .alert(L10n.text("DNS 操作失败"), isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) { Button(L10n.text("好"), role: .cancel) { error = nil } } message: { Text(error ?? "") }
-            .task { await store.refreshDNS(); openRequestedRecord() }
+            .task { await store.refreshDNSIfNeeded(); openRequestedRecord() }
             .task(id: pageRequestKey) { await loadPage() }
+        .onDisappear { loadedPageKey = nil }
             .onChange(of: connectionID) { _, _ in resetPage() }
             .onChange(of: zoneID) { _, _ in resetPage() }
             .onChange(of: search) { _, _ in resetPage() }
@@ -180,7 +181,7 @@ struct DNSRecordsView: View {
             if let pageError {
                 HStack {
                     Text(pageError).foregroundStyle(.red).textSelection(.enabled)
-                    Button(L10n.text("重试")) { retryPageToken = UUID() }
+                    Button(L10n.text("重试")) { loadedPageKey = nil; retryPageToken = UUID() }
                 }.font(.caption)
             }
             HStack(spacing: 12) {
@@ -216,7 +217,7 @@ struct DNSRecordsView: View {
         defer { if requestKey == pageRequestKey { isLoadingPage = false } }
         do {
             if !query.isEmpty { try await Task.sleep(for: .milliseconds(250)) }
-            let response = try await store.dnsRecordsPage(page: page, pageSize: pageSize, connectionID: connectionID, zoneID: zoneID, query: query, sort: sortField, order: sortDirection)
+            let response = try await store.dnsRecordsPage(page: page, pageSize: pageSize, connectionID: connectionID, zoneID: zoneID, query: query, sort: sortField, order: sortDirection, cacheKey: pageKey, revalidate: loadedPageKey != pageKey)
             guard !Task.isCancelled, requestKey == pageRequestKey else { return }
             page = response.page
             pageResponse = response

@@ -41,6 +41,7 @@ tracing-subscriber.workspace = true
 uuid.workspace = true
 url.workspace = true
 x509-parser = "0.18"
+redis = { version = "1", features = ["tokio-comp", "connection-manager"] }
 
 [dev-dependencies]
 reqwest = { workspace = true, features = ["json"] }

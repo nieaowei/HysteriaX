@@ -54,6 +54,10 @@ final class ManagementStore {
     var isConnected = false
     var isLoading = false
     var lastUpdated: Date?
+    var dataRefreshToken = UUID()
+    var listCacheSession = UUID()
+    let listPageCache = ListPageCache()
+    private var directoryGeneration: Int64?
     var errorMessage: String?
 
     private var api: APIClient?
@@ -96,7 +100,10 @@ final class ManagementStore {
         let serviceChanged = normalizedAddress != self.serviceAddress
         let tokenChanged = previousToken != token
         try KeychainStore.saveToken(token)
+        listPageCache.invalidate(clear: true)
+        listCacheSession = UUID()
         serviceGeneration = UUID()
+        directoryGeneration = nil
         overviewRequestGeneration = UUID()
         if serviceChanged {
             historyCache = [:]
@@ -158,22 +165,26 @@ final class ManagementStore {
         supportsJobRetryLinks = version.features?.contains("job_retry_links") == true
         supportsNodeRecordRemoval = version.features?.contains("node_record_removal") == true
         supportsAuthorizationGroups = version.features?.contains("authorization_groups") == true
+        directoryGeneration = version.directoryGeneration
         await refreshAuthorizationGroups()
         await refreshOverview()
         await refreshDNS()
         startEventUpdates(using: client)
     }
 
-    func refresh() async {
+    func refresh(forceDirectories: Bool = true) async {
         guard let api else { isConnected = false; return }
         let refreshGeneration = serviceGeneration
+        if forceDirectories { listPageCache.invalidate() }
         isLoading = true
         defer { if refreshGeneration == serviceGeneration { isLoading = false } }
         do {
             let version: APIVersion = try await api.get(APIEndpoints.getAPIVersion)
             currentAdminTokenID = version.currentAdminTokenId
             guard version.apiVersion == "1.0.0" else { throw APIClientError.incompatibleAPI(version.apiVersion) }
-            try await loadData(using: api)
+            let changed=forceDirectories || directoryGeneration != version.directoryGeneration || !isConnected
+            if changed && !forceDirectories { listPageCache.invalidate() }
+            if changed { try await loadData(using: api, bypassCache: forceDirectories); directoryGeneration=version.directoryGeneration }
             guard refreshGeneration == serviceGeneration, !Task.isCancelled else { return }
             supportsDNSManagement = version.features?.contains("dns_management") == true
             supportsNodePackages = version.features?.contains("node_packages") == true
@@ -182,12 +193,18 @@ final class ManagementStore {
             supportsNodeRecordRemoval = version.features?.contains("node_record_removal") == true
             supportsAuthorizationGroups = version.features?.contains("authorization_groups") == true
             isConnected = true
-            await refreshAuthorizationGroups()
+            if changed { await refreshAuthorizationGroups() }
             errorMessage = nil
             await (nodeNotifications ?? .shared).deliver(nodes: nodes, service: serviceAddress)
             await (nodeNotifications ?? .shared).deliver(credentials: credentials, service: serviceAddress)
-            await refreshOverview()
-            await refreshDNS()
+            if !changed {
+                let monitoring=await fetchServerMonitoring(using:api)
+                guard refreshGeneration==serviceGeneration,!Task.isCancelled else {return}
+                serverMonitoring=monitoring.value ?? serverMonitoring; serverMonitoringError=monitoring.error
+            }
+            await refreshOverview(bypassCache: forceDirectories)
+            dataRefreshToken=UUID()
+            if changed { await refreshDNS(bypassCache: forceDirectories) }
         } catch {
             guard refreshGeneration == serviceGeneration, !Task.isCancelled else { return }
             isConnected = false
@@ -195,14 +212,14 @@ final class ManagementStore {
         }
     }
 
-    func refreshOverview() async {
+    func refreshOverview(bypassCache: Bool = false) async {
         guard supportsOverviewMonitoring else { overview = nil; overviewError = nil; return }
         guard let api else { return }
         let generation = serviceGeneration
         let request = UUID()
         overviewRequestGeneration = request
         do {
-            let value = try await api.get(APIEndpoints.getOverview)
+            let value = try await api.get(APIEndpoints.getOverview, bypassCache: bypassCache)
             guard generation == serviceGeneration, request == overviewRequestGeneration, !Task.isCancelled else { return }
             overview = value
             overviewError = nil
@@ -214,25 +231,25 @@ final class ManagementStore {
         }
     }
 
-    func overviewHistory(range: String, nodeID: String?, source: String) async throws -> OverviewHistory {
+    func overviewHistory(range: String, nodeID: String?, source: String, metrics: String = "all", bypassCache: Bool = false) async throws -> OverviewHistory {
         let client = try requireConnectedAPI()
         let generation = serviceGeneration
-        let value = try await client.get(APIEndpoints.getOverviewHistory(range: range, timezone: TimeZone.current.identifier, nodeID: nodeID, source: source))
+        let value = try await client.get(APIEndpoints.getOverviewHistory(metrics: metrics, range: range, timezone: TimeZone.current.identifier, nodeID: nodeID, source: source), bypassCache: bypassCache)
         guard generation == serviceGeneration, !Task.isCancelled else { throw CancellationError() }
-        cacheOverviewHistory(value, nodeID: nodeID)
+        cacheOverviewHistory(value, nodeID: nodeID, metrics: metrics)
         return value
     }
 
-    func cacheOverviewHistory(_ value: OverviewHistory, nodeID: String?) {
-        let key = historyKey(range: value.range, nodeID: nodeID, source: value.source)
+    func cacheOverviewHistory(_ value: OverviewHistory, nodeID: String?, metrics: String = "all") {
+        let key = historyKey(range: value.range, nodeID: nodeID, source: value.source, metrics: metrics)
         historyCache[key] = value
         if historyCache.count > 16, let oldest = historyCache.min(by: { $0.value.generatedAt < $1.value.generatedAt })?.key { historyCache.removeValue(forKey: oldest) }
         if let data = try? JSONEncoder().encode(historyCache) { UserDefaults.standard.set(data, forKey: "overviewHistory.\(serviceAddress)") }
     }
 
-    private func historyKey(range: String, nodeID: String?, source: String) -> String { "rolling-v1|\(TimeZone.current.identifier)|\(range)|\(nodeID ?? "all")|\(source)" }
+    private func historyKey(range: String, nodeID: String?, source: String, metrics: String) -> String { "rolling-v2|\(metrics)|\(TimeZone.current.identifier)|\(range)|\(nodeID ?? "all")|\(source)" }
     func requestOverviewHistoryRefresh() { overviewHistoryRefreshToken = UUID() }
-    func cachedOverviewHistory(range: String, nodeID: String?, source: String) -> OverviewHistory? { historyCache[historyKey(range: range, nodeID: nodeID, source: source)] }
+    func cachedOverviewHistory(range: String, nodeID: String?, source: String, metrics: String = "all") -> OverviewHistory? { historyCache[historyKey(range: range, nodeID: nodeID, source: source, metrics: metrics)] }
 
     func createNode(_ request: NodeCreateRequest) async throws -> CreatedEntity {
         let api = try requireConnectedAPI()
@@ -275,8 +292,8 @@ final class ManagementStore {
         await refresh()
     }
 
-    func nodesPage(page: Int, pageSize: Int, query: String, sort: String, order: String) async throws -> NodesPage {
-        try await requireConnectedAPI().get(APIEndpoints.listNodes(page: page, pageSize: pageSize, q: query, stateMatches: NodeDisplayText.matchingStates(query), sort: sort, order: order))
+    func nodesPage(page: Int, pageSize: Int, query: String, sort: String, order: String, cacheKey: String? = nil, revalidate: Bool = false) async throws -> NodesPage {
+        try await loadListPage(APIEndpoints.listNodes(page: page, pageSize: pageSize, q: query, stateMatches: NodeDisplayText.matchingStates(query), sort: sort, order: order), cacheKey: cacheKey, ttl: 15, revalidate: revalidate)
     }
 
     func nodeDetail(_ nodeID: String) async throws -> NodeDetail {
@@ -291,17 +308,17 @@ final class ManagementStore {
         await refresh()
     }
 
-    func usersPage(page: Int, pageSize: Int, query: String, order: String) async throws -> UsersPage {
-        try await requireConnectedAPI().get(APIEndpoints.listUsers(page: page, pageSize: pageSize, q: query, sort: "name", order: order))
+    func usersPage(page: Int, pageSize: Int, query: String, order: String, cacheKey: String? = nil, revalidate: Bool = false) async throws -> UsersPage {
+        try await loadListPage(APIEndpoints.listUsers(page: page, pageSize: pageSize, q: query, sort: "name", order: order), cacheKey: cacheKey, ttl: 15, revalidate: revalidate)
     }
 
-    func auditPage(page: Int, pageSize: Int, query: String, sort: String, order: String) async throws -> AuditPage {
+    func auditPage(page: Int, pageSize: Int, query: String, sort: String, order: String, cacheKey: String? = nil, revalidate: Bool = false) async throws -> AuditPage {
         let matches = AuditDisplayText.searchMatches(query)
-        return try await requireConnectedAPI().get(APIEndpoints.listAuditRecords(page: page, pageSize: pageSize, q: query, sort: sort, order: order, actionMatches: matches.actions, entityTypeMatches: matches.entityTypes, actorMatches: matches.actors))
+        return try await loadListPage(APIEndpoints.listAuditRecords(page: page, pageSize: pageSize, q: query, sort: sort, order: order, actionMatches: matches.actions, entityTypeMatches: matches.entityTypes, actorMatches: matches.actors), cacheKey: cacheKey, ttl: 60, revalidate: revalidate)
     }
 
-    func jobsPage(page: Int, pageSize: Int, query: String, sort: String, order: String) async throws -> JobsPage {
-        try await requireConnectedAPI().get(APIEndpoints.listJobs(page: page, pageSize: pageSize, q: query, sort: sort, order: order))
+    func jobsPage(page: Int, pageSize: Int, query: String, sort: String, order: String, cacheKey: String? = nil, revalidate: Bool = false) async throws -> JobsPage {
+        try await loadListPage(APIEndpoints.listJobs(page: page, pageSize: pageSize, q: query, sort: sort, order: order), cacheKey: cacheKey, ttl: 15, revalidate: revalidate)
     }
 
     func jobDetail(_ jobID: String) async throws -> JobDetailResponse {
@@ -632,14 +649,14 @@ final class ManagementStore {
         await refresh()
     }
 
-    private func loadData(using client: APIClient) async throws {
+    private func loadData(using client: APIClient, bypassCache: Bool = false) async throws {
         let generation = serviceGeneration
         async let loadedMonitoring = fetchServerMonitoring(using: client)
-        async let loadedCredentials: [CredentialSummary] = client.collectPages { APIEndpoints.listCredentials(page: $0, pageSize: 200) }
-        async let loadedNodes: [NodeSummary] = client.collectPages { APIEndpoints.listNodes(page: $0, pageSize: 200) }
-        async let loadedUsers: [UserSummary] = client.collectPages { APIEndpoints.listUsers(page: $0, pageSize: 200) }
-        async let loadedJobs: JobsPage = client.get(APIEndpoints.listJobs(pageSize: 200))
-        async let loadedAudit: AuditPage = client.get(APIEndpoints.listAuditRecords(pageSize: 200))
+        async let loadedCredentials: [CredentialSummary] = client.collectPages(bypassCache: bypassCache) { APIEndpoints.listCredentials(page: $0, pageSize: 200) }
+        async let loadedNodes: [NodeSummary] = client.collectPages(bypassCache: bypassCache) { APIEndpoints.listNodes(page: $0, pageSize: 200) }
+        async let loadedUsers: [UserSummary] = client.collectPages(bypassCache: bypassCache) { APIEndpoints.listUsers(page: $0, pageSize: 200) }
+        async let loadedJobs: JobsPage = client.get(APIEndpoints.listJobs(pageSize: 200), bypassCache: bypassCache)
+        async let loadedAudit: AuditPage = client.get(APIEndpoints.listAuditRecords(pageSize: 200), bypassCache: bypassCache)
         async let loadedAdminTokens: [AdminTokenSummary] = client.get(APIEndpoints.listAdminTokens)
         let tokens = try await loadedAdminTokens
         let monitoring = await loadedMonitoring
@@ -717,14 +734,15 @@ final class ManagementStore {
                         UserDefaults.standard.set(eventID, forKey: "lastEventID.\(self.serviceAddress)")
                         let now = Date()
                         if now.timeIntervalSince(lastRefresh) >= 1 {
-                            await self.refresh()
+                            self.listPageCache.invalidate(types: [NodesPage.self, UsersPage.self, JobsPage.self].map { String(reflecting: $0) })
+                            await self.refresh(forceDirectories: false)
                             lastRefresh = now
                         }
                     }
                     retryDelay = 1
                 } catch {
                     guard !Task.isCancelled else { return }
-                    await self.refresh()
+                    await self.refresh(forceDirectories: false)
                 }
                 guard !Task.isCancelled else { return }
                 try? await Task.sleep(for: .seconds(retryDelay))
@@ -736,8 +754,33 @@ final class ManagementStore {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(15))
                 guard !Task.isCancelled else { return }
-                await self?.refresh()
+                await self?.refresh(forceDirectories: false)
             }
+        }
+    }
+}
+
+extension ManagementStore {
+    func listPageKey(_ fields: [String]) -> String {
+        String(data: try! JSONEncoder().encode([listCacheSession.uuidString, serviceAddress, L10n.locale.identifier] + fields), encoding: .utf8)!
+    }
+
+    private func listCacheKey<Value>(_ key: String, as: Value.Type) -> String {
+        // Encode fields independently so delimiters in a search cannot alias another query.
+        String(data: try! JSONEncoder().encode([serviceAddress, L10n.locale.identifier, String(reflecting: Value.self), key]), encoding: .utf8)!
+    }
+
+    func cachedListPage<Value: Decodable>(_ key: String, as: Value.Type) -> Value? {
+        listPageCache.peek(listCacheKey(key, as: Value.self), as: Value.self)
+    }
+
+    func loadListPage<Value: Codable & Sendable>(
+        _ operation: APIOperation<NoRequest, Value>, cacheKey: String?, ttl: TimeInterval, revalidate: Bool = false
+    ) async throws -> Value {
+        let client = try requireConnectedAPI()
+        let requestKey = String(data: try JSONEncoder().encode([operation.path] + operation.queryParameters.sorted(by: { $0.key < $1.key }).flatMap { [$0.key, $0.value] }), encoding: .utf8)!
+        return try await listPageCache.load(listCacheKey(cacheKey ?? requestKey, as: Value.self), ttl: ttl, revalidate: revalidate) { bypassCache in
+            try await client.get(operation, bypassCache: bypassCache)
         }
     }
 }

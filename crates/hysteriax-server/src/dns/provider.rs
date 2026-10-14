@@ -37,10 +37,19 @@ pub struct Cloudflare {
 impl Cloudflare {
     pub fn new(token: String) -> Result<Self> {
         Ok(Self {
-            client: Client::builder()
-                .timeout(Duration::from_secs(20))
-                .redirect(reqwest::redirect::Policy::none())
-                .build()?,
+            client: {
+                static CLIENT: std::sync::OnceLock<Client> = std::sync::OnceLock::new();
+                if let Some(client) = CLIENT.get() {
+                    client.clone()
+                } else {
+                    let client = Client::builder()
+                        .timeout(Duration::from_secs(20))
+                        .redirect(reqwest::redirect::Policy::none())
+                        .build()?;
+                    let _ = CLIENT.set(client.clone());
+                    CLIENT.get().cloned().unwrap_or(client)
+                }
+            },
             token,
             base: "https://api.cloudflare.com/client/v4".into(),
         })

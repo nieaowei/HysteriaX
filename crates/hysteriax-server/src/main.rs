@@ -1,16 +1,22 @@
+mod analytics;
 mod api;
+mod artifact_cache;
+mod cache;
+mod cache_domains;
 mod config;
 mod credentials;
 mod db;
 mod deployment;
 mod dns;
 mod error;
+mod events;
 mod jobs;
 mod kick_requests;
 mod monitoring;
 mod node_limits;
 mod overview;
 mod proxy_monitor;
+mod redis_cache;
 mod security;
 mod ssh;
 mod state;
@@ -54,11 +60,18 @@ async fn main() -> Result<()> {
         .context("HYSTERIAX_MASTER_KEY must be a base64 encoded 32-byte key")?;
     let secret_box = SecretBox::from_base64(&master_key)?;
     credentials::migration::migrate(&pool, &secret_box).await?;
+    credentials::reference_index::initialize(&pool, &secret_box)
+        .await
+        .map_err(|error| anyhow::anyhow!("initialize reference index: {}", error.message))?;
+    analytics::refresh(&pool)
+        .await
+        .map_err(|e| anyhow::anyhow!("initialize analytics: {}", e.message))?;
     if migrate_only {
         tracing::info!("database and credential migration completed; workers were not started");
         return Ok(());
     }
     let state = AppState::new(pool, secret_box);
+    let analytics = tokio::spawn(analytics::run(state.clone()));
     let jobs = tokio::spawn(jobs::run(state.clone()));
     let traffic = tokio::spawn(traffic::run(state.clone()));
     let network = tokio::spawn(node_limits::collect(state.clone()));
@@ -82,6 +95,7 @@ async fn main() -> Result<()> {
             result.context("serve HTTP API")?;
         }
         result = &mut monitor => {
+            analytics.abort();
             jobs.abort();
             traffic.abort();
             network.abort();
@@ -91,6 +105,7 @@ async fn main() -> Result<()> {
             bail!("single-instance lock monitor stopped unexpectedly");
         }
     }
+    analytics.abort();
     jobs.abort();
     traffic.abort();
     network.abort();

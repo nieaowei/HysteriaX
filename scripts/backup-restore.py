@@ -347,6 +347,14 @@ def _rename_database(project_root, old_name, new_name):
     _psql_admin(project_root, f'ALTER DATABASE "{old_name}" RENAME TO "{new_name}"')
 
 
+def _clear_redis_cache(project_root):
+    services = compose(project_root, "config", "--services").stdout.splitlines()
+    if "redis" in services:
+        compose(project_root, "up", "-d", "--wait", "--wait-timeout", "30", "redis")
+        compose(project_root, "exec", "-T", "redis", "sh", "-c",
+                'REDISCLI_AUTH="$HYSTERIAX_REDIS_PASSWORD" redis-cli FLUSHDB')
+
+
 def restore(project_root, archive_path):
     project_root = pathlib.Path(project_root).resolve()
     master_key = read_master_key(project_root)
@@ -386,6 +394,7 @@ def restore(project_root, archive_path):
             previous_renamed = True
             _rename_database(project_root, staging_db, DATABASE_NAME)
             restored_renamed = True
+            _clear_redis_cache(project_root)
             start_api(project_root)
         except Exception:
             if api_stopped:
@@ -406,6 +415,7 @@ def restore(project_root, archive_path):
                     file=sys.stderr,
                 )
             if api_stopped:
+                _clear_redis_cache(project_root)
                 start_api(project_root)
             raise
 

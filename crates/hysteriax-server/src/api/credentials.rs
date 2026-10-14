@@ -73,37 +73,16 @@ fn summary(row: &sqlx::postgres::PgRow) -> Value {
 }
 
 // Managed and synthesized credentials share the same summaries and reference rules.
-async fn catalog_on(
-    state: &AppState,
-    connection: &mut sqlx::PgConnection,
-) -> Result<Vec<Value>, ApiError> {
+async fn catalog_on(connection: &mut sqlx::PgConnection) -> Result<Vec<Value>, ApiError> {
     let rows = sqlx::query("SELECT c.*,v.metadata FROM credentials c JOIN credential_versions v ON v.credential_id=c.id AND v.version=c.latest_version ORDER BY lower(c.name) COLLATE \"C\",c.id").fetch_all(&mut *connection).await?;
     let mut counts =
         std::collections::BTreeMap::<String, std::collections::BTreeSet<String>>::new();
-    for node in
-        sqlx::query("SELECT id,ssh_credential_id,desired_config_enc,deployed_config_enc FROM nodes")
-            .fetch_all(&mut *connection)
-            .await?
-    {
-        let node_id: String = node.get("id");
-        if let Some(id) = node.get::<Option<String>, _>("ssh_credential_id") {
-            counts
-                .entry(id)
-                .or_default()
-                .insert(format!("node:{node_id}"));
-        }
-        for field in ["desired_config_enc", "deployed_config_enc"] {
-            if let Some(cipher) = node.get::<Option<String>, _>(field) {
-                let config: Value = serde_json::from_str(&state.secrets.decrypt(&cipher)?)
-                    .map_err(|_| ApiError::internal())?;
-                for (_, r) in vault::references(&config).map_err(invalid)? {
-                    counts
-                        .entry(r.id)
-                        .or_default()
-                        .insert(format!("node:{node_id}"));
-                }
-            }
-        }
+    let references=sqlx::query("SELECT DISTINCT credential_id,node_id FROM credential_reference_edges WHERE source IN ('desired','deployed') UNION SELECT ssh_credential_id,id FROM nodes WHERE ssh_credential_id IS NOT NULL").fetch_all(&mut *connection).await?;
+    for row in references {
+        counts
+            .entry(row.get("credential_id"))
+            .or_default()
+            .insert(format!("node:{}", row.get::<String, _>("node_id")));
     }
     for row in sqlx::query("SELECT user_id,node_id,mtls_credential_id FROM node_assignments WHERE mtls_credential_id IS NOT NULL").fetch_all(&mut *connection).await? { counts.entry(row.get("mtls_credential_id")).or_default().insert(format!("assignment:{}:{}",row.get::<String,_>("user_id"),row.get::<String,_>("node_id"))); }
     for connection in sqlx::query("SELECT id,credential_id FROM dns_connections")
@@ -192,16 +171,31 @@ pub(crate) async fn list(
     let search = query.q.as_deref().unwrap_or("").trim().to_lowercase();
     let kind = query.kind.as_deref().unwrap_or("");
     let category = query.category.as_deref().unwrap_or("all");
-    // Aggregation includes synthetic entries and encrypted-config reference counts;
-    // one snapshot/connection keeps every source consistent, including a one-slot pool.
-    let mut tx = state.pool.begin().await?;
-    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
-        .execute(&mut *tx)
+    let generation = crate::cache_domains::version(
+        &state.pool,
+        &["credentials", "node_config", "user_config", "dns"],
+    )
+    .await?;
+    let catalog = state
+        .caches
+        .values
+        .get(
+            format!("credential-catalog:static:{generation}"),
+            std::time::Duration::from_secs(300),
+            crate::cache::bypass(),
+            || async {
+                let mut tx = crate::db::begin_write(&state.pool).await?;
+                crate::credentials::reference_index::ensure_on(&mut tx, &state.secrets).await?;
+                let entries = catalog_on(&mut tx).await?;
+                tx.commit().await?;
+                Ok::<_, ApiError>(json!(entries))
+            },
+        )
         .await?;
-    let catalog = catalog_on(&state, &mut tx).await?;
-    tx.commit().await?;
     let mut entries: Vec<Value> = catalog
-        .into_iter()
+        .as_array()
+        .ok_or_else(ApiError::internal)?
+        .iter()
         .filter(|entry| {
             let user_owned = !entry["owner_user_id"].is_null();
             (category == "all" || user_owned == (category == "user"))
@@ -213,7 +207,64 @@ pub(crate) async fn list(
                         .to_lowercase()
                         .contains(&search))
         })
+        .cloned()
         .collect();
+    let owners: Vec<String> = entries
+        .iter()
+        .filter_map(|v| v["owner_user_id"].as_str().map(str::to_owned))
+        .collect();
+    let rows = sqlx::query(
+        "SELECT id,enabled,expires_at,quota_bytes,usage_bytes FROM users WHERE id=ANY($1)",
+    )
+    .bind(&owners)
+    .fetch_all(&state.pool)
+    .await?;
+    let statuses: std::collections::BTreeMap<String, String> = rows
+        .iter()
+        .map(|r| (r.get("id"), user_status(r).to_owned()))
+        .collect();
+    let tokens = sqlx::query("SELECT id,last_used_at FROM admin_tokens")
+        .fetch_all(&state.pool)
+        .await?;
+    let token_times: std::collections::BTreeMap<String, Option<DateTime<Utc>>> = tokens
+        .iter()
+        .map(|r| (r.get("id"), r.get("last_used_at")))
+        .collect();
+    for entry in &mut entries {
+        let kind = entry["kind"].as_str().unwrap_or_default();
+        if matches!(kind, "user_credential" | "subscription_token") {
+            if entry["status"] != "revoked" {
+                entry["status"] = json!(
+                    statuses
+                        .get(entry["owner_user_id"].as_str().unwrap_or_default())
+                        .map(String::as_str)
+                        .unwrap_or("inactive")
+                );
+            }
+        } else if kind == "admin_token" {
+            let id = entry["metadata"]["token_id"].as_str().unwrap_or_default();
+            entry["metadata"]["last_used_at"] = json!(token_times.get(id).copied().flatten());
+        } else {
+            let days = entry["expires_at"]
+                .as_str()
+                .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
+                .map(|d| {
+                    (d.with_timezone(&Utc) - Utc::now())
+                        .num_seconds()
+                        .div_euclid(86400)
+                });
+            entry["days_remaining"] = json!(days);
+            entry["status"] = json!(if entry["archived"] == true {
+                "archived"
+            } else if days.is_some_and(|d| d < 0) {
+                "expired"
+            } else if days.is_some_and(|d| d <= 30) {
+                "expiring"
+            } else {
+                "active"
+            });
+        }
+    }
     if sort == "created_at" {
         entries.sort_by_cached_key(|entry| {
             (
@@ -277,22 +328,21 @@ pub async fn get(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
-    let row = sqlx::query("SELECT c.*,v.metadata FROM credentials c JOIN credential_versions v ON v.credential_id=c.id AND v.version=c.latest_version WHERE c.id=$1").bind(&id).fetch_optional(&state.pool).await?.ok_or_else(||ApiError::not_found("credential"))?;
+    let mut tx = crate::db::begin_write(&state.pool).await?;
+    let row = sqlx::query("SELECT c.*,v.metadata FROM credentials c JOIN credential_versions v ON v.credential_id=c.id AND v.version=c.latest_version WHERE c.id=$1").bind(&id).fetch_optional(&mut *tx).await?.ok_or_else(||ApiError::not_found("credential"))?;
     let mut result = summary(&row);
-    let versions = sqlx::query("SELECT version,metadata,created_at FROM credential_versions WHERE credential_id=$1 ORDER BY version DESC").bind(&id).fetch_all(&state.pool).await?;
+    let versions = sqlx::query("SELECT version,metadata,created_at FROM credential_versions WHERE credential_id=$1 ORDER BY version DESC").bind(&id).fetch_all(&mut *tx).await?;
     result["versions"] = json!(versions.iter().map(|v|json!({"version":v.get::<i64,_>("version"),"metadata":v.get::<Value,_>("metadata"),"created_at":v.get::<DateTime<Utc>,_>("created_at")})).collect::<Vec<_>>());
-    result["references"] = json!(find_references(&state, &id).await?);
+    result["references"] = json!(find_references_on(&mut tx, &state.secrets, &id).await?);
     let batches = sqlx::query(
         "SELECT id FROM credential_batches WHERE credential_id=$1 ORDER BY created_at DESC",
     )
     .bind(&id)
-    .fetch_all(&state.pool)
+    .fetch_all(&mut *tx)
     .await?;
-    let mut output = Vec::new();
-    for batch in batches {
-        output.push(batch_value(&state, &batch.get::<String, _>("id")).await?);
-    }
-    result["batches"] = json!(output);
+    let ids: Vec<String> = batches.iter().map(|row| row.get("id")).collect();
+    result["batches"] = json!(batch_values_on(&mut tx, &ids).await?);
+    tx.commit().await?;
     Ok(Json(result))
 }
 
@@ -507,8 +557,10 @@ pub async fn references(
 }
 
 pub(crate) async fn find_references(state: &AppState, id: &str) -> Result<Vec<Value>, ApiError> {
-    let mut connection = state.pool.acquire().await?;
-    find_references_on(&mut connection, &state.secrets, id).await
+    let mut tx = crate::db::begin_write(&state.pool).await?;
+    let references = find_references_on(&mut tx, &state.secrets, id).await?;
+    tx.commit().await?;
+    Ok(references)
 }
 
 async fn find_references_on(
@@ -516,6 +568,7 @@ async fn find_references_on(
     secrets: &crate::security::SecretBox,
     id: &str,
 ) -> Result<Vec<Value>, ApiError> {
+    crate::credentials::reference_index::ensure_on(connection, secrets).await?;
     let mut out = Vec::new();
     for row in
         sqlx::query("SELECT id,name,credential_version FROM dns_connections WHERE credential_id=$1")
@@ -525,30 +578,20 @@ async fn find_references_on(
     {
         out.push(json!({"entity_type":"dns_connection","entity_id":row.get::<String,_>("id"),"name":row.get::<String,_>("name"),"source":"dns","version":row.get::<i64,_>("credential_version")}));
     }
-    for row in sqlx::query("SELECT id,name,desired_config_enc,deployed_config_enc,ssh_credential_id,ssh_credential_version FROM nodes").fetch_all(&mut *connection).await? {
-        let node:String = row.get("id"); let name:String = row.get("name");
-        if row.get::<Option<String>,_>("ssh_credential_id").as_deref()==Some(id) { out.push(json!({"entity_type":"node","entity_id":node,"name":name,"source":"ssh","version":row.get::<Option<i64>,_>("ssh_credential_version")})); }
-        for (field,source) in [("desired_config_enc","desired"),("deployed_config_enc","deployed")] {
-            if let Some(cipher)=row.get::<Option<String>,_>(field) {
-                let value:Value=serde_json::from_str(&secrets.decrypt(&cipher)?).map_err(|_|ApiError::internal())?;
-                for (path,r) in vault::references(&value).map_err(invalid)?.into_iter().filter(|(_,r)|r.id==id) { out.push(json!({"entity_type":"node","entity_id":node,"name":name,"source":source,"version":r.version,"field":path})); }
-            }
-        }
-    }
-    for row in sqlx::query("SELECT node_id,revision,config_enc FROM config_versions")
-        .fetch_all(&mut *connection)
-        .await?
+    for row in
+        sqlx::query("SELECT id,name,ssh_credential_version FROM nodes WHERE ssh_credential_id=$1")
+            .bind(id)
+            .fetch_all(&mut *connection)
+            .await?
     {
-        let value: Value =
-            serde_json::from_str(&secrets.decrypt(&row.get::<String, _>("config_enc"))?)
-                .map_err(|_| ApiError::internal())?;
-        for (path, r) in vault::references(&value)
-            .map_err(invalid)?
-            .into_iter()
-            .filter(|(_, r)| r.id == id)
-        {
-            out.push(json!({"entity_type":"node","entity_id":row.get::<String,_>("node_id"),"source":"history","config_revision":row.get::<i64,_>("revision"),"version":r.version,"field":path}));
-        }
+        out.push(json!({"entity_type":"node","entity_id":row.get::<String,_>("id"),"name":row.get::<String,_>("name"),"source":"ssh","version":row.get::<Option<i64>,_>("ssh_credential_version")}));
+    }
+    for row in sqlx::query("SELECT e.node_id,n.name,e.source,e.config_revision,e.version,e.field FROM credential_reference_edges e JOIN nodes n ON n.id=e.node_id WHERE e.credential_id=$1 ORDER BY e.source,e.node_id,e.config_revision,e.field").bind(id).fetch_all(&mut *connection).await? {
+        let source:String=row.get("source");
+        let mut reference=json!({"entity_type":"node","entity_id":row.get::<String,_>("node_id"),"source":source,"version":row.get::<i64,_>("version"),"field":row.get::<String,_>("field")});
+        if source=="history" { reference["config_revision"]=json!(row.get::<i64,_>("config_revision")); }
+        else { reference["name"]=json!(row.get::<String,_>("name")); }
+        out.push(reference);
     }
     for row in sqlx::query("SELECT user_id,node_id,mtls_credential_version FROM node_assignments WHERE mtls_credential_id=$1").bind(id).fetch_all(&mut *connection).await? { out.push(json!({"entity_type":"user","entity_id":row.get::<String,_>("user_id"),"node_id":row.get::<String,_>("node_id"),"source":"mtls","version":row.get::<i64,_>("mtls_credential_version")})); }
     for row in
@@ -601,22 +644,59 @@ pub async fn delete(
     Ok(StatusCode::NO_CONTENT)
 }
 
-async fn batch_value(state: &AppState, id: &str) -> Result<Value, ApiError> {
-    let batch = sqlx::query("SELECT * FROM credential_batches WHERE id=$1")
-        .bind(id)
-        .fetch_optional(&state.pool)
-        .await?
-        .ok_or_else(|| ApiError::not_found("credential batch"))?;
-    let items=sqlx::query("SELECT i.node_id,i.user_id,i.job_id,j.status,j.stage,j.error_message,j.result_json,n.name FROM credential_batch_items i JOIN jobs j ON j.id=i.job_id LEFT JOIN nodes n ON n.id=i.node_id WHERE i.batch_id=$1 ORDER BY i.node_id,i.user_id").bind(id).fetch_all(&state.pool).await?;
-    Ok(
-        json!({"id":id,"credential_id":batch.get::<String,_>("credential_id"),"version":batch.get::<i64,_>("version"),"created_at":batch.get::<DateTime<Utc>,_>("created_at"),"dns_items":crate::dns::rotation::batch_items(&state.pool,id).await?,"items":items.iter().map(|i|json!({"node_id":i.get::<String,_>("node_id"),"user_id":i.get::<String,_>("user_id"),"job_id":i.get::<String,_>("job_id"),"status":i.get::<String,_>("status"),"stage":i.get::<String,_>("stage"),"error_message":i.get::<Option<String>,_>("error_message"),"name":i.get::<Option<String>,_>("name")})).collect::<Vec<_>>()}),
-    )
+async fn batch_values_on(
+    connection: &mut sqlx::PgConnection,
+    ids: &[String],
+) -> Result<Vec<Value>, ApiError> {
+    if ids.is_empty() {
+        return Ok(vec![]);
+    }
+    let batches = sqlx::query("SELECT * FROM credential_batches WHERE id=ANY($1)")
+        .bind(ids)
+        .fetch_all(&mut *connection)
+        .await?;
+    let items=sqlx::query("SELECT i.batch_id,i.node_id,i.user_id,i.job_id,j.status,j.stage,j.error_message,n.name FROM credential_batch_items i JOIN jobs j ON j.id=i.job_id LEFT JOIN nodes n ON n.id=i.node_id WHERE i.batch_id=ANY($1) ORDER BY i.node_id,i.user_id").bind(ids).fetch_all(&mut *connection).await?;
+    let dns=sqlx::query("SELECT i.batch_id,i.connection_id,i.job_id,c.name,j.status,j.stage,j.error_message FROM dns_credential_batch_items i JOIN dns_connections c ON c.id=i.connection_id JOIN jobs j ON j.id=i.job_id WHERE i.batch_id=ANY($1) ORDER BY c.name").bind(ids).fetch_all(&mut *connection).await?;
+    let mut item_map = std::collections::BTreeMap::<String, Vec<Value>>::new();
+    let mut dns_map = std::collections::BTreeMap::<String, Vec<Value>>::new();
+    for row in items {
+        item_map.entry(row.get("batch_id")).or_default().push(json!({"node_id":row.get::<String,_>("node_id"),"user_id":row.get::<String,_>("user_id"),"job_id":row.get::<String,_>("job_id"),
+        "status":row.get::<String,_>("status"),"stage":row.get::<String,_>("stage"),"error_message":row.get::<Option<String>,_>("error_message"),"name":row.get::<Option<String>,_>("name")}));
+    }
+    for row in dns {
+        dns_map.entry(row.get("batch_id")).or_default().push(json!({"connection_id":row.get::<String,_>("connection_id"),"job_id":row.get::<String,_>("job_id"),"name":row.get::<String,_>("name"),
+        "status":row.get::<String,_>("status"),"stage":row.get::<String,_>("stage"),"error_message":row.get::<Option<String>,_>("error_message")}));
+    }
+    let mut values = std::collections::BTreeMap::new();
+    for row in batches {
+        let id: String = row.get("id");
+        let items = item_map.remove(&id).unwrap_or_default();
+        let dns = dns_map.remove(&id).unwrap_or_default();
+        values.insert(id.clone(),json!({"id":id,"credential_id":row.get::<String,_>("credential_id"),"version":row.get::<i64,_>("version"),"created_at":row.get::<DateTime<Utc>,_>("created_at"),"items":items,"dns_items":dns}));
+    }
+    ids.iter()
+        .map(|id| {
+            values
+                .remove(id)
+                .ok_or_else(|| ApiError::not_found("credential batch"))
+        })
+        .collect()
 }
 pub async fn batch(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
-    Ok(Json(batch_value(&state, &id).await?))
+    let mut tx = state.pool.begin().await?;
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+        .execute(&mut *tx)
+        .await?;
+    let value = batch_values_on(&mut tx, &[id])
+        .await?
+        .into_iter()
+        .next()
+        .ok_or_else(ApiError::internal)?;
+    tx.commit().await?;
+    Ok(Json(value))
 }
 
 pub async fn retry(

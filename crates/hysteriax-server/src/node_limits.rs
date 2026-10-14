@@ -283,8 +283,18 @@ pub async fn snapshot(pool: &PgPool, id: &str) -> Result<(Value, Value)> {
     let now = Utc::now();
     let alerts = sqlx::query("SELECT id, kind, created_at FROM node_alerts WHERE node_id = $1 AND active ORDER BY created_at, id").bind(id).fetch_all(pool).await?;
     let alerts: Vec<Value> = alerts.iter().map(|r| json!({"id": r.get::<String,_>("id"), "kind": r.get::<String,_>("kind"), "created_at": r.get::<DateTime<Utc>,_>("created_at")})).collect();
-    let failed: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM jobs WHERE node_id = $1 AND kind = 'kick' AND payload_json->>'node_limit' = 'true' AND status = 'failed'").bind(id).fetch_one(pool).await?;
-    let pending: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM jobs WHERE node_id = $1 AND kind = 'kick' AND payload_json->>'node_limit' = 'true' AND status IN ('queued', 'running')").bind(id).fetch_one(pool).await?;
+    let failed: i64 = sqlx::query_scalar(
+        "SELECT coalesce((SELECT failed_limit FROM job_node_kick_totals WHERE node_id=$1),0)",
+    )
+    .bind(id)
+    .fetch_one(pool)
+    .await?;
+    let pending: i64 = sqlx::query_scalar(
+        "SELECT coalesce((SELECT pending_limit FROM job_node_kick_totals WHERE node_id=$1),0)",
+    )
+    .bind(id)
+    .fetch_one(pool)
+    .await?;
     snapshot_from_reading(row.as_ref(), alerts, failed, pending, now)
 }
 

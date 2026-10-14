@@ -50,19 +50,21 @@ actor APIClient {
         }
     }
 
-    func get<Value: Decodable>(_ operation: APIOperation<NoRequest, Value>) async throws -> Value {
+    func get<Value: Decodable>(_ operation: APIOperation<NoRequest, Value>, bypassCache: Bool = false) async throws -> Value {
         try requireMethod(operation, expected: "GET")
-        return try await send(operation, method: operation.method, body: Optional<Data>.none)
+        let data = try await perform(operation, method: operation.method, body: nil, bypassCache: bypassCache)
+        return try decode(Value.self, from: data)
     }
 
     func collectPages<Page: APIPage>(
+        bypassCache: Bool = false,
         _ operation: @Sendable (Int) -> APIOperation<NoRequest, Page>
     ) async throws -> [Page.Item] {
         var items: [Page.Item] = []
         var requestedPage = 1
         while true {
             try Task.checkCancellation()
-            let response = try await get(operation(requestedPage))
+            let response = try await get(operation(requestedPage), bypassCache: bypassCache)
             guard response.page == requestedPage, (1...200).contains(response.pageSize),
                   response.total >= 0, response.items.count <= response.pageSize else {
                 throw APIClientError.invalidResponse
@@ -198,13 +200,15 @@ actor APIClient {
         method: String,
         body: Data?,
         accept: String = "application/json",
-        rejectHTML: Bool = false
+        rejectHTML: Bool = false,
+        bypassCache: Bool = false
     ) async throws -> Data {
         let url = try makeURL(for: operation)
         var request = URLRequest(url: url)
         request.httpMethod = method
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue(accept, forHTTPHeaderField: "Accept")
+        if bypassCache { request.setValue("no-cache", forHTTPHeaderField: "Cache-Control") }
         if let body {
             request.httpBody = body
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")

@@ -1,4 +1,5 @@
 pub mod migration;
+pub(crate) mod reference_index;
 #[cfg(test)]
 mod tests;
 pub mod worker;
@@ -242,21 +243,49 @@ pub async fn insert(
     Ok(id)
 }
 
+pub(crate) type LoadedCredential = (String, Option<String>, bool, Value, Value);
 pub async fn load(
     pool: &PgPool,
     secrets: &SecretBox,
     id: &str,
     version: i64,
-) -> Result<(String, Option<String>, bool, Value, Value)> {
-    let row = sqlx::query("SELECT c.kind,c.owner_user_id,c.archived,v.payload_enc,v.artifact_names FROM credentials c JOIN credential_versions v ON v.credential_id=c.id WHERE c.id=$1 AND v.version=$2").bind(id).bind(version).fetch_optional(pool).await?.context("credential version not found")?;
-    let payload = serde_json::from_str(&secrets.decrypt(&row.get::<String, _>("payload_enc"))?)?;
-    Ok((
-        row.get("kind"),
-        row.get("owner_user_id"),
-        row.get("archived"),
-        payload,
-        row.get("artifact_names"),
-    ))
+) -> Result<LoadedCredential> {
+    load_many(pool, secrets, &[(id.to_owned(), version)])
+        .await?
+        .remove(&(id.to_owned(), version))
+        .context("credential version not found")
+}
+pub(crate) async fn load_many(
+    pool: &PgPool,
+    secrets: &SecretBox,
+    keys: &[(String, i64)],
+) -> Result<BTreeMap<(String, i64), LoadedCredential>> {
+    if keys.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+    let ids: Vec<_> = keys.iter().map(|(id, _)| id.clone()).collect();
+    let versions: Vec<_> = keys.iter().map(|(_, version)| *version).collect();
+    let rows=sqlx::query("SELECT c.id,c.kind,c.owner_user_id,c.archived,v.version,v.payload_enc,v.artifact_names FROM unnest($1::text[],$2::bigint[]) requested(id,version) JOIN credentials c ON c.id=requested.id JOIN credential_versions v ON v.credential_id=c.id AND v.version=requested.version")
+        .bind(ids).bind(versions).fetch_all(pool).await?;
+    let mut loaded = BTreeMap::new();
+    for row in rows {
+        let payload =
+            serde_json::from_str(&secrets.decrypt(&row.get::<String, _>("payload_enc"))?)?;
+        loaded.insert(
+            (row.get("id"), row.get("version")),
+            (
+                row.get("kind"),
+                row.get("owner_user_id"),
+                row.get("archived"),
+                payload,
+                row.get("artifact_names"),
+            ),
+        );
+    }
+    if keys.iter().any(|key| !loaded.contains_key(key)) {
+        bail!("credential version not found");
+    }
+    Ok(loaded)
 }
 
 fn check_config_reference(
@@ -295,23 +324,30 @@ pub async fn resolve_config(
     config: &Value,
     new_binding: bool,
 ) -> Result<(Value, Vec<ResourceFile>)> {
-    let dns_references: std::collections::BTreeSet<_> = references(config)?
-        .into_iter()
+    let references = references(config)?;
+    let dns_references: std::collections::BTreeSet<_> = references
+        .iter()
         .filter(|(path, _)| path.starts_with("/acme/dns/config/"))
-        .map(|(_, r)| (r.id, r.version))
+        .map(|(_, r)| (r.id.clone(), r.version))
         .collect();
     if dns_references.len() > 1 {
         bail!("DNS configuration must use one credential version");
     }
     let mut resolved = config.clone();
     let mut files = BTreeMap::<String, Vec<u8>>::new();
-    for (path, reference) in references(config)? {
-        let (kind, owner, archived, payload, artifacts) =
-            load(pool, secrets, &reference.id, reference.version).await?;
-        if new_binding && archived {
+    let keys: std::collections::BTreeSet<_> = references
+        .iter()
+        .map(|(_, reference)| (reference.id.clone(), reference.version))
+        .collect();
+    let loaded = load_many(pool, secrets, &keys.into_iter().collect::<Vec<_>>()).await?;
+    for (path, reference) in references {
+        let (kind, owner, archived, payload, artifacts) = loaded
+            .get(&(reference.id.clone(), reference.version))
+            .context("credential version not found")?;
+        if new_binding && *archived {
             bail!("credential is archived");
         }
-        let file = check_config_reference(&path, &reference, &kind, owner.as_deref())?;
+        let file = check_config_reference(&path, &reference, kind, owner.as_deref())?;
         let content = if kind == "dns" {
             if payload["provider"].as_str()
                 != config.pointer("/acme/dns/name").and_then(Value::as_str)
@@ -320,7 +356,7 @@ pub async fn resolve_config(
             }
             text(&payload["config"], &reference.field)?
         } else {
-            text(&payload, &reference.field)?
+            text(payload, &reference.field)?
         };
         let replacement = if file {
             let filename = artifacts

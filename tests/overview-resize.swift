@@ -52,6 +52,8 @@ import SwiftUI
         store.serverMonitoring = try decode(ServerMonitoring.self,"server-monitoring")
         store.supportsOverviewMonitoring = true
         store.cacheOverviewHistory(try decode(OverviewHistory.self,"history-24h"),nodeID:nil)
+        store.cacheOverviewHistory(try decode(OverviewHistory.self,"history-24h"),nodeID:nil, metrics: "traffic")
+        store.cacheOverviewHistory(try decode(OverviewHistory.self,"history-24h"),nodeID:nil, metrics: "quality")
         defer { UserDefaults.standard.removeObject(forKey:"overviewHistory.\(store.serviceAddress)") }
         var results: [[String:Any]] = []
         for (name,root) in [

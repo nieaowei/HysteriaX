@@ -11,7 +11,7 @@ use sqlx::{PgPool, Row};
 use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
 
-mod summary;
+pub(crate) mod summary;
 
 pub fn real_connections(value: Value, users: &BTreeSet<String>) -> Option<BTreeMap<String, i64>> {
     let object = value.as_object()?;
@@ -443,13 +443,19 @@ pub struct HistoryQuery {
     pub timezone: String,
     pub node_id: Option<String>,
     pub source: Option<String>,
+    pub metrics: Option<String>,
 }
 
 pub async fn history(
     State(state): State<AppState>,
     Query(query): Query<HistoryQuery>,
 ) -> Result<Json<Value>, ApiError> {
-    history_at(state, query, Utc::now()).await
+    let now = Utc::now();
+    let as_of = Utc
+        .timestamp_opt(now.timestamp().div_euclid(60) * 60, 0)
+        .single()
+        .ok_or_else(ApiError::internal)?;
+    history_at(state, query, as_of).await
 }
 
 async fn history_at(
@@ -478,10 +484,32 @@ async fn history_at(
     if !matches!(source, "users" | "network") {
         return Err(ApiError::bad_request("source must be users or network"));
     }
+    let metrics = query.metrics.as_deref().unwrap_or("all");
+    if !matches!(metrics, "all" | "traffic" | "quality") {
+        return Err(ApiError::bad_request(
+            "metrics must be traffic, quality or all",
+        ));
+    }
+    let want_traffic = metrics != "quality";
+    let want_quality = metrics != "traffic";
+    let mut tx = crate::analytics::snapshot(
+        &state.pool,
+        now,
+        want_quality || (want_traffic && source == "users"),
+    )
+    .await?;
+    // Window length and node scope change selectivity substantially. Generic
+    // prepared plans overestimate the edge ranges and spend seconds in JIT.
+    sqlx::query("SET LOCAL plan_cache_mode = force_custom_plan")
+        .execute(&mut *tx)
+        .await?;
+    // These bounded history aggregations finish faster than JIT initialization
+    // on a fresh connection. Keep this setting local to the read transaction.
+    sqlx::query("SET LOCAL jit = off").execute(&mut *tx).await?;
     if let Some(id) = &query.node_id {
         let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM nodes WHERE id=$1)")
             .bind(id)
-            .fetch_one(&state.pool)
+            .fetch_one(&mut *tx)
             .await?;
         if !exists {
             return Err(ApiError::not_found("node"));
@@ -505,23 +533,42 @@ async fn history_at(
     } else {
         "node_network_samples"
     };
-    let sql = format!(
-        "SELECT CASE WHEN $1='hour' THEN date_bin(interval '1 hour',sampled_at,$3) WHEN $1='rolling_day' THEN date_bin(interval '24 hours',sampled_at,$3) ELSE date_trunc($1, sampled_at AT TIME ZONE $2) AT TIME ZONE $2 END bucket,sum(delta_tx)::bigint tx,sum(delta_rx)::bigint rx,count(DISTINCT node_id)::bigint covered_nodes,bool_or(gap_reason IS NOT NULL OR baseline_only) incomplete FROM {table} WHERE sampled_at >= $3 AND sampled_at < $4 AND ($5::text IS NULL OR node_id=$5) GROUP BY bucket ORDER BY bucket"
-    );
-    let traffic = sqlx::query(&sql)
-        .bind(unit)
-        .bind(&query.timezone)
-        .bind(start)
-        .bind(now)
-        .bind(&query.node_id)
-        .fetch_all(&state.pool)
-        .await?;
-    let online=sqlx::query("WITH cycles AS (SELECT cycle_id,CASE WHEN $1='hour' THEN date_bin(interval '1 hour',cycle_started_at,$3) WHEN $1='rolling_day' THEN date_bin(interval '24 hours',cycle_started_at,$3) ELSE date_trunc($1,cycle_started_at AT TIME ZONE $2) AT TIME ZONE $2 END bucket,count(*) FILTER(WHERE status='ok') covered,bool_or(status!='ok') OR count(*) FILTER(WHERE status='ok')<CASE WHEN $5::text IS NULL THEN max(expected_nodes) ELSE 1 END incomplete FROM online_samples WHERE cycle_started_at >= $3 AND cycle_started_at < $4 AND ($5::text IS NULL OR node_id=$5) GROUP BY cycle_id,bucket), counts AS (SELECT s.cycle_id,count(DISTINCT e.key)::double precision users,COALESCE(sum(e.value::bigint),0)::double precision connections FROM online_samples s LEFT JOIN LATERAL jsonb_each_text(s.connections) e ON true WHERE s.cycle_started_at >= $3 AND s.cycle_started_at < $4 AND s.status='ok' AND ($5::text IS NULL OR s.node_id=$5) GROUP BY s.cycle_id) SELECT c.bucket,avg(n.users) users_avg,max(n.users) users_peak,avg(n.connections) connections_avg,max(n.connections) connections_peak,min(c.covered)::bigint covered_nodes,bool_or(c.incomplete) incomplete FROM cycles c LEFT JOIN counts n USING(cycle_id) GROUP BY c.bucket ORDER BY c.bucket")
-        .bind(unit).bind(&query.timezone).bind(start).bind(now).bind(&query.node_id).fetch_all(&state.pool).await?;
-    let probes=sqlx::query("SELECT CASE WHEN $1='hour' THEN date_bin(interval '1 hour',sampled_at,$3) WHEN $1='rolling_day' THEN date_bin(interval '24 hours',sampled_at,$3) ELSE date_trunc($1,sampled_at AT TIME ZONE $2) AT TIME ZONE $2 END bucket,count(*)::bigint attempts,count(*) FILTER(WHERE status='ok' AND external_status IS DISTINCT FROM 'failed')::bigint successes,percentile_cont(0.5) WITHIN GROUP(ORDER BY latency_ms) FILTER(WHERE status='ok' AND external_status IS DISTINCT FROM 'failed') p50,percentile_cont(0.95) WITHIN GROUP(ORDER BY latency_ms) FILTER(WHERE status='ok' AND external_status IS DISTINCT FROM 'failed') p95 FROM proxy_probe_samples WHERE sampled_at >= $3 AND sampled_at < $4 AND status IN ('ok','failed') AND ($5::text IS NULL OR node_id=$5) GROUP BY bucket ORDER BY bucket")
-        .bind(unit).bind(&query.timezone).bind(start).bind(now).bind(&query.node_id).fetch_all(&state.pool).await?;
-    let quality=sqlx::query("WITH cycles AS (SELECT cycle_id,CASE WHEN $1='hour' THEN date_bin(interval '1 hour',cycle_started_at,$3) WHEN $1='rolling_day' THEN date_bin(interval '24 hours',cycle_started_at,$3) ELSE date_trunc($1,cycle_started_at AT TIME ZONE $2) AT TIME ZONE $2 END bucket,count(*) FILTER(WHERE traffic_status='ok')::bigint covered,CASE WHEN $5::text IS NULL THEN max(expected_nodes) ELSE 1 END expected FROM online_samples WHERE cycle_started_at >= $3 AND cycle_started_at < $4 AND ($5::text IS NULL OR node_id=$5) GROUP BY cycle_id,bucket) SELECT bucket,min(covered)::bigint covered,max(expected)::bigint expected,bool_or(covered<expected) incomplete FROM cycles GROUP BY bucket")
-        .bind(unit).bind(&query.timezone).bind(start).bind(now).bind(&query.node_id).fetch_all(&state.pool).await?;
+    let sql = include_str!("analytics/traffic_history.sql").replace("RAW_TABLE", table);
+    let traffic = if want_traffic {
+        sqlx::query(&sql)
+            .bind(unit)
+            .bind(source)
+            .bind(start)
+            .bind(now)
+            .bind(&query.node_id)
+            .fetch_all(&mut *tx)
+            .await?
+    } else {
+        Vec::new()
+    };
+    let cycles = if want_quality || (want_traffic && source == "users") {
+        sqlx::query(include_str!("analytics/online_history.sql"))
+            .bind(unit)
+            .bind(&query.timezone)
+            .bind(start)
+            .bind(now)
+            .bind(&query.node_id)
+            .fetch_all(&mut *tx)
+            .await?
+    } else {
+        Vec::new()
+    };
+    let probes = if want_quality {
+        sqlx::query(include_str!("analytics/probe_history.sql"))
+            .bind(unit)
+            .bind(start)
+            .bind(now)
+            .bind(&query.node_id)
+            .fetch_all(&mut *tx)
+            .await?
+    } else {
+        Vec::new()
+    };
     let mut buckets = BTreeMap::<DateTime<Utc>, Value>::new();
     let mut cursor = start;
     while cursor < now {
@@ -550,7 +597,7 @@ async fn history_at(
             };
         }
     }
-    for row in quality {
+    for row in cycles.iter().filter(|_| want_traffic && source == "users") {
         if let Some(v) = buckets.get_mut(&row.get::<DateTime<Utc>, _>("bucket")) {
             let covered: i64 = row.get("covered");
             let expected: i64 = row.get("expected");
@@ -563,14 +610,14 @@ async fn history_at(
                     v["incomplete"] = json!(false);
                     v["missing_reason"] = Value::Null;
                 }
-                if row.get::<bool, _>("incomplete") {
+                if row.get::<bool, _>("traffic_incomplete") {
                     v["incomplete"] = json!(true);
                     v["missing_reason"] = json!("部分节点流量采集失败或尚无有效样本");
                 }
             }
         }
     }
-    for row in online {
+    for row in cycles.iter().filter(|_| want_quality) {
         if let Some(v) = buckets.get_mut(&row.get::<DateTime<Utc>, _>("bucket")) {
             v["online_users_avg"] = json!(row.get::<Option<f64>, _>("users_avg"));
             v["online_users_peak"] = json!(row.get::<Option<f64>, _>("users_peak"));
@@ -589,8 +636,8 @@ async fn history_at(
         }
     }
     // Gaps can overlap multiple buckets even when no record was written in the gap.
-    let gaps = if source == "users" {
-        sqlx::query("SELECT opened_at start,COALESCE(resolved_at,now()) finish FROM data_gaps WHERE opened_at <= $2 AND COALESCE(resolved_at,now()) >= $1 AND ($3::text IS NULL OR node_id=$3)").bind(start).bind(now).bind(&query.node_id).fetch_all(&state.pool).await?
+    let gaps = if want_traffic && source == "users" {
+        sqlx::query("SELECT opened_at start,COALESCE(resolved_at,now()) finish FROM data_gaps WHERE opened_at <= $2 AND COALESCE(resolved_at,now()) >= $1 AND ($3::text IS NULL OR node_id=$3)").bind(start).bind(now).bind(&query.node_id).fetch_all(&mut *tx).await?
     } else {
         Vec::new()
     };
@@ -608,8 +655,9 @@ async fn history_at(
             }
         }
     }
+    tx.commit().await?;
     Ok(Json(
-        json!({"generated_at":now,"range":query.range,"timezone":query.timezone,"source":source,"buckets":buckets.into_values().collect::<Vec<_>>()}),
+        json!({"metrics":metrics,"generated_at":now,"range":query.range,"timezone":query.timezone,"source":source,"buckets":buckets.into_values().collect::<Vec<_>>()}),
     ))
 }
 

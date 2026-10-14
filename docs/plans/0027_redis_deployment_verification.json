@@ -1,0 +1,129 @@
+{
+  "checks": [
+    "redis_primary_encrypted_preview_keys",
+    "preview_cache_hit_after_api_restart",
+    "redis_outage_database_fallback",
+    "redis_recovery_and_no_published_port"
+  ],
+  "cache_statistics": {
+    "caches": {
+      "backend": "redis",
+      "previews": {
+        "bytes": 530,
+        "entries": 1,
+        "evictions": 0,
+        "hits": 2,
+        "misses": 1,
+        "waits": 0
+      },
+      "redis": {
+        "available": true,
+        "configured": true,
+        "encrypted": true,
+        "errors": 2
+      },
+      "responses": {
+        "bytes": 13709,
+        "entries": 2,
+        "evictions": 1,
+        "hits": 0,
+        "misses": 5,
+        "waits": 0
+      },
+      "values": {
+        "bytes": 0,
+        "entries": 0,
+        "evictions": 0,
+        "hits": 0,
+        "misses": 0,
+        "waits": 0
+      }
+    },
+    "events": {
+      "bytes": 0,
+      "events": 0,
+      "running": false,
+      "watermark": 0
+    }
+  },
+  "redis_keys": 7,
+  "redis_memory": "# Memory\nused_memory:941312\nused_memory_human:919.25K\nused_memory_rss:12320768\nused_memory_rss_human:11.75M\nused_memory_peak:1267112\nused_memory_peak_human:1.21M\nused_memory_peak_time:1791939574\nused_memory_peak_perc:74.29%\nused_memory_overhead:786512\nused_memory_startup:715136\nused_memory_dataset:154800\nused_memory_dataset_perc:68.44%\nallocator_allocated:4485600\nallocator_active:4513792\nallocator_resident:7720960\nallocator_muzzy:0\ntotal_system_memory:1011417088\ntotal_system_memory_human:964.56M\nused_memory_lua:32768\nused_memory_vm_eval:32768\nused_memory_lua_human:32.00K\nused_memory_scripts_eval:0\nnumber_of_cached_scripts:0\nnumber_of_functions:0\nnumber_of_libraries:0\nused_memory_vm_functions:34816\nused_memory_vm_total:67584\nused_memory_vm_total_human:66.00K\nused_memory_functions:192\nused_memory_hash_templates:72\nused_memory_scripts:192\nused_memory_scripts_human:192B\nmaxmemory:67108864\nmaxmemory_human:64.00M\nmaxmemory_policy:allkeys-lru\nallocator_frag_ratio:1.00\nallocator_frag_bytes:12256\nallocator_rss_ratio:1.71\nallocator_rss_bytes:3207168\nrss_overhead_ratio:1.60\nrss_overhead_bytes:4599808\nmem_fragmentation_ratio:13.35\nmem_fragmentation_bytes:11397736\nmem_not_counted_for_evict:8\nmem_replication_backlog:0\nmem_total_replication_buffers:0\nmem_replica_full_sync_buffer:0\nmem_clients_slaves:0\nmem_clients_normal:2304\nmem_clients_normal_shared:0\nmem_clients_normal_unshared:0\nmem_cluster_slot_migration_output_buffer:0\nmem_cluster_slot_migration_input_buffer:0\nmem_cluster_slot_migration_input_buffer_peak:0\nmem_cluster_links:0\nmem_aof_buffer:8\nmem_allocator:jemalloc-5.3.0\nmem_overhead_db_hashtable_rehashing:0\nactive_defrag_running:0\nlazyfree_pending_objects:0\nlazyfreed_objects:0",
+  "redis_version": "redis_version:8.10.2",
+  "verified_at": "2026-10-14T01:00:53.733357+00:00",
+  "service_url": "https://hysteriax.cc",
+  "image": "nieaowei/hysteriax-server:redis-cache-20261014-v1",
+  "binary_sha256": "995a38d8ba80af3cd71fede0f68aba00010ff361a25128854dd2652457eb17a9",
+  "archive_sha256": "a712b56c9382f3d23bbb4e2da06fb1bce09e3237a74e7149660f9697c6474382",
+  "api_version": "1.0.0",
+  "schema_version": 19,
+  "tests_passed": 189,
+  "strict_clippy_passed": true,
+  "isolated_postgresql_restore_and_redis_invalidation_passed": true,
+  "backup_directory": "/home/nieaowei/HysteriaX/backups/redis-cache-20261014-v1",
+  "api_regression": {
+    "service_url": "https://hysteriax.cc",
+    "verified_at": "2026-10-14T01:02:06Z",
+    "api_version": "1.0.0",
+    "migration": 19,
+    "container_health": "healthy",
+    "counts": {
+      "nodes": 5,
+      "users": 7,
+      "credentials": 50,
+      "dns/records": 22
+    },
+    "checks": [
+      "v1_version_directory_generation_auth_and_no_v2",
+      "pagination_node_summary_detail_user_usage_credentials_dns",
+      "overview_cache_hit_force_refresh_and_cache_statistics",
+      "history_24h_7d_30d_traffic_quality_minute_anchor",
+      "openapi_v1_and_etag",
+      "shared_sse_durable_history_replay",
+      "migration_19_and_exact_raw_vs_aggregate_reconciliation",
+      "postgres_and_caddy_container_identities_unchanged",
+      "migration_preserved_entire_user_and_package_billing_state"
+    ],
+    "cache_statistics": {
+      "caches": {
+        "backend": "redis",
+        "previews": {
+          "bytes": 530,
+          "entries": 1,
+          "evictions": 0,
+          "hits": 13,
+          "misses": 1,
+          "waits": 0
+        },
+        "redis": {
+          "available": true,
+          "configured": true,
+          "encrypted": true,
+          "errors": 2
+        },
+        "responses": {
+          "bytes": 13709,
+          "entries": 2,
+          "evictions": 5,
+          "hits": 5,
+          "misses": 48,
+          "waits": 0
+        },
+        "values": {
+          "bytes": 0,
+          "entries": 0,
+          "evictions": 0,
+          "hits": 0,
+          "misses": 2,
+          "waits": 0
+        }
+      },
+      "events": {
+        "bytes": 0,
+        "events": 0,
+        "running": true,
+        "watermark": 2435
+      }
+    }
+  },
+  "container_health": "healthy"
+}

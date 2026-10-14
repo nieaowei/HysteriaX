@@ -12,8 +12,8 @@ extension ManagementStore {
         return (receipt.id, receipt.version ?? 1)
     }
 
-    func credentialsPage(page: Int, pageSize: Int, category: String, kind: String, query: String, sort: String, order: String) async throws -> CredentialsPage {
-        try await requireConnectedAPI().get(APIEndpoints.listCredentials(page: page, pageSize: pageSize, category: category, kind: kind.isEmpty ? nil : kind, q: query, sort: sort, order: order))
+    func credentialsPage(page: Int, pageSize: Int, category: String, kind: String, query: String, sort: String, order: String, cacheKey: String? = nil, revalidate: Bool = false) async throws -> CredentialsPage {
+        try await loadListPage(APIEndpoints.listCredentials(page: page, pageSize: pageSize, category: category, kind: kind.isEmpty ? nil : kind, q: query, sort: sort, order: order), cacheKey: cacheKey, ttl: 60, revalidate: revalidate)
     }
 
     func credentialDetail(_ id: String) async throws -> CredentialDetail {

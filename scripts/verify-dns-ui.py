@@ -25,7 +25,7 @@ with tempfile.TemporaryDirectory(prefix="hysteriax-dns-ui-") as folder:
     node = {"id":"node-1","name":"Hong Kong","revision":1,"state":"new","ssh":ssh,"dns_binding":binding}
     credential = {"id":"credential-1","name":"Cloudflare","kind":"dns","revision":1,"latest_version":1,"archived":False,"status":"active","metadata":{"provider":"cloudflare","fields":["cloudflare_api_token"]},"created_at":stamp,"updated_at":stamp}
     detail = node | {"config":{},"yaml_preview":"listen: :443","public":{"host":"hk.example.test","port":443,"listen_addr":":443","skip_cert_verify":False},"created_at":stamp,"updated_at":stamp}
-    responses = {"version":{"api_version":"1.0.0","features":["dns_management"],"current_admin_token_id":"fixture","service_version":"fixture","hysteria_version":"app/v2.12.3","mihomo_version":"v1.19.31"},"connections":[connection],"zones":[zone],"records":[record],"record":record,"nodes":[node],"node":detail,"credentials":[credential],"empty":[]}
+    responses = {"version":{"api_version":"1.0.0","directory_generation":1,"features":["dns_management"],"current_admin_token_id":"fixture","service_version":"fixture","hysteria_version":"app/v2.12.3","mihomo_version":"v1.19.31"},"connections":[connection],"zones":[zone],"records":[record],"record":record,"nodes":[node],"node":detail,"credentials":[credential],"empty":[]}
     for name, value in responses.items():
         (fixtures / (name + ".json")).write_text(json.dumps(value))
     support = '''import Foundation

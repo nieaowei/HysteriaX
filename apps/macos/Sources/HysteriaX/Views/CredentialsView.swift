@@ -32,13 +32,13 @@ struct CredentialsView: View {
         }
     }
     private var sortDirection: String { sortOrder.first?.order == .reverse ? "desc" : "asc" }
-    private var pageKey: String { "\(store.serviceAddress)|\(page)|\(pageSize)|\(category.apiValue)|\(type)|\(query)|\(sortField)|\(sortDirection)" }
-    private var pageRequestKey: String { "\(pageKey)|\(store.isConnected)|\(store.lastUpdated?.timeIntervalSince1970 ?? 0)|\(retryPageToken)" }
-    private var currentPageResponse: CredentialsPage? { loadedPageKey == pageKey ? pageResponse : nil }
+    private var pageKey: String { store.listPageKey([String(page), String(pageSize), category.apiValue, type, query, sortField, sortDirection]) }
+    private var pageRequestKey: String { "\(pageKey)|\(store.isConnected)|\(store.dataRefreshToken)|\(retryPageToken)" }
+    private var currentPageResponse: CredentialsPage? { store.cachedListPage(pageKey, as: CredentialsPage.self) ?? (loadedPageKey == pageKey ? pageResponse : nil) }
     private var totalEntries: Int { store.isConnected ? (currentPageResponse?.total ?? 0) : snapshotEntries.count }
     private var pageCount: Int { max(1, (totalEntries + pageSize - 1) / pageSize) }
     private var currentPage: Int { store.isConnected ? page : min(page, pageCount) }
-    private var detailRequestKey: String { "\(store.serviceAddress)|\(selection ?? "")|\(store.lastUpdated?.timeIntervalSince1970 ?? 0)|\(store.isConnected)" }
+    private var detailRequestKey: String { "\(store.serviceAddress)|\(selection ?? "")|\(store.dataRefreshToken)|\(store.isConnected)" }
 
     private var categoryEntries: [CredentialSummary] {
         store.credentials.filter { category.contains($0) }
@@ -72,6 +72,7 @@ struct CredentialsView: View {
             loadedPageKey = nil
         }
         .task(id: pageRequestKey) { await loadPage() }
+        .onDisappear { loadedPageKey = nil }
         .toolbar {
             ToolbarItem(placement: .principal) {
                 Picker(L10n.text("凭据分类"), selection: $category) {
@@ -162,7 +163,7 @@ struct CredentialsView: View {
             if let pageError {
                 HStack {
                     Text(pageError).foregroundStyle(.red).textSelection(.enabled)
-                    Button(L10n.text("重试")) { retryPageToken = UUID() }
+                    Button(L10n.text("重试")) { loadedPageKey = nil; retryPageToken = UUID() }
                 }.font(.caption)
             }
             HStack(spacing: 12) {
@@ -199,7 +200,7 @@ struct CredentialsView: View {
         defer { if requestKey == pageRequestKey { isLoadingPage = false } }
         do {
             if !query.isEmpty { try await Task.sleep(for: .milliseconds(250)) }
-            let response = try await store.credentialsPage(page: page, pageSize: pageSize, category: category.apiValue, kind: type, query: query, sort: sortField, order: sortDirection)
+            let response = try await store.credentialsPage(page: page, pageSize: pageSize, category: category.apiValue, kind: type, query: query, sort: sortField, order: sortDirection, cacheKey: pageKey, revalidate: loadedPageKey != pageKey)
             guard !Task.isCancelled, requestKey == pageRequestKey else { return }
             page = response.page
             pageResponse = response

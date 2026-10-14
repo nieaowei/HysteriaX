@@ -152,7 +152,7 @@ pub(crate) async fn list(
         _ => format!("n.created_at {order}, n.id {order}"),
     };
     let rows = sqlx::query(&format!(
-        "SELECT n.* FROM nodes n WHERE {filter} ORDER BY {order_by} LIMIT $3 OFFSET $4"
+        "SELECT n.*,c.kind AS credential_kind FROM nodes n LEFT JOIN credentials c ON c.id=n.ssh_credential_id WHERE {filter} ORDER BY {order_by} LIMIT $3 OFFSET $4"
     ))
     .bind(search)
     .bind(&states)
@@ -160,12 +160,56 @@ pub(crate) async fn list(
     .bind((page - 1) * page_size)
     .fetch_all(&mut *tx)
     .await?;
-    // Count/base rows share a snapshot. Release it before the existing live telemetry,
-    // resource and binding readers acquire connections (also works with a one-slot pool).
+    let ids: Vec<String> = rows.iter().map(|row| row.get("id")).collect();
+    let readings = crate::overview::summary::read_nodes_on(&mut tx, Some(&ids)).await?;
+    let now = chrono::Utc::now();
+    let mut summaries: std::collections::BTreeMap<String, Value> = readings
+        .iter()
+        .map(|row| {
+            let value = row.summary(now)?;
+            Ok((
+                value["id"]
+                    .as_str()
+                    .ok_or_else(ApiError::internal)?
+                    .to_owned(),
+                value,
+            ))
+        })
+        .collect::<Result<_, ApiError>>()?;
+    let mut bindings = super::dns::bindings_on(&mut tx, &ids).await?;
     tx.commit().await?;
     let mut items = Vec::with_capacity(rows.len());
     for row in rows {
-        items.push(node_json(&state, &row).await?);
+        let id: String = row.get("id");
+        let mut node = summaries.remove(&id).ok_or_else(ApiError::internal)?;
+        let cipher: String = row.get("desired_config_enc");
+        let key = format!("mtls:{}:{}", id, crate::security::token_digest(&cipher));
+        let mtls = state
+            .caches
+            .previews
+            .get(key, std::time::Duration::from_secs(1800), false, || async {
+                let config: Value = serde_json::from_str(&state.secrets.decrypt(&cipher)?)
+                    .map_err(|_| ApiError::internal())?;
+                Ok::<_, ApiError>(json!(
+                    config
+                        .pointer("/tls/clientCA")
+                        .and_then(Value::as_str)
+                        .is_some_and(|v| !v.trim().is_empty())
+                ))
+            })
+            .await?;
+        node["mtls_required"] = (*mtls).clone();
+        let kind: Option<String> = row.get("credential_kind");
+        node["ssh"] = json!({"host":row.get::<String,_>("ssh_host"),"port":row.get::<i32,_>("ssh_port"),"username":row.get::<String,_>("ssh_username"),
+            "auth_type":if kind.as_deref()==Some("ssh_password"){ "password" }else{ "private_key" },"credential_id":row.get::<Option<String>,_>("ssh_credential_id"),
+            "credential_version":row.get::<Option<i64>,_>("ssh_credential_version"),"secret_configured":true,"host_fingerprint":row.get::<Option<String>,_>("ssh_host_fingerprint")});
+        node["published_connection"] = json!(row.get::<Option<Value>, _>("published_connection"));
+        node["public"] = json!({"host":row.get::<String,_>("public_host"),"port":row.get::<i32,_>("public_port"),"listen_addr":row.get::<String,_>("listen_addr"),"tls_sni":row.get::<Option<String>,_>("tls_sni"),"skip_cert_verify":row.get::<bool,_>("tls_skip_verify")});
+        node["dns_binding"] = bindings.remove(&id).unwrap_or(Value::Null);
+        node["traffic_stats_port"] = json!(row.get::<i32, _>("traffic_stats_port"));
+        node["proxy_probe_url"] = json!(row.get::<Option<String>, _>("proxy_probe_url"));
+        node["created_at"] = json!(row.get::<chrono::DateTime<chrono::Utc>, _>("created_at"));
+        items.push(node);
     }
     Ok(Json(
         json!({"items":items,"total":total,"page":page,"page_size":page_size}),
@@ -943,27 +987,48 @@ async fn node_json(state: &AppState, row: &sqlx::postgres::PgRow) -> Result<Valu
     let telemetry = sqlx::query(
         "SELECT
             (SELECT COUNT(*) FROM data_gaps WHERE node_id = $1 AND resolved_at IS NULL) AS open_gaps,
-            (SELECT COUNT(*) FROM jobs WHERE node_id = $2 AND kind = 'kick' AND status IN ('queued', 'running')) AS pending_revocations",
+            (SELECT coalesce((SELECT pending FROM job_node_kick_totals WHERE node_id=$2),0)) AS pending_revocations",
     )
     .bind(&node_id)
     .bind(&node_id)
     .fetch_one(&state.pool)
     .await?;
-    let (resolved_config, _) =
-        super::resources::resolve_config_resources(&state.pool, &state.secrets, &node_id, &config)
-            .await?;
     let traffic_stats_port = row.get::<i32, _>("traffic_stats_port") as u16;
-    let yaml_preview = render_server_yaml_preview_with_traffic_stats_port(
-        &resolved_config,
-        row.get::<String, _>("listen_addr").as_str(),
-        &node_id,
-        "<managed-node-token>",
-        "<managed-stats-secret>",
-        &std::env::var("HYSTERIAX_PUBLIC_URL")
-            .unwrap_or_else(|_| "https://management.example.invalid".into()),
-        traffic_stats_port,
-    )
-    .map_err(|_| ApiError::internal())?;
+    let version =
+        crate::cache_domains::version(&state.pool, &["node_config", "credentials", "resources"])
+            .await?;
+    let key = format!(
+        "preview:{}:{}:{}",
+        node_id,
+        version,
+        crate::security::token_digest(&config_enc)
+    );
+    let preview = state
+        .caches
+        .previews
+        .get(key, std::time::Duration::from_secs(1800), false, || async {
+            let (resolved, _) = super::resources::resolve_config_resources(
+                &state.pool,
+                &state.secrets,
+                &node_id,
+                &config,
+            )
+            .await?;
+            let value = render_server_yaml_preview_with_traffic_stats_port(
+                &resolved,
+                row.get::<String, _>("listen_addr").as_str(),
+                &node_id,
+                "<managed-node-token>",
+                "<managed-stats-secret>",
+                &std::env::var("HYSTERIAX_PUBLIC_URL")
+                    .unwrap_or_else(|_| "https://management.example.invalid".into()),
+                traffic_stats_port,
+            )
+            .map_err(|_| ApiError::internal())?;
+            Ok::<_, ApiError>(json!(value))
+        })
+        .await?;
+    let yaml_preview = preview.as_str().ok_or_else(ApiError::internal)?;
     let (package, package_usage) = crate::node_limits::snapshot(&state.pool, &node_id)
         .await
         .map_err(|_| ApiError::internal())?;

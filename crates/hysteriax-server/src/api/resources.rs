@@ -41,9 +41,10 @@ pub(crate) async fn resolve_config_resources(
     let ids = collect_resource_ids(&resolved);
     if !ids.is_empty() {
         let rows = sqlx::query(
-            "SELECT id, resource_kind, content_enc FROM config_resources WHERE node_id=$1",
+            "SELECT id, resource_kind, content_enc FROM config_resources WHERE node_id=$1 AND id=ANY($2)",
         )
         .bind(node_id)
+        .bind(ids.iter().cloned().collect::<Vec<_>>())
         .fetch_all(pool)
         .await?;
         let mut kinds = BTreeMap::new();
@@ -63,7 +64,7 @@ pub(crate) async fn resolve_config_resources(
             ));
         }
         validate_resource_kinds(&resolved, &kinds)?;
-        validate_server_tls_resource_pair(&resolved, &resources)?;
+        validate_server_tls_resource_pair(&resolved, &resources).await?;
         rewrite_resource_paths(&mut resolved);
     }
     if let Some(tls) = resolved.get("tls").and_then(Value::as_object) {
@@ -74,24 +75,13 @@ pub(crate) async fn resolve_config_resources(
                 .and_then(|id| resources.iter().find(|r| r.id == id))
         };
         if let (Some(cert), Some(key)) = (file("cert"), file("key")) {
-            let certs = rustls_pemfile::certs(&mut Cursor::new(&cert.content))
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(|_| ApiError::bad_request("invalid TLS certificate"))?;
-            let key = rustls_pemfile::private_key(&mut Cursor::new(&key.content))
-                .map_err(|_| ApiError::bad_request("invalid TLS key"))?
-                .ok_or_else(|| ApiError::bad_request("TLS key is missing"))?;
-            rustls::sign::CertifiedKey::from_der(
-                certs,
-                key,
-                &rustls::crypto::ring::default_provider(),
-            )
-            .map_err(|_| ApiError::bad_request("TLS certificate and private key do not match"))?;
+            validate_pair_cached(&cert.content, &key.content).await?;
         }
     }
     Ok((resolved, resources))
 }
 
-fn validate_server_tls_resource_pair(
+async fn validate_server_tls_resource_pair(
     config: &Value,
     resources: &[ResourceFile],
 ) -> Result<(), ApiError> {
@@ -120,25 +110,7 @@ fn validate_server_tls_resource_pair(
         .iter()
         .find(|resource| resource.id == private_key_id)
         .ok_or_else(|| ApiError::bad_request("TLS private-key resource is missing"))?;
-    let certificates = rustls_pemfile::certs(&mut Cursor::new(&certificate.content))
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|_| ApiError::bad_request("TLS certificate resource is not valid PEM"))?;
-    let private_key = rustls_pemfile::private_key(&mut Cursor::new(&private_key.content))
-        .map_err(|_| ApiError::bad_request("TLS private-key resource is not valid PEM"))?
-        .ok_or_else(|| {
-            ApiError::bad_request("TLS private-key resource has no supported PEM key")
-        })?;
-    if certificates.is_empty() {
-        return Err(ApiError::bad_request(
-            "TLS certificate resource must contain at least one PEM certificate",
-        ));
-    }
-    rustls::sign::CertifiedKey::from_der(
-        certificates,
-        private_key,
-        &rustls::crypto::ring::default_provider(),
-    )
-    .map_err(|_| ApiError::bad_request("TLS certificate and private-key resources do not match"))?;
+    validate_pair_cached(&certificate.content, &private_key.content).await?;
     Ok(())
 }
 
@@ -457,6 +429,40 @@ fn valid_base64_pem_block(text: &str, name: &str) -> bool {
 
 fn references_resource(config_json: &str, resource_id: &str) -> bool {
     config_json.contains(&format!("resource://{resource_id}"))
+}
+
+async fn validate_pair_cached(certificate: &[u8], private_key: &[u8]) -> Result<(), ApiError> {
+    use sha2::{Digest, Sha256};
+    static VALIDATED: std::sync::OnceLock<crate::cache::Cache<bool>> = std::sync::OnceLock::new();
+    let mut hash = Sha256::new();
+    hash.update(certificate.len().to_be_bytes());
+    hash.update(certificate);
+    hash.update(private_key);
+    let key = hex::encode(hash.finalize());
+    VALIDATED
+        .get_or_init(|| crate::cache::Cache::new(128, 128, 1, |_| 1))
+        .get(key, std::time::Duration::from_secs(1800), false, || async {
+            let certificates = rustls_pemfile::certs(&mut Cursor::new(certificate))
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|_| ApiError::bad_request("invalid TLS certificate"))?;
+            if certificates.is_empty() {
+                return Err(ApiError::bad_request(
+                    "TLS certificate must contain a PEM certificate",
+                ));
+            }
+            let private_key = rustls_pemfile::private_key(&mut Cursor::new(private_key))
+                .map_err(|_| ApiError::bad_request("invalid TLS key"))?
+                .ok_or_else(|| ApiError::bad_request("TLS key is missing"))?;
+            rustls::sign::CertifiedKey::from_der(
+                certificates,
+                private_key,
+                &rustls::crypto::ring::default_provider(),
+            )
+            .map_err(|_| ApiError::bad_request("TLS certificate and private key do not match"))?;
+            Ok::<_, ApiError>(true)
+        })
+        .await?;
+    Ok(())
 }
 
 #[cfg(test)]

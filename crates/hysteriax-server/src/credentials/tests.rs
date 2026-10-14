@@ -475,7 +475,7 @@ async fn migration_preserves_existing_tokens_and_rolls_back_bad_ciphertext() {
 }
 
 #[tokio::test]
-async fn v1_http_contract_authentication_and_current_token_protection() {
+async fn http_contract_authentication_and_current_token_protection() {
     let state = state().await;
     for (id, token) in [
         ("admin-one", "first-administrator-token"),

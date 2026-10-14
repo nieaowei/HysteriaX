@@ -47,7 +47,6 @@ pub struct RevisionRequest {
 #[serde(deny_unknown_fields)]
 #[allow(dead_code)]
 // Retain the legacy body shape to return a clear migration error.
-#[allow(dead_code)]
 pub struct AssignRequest {
     expected_revision: i64,
     node_id: String,
@@ -125,10 +124,7 @@ pub(crate) async fn list(
     .bind((page - 1) * page_size)
     .fetch_all(&mut *tx)
     .await?;
-    let mut items = Vec::with_capacity(rows.len());
-    for row in rows {
-        items.push(user_json_on(&mut tx, &row).await?);
-    }
+    let items = users_json_on(&mut tx, &rows).await?;
     tx.commit().await?;
     Ok(Json(
         json!({"items": items, "total": total, "page": page, "page_size": page_size}),
@@ -473,27 +469,15 @@ pub async fn usage(
     .ok_or_else(|| ApiError::not_found("user"))?;
     let rows = sqlx::query(
         "WITH user_nodes AS (
-            SELECT node_id FROM node_assignments WHERE user_id = $1
-            UNION
-            SELECT node_id FROM traffic_records WHERE user_id = $2
-            UNION
-            SELECT node_id FROM traffic_baselines WHERE user_id = $3
-        )
-        SELECT n.node_id, COALESCE(SUM(t.delta_tx)::BIGINT, 0::BIGINT) AS tx,
-            COALESCE(SUM(t.delta_rx)::BIGINT, 0::BIGINT) AS rx,
-            COALESCE(MAX(t.sampled_at), MAX(b.sampled_at)) AS sampled_at,
-            EXISTS(SELECT 1 FROM node_assignments a WHERE a.user_id = $4 AND a.node_id = n.node_id) AS assigned
-        FROM user_nodes n
-        LEFT JOIN traffic_records t ON t.node_id = n.node_id AND t.user_id = $5
-        LEFT JOIN traffic_baselines b ON b.node_id = n.node_id AND b.user_id = $6
-        GROUP BY n.node_id ORDER BY n.node_id",
-    )
-    .bind(&user_id)
-    .bind(&user_id)
-    .bind(&user_id)
-    .bind(&user_id)
-    .bind(&user_id)
-    .bind(&user_id)
+            SELECT node_id FROM node_assignments WHERE user_id=$1
+            UNION SELECT node_id FROM user_node_usage WHERE user_id=$1
+            UNION SELECT node_id FROM traffic_baselines WHERE user_id=$1
+        ) SELECT n.node_id,coalesce(t.tx,0)::bigint tx,coalesce(t.rx,0)::bigint rx,
+            coalesce(t.sampled_at,b.sampled_at) sampled_at,
+            EXISTS(SELECT 1 FROM node_assignments a WHERE a.user_id=$1 AND a.node_id=n.node_id) assigned
+        FROM user_nodes n LEFT JOIN user_node_usage t ON t.node_id=n.node_id AND t.user_id=$1
+        LEFT JOIN traffic_baselines b ON b.node_id=n.node_id AND b.user_id=$1 ORDER BY n.node_id",
+    ).bind(&user_id)
     .fetch_all(&state.pool)
     .await?;
     let by_node: Vec<Value> = rows.iter().map(|row| json!({
@@ -605,46 +589,52 @@ async fn user_json_on(
     connection: &mut sqlx::PgConnection,
     row: &sqlx::postgres::PgRow,
 ) -> Result<Value, ApiError> {
-    let id: String = row.get("id");
-    let assignments = sqlx::query(
-        "SELECT node_id, mtls_credential_id, mtls_credential_version, created_at FROM node_assignments WHERE user_id = $1 ORDER BY node_id",
-    )
-    .bind(&id)
-    .fetch_all(&mut *connection)
-    .await?;
-    let mut assigned = Vec::with_capacity(assignments.len());
-    for assignment in assignments {
-        let node_id: String = assignment.get("node_id");
-        let source_groups = sqlx::query("SELECT g.id,g.name FROM authorization_group_users gu JOIN authorization_group_nodes gn ON gn.group_id=gu.group_id JOIN authorization_groups g ON g.id=gu.group_id WHERE gu.user_id=$1 AND gn.node_id=$2 ORDER BY lower(g.name) COLLATE \"C\",g.name COLLATE \"C\",g.id")
-            .bind(&id)
-            .bind(&node_id)
-            .fetch_all(&mut *connection)
-            .await?
-            .iter()
-            .map(|source| json!({"id":source.get::<String,_>("id"),"name":source.get::<String,_>("name")}))
-            .collect::<Vec<_>>();
-        assigned.push(json!({
-            "node_id":node_id,
-            "created_at":assignment.get::<chrono::DateTime<chrono::Utc>,_>("created_at"),
-            "mtls_credential_id":assignment.get::<Option<String>,_>("mtls_credential_id"),
-            "mtls_credential_version":assignment.get::<Option<i64>,_>("mtls_credential_version"),
-            "source_groups":source_groups,
-        }));
-    }
-    let authorization_groups = sqlx::query("SELECT g.id,g.name,g.revision FROM authorization_group_users gu JOIN authorization_groups g ON g.id=gu.group_id WHERE gu.user_id=$1 ORDER BY lower(g.name) COLLATE \"C\",g.name COLLATE \"C\",g.id")
-        .bind(&id)
-        .fetch_all(&mut *connection)
+    users_json_on(connection, std::slice::from_ref(row))
         .await?
-        .iter()
-        .map(|group| json!({"id":group.get::<String,_>("id"),"name":group.get::<String,_>("name"),"revision":group.get::<i64,_>("revision")}))
-        .collect::<Vec<_>>();
-    Ok(json!({
-        "id": id, "name": row.get::<String, _>("name"), "enabled": row.get::<bool, _>("enabled"),
-        "expires_at": row.get::<Option<chrono::DateTime<chrono::Utc>>, _>("expires_at"), "quota_bytes": row.get::<Option<i64>, _>("quota_bytes"),
-        "usage_bytes": row.get::<i64, _>("usage_bytes"), "revision": row.get::<i64, _>("revision"),
-        "quota_reset_at": row.get::<Option<chrono::DateTime<chrono::Utc>>, _>("quota_reset_at"), "assignments": assigned, "authorization_groups":authorization_groups,
-        "created_at": row.get::<chrono::DateTime<chrono::Utc>, _>("created_at"), "updated_at": row.get::<chrono::DateTime<chrono::Utc>, _>("updated_at")
-    }))
+        .into_iter()
+        .next()
+        .ok_or_else(ApiError::internal)
+}
+async fn users_json_on(
+    connection: &mut sqlx::PgConnection,
+    rows: &[sqlx::postgres::PgRow],
+) -> Result<Vec<Value>, ApiError> {
+    use std::collections::BTreeMap;
+    if rows.is_empty() {
+        return Ok(vec![]);
+    }
+    let ids: Vec<String> = rows.iter().map(|row| row.get("id")).collect();
+    let assignments=sqlx::query("SELECT user_id,node_id,mtls_credential_id,mtls_credential_version,created_at FROM node_assignments WHERE user_id=ANY($1) ORDER BY user_id,node_id").bind(&ids).fetch_all(&mut *connection).await?;
+    let sources=sqlx::query("SELECT gu.user_id,gn.node_id,g.id,g.name FROM authorization_group_users gu JOIN authorization_group_nodes gn ON gn.group_id=gu.group_id JOIN authorization_groups g ON g.id=gu.group_id WHERE gu.user_id=ANY($1) ORDER BY lower(g.name) COLLATE \"C\",g.name COLLATE \"C\",g.id").bind(&ids).fetch_all(&mut *connection).await?;
+    let memberships=sqlx::query("SELECT gu.user_id,g.id,g.name,g.revision FROM authorization_group_users gu JOIN authorization_groups g ON g.id=gu.group_id WHERE gu.user_id=ANY($1) ORDER BY lower(g.name) COLLATE \"C\",g.name COLLATE \"C\",g.id").bind(&ids).fetch_all(&mut *connection).await?;
+    let mut source_map = BTreeMap::<(String, String), Vec<Value>>::new();
+    for row in sources {
+        source_map
+            .entry((row.get("user_id"), row.get("node_id")))
+            .or_default()
+            .push(json!({"id":row.get::<String,_>("id"),"name":row.get::<String,_>("name")}));
+    }
+    let mut assigned = BTreeMap::<String, Vec<Value>>::new();
+    for row in assignments {
+        let user: String = row.get("user_id");
+        let node: String = row.get("node_id");
+        let sources = source_map
+            .remove(&(user.clone(), node.clone()))
+            .unwrap_or_default();
+        assigned.entry(user).or_default().push(json!({"node_id":node,"created_at":row.get::<DateTime<Utc>,_>("created_at"),
+            "mtls_credential_id":row.get::<Option<String>,_>("mtls_credential_id"),"mtls_credential_version":row.get::<Option<i64>,_>("mtls_credential_version"),"source_groups":sources}));
+    }
+    let mut groups = BTreeMap::<String, Vec<Value>>::new();
+    for row in memberships {
+        groups.entry(row.get("user_id")).or_default().push(json!({"id":row.get::<String,_>("id"),"name":row.get::<String,_>("name"),"revision":row.get::<i64,_>("revision")}));
+    }
+    Ok(rows.iter().map(|row|{
+        let id:String=row.get("id");let assignments=assigned.remove(&id).unwrap_or_default();let groups=groups.remove(&id).unwrap_or_default();
+        json!({"id":id,"name":row.get::<String,_>("name"),"enabled":row.get::<bool,_>("enabled"),
+            "expires_at":row.get::<Option<DateTime<Utc>>,_>("expires_at"),"quota_bytes":row.get::<Option<i64>,_>("quota_bytes"),"usage_bytes":row.get::<i64,_>("usage_bytes"),
+            "revision":row.get::<i64,_>("revision"),"quota_reset_at":row.get::<Option<DateTime<Utc>>,_>("quota_reset_at"),
+            "assignments":assignments,"authorization_groups":groups,"created_at":row.get::<DateTime<Utc>,_>("created_at"),"updated_at":row.get::<DateTime<Utc>,_>("updated_at")})
+    }).collect())
 }
 
 async fn audit(state: &AppState, action: &str, id: &str, detail: Value) -> Result<(), ApiError> {

@@ -37,9 +37,9 @@ struct NodesView: View {
         }
     }
     private var sortDirection: String { sortOrder.first?.order == .reverse ? "desc" : "asc" }
-    private var pageKey: String { "\(store.serviceAddress)|\(page)|\(pageSize)|\(query)|\(sortField)|\(sortDirection)|\(L10n.locale.identifier)" }
-    private var pageRequestKey: String { "\(pageKey)|\(store.isConnected)|\(store.lastUpdated?.timeIntervalSince1970 ?? 0)|\(retryPageToken)" }
-    private var currentPageResponse: NodesPage? { loadedPageKey == pageKey ? pageResponse : nil }
+    private var pageKey: String { store.listPageKey([String(page), String(pageSize), query, sortField, sortDirection]) }
+    private var pageRequestKey: String { "\(pageKey)|\(store.isConnected)|\(store.dataRefreshToken)|\(retryPageToken)" }
+    private var currentPageResponse: NodesPage? { store.cachedListPage(pageKey, as: NodesPage.self) ?? (loadedPageKey == pageKey ? pageResponse : nil) }
     private var totalNodes: Int { store.isConnected ? (currentPageResponse?.total ?? 0) : snapshotNodes.count }
     private var pageCount: Int { max(1, (totalNodes + pageSize - 1) / pageSize) }
     private var currentPage: Int { store.isConnected ? page : min(page, pageCount) }
@@ -165,6 +165,7 @@ struct NodesView: View {
         .onChange(of: pageSize) { _, _ in resetPage() }
         .onChange(of: L10n.locale.identifier) { _, _ in resetPage() }
         .task(id: pageRequestKey) { await loadPage() }
+        .onDisappear { loadedPageKey = nil }
         .onChange(of: store.serviceAddress) { _, _ in
             submittingActions = [:]
             submittedActions = [:]
@@ -223,7 +224,7 @@ struct NodesView: View {
             if let pageError {
                 HStack {
                     Text(pageError).foregroundStyle(.red).textSelection(.enabled)
-                    Button(L10n.text("重试")) { retryPageToken = UUID() }
+                    Button(L10n.text("重试")) { loadedPageKey = nil; retryPageToken = UUID() }
                 }.font(.caption)
             }
             HStack(spacing: 12) {
@@ -260,7 +261,7 @@ struct NodesView: View {
         defer { if requestKey == pageRequestKey { isLoadingPage = false } }
         do {
             if !query.isEmpty { try await Task.sleep(for: .milliseconds(250)) }
-            let response = try await store.nodesPage(page: page, pageSize: pageSize, query: query, sort: sortField, order: sortDirection)
+            let response = try await store.nodesPage(page: page, pageSize: pageSize, query: query, sort: sortField, order: sortDirection, cacheKey: pageKey, revalidate: loadedPageKey != pageKey)
             guard !Task.isCancelled, requestKey == pageRequestKey else { return }
             page = response.page
             pageResponse = response

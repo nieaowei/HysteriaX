@@ -8,6 +8,10 @@ final class OverviewTransport: URLProtocol, @unchecked Sendable {
         var nodes = Data()
         var history = Data()
         var jobs = Data("[]".utf8)
+        var pageRequests = 0
+        func recordedPageCount() -> Int { lock.lock(); defer { lock.unlock() }; return pageRequests }
+        var directoryRequests = 0
+        func recordedDirectoryCount() -> Int { lock.lock(); defer { lock.unlock() }; return directoryRequests }
         var nodesPageRequest: URLRequest?
         func recordedNodesPage() -> URLRequest? { lock.lock(); defer { lock.unlock() }; return nodesPageRequest }
         var credentialsPageRequest: URLRequest?
@@ -29,9 +33,10 @@ final class OverviewTransport: URLProtocol, @unchecked Sendable {
             let url = request.url!
             let path = url.path
             lock.lock(); defer { lock.unlock() }
+            if ["/api/v1/nodes", "/api/v1/users", "/api/v1/credentials", "/api/v1/jobs", "/api/v1/audit", "/api/v1/dns/records"].contains(path) { pageRequests += 1 }
             if path.hasSuffix("version") {
                 let features = mode == "legacy" ? "[]" : "[\"overview_monitoring\",\"job_retry_links\",\"node_record_removal\"]"
-                return (200, Data("{\"api_version\":\"1.0.0\",\"service_version\":\"test\",\"hysteria_version\":\"test\",\"mihomo_version\":\"test\",\"features\":\(features)}".utf8))
+                return (200, Data("{\"api_version\":\"1.0.0\",\"directory_generation\":1,\"service_version\":\"test\",\"hysteria_version\":\"test\",\"mihomo_version\":\"test\",\"features\":\(features)}".utf8))
             }
             if path.hasSuffix("overview/history") {
                 var body = try! JSONSerialization.jsonObject(with: history) as! [String: Any]
@@ -55,6 +60,7 @@ final class OverviewTransport: URLProtocol, @unchecked Sendable {
                 nodesPageRequest = request
                 let parameters = URLComponents(url: url, resolvingAgainstBaseURL: false)!.queryItems ?? []
                 let size = Int(parameters.first { $0.name == "page_size" }?.value ?? "50")!
+                if size == 200 { directoryRequests += 1 }
                 let requested = Int(parameters.first { $0.name == "page" }?.value ?? "1")!
                 let fixture = try! JSONSerialization.jsonObject(with: nodes) as! [[String: Any]]
                 let items: [[String: Any]] = size == 200 ? (1...235).map { index in
@@ -132,6 +138,14 @@ struct OverviewNetworkChecks {
         precondition(store.isConnected && store.supportsOverviewMonitoring && store.overview?.nodeCount == 1)
         precondition(store.nodes.count == 235 && Set(store.nodes.map(\.id)).count == 235, "refresh must read all pages without duplicates")
         precondition(store.supportsJobRetryLinks && store.supportsNodeRecordRemoval)
+        let directoryCount = OverviewTransport.responses.recordedDirectoryCount()
+        let refreshToken = store.dataRefreshToken
+        await store.refresh(forceDirectories: false)
+        precondition(store.isConnected && OverviewTransport.responses.recordedDirectoryCount() == directoryCount, "periodic overview refresh must not reload unchanged directories")
+        precondition(store.dataRefreshToken != refreshToken)
+        await store.refresh()
+        precondition(OverviewTransport.responses.recordedDirectoryCount() > directoryCount, "manual refresh must reload directories")
+        precondition(OverviewTransport.responses.recordedNodesPage()!.value(forHTTPHeaderField: "Cache-Control") == "no-cache")
         let removedNode = store.nodes[0]
         try await store.removeNodeRecord(removedNode)
         let removalRequest = OverviewTransport.responses.recordedRemovals().last!
@@ -145,6 +159,23 @@ struct OverviewNetworkChecks {
         let jobsRequest = OverviewTransport.responses.recordedJobs()!
         let jobsQuery = URLComponents(url: jobsRequest.url!, resolvingAgainstBaseURL: false)!.queryItems!
         precondition(Dictionary(uniqueKeysWithValues: jobsQuery.map { ($0.name, $0.value!) }) == pageOperation.queryParameters)
+        let sharedKey = "jobs-page-five"
+        _ = try await store.jobsPage(page: 5, pageSize: 25, query: "历史 %_&", sort: "status", order: "asc", cacheKey: sharedKey)
+        precondition(store.cachedListPage(sharedKey, as: JobsPage.self)?.total == 2)
+        let beforeReuse = OverviewTransport.responses.recordedPageCount()
+        _ = try await store.jobsPage(page: 5, pageSize: 25, query: "历史 %_&", sort: "status", order: "asc", cacheKey: sharedKey)
+        precondition(OverviewTransport.responses.recordedPageCount() == beforeReuse, "re-entering a page must reuse its shared cache")
+        await store.refresh(forceDirectories: false)
+        _ = try await store.jobsPage(page: 5, pageSize: 25, query: "历史 %_&", sort: "status", order: "asc", cacheKey: sharedKey)
+        precondition(OverviewTransport.responses.recordedPageCount() == beforeReuse, "unrelated overview refresh must not refetch a fresh page")
+        _ = try await store.jobsPage(page: 5, pageSize: 25, query: "历史 %_&", sort: "status", order: "asc", cacheKey: sharedKey, revalidate: true)
+        precondition(OverviewTransport.responses.recordedPageCount() == beforeReuse + 1, "page entry must revalidate even a fresh cache")
+        precondition(OverviewTransport.responses.recordedJobs()!.value(forHTTPHeaderField: "Cache-Control") == "no-cache")
+        await store.refresh()
+        let afterManual = OverviewTransport.responses.recordedPageCount()
+        _ = try await store.jobsPage(page: 5, pageSize: 25, query: "历史 %_&", sort: "status", order: "asc", cacheKey: sharedKey)
+        precondition(OverviewTransport.responses.recordedPageCount() == afterManual + 1)
+        precondition(OverviewTransport.responses.recordedJobs()!.value(forHTTPHeaderField: "Cache-Control") == "no-cache")
         let emptyPage = try JSONDecoder().decode(JobsPage.self, from: Data(#"{"items":[],"total":0,"page":1,"page_size":50}"#.utf8))
         precondition(emptyPage.items.isEmpty && emptyPage.total == 0)
         let nodeQuery = NodeDisplayText.state("unreachable")
@@ -203,10 +234,13 @@ struct OverviewNetworkChecks {
         cancelled.cancel()
         do { _ = try await cancelled.value; preconditionFailure("Cancelled history should not be applied") } catch {}
         precondition(store.cachedOverviewHistory(range: "30d", nodeID: nil, source: "users") == nil)
+        let oldSession = store.listCacheSession
         let oldService = store.serviceAddress
         let switching = Task { try await store.overviewHistory(range: "30d", nodeID: nil, source: "users") }
         try await Task.sleep(for: .milliseconds(30))
         try await store.connect(serviceAddress: "https://overview-other-fixture.invalid", token: "test-only", session: session)
+        precondition(store.listCacheSession != oldSession)
+        precondition(store.cachedListPage(sharedKey, as: JobsPage.self) == nil)
         do { _ = try await switching.value; preconditionFailure("Previous-service history should not be applied") } catch {}
         precondition(store.cachedOverviewHistory(range: "30d", nodeID: nil, source: "users") == nil)
         UserDefaults.standard.removeObject(forKey: "displaySnapshot.\(oldService)")

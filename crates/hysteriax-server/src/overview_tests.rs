@@ -1,6 +1,113 @@
 use super::*;
 use base64::Engine;
 
+#[tokio::test]
+async fn aligned_traffic_history_never_scans_raw_records() {
+    let (state, nodes, user) = fixture().await;
+    let anchor: DateTime<Utc> = "2026-10-14T12:00:00Z".parse().unwrap();
+    sqlx::query("INSERT INTO traffic_records(id,node_id,user_id,instance_id,baseline_tx,baseline_rx,delta_tx,delta_rx,sampled_at) SELECT 'edge-test-'||i,$1,$2,'instance',0,0,1,2,$3::timestamptz-i*interval '1 second' FROM generate_series(1,1200) i")
+        .bind(&nodes[0]).bind(&user).bind(anchor).execute(&state.pool).await.unwrap();
+    let query = format!(
+        "EXPLAIN (ANALYZE, FORMAT JSON) {}",
+        include_str!("analytics/traffic_history.sql").replace("RAW_TABLE", "traffic_records")
+    );
+    fn raw_loops(plan: &Value) -> u64 {
+        let own = if plan["Relation Name"] == "traffic_records" {
+            plan["Actual Loops"].as_u64().unwrap()
+        } else {
+            0
+        };
+        own + plan["Plans"]
+            .as_array()
+            .map(|children| children.iter().map(raw_loops).sum())
+            .unwrap_or(0)
+    }
+    for (offset, expected_scan) in [(Duration::zero(), false), (Duration::seconds(17), true)] {
+        let end = anchor - offset;
+        let row = sqlx::query(&query)
+            .bind("hour")
+            .bind("users")
+            .bind(end - Duration::days(1))
+            .bind(end)
+            .bind(Option::<String>::None)
+            .fetch_one(&state.pool)
+            .await
+            .unwrap();
+        let plan: Value = row.get("QUERY PLAN");
+        assert_eq!(raw_loops(&plan[0]["Plan"]) > 0, expected_scan);
+    }
+}
+
+#[tokio::test]
+async fn history_metric_selection_preserves_requested_values_and_stable_anchor() {
+    let (state, nodes, user) = fixture().await;
+    let now = Utc::now();
+    let cycle = Uuid::new_v4();
+    let body = serde_json::to_vec(&json!({&user:2})).unwrap();
+    record_online(
+        &state.pool,
+        &nodes[0],
+        cycle,
+        now - Duration::minutes(2),
+        1,
+        Some(&body),
+    )
+    .await
+    .unwrap();
+    finish_traffic_sample(&state.pool, &nodes[0], cycle, "ok").await;
+    let mut results = Vec::new();
+    for metrics in ["all", "traffic", "quality"] {
+        let Json(value) = history_at(
+            state.clone(),
+            HistoryQuery {
+                range: "24h".into(),
+                timezone: "Asia/Shanghai".into(),
+                node_id: None,
+                source: None,
+                metrics: Some(metrics.into()),
+            },
+            now,
+        )
+        .await
+        .unwrap();
+        assert_eq!(value["metrics"], metrics);
+        results.push(value);
+    }
+    let all = results[0]["buckets"].as_array().unwrap().last().unwrap();
+    let traffic = results[1]["buckets"].as_array().unwrap().last().unwrap();
+    let quality = results[2]["buckets"].as_array().unwrap().last().unwrap();
+    assert_eq!(all["tx_bytes"], 0);
+    assert_eq!(traffic["tx_bytes"], all["tx_bytes"]);
+    assert!(traffic["online_users_avg"].is_null());
+    assert_eq!(quality["online_users_avg"], all["online_users_avg"]);
+    assert_eq!(quality["online_users_avg"], 1.0);
+    assert!(quality["tx_bytes"].is_null());
+    let query = || HistoryQuery {
+        range: "24h".into(),
+        timezone: "UTC".into(),
+        node_id: None,
+        source: None,
+        metrics: Some("traffic".into()),
+    };
+    let Json(value) = history(State(state.clone()), Query(query())).await.unwrap();
+    let anchor = value["generated_at"]
+        .as_str()
+        .unwrap()
+        .parse::<DateTime<Utc>>()
+        .unwrap();
+    assert_eq!(anchor.timestamp() % 60, 0);
+    assert_eq!(anchor.timestamp_subsec_nanos(), 0);
+    let mut invalid = query();
+    invalid.metrics = Some("invalid".into());
+    assert_eq!(
+        history(State(state), Query(invalid))
+            .await
+            .unwrap_err()
+            .status,
+        axum::http::StatusCode::BAD_REQUEST
+    );
+}
+
 async fn fixture() -> (AppState, Vec<String>, String) {
     fixture_with_connections(3).await
 }
@@ -61,18 +168,19 @@ async fn summary_deduplicates_users_excludes_probes_and_counts_all_jobs() {
 async fn history_uses_cycle_deduplication_and_separates_unknown_from_zero() {
     let (state, nodes, user) = fixture().await;
     let cycle = Uuid::new_v4();
-    let at = Utc::now();
+    let at = Utc::now() - Duration::minutes(2);
     let body = serde_json::to_vec(&json!({&user:2})).unwrap();
     for id in &nodes {
         record_online(&state.pool, id, cycle, at, 2, Some(&body))
             .await
             .unwrap();
     }
-    sqlx::query("INSERT INTO traffic_records(id,node_id,user_id,instance_id,baseline_tx,baseline_rx,delta_tx,delta_rx,sampled_at) VALUES('t',$1,$2,'instance',100,100,10,20,now())").bind(&nodes[0]).bind(&user).execute(&state.pool).await.unwrap();
-    sqlx::query("INSERT INTO proxy_probe_samples(node_id,revision,status,latency_ms,sampled_at) VALUES($1,1,'ok',10,now()),($1,1,'failed',NULL,now()-interval '1 second')").bind(&nodes[0]).execute(&state.pool).await.unwrap();
+    sqlx::query("INSERT INTO traffic_records(id,node_id,user_id,instance_id,baseline_tx,baseline_rx,delta_tx,delta_rx,sampled_at) VALUES('t',$1,$2,'instance',100,100,10,20,now()-interval '2 minutes')").bind(&nodes[0]).bind(&user).execute(&state.pool).await.unwrap();
+    sqlx::query("INSERT INTO proxy_probe_samples(node_id,revision,status,latency_ms,sampled_at) VALUES($1,1,'ok',10,now()-interval '2 minutes'),($1,1,'failed',NULL,now()-interval '2 minutes 1 second')").bind(&nodes[0]).execute(&state.pool).await.unwrap();
     let Json(history) = history(
         State(state.clone()),
         Query(HistoryQuery {
+            metrics: None,
             range: "7d".into(),
             timezone: "Asia/Shanghai".into(),
             node_id: None,
@@ -97,6 +205,7 @@ async fn history_uses_cycle_deduplication_and_separates_unknown_from_zero() {
     let Json(history) = super::history(
         State(state),
         Query(HistoryQuery {
+            metrics: None,
             range: "30d".into(),
             timezone: "America/New_York".into(),
             node_id: None,
@@ -125,6 +234,7 @@ async fn invalid_history_queries_and_missing_node_are_rejected() {
             history(
                 State(state.clone()),
                 Query(HistoryQuery {
+                    metrics: None,
                     range: range.into(),
                     timezone: tz.into(),
                     node_id: node.map(str::to_owned),
@@ -142,7 +252,7 @@ async fn online_failed_samples_do_not_erase_successful_history() {
     let (state, nodes, user) = fixture().await;
     let good = serde_json::to_vec(&json!({&user:1})).unwrap();
     let cycle = Uuid::new_v4();
-    let at = Utc::now();
+    let at = Utc::now() - Duration::minutes(2);
     record_online(&state.pool, &nodes[0], cycle, at, 2, Some(&good))
         .await
         .unwrap();
@@ -152,6 +262,7 @@ async fn online_failed_samples_do_not_erase_successful_history() {
     let Json(value) = history(
         State(state),
         Query(HistoryQuery {
+            metrics: None,
             range: "today".into(),
             timezone: "UTC".into(),
             node_id: None,
@@ -178,6 +289,7 @@ async fn repeated_dst_hour_has_distinct_buckets_and_spring_day_has_23_hours() {
     let Json(value) = history_at(
         state.clone(),
         HistoryQuery {
+            metrics: None,
             range: "today".into(),
             timezone: "America/New_York".into(),
             node_id: None,
@@ -203,6 +315,7 @@ async fn repeated_dst_hour_has_distinct_buckets_and_spring_day_has_23_hours() {
     let Json(value) = history_at(
         state,
         HistoryQuery {
+            metrics: None,
             range: "today".into(),
             timezone: "America/New_York".into(),
             node_id: None,
@@ -257,7 +370,7 @@ async fn monitoring_credentials_are_short_lived_separate_from_deployment_credent
 async fn successful_empty_traffic_is_zero_and_failed_collection_is_incomplete() {
     let (state, nodes, _) = fixture().await;
     let cycle = Uuid::new_v4();
-    let at = Utc::now();
+    let at = Utc::now() - Duration::minutes(2);
     for node in &nodes {
         record_online(&state.pool, node, cycle, at, 2, Some(b"{}"))
             .await
@@ -267,6 +380,7 @@ async fn successful_empty_traffic_is_zero_and_failed_collection_is_incomplete() 
     let Json(value) = history(
         State(state.clone()),
         Query(HistoryQuery {
+            metrics: None,
             range: "today".into(),
             timezone: "UTC".into(),
             node_id: None,
@@ -283,6 +397,7 @@ async fn successful_empty_traffic_is_zero_and_failed_collection_is_incomplete() 
     let Json(value) = history(
         State(state),
         Query(HistoryQuery {
+            metrics: None,
             range: "today".into(),
             timezone: "UTC".into(),
             node_id: None,
@@ -344,6 +459,7 @@ async fn rolling_windows_have_exact_bounds_across_midnight_and_dst() {
                     let Json(value) = history_at(
                         state.clone(),
                         HistoryQuery {
+                            metrics: None,
                             range: range.into(),
                             timezone: timezone.into(),
                             node_id: Some(nodes[0].clone()),

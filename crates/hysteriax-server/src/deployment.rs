@@ -1337,12 +1337,23 @@ fn systemd_unit(port_hopping: bool) -> String {
 }
 
 async fn download_hysteria(asset: &str, expected_sha256: &str) -> Result<Vec<u8>> {
+    crate::artifact_cache::load(asset, expected_sha256, verify_hysteria_asset, || {
+        download_hysteria_uncached(asset, expected_sha256)
+    })
+    .await
+}
+async fn download_hysteria_uncached(asset: &str, expected_sha256: &str) -> Result<Vec<u8>> {
     let url = format!(
         "https://github.com/apernet/hysteria/releases/download/{HYSTERIA_RELEASE_TAG}/{asset}"
     );
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(120))
-        .build()?;
+    static CLIENT: tokio::sync::OnceCell<reqwest::Client> = tokio::sync::OnceCell::const_new();
+    let client = CLIENT
+        .get_or_try_init(|| async {
+            reqwest::Client::builder()
+                .timeout(Duration::from_secs(120))
+                .build()
+        })
+        .await?;
     let max_attempts = 3;
     for attempt in 1..=max_attempts {
         let response = match client.get(&url).send().await {
@@ -1360,17 +1371,39 @@ async fn download_hysteria(asset: &str, expected_sha256: &str) -> Result<Vec<u8>
             tokio::time::sleep(Duration::from_millis(500 * attempt)).await;
             continue;
         }
-        let response = response.error_for_status()?;
-        let bytes = match response.bytes().await {
+        let mut response = response.error_for_status()?;
+        if response
+            .content_length()
+            .is_some_and(|size| size > 100_000_000)
+        {
+            bail!("official Hysteria asset exceeds the size limit");
+        }
+        let result: Result<Vec<u8>> = async {
+            let mut bytes = Vec::new();
+            while let Some(chunk) = response.chunk().await? {
+                if bytes.len() + chunk.len() > 100_000_000 {
+                    bail!("official Hysteria asset exceeds the size limit");
+                }
+                bytes.extend_from_slice(&chunk);
+            }
+            Ok(bytes)
+        }
+        .await;
+        let bytes = match result {
             Ok(bytes) => bytes,
-            Err(error) if attempt < max_attempts && retryable_download_error(&error) => {
+            Err(error)
+                if attempt < max_attempts
+                    && error
+                        .downcast_ref::<reqwest::Error>()
+                        .is_some_and(retryable_download_error) =>
+            {
                 tokio::time::sleep(Duration::from_millis(500 * attempt)).await;
                 continue;
             }
-            Err(error) => return Err(error.into()),
+            Err(error) => return Err(error),
         };
         verify_hysteria_asset(&bytes, expected_sha256)?;
-        return Ok(bytes.to_vec());
+        return Ok(bytes);
     }
     unreachable!("bounded download retry loop always returns")
 }

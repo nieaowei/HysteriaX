@@ -14,6 +14,16 @@ servers:
 security:
   - BearerAuth: []
 paths:
+  /cache:
+    get:
+      operationId: getCacheStatistics
+      summary: Get bounded cache and shared event-reader statistics
+      responses:
+        '200':
+          description: Aggregate counters without cache keys or payloads
+          content:
+            application/json:
+              schema: { type: object }
   /credentials:
     get:
       operationId: listCredentials
@@ -226,6 +236,7 @@ paths:
           "$ref": "#/components/responses/Error"
       x-swift-include-optional-query: true
       parameters:
+      - { name: metrics, in: query, schema: { type: string, enum: [traffic, quality, all], default: all } }
       - name: range
         description: Rolling elapsed time (24h, 7d, 30d), with hourly or 24-hour buckets anchored at window start. Legacy today uses local midnight.
         in: query
@@ -2484,8 +2495,9 @@ components:
         database: { type: string }
     APIVersion:
       type: object
-      required: [api_version, service_version, hysteria_version, mihomo_version]
+      required: [api_version, service_version, hysteria_version, mihomo_version, directory_generation]
       properties:
+        directory_generation: { type: integer, format: int64 }
         current_admin_token_id: { type: string }
         features: { type: array, items: { type: string }, description: Optional supported features; node_packages enables node package writes and authorization_groups enables group-based access management. }
         api_version: { type: string }
@@ -2779,6 +2791,9 @@ components:
       - source
       - buckets
       properties:
+        metrics:
+          type: string
+          enum: [traffic, quality, all]
         generated_at:
           type: string
         range:

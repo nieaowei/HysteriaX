@@ -25,7 +25,8 @@ def main():
         raise RuntimeError("Docker is required for the Compose backup/restore integration")
 
     project_name = f"hysteriax-backup-restore-{uuid.uuid4().hex[:10]}"
-    image = f"hysteriax-backup-restore-test:{uuid.uuid4().hex[:12]}"
+    image = os.environ.get("HYSTERIAX_TEST_IMAGE") or f"hysteriax-backup-restore-test:{uuid.uuid4().hex[:12]}"
+    owns_image = not os.environ.get("HYSTERIAX_TEST_IMAGE")
     with tempfile.TemporaryDirectory(prefix="hysteriax-backup-restore-compose-") as folder:
         project = pathlib.Path(folder)
         backups = project / "backups"
@@ -43,6 +44,7 @@ def main():
                     f"HYSTERIAX_DB_ADMIN_PASSWORD={admin_password}",
                     "HYSTERIAX_DB_USER=hysteriax",
                     f"HYSTERIAX_DB_PASSWORD={app_password}",
+                    f"HYSTERIAX_REDIS_PASSWORD={secrets.token_hex(32)}",
                     f"HYSTERIAX_UID={os.getuid()}",
                     f"HYSTERIAX_GID={os.getgid()}",
                     f"HYSTERIAX_IMAGE={image.split(':', 1)[0]}",
@@ -54,6 +56,15 @@ def main():
         (project / ".env").chmod(0o600)
         compose_file = {
             "services": {
+                "redis": {
+                    "image": "redis:8-alpine",
+                    "environment": {"HYSTERIAX_REDIS_PASSWORD": "${HYSTERIAX_REDIS_PASSWORD}"},
+                    "command": ["sh", "-ec", 'exec redis-server --requirepass "$$HYSTERIAX_REDIS_PASSWORD"'],
+                    "healthcheck": {
+                        "test": ["CMD-SHELL", 'REDISCLI_AUTH="$$HYSTERIAX_REDIS_PASSWORD" redis-cli ping | grep -q PONG'],
+                        "interval": "2s", "timeout": "3s", "retries": 10,
+                    },
+                },
                 "postgres": {
                     "image": "postgres:18-bookworm",
                     "restart": "unless-stopped",
@@ -79,9 +90,10 @@ def main():
                     "build": {"context": str(ROOT)},
                     "image": image,
                     "restart": "unless-stopped",
-                    "depends_on": {"postgres": {"condition": "service_healthy"}},
+                    "depends_on": {"postgres": {"condition": "service_healthy"}, "redis": {"condition": "service_healthy"}},
                     "environment": {
                         "DATABASE_URL": "postgresql://hysteriax:${HYSTERIAX_DB_PASSWORD}@postgres:5432/hysteriax",
+                        "HYSTERIAX_REDIS_URL": "redis://:${HYSTERIAX_REDIS_PASSWORD}@redis:6379/0",
                         "HYSTERIAX_LISTEN_ADDR": "0.0.0.0:8080",
                         "HYSTERIAX_PUBLIC_URL": "http://127.0.0.1:8080",
                         "HYSTERIAX_ADMIN_TOKEN": "${HYSTERIAX_ADMIN_TOKEN}",
@@ -101,7 +113,7 @@ def main():
         (project / "compose.yaml").write_text(__import__("json").dumps(compose_file, indent=2) + "\n")
 
         try:
-            backup_restore.compose(project, "up", "-d", "--build", "api")
+            backup_restore.compose(project, "up", "-d", "--build" if owns_image else "--no-build", "api")
             backup_restore.wait_ready(project)
             backup_restore.compose(
                 project,
@@ -134,7 +146,12 @@ def main():
                 "--command",
                 "UPDATE backup_fixture SET content = 'after backup' WHERE id = 1",
             )
+            redis_shell = 'REDISCLI_AUTH="$HYSTERIAX_REDIS_PASSWORD" redis-cli '
+            backup_restore.compose(project, "exec", "-T", "redis", "sh", "-c", redis_shell + 'SET restore-marker stale')
             backup_restore.restore(project, archive)
+            remaining = backup_restore.compose(project, "exec", "-T", "redis", "sh", "-c", redis_shell + 'EXISTS restore-marker').stdout.strip()
+            if remaining != "0":
+                raise RuntimeError("restore retained stale Redis cache")
             restored = backup_restore.compose(
                 project,
                 "exec",
@@ -157,7 +174,8 @@ def main():
             print("Compose PostgreSQL backup and restore passed, including staging validation and readiness.")
         finally:
             backup_restore.compose(project, "down", "--volumes", "--remove-orphans", check=False)
-            subprocess.run(["docker", "image", "rm", image], check=False, capture_output=True)
+            if owns_image:
+                subprocess.run(["docker", "image", "rm", image], check=False, capture_output=True)
 
 
 if __name__ == "__main__":

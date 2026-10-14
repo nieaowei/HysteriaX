@@ -129,12 +129,15 @@ async fn nodes_pagination_searches_labels_hosts_ids_and_preserves_details() {
         assert_eq!(node["ssh"]["auth_type"], "password");
         assert_eq!(node["data_freshness"], "stale");
         assert!(node["package"].is_object() && node["package_usage"].is_object());
-        assert!(node["yaml_preview"].is_string() && node["config"].is_object());
+        assert!(node.get("yaml_preview").is_none() && node.get("config").is_none());
         assert!(!node.to_string().contains("NODE-PASSWORD-MUST-NOT-LEAK"));
         let Json(detail) = get(State(state.clone()), Path("node-235".into()))
             .await
             .unwrap();
-        assert_eq!(node, &detail);
+        assert!(detail["yaml_preview"].is_string() && detail["config"].is_object());
+        for (key, value) in node.as_object().unwrap() {
+            assert_eq!(value, &detail[key], "summary field {key}");
+        }
     }
     let status = page(
         &state,

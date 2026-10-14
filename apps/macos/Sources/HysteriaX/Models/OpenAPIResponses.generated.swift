@@ -1232,6 +1232,7 @@ struct APIHealth: Codable, Sendable {
 }
 
 struct APIVersion: Codable, Sendable {
+    let directoryGeneration: Int64
     let currentAdminTokenId: String?
     let features: [String]?
     let apiVersion: String
@@ -1240,6 +1241,7 @@ struct APIVersion: Codable, Sendable {
     let mihomoVersion: String
 
     enum CodingKeys: String, CodingKey {
+        case directoryGeneration = "directory_generation"
         case currentAdminTokenId = "current_admin_token_id"
         case features
         case apiVersion = "api_version"
@@ -1462,6 +1464,7 @@ struct OverviewBucket: Codable, Sendable {
 }
 
 struct OverviewHistory: Codable, Sendable {
+    let metrics: String?
     let generatedAt: String
     let range: String
     let timezone: String
@@ -1469,6 +1472,7 @@ struct OverviewHistory: Codable, Sendable {
     let buckets: [OverviewBucket]
 
     enum CodingKeys: String, CodingKey {
+        case metrics
         case generatedAt = "generated_at"
         case range
         case timezone

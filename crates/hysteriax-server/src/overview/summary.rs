@@ -15,7 +15,7 @@ struct Alert {
 }
 
 #[derive(sqlx::FromRow)]
-pub(super) struct NodeReading {
+pub(crate) struct NodeReading {
     id: String,
     name: String,
     state: String,
@@ -45,7 +45,7 @@ pub(super) struct NodeReading {
 }
 
 impl NodeReading {
-    pub(super) fn summary(&self, now: DateTime<Utc>) -> Result<Value, ApiError> {
+    pub(crate) fn summary(&self, now: DateTime<Utc>) -> Result<Value, ApiError> {
         let alerts = self.alerts.0.iter().map(|alert| json!(alert)).collect();
         let (package, usage) = node_limits::snapshot_from_reading(
             self.has_package.then_some(&self.package),
@@ -106,9 +106,7 @@ pub(super) async fn load(pool: &PgPool) -> Result<SummaryData, ApiError> {
         .map(|row| (row.get("state"), row.get("count")))
         .collect();
     let node_count = node_states.values().sum();
-    let nodes = sqlx::query_as::<_, NodeReading>(include_str!("summary_nodes.sql"))
-        .fetch_all(&mut *tx)
-        .await?;
+    let nodes = read_nodes_on(&mut tx, None).await?;
     let users = sqlx::query_as::<_, UserWarning>(
         "SELECT id, name, expires_at, quota_bytes, usage_bytes, updated_at
          FROM users WHERE enabled AND (expires_at <= $1 OR usage_bytes >= quota_bytes)
@@ -121,8 +119,10 @@ pub(super) async fn load(pool: &PgPool) -> Result<SummaryData, ApiError> {
         .bind(now)
         .fetch_all(&mut *tx)
         .await?;
-    let task = sqlx::query("SELECT count(*) FILTER(WHERE status='queued')::bigint queued,count(*) FILTER(WHERE status='running')::bigint running,count(*) FILTER(WHERE status='failed' AND finished_at >= $1)::bigint failed FROM jobs")
-        .bind(now - Duration::hours(24)).fetch_one(&mut *tx).await?;
+    let task = sqlx::query(include_str!("summary_tasks.sql"))
+        .bind(now - Duration::hours(24))
+        .fetch_one(&mut *tx)
+        .await?;
     let failures = sqlx::query(include_str!("summary_failures.sql"))
         .bind(now - Duration::hours(24))
         .fetch_all(&mut *tx)
@@ -138,4 +138,16 @@ pub(super) async fn load(pool: &PgPool) -> Result<SummaryData, ApiError> {
         failures,
         generated_at: now,
     })
+}
+
+pub(crate) async fn read_nodes_on(
+    connection: &mut sqlx::PgConnection,
+    ids: Option<&[String]>,
+) -> Result<Vec<NodeReading>, ApiError> {
+    Ok(
+        sqlx::query_as::<_, NodeReading>(include_str!("summary_nodes.sql"))
+            .bind(ids)
+            .fetch_all(connection)
+            .await?,
+    )
 }

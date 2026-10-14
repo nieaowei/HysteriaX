@@ -1,0 +1,73 @@
+{
+  "service_url": "https://hysteriax.cc",
+  "verified_at": "2026-10-13T20:26:10Z",
+  "api_version": "1.0.0",
+  "migration": 19,
+  "container_health": "healthy",
+  "counts": {
+    "nodes": 5,
+    "users": 7,
+    "credentials": 50,
+    "dns/records": 22
+  },
+  "checks": [
+    "v1_version_directory_generation_auth_and_no_v2",
+    "pagination_node_summary_detail_user_usage_credentials_dns",
+    "overview_cache_hit_force_refresh_and_cache_statistics",
+    "history_24h_7d_30d_traffic_quality_minute_anchor",
+    "openapi_v1_and_etag",
+    "shared_sse_durable_history_replay",
+    "migration_19_and_exact_raw_vs_aggregate_reconciliation",
+    "postgres_and_caddy_container_identities_unchanged",
+    "migration_preserved_entire_user_and_package_billing_state"
+  ],
+  "cache_statistics": {
+    "caches": {
+      "previews": {
+        "bytes": 555,
+        "entries": 6,
+        "evictions": 0,
+        "hits": 93,
+        "misses": 6,
+        "waits": 0
+      },
+      "responses": {
+        "bytes": 5316484,
+        "entries": 208,
+        "evictions": 17,
+        "hits": 6,
+        "misses": 225,
+        "waits": 0
+      },
+      "values": {
+        "bytes": 394280,
+        "entries": 20,
+        "evictions": 0,
+        "hits": 0,
+        "misses": 20,
+        "waits": 0
+      }
+    },
+    "events": {
+      "bytes": 0,
+      "events": 0,
+      "running": true,
+      "watermark": 2435
+    }
+  },
+  "image": "nieaowei/hysteriax-server:cache-preaggregation-20261014-v1",
+  "local_image_id": "sha256:cddbbf1dee96dfe0391edd35147301c3d7c0983a35176e84d7d9142bfb56d0a6",
+  "remote_image_id": "sha256:52c94e4b36a97773ec04d3d8e0a1329700efc35e684576a7192f3aad733c81ff",
+  "binary_sha256": "319e8bf8e4ddc1abad7456eebc2dd7700a4afc062d4c66f053a03440becc3db6",
+  "archive_sha256": "4a0bc35970c3383dbf8c0ce0c5fd0486e9f2ec64ba5e41b053666c0eb01dcf55",
+  "layers_and_config_match": true,
+  "base_commit": "4668a2ff6b805669b81805a9b43362f4a06e1805",
+  "source_has_uncommitted_changes": true,
+  "previous_image": "nieaowei/hysteriax-server:overview-aggregation-20261011-v1",
+  "backup_directory": "/home/nieaowei/HysteriaX/backups/cache-preaggregation-20261014-v1",
+  "database_backup_verified": true,
+  "billing_state_unchanged_by_migration": true,
+  "persistent_asset_cache_directory": "/home/nieaowei/HysteriaX/data/assets",
+  "persistent_asset_cache_writable": true,
+  "macos_release_build_verified": true
+}

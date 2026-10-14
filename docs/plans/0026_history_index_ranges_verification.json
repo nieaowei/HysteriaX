@@ -1,0 +1,775 @@
+{
+  "sql_measurements": [
+    {
+      "days": 1,
+      "before_ms": 177.019,
+      "after_ms": 9.797,
+      "after_raw_scan_loops": 0
+    },
+    {
+      "days": 7,
+      "before_ms": 529.077,
+      "after_ms": 39.532,
+      "after_raw_scan_loops": 0
+    },
+    {
+      "days": 30,
+      "before_ms": 795.797,
+      "after_ms": 111.592,
+      "after_raw_scan_loops": 0
+    }
+  ],
+  "comparison_cases": [
+    {
+      "source": "users",
+      "days": 1,
+      "fractional": false,
+      "difference_rows": 0
+    },
+    {
+      "source": "users",
+      "days": 1,
+      "fractional": true,
+      "difference_rows": 0
+    },
+    {
+      "source": "users",
+      "days": 7,
+      "fractional": false,
+      "difference_rows": 0
+    },
+    {
+      "source": "users",
+      "days": 7,
+      "fractional": true,
+      "difference_rows": 0
+    },
+    {
+      "source": "users",
+      "days": 30,
+      "fractional": false,
+      "difference_rows": 0
+    },
+    {
+      "source": "users",
+      "days": 30,
+      "fractional": true,
+      "difference_rows": 0
+    },
+    {
+      "source": "network",
+      "days": 1,
+      "fractional": false,
+      "difference_rows": 0
+    },
+    {
+      "source": "network",
+      "days": 1,
+      "fractional": true,
+      "difference_rows": 0
+    },
+    {
+      "source": "network",
+      "days": 7,
+      "fractional": false,
+      "difference_rows": 0
+    },
+    {
+      "source": "network",
+      "days": 7,
+      "fractional": true,
+      "difference_rows": 0
+    },
+    {
+      "source": "network",
+      "days": 30,
+      "fractional": false,
+      "difference_rows": 0
+    },
+    {
+      "source": "network",
+      "days": 30,
+      "fractional": true,
+      "difference_rows": 0
+    }
+  ],
+  "tests_passed": 187,
+  "image": "nieaowei/hysteriax-server:history-index-ranges-20261014-v3",
+  "archive_sha256": "6d87b7cc849dd45499c5ae054d89d654d2dd24fe5f7df7671e57473f2e134e5f",
+  "http_before": [
+    {
+      "source": "users",
+      "range": "24h",
+      "force_refresh_ms": 4274.53,
+      "buckets": 24
+    },
+    {
+      "source": "users",
+      "range": "7d",
+      "force_refresh_ms": 5098.35,
+      "buckets": 7
+    },
+    {
+      "source": "users",
+      "range": "30d",
+      "force_refresh_ms": 2720.87,
+      "buckets": 30
+    },
+    {
+      "source": "network",
+      "range": "24h",
+      "force_refresh_ms": 1026.09,
+      "buckets": 24
+    },
+    {
+      "source": "network",
+      "range": "7d",
+      "force_refresh_ms": 1255.09,
+      "buckets": 7
+    },
+    {
+      "source": "network",
+      "range": "30d",
+      "force_refresh_ms": 954.28,
+      "buckets": 30
+    }
+  ],
+  "verified_at": "2026-10-14T00:42:51.480461+00:00",
+  "service_url": "https://hysteriax.cc",
+  "api_version": "1.0.0",
+  "binary_sha256": "d938ac5b39e7f2c746d46c72c326e5f853a9404d9544335a1778069412ad5aeb",
+  "container_health": "healthy",
+  "schema_version": 19,
+  "schema_changed": false,
+  "backup_directory": "/home/nieaowei/HysteriaX/backups/history-index-ranges-20261014-v3",
+  "custom_plans_and_jit_off_are_transaction_local": true,
+  "strict_clippy_passed": true,
+  "http_after": [
+    {
+      "round": 0,
+      "source": "users",
+      "range": "24h",
+      "force_refresh_ms": 375.17,
+      "buckets": 24
+    },
+    {
+      "round": 0,
+      "source": "users",
+      "range": "7d",
+      "force_refresh_ms": 75.76,
+      "buckets": 7
+    },
+    {
+      "round": 0,
+      "source": "users",
+      "range": "30d",
+      "force_refresh_ms": 90.91,
+      "buckets": 30
+    },
+    {
+      "round": 0,
+      "source": "network",
+      "range": "24h",
+      "force_refresh_ms": 74.88,
+      "buckets": 24
+    },
+    {
+      "round": 0,
+      "source": "network",
+      "range": "7d",
+      "force_refresh_ms": 57.39,
+      "buckets": 7
+    },
+    {
+      "round": 0,
+      "source": "network",
+      "range": "30d",
+      "force_refresh_ms": 102.75,
+      "buckets": 30
+    },
+    {
+      "round": 1,
+      "source": "users",
+      "range": "24h",
+      "force_refresh_ms": 30.61,
+      "buckets": 24
+    },
+    {
+      "round": 1,
+      "source": "users",
+      "range": "7d",
+      "force_refresh_ms": 88.23,
+      "buckets": 7
+    },
+    {
+      "round": 1,
+      "source": "users",
+      "range": "30d",
+      "force_refresh_ms": 84.42,
+      "buckets": 30
+    },
+    {
+      "round": 1,
+      "source": "network",
+      "range": "24h",
+      "force_refresh_ms": 28.67,
+      "buckets": 24
+    },
+    {
+      "round": 1,
+      "source": "network",
+      "range": "7d",
+      "force_refresh_ms": 55.78,
+      "buckets": 7
+    },
+    {
+      "round": 1,
+      "source": "network",
+      "range": "30d",
+      "force_refresh_ms": 67.6,
+      "buckets": 30
+    },
+    {
+      "round": 2,
+      "source": "users",
+      "range": "24h",
+      "force_refresh_ms": 32.13,
+      "buckets": 24
+    },
+    {
+      "round": 2,
+      "source": "users",
+      "range": "7d",
+      "force_refresh_ms": 82.34,
+      "buckets": 7
+    },
+    {
+      "round": 2,
+      "source": "users",
+      "range": "30d",
+      "force_refresh_ms": 90.55,
+      "buckets": 30
+    },
+    {
+      "round": 2,
+      "source": "network",
+      "range": "24h",
+      "force_refresh_ms": 29.22,
+      "buckets": 24
+    },
+    {
+      "round": 2,
+      "source": "network",
+      "range": "7d",
+      "force_refresh_ms": 53.17,
+      "buckets": 7
+    },
+    {
+      "round": 2,
+      "source": "network",
+      "range": "30d",
+      "force_refresh_ms": 138.42,
+      "buckets": 30
+    }
+  ],
+  "generic_plan_diagnostics": [
+    {
+      "days": 1,
+      "execution_ms": 5082.328,
+      "jit": {
+        "Functions": 52,
+        "Options": {
+          "Inlining": true,
+          "Optimization": true,
+          "Expressions": true,
+          "Deforming": true
+        },
+        "Timing": {
+          "Generation": {
+            "Deform": 2.178,
+            "Total": 7.542
+          },
+          "Inlining": 458.384,
+          "Optimization": 487.212,
+          "Emission": 381.589,
+          "Total": 1334.727
+        }
+      },
+      "nodes": [
+        {
+          "type": "Aggregate",
+          "relation": null,
+          "time_ms": 2247.464,
+          "loops": 1,
+          "rows_removed": null,
+          "cost": 889852.04
+        },
+        {
+          "type": "Function Scan",
+          "relation": null,
+          "time_ms": 1327.229,
+          "loops": 1,
+          "rows_removed": null,
+          "cost": 37.51
+        },
+        {
+          "type": "Sort",
+          "relation": null,
+          "time_ms": 2247.372,
+          "loops": 1,
+          "rows_removed": null,
+          "cost": 889780.53
+        },
+        {
+          "type": "Subquery Scan",
+          "relation": null,
+          "time_ms": 2247.168,
+          "loops": 1,
+          "rows_removed": null,
+          "cost": 889665.87
+        },
+        {
+          "type": "Append",
+          "relation": null,
+          "time_ms": 2247.147,
+          "loops": 1,
+          "rows_removed": null,
+          "cost": 889645.87
+        },
+        {
+          "type": "Aggregate",
+          "relation": null,
+          "time_ms": 2247.099,
+          "loops": 1,
+          "rows_removed": null,
+          "cost": 210747.95
+        },
+        {
+          "type": "Nested Loop",
+          "relation": null,
+          "time_ms": 2243.447,
+          "loops": 1,
+          "rows_removed": null,
+          "cost": 193773.5
+        },
+        {
+          "type": "CTE Scan",
+          "relation": null,
+          "time_ms": 1327.347,
+          "loops": 1,
+          "rows_removed": null,
+          "cost": 20.0
+        },
+        {
+          "type": "Index Scan",
+          "relation": "traffic_minute_totals",
+          "time_ms": 38.119,
+          "loops": 24,
+          "rows_removed": 0,
+          "cost": 180.18
+        },
+        {
+          "type": "Subquery Scan",
+          "relation": null,
+          "time_ms": 0.035,
+          "loops": 1,
+          "rows_removed": null,
+          "cost": 678887.92
+        },
+        {
+          "type": "Aggregate",
+          "relation": null,
+          "time_ms": 0.034,
+          "loops": 1,
+          "rows_removed": null,
+          "cost": 678875.42
+        },
+        {
+          "type": "Nested Loop",
+          "relation": null,
+          "time_ms": 0.02,
+          "loops": 1,
+          "rows_removed": null,
+          "cost": 620381.92
+        },
+        {
+          "type": "Append",
+          "relation": null,
+          "time_ms": 0.019,
+          "loops": 1,
+          "rows_removed": null,
+          "cost": 50.55
+        },
+        {
+          "type": "CTE Scan",
+          "relation": null,
+          "time_ms": 0.01,
+          "loops": 1,
+          "rows_removed": 24,
+          "cost": 23.33
+        },
+        {
+          "type": "CTE Scan",
+          "relation": null,
+          "time_ms": 0.007,
+          "loops": 1,
+          "rows_removed": 24,
+          "cost": 25.0
+        },
+        {
+          "type": "Index Scan",
+          "relation": "traffic_records",
+          "time_ms": 0.0,
+          "loops": 0,
+          "rows_removed": 0,
+          "cost": 1291.77
+        }
+      ]
+    },
+    {
+      "days": 7,
+      "execution_ms": 1723.21,
+      "jit": {
+        "Functions": 52,
+        "Options": {
+          "Inlining": true,
+          "Optimization": true,
+          "Expressions": true,
+          "Deforming": true
+        },
+        "Timing": {
+          "Generation": {
+            "Deform": 1.417,
+            "Total": 4.272
+          },
+          "Inlining": 168.632,
+          "Optimization": 341.26,
+          "Emission": 241.114,
+          "Total": 755.278
+        }
+      },
+      "nodes": [
+        {
+          "type": "Aggregate",
+          "relation": null,
+          "time_ms": 1678.048,
+          "loops": 1,
+          "rows_removed": null,
+          "cost": 889852.04
+        },
+        {
+          "type": "Function Scan",
+          "relation": null,
+          "time_ms": 750.964,
+          "loops": 1,
+          "rows_removed": null,
+          "cost": 37.51
+        },
+        {
+          "type": "Sort",
+          "relation": null,
+          "time_ms": 1677.997,
+          "loops": 1,
+          "rows_removed": null,
+          "cost": 889780.53
+        },
+        {
+          "type": "Subquery Scan",
+          "relation": null,
+          "time_ms": 1677.865,
+          "loops": 1,
+          "rows_removed": null,
+          "cost": 889665.87
+        },
+        {
+          "type": "Append",
+          "relation": null,
+          "time_ms": 1677.854,
+          "loops": 1,
+          "rows_removed": null,
+          "cost": 889645.87
+        },
+        {
+          "type": "Aggregate",
+          "relation": null,
+          "time_ms": 1677.817,
+          "loops": 1,
+          "rows_removed": null,
+          "cost": 210747.95
+        },
+        {
+          "type": "Nested Loop",
+          "relation": null,
+          "time_ms": 1658.971,
+          "loops": 1,
+          "rows_removed": null,
+          "cost": 193773.5
+        },
+        {
+          "type": "CTE Scan",
+          "relation": null,
+          "time_ms": 750.998,
+          "loops": 1,
+          "rows_removed": null,
+          "cost": 20.0
+        },
+        {
+          "type": "Index Scan",
+          "relation": "traffic_minute_totals",
+          "time_ms": 128.706,
+          "loops": 7,
+          "rows_removed": 0,
+          "cost": 180.18
+        },
+        {
+          "type": "Subquery Scan",
+          "relation": null,
+          "time_ms": 0.031,
+          "loops": 1,
+          "rows_removed": null,
+          "cost": 678887.92
+        },
+        {
+          "type": "Aggregate",
+          "relation": null,
+          "time_ms": 0.029,
+          "loops": 1,
+          "rows_removed": null,
+          "cost": 678875.42
+        },
+        {
+          "type": "Nested Loop",
+          "relation": null,
+          "time_ms": 0.018,
+          "loops": 1,
+          "rows_removed": null,
+          "cost": 620381.92
+        },
+        {
+          "type": "Append",
+          "relation": null,
+          "time_ms": 0.016,
+          "loops": 1,
+          "rows_removed": null,
+          "cost": 50.55
+        },
+        {
+          "type": "CTE Scan",
+          "relation": null,
+          "time_ms": 0.009,
+          "loops": 1,
+          "rows_removed": 7,
+          "cost": 23.33
+        },
+        {
+          "type": "CTE Scan",
+          "relation": null,
+          "time_ms": 0.006,
+          "loops": 1,
+          "rows_removed": 7,
+          "cost": 25.0
+        },
+        {
+          "type": "Index Scan",
+          "relation": "traffic_records",
+          "time_ms": 0.0,
+          "loops": 0,
+          "rows_removed": 0,
+          "cost": 1291.77
+        }
+      ]
+    },
+    {
+      "days": 30,
+      "execution_ms": 1838.434,
+      "jit": {
+        "Functions": 52,
+        "Options": {
+          "Inlining": true,
+          "Optimization": true,
+          "Expressions": true,
+          "Deforming": true
+        },
+        "Timing": {
+          "Generation": {
+            "Deform": 1.312,
+            "Total": 3.991
+          },
+          "Inlining": 178.492,
+          "Optimization": 405.597,
+          "Emission": 354.254,
+          "Total": 942.335
+        }
+      },
+      "nodes": [
+        {
+          "type": "Aggregate",
+          "relation": null,
+          "time_ms": 1803.774,
+          "loops": 1,
+          "rows_removed": null,
+          "cost": 889852.04
+        },
+        {
+          "type": "Function Scan",
+          "relation": null,
+          "time_ms": 938.385,
+          "loops": 1,
+          "rows_removed": null,
+          "cost": 37.51
+        },
+        {
+          "type": "Sort",
+          "relation": null,
+          "time_ms": 1803.681,
+          "loops": 1,
+          "rows_removed": null,
+          "cost": 889780.53
+        },
+        {
+          "type": "Subquery Scan",
+          "relation": null,
+          "time_ms": 1803.517,
+          "loops": 1,
+          "rows_removed": null,
+          "cost": 889665.87
+        },
+        {
+          "type": "Append",
+          "relation": null,
+          "time_ms": 1803.496,
+          "loops": 1,
+          "rows_removed": null,
+          "cost": 889645.87
+        },
+        {
+          "type": "Aggregate",
+          "relation": null,
+          "time_ms": 1803.407,
+          "loops": 1,
+          "rows_removed": null,
+          "cost": 210747.95
+        },
+        {
+          "type": "Nested Loop",
+          "relation": null,
+          "time_ms": 1768.491,
+          "loops": 1,
+          "rows_removed": null,
+          "cost": 193773.5
+        },
+        {
+          "type": "CTE Scan",
+          "relation": null,
+          "time_ms": 938.473,
+          "loops": 1,
+          "rows_removed": null,
+          "cost": 20.0
+        },
+        {
+          "type": "Index Scan",
+          "relation": "traffic_minute_totals",
+          "time_ms": 27.256,
+          "loops": 30,
+          "rows_removed": 0,
+          "cost": 180.18
+        },
+        {
+          "type": "Subquery Scan",
+          "relation": null,
+          "time_ms": 0.075,
+          "loops": 1,
+          "rows_removed": null,
+          "cost": 678887.92
+        },
+        {
+          "type": "Aggregate",
+          "relation": null,
+          "time_ms": 0.073,
+          "loops": 1,
+          "rows_removed": null,
+          "cost": 678875.42
+        },
+        {
+          "type": "Nested Loop",
+          "relation": null,
+          "time_ms": 0.056,
+          "loops": 1,
+          "rows_removed": null,
+          "cost": 620381.92
+        },
+        {
+          "type": "Append",
+          "relation": null,
+          "time_ms": 0.053,
+          "loops": 1,
+          "rows_removed": null,
+          "cost": 50.55
+        },
+        {
+          "type": "CTE Scan",
+          "relation": null,
+          "time_ms": 0.04,
+          "loops": 1,
+          "rows_removed": 30,
+          "cost": 23.33
+        },
+        {
+          "type": "CTE Scan",
+          "relation": null,
+          "time_ms": 0.011,
+          "loops": 1,
+          "rows_removed": 30,
+          "cost": 25.0
+        },
+        {
+          "type": "Index Scan",
+          "relation": "traffic_records",
+          "time_ms": 0.0,
+          "loops": 0,
+          "rows_removed": 0,
+          "cost": 1291.77
+        }
+      ]
+    }
+  ],
+  "measurement_notes": "SQL EXPLAIN ANALYZE and same-server HTTPS measurements on live data. HTTP bypasses response cache; three rounds after process restart. Single-run before measurements and changing background load are not a latency guarantee.",
+  "http_summary": [
+    {
+      "source": "users",
+      "range": "24h",
+      "first_request_ms": 375.17,
+      "median_ms": 32.13
+    },
+    {
+      "source": "users",
+      "range": "7d",
+      "first_request_ms": 75.76,
+      "median_ms": 82.34
+    },
+    {
+      "source": "users",
+      "range": "30d",
+      "first_request_ms": 90.91,
+      "median_ms": 90.55
+    },
+    {
+      "source": "network",
+      "range": "24h",
+      "first_request_ms": 74.88,
+      "median_ms": 29.22
+    },
+    {
+      "source": "network",
+      "range": "7d",
+      "first_request_ms": 57.39,
+      "median_ms": 55.78
+    },
+    {
+      "source": "network",
+      "range": "30d",
+      "first_request_ms": 102.75,
+      "median_ms": 102.75
+    }
+  ]
+}

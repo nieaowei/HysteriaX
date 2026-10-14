@@ -88,8 +88,3 @@ pub async fn apply(
     tx.commit().await?;
     Ok(json!({"connection_id":connection,"credential_version":version,"read_access_verified":true}))
 }
-pub async fn batch_items(pool: &PgPool, batch: &str) -> Result<Vec<Value>> {
-    let rows=sqlx::query("SELECT i.connection_id,i.job_id,c.name,j.status,j.stage,j.error_message FROM dns_credential_batch_items i JOIN dns_connections c ON c.id=i.connection_id JOIN jobs j ON j.id=i.job_id WHERE i.batch_id=$1 ORDER BY c.name")
-        .bind(batch).fetch_all(pool).await?;
-    Ok(rows.into_iter().map(|r|json!({"connection_id":r.get::<String,_>("connection_id"),"job_id":r.get::<String,_>("job_id"),"name":r.get::<String,_>("name"),"status":r.get::<String,_>("status"),"stage":r.get::<String,_>("stage"),"error_message":r.get::<Option<String>,_>("error_message")})).collect())
-}

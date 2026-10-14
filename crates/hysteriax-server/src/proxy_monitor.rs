@@ -74,7 +74,7 @@ pub async fn run(state: AppState) {
 async fn cleanup(state: &AppState) -> Result<()> {
     for table in ["online_samples", "proxy_probe_samples"] {
         loop {
-            let affected=sqlx::query(&format!("DELETE FROM {table} WHERE id IN (SELECT id FROM {table} WHERE sampled_at < now()-interval '30 days' LIMIT 1000)" )).execute(&state.pool).await?.rows_affected();
+            let affected=sqlx::query(&format!("DELETE FROM {table} WHERE id IN (SELECT id FROM {table} WHERE sampled_at < now()-interval '31 days' LIMIT 1000)" )).execute(&state.pool).await?.rows_affected();
             if affected < 1000 {
                 break;
             }

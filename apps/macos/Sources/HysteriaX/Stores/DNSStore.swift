@@ -19,8 +19,14 @@ extension ManagementStore {
         dnsUpdatedAt = snapshot.updatedAt
     }
 
-    func refreshDNS() async {
+    func refreshDNSIfNeeded() async {
+        if let dnsUpdatedAt, Date().timeIntervalSince(dnsUpdatedAt) < 60 { return }
+        await refreshDNS()
+    }
+
+    func refreshDNS(bypassCache: Bool = false) async {
         guard supportsDNSManagement, isConnected else { return }
+        listPageCache.invalidate(types: [String(reflecting: DNSRecordsPage.self)])
         let generation = UUID()
         dnsRequestGeneration = generation
         let service = serviceAddress
@@ -28,9 +34,9 @@ extension ManagementStore {
         defer { if dnsRequestGeneration == generation { dnsIsLoading = false } }
         do {
             let client = try requireConnectedAPI()
-            async let connections = client.get(APIEndpoints.listDNSConnections)
-            async let zones = client.get(APIEndpoints.listDNSZones)
-            async let records = client.collectPages { APIEndpoints.listDNSRecords(page: $0, pageSize: 200) }
+            async let connections = client.get(APIEndpoints.listDNSConnections, bypassCache: bypassCache)
+            async let zones = client.get(APIEndpoints.listDNSZones, bypassCache: bypassCache)
+            async let records = client.collectPages(bypassCache: bypassCache) { APIEndpoints.listDNSRecords(page: $0, pageSize: 200) }
             let snapshot = try await DNSDisplaySnapshot(connections: connections, zones: zones, records: records, updatedAt: Date())
             guard service == serviceAddress, dnsRequestGeneration == generation, !Task.isCancelled else { return }
             dnsConnections = snapshot.connections
@@ -73,8 +79,8 @@ extension ManagementStore {
         await refresh()
     }
 
-    func dnsRecordsPage(page: Int, pageSize: Int, connectionID: String, zoneID: String, query: String, sort: String, order: String) async throws -> DNSRecordsPage {
-        try await requireConnectedAPI().get(APIEndpoints.listDNSRecords(page: page, pageSize: pageSize, connectionId: connectionID.isEmpty ? nil : connectionID, zoneId: zoneID.isEmpty ? nil : zoneID, q: query, sort: sort, order: order))
+    func dnsRecordsPage(page: Int, pageSize: Int, connectionID: String, zoneID: String, query: String, sort: String, order: String, cacheKey: String? = nil, revalidate: Bool = false) async throws -> DNSRecordsPage {
+        try await loadListPage(APIEndpoints.listDNSRecords(page: page, pageSize: pageSize, connectionId: connectionID.isEmpty ? nil : connectionID, zoneId: zoneID.isEmpty ? nil : zoneID, q: query, sort: sort, order: order), cacheKey: cacheKey, ttl: 60, revalidate: revalidate)
     }
 
     func dnsRecordDetail(_ id: String) async throws -> DNSRecord {

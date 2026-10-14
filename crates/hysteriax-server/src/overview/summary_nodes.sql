@@ -1,9 +1,5 @@
 WITH node_jobs AS (
-    SELECT node_id,
-        count(*) FILTER (WHERE status IN ('queued', 'running'))::bigint AS pending_revocations,
-        count(*) FILTER (WHERE status IN ('queued', 'running') AND payload_json->>'node_limit' = 'true')::bigint AS pending_disconnects,
-        count(*) FILTER (WHERE status = 'failed' AND payload_json->>'node_limit' = 'true')::bigint AS failed_disconnects
-    FROM jobs WHERE kind = 'kick' GROUP BY node_id
+    SELECT node_id,pending AS pending_revocations,pending_limit AS pending_disconnects,failed_limit AS failed_disconnects FROM job_node_kick_totals
 ), gaps AS (
     SELECT node_id, count(*)::bigint AS open_gaps
     FROM data_gaps WHERE resolved_at IS NULL GROUP BY node_id
@@ -42,4 +38,5 @@ LEFT JOIN LATERAL (
     FROM proxy_probe_samples WHERE node_id = n.id ORDER BY sampled_at DESC LIMIT 1
 ) probe ON true
 LEFT JOIN monitoring_probe_state health ON health.node_id = n.id AND health.revision = probe.revision
+WHERE ($1::text[] IS NULL OR n.id=ANY($1))
 ORDER BY lower(n.name) COLLATE "C", n.name COLLATE "C", n.id

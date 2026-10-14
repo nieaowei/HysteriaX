@@ -23,7 +23,6 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sqlx::{PgPool, Postgres, Row, Transaction};
-use subtle::ConstantTimeEq;
 use uuid::Uuid;
 
 use crate::{db, error::ApiError, security::token_digest, state::AppState};
@@ -186,6 +185,11 @@ pub fn router(state: AppState) -> Router {
             post(credentials::retry),
         )
         .layer(DefaultBodyLimit::max(30 * 1024 * 1024))
+        .route("/api/v1/cache", get(cache_stats))
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            crate::cache::middleware,
+        ))
         .route_layer(middleware::from_fn_with_state(state.clone(), require_admin));
 
     Router::new()
@@ -237,56 +241,57 @@ async fn require_admin(
     };
 
     let digest = token_digest(token);
-    let hashes =
-        match sqlx::query("SELECT id, token_hash FROM admin_tokens WHERE revoked_at IS NULL")
-            .fetch_all(&state.pool)
-            .await
-        {
-            Ok(hashes) => hashes,
-            Err(error) => {
-                tracing::error!(%error, "failed to verify administrator token");
-                return ApiError::internal().into_response();
-            }
-        };
-    let actor = hashes.iter().find(|row| {
-        let known: String = row.get("token_hash");
-        known.len() == digest.len() && bool::from(known.as_bytes().ct_eq(digest.as_bytes()))
-    });
-    let Some(actor) = actor else {
-        return ApiError::new(
-            StatusCode::UNAUTHORIZED,
-            "unauthorized",
-            "administrator token is invalid",
-        )
-        .into_response();
+    let actor = match sqlx::query(
+        "SELECT id,last_used_at FROM admin_tokens WHERE token_hash=$1 AND revoked_at IS NULL",
+    )
+    .bind(&digest)
+    .fetch_optional(&state.pool)
+    .await
+    {
+        Ok(Some(actor)) => actor,
+        Ok(None) => {
+            return ApiError::new(
+                StatusCode::UNAUTHORIZED,
+                "unauthorized",
+                "administrator token is invalid",
+            )
+            .into_response();
+        }
+        Err(error) => return ApiError::from(error).into_response(),
     };
     let id: String = actor.get("id");
-    if sqlx::query("UPDATE admin_tokens SET last_used_at=$1 WHERE id=$2 AND revoked_at IS NULL")
-        .bind(now())
-        .bind(&id)
-        .execute(&state.pool)
-        .await
-        .is_err()
-    {
-        return ApiError::internal().into_response();
+    let last_used: Option<DateTime<Utc>> = actor.get("last_used_at");
+    if last_used.is_none_or(|at|now()-at>=chrono::Duration::seconds(60))
+        && let Err(error)=sqlx::query("UPDATE admin_tokens SET last_used_at=$1 WHERE id=$2 AND revoked_at IS NULL AND (last_used_at IS NULL OR last_used_at<$3)")
+            .bind(now()).bind(&id).bind(now()-chrono::Duration::seconds(60)).execute(&state.pool).await {
+        return ApiError::from(error).into_response();
     }
     request.extensions_mut().insert(AdminActor { id });
     next.run(request).await
+}
+
+async fn cache_stats(State(state): State<AppState>) -> Json<Value> {
+    Json(json!({"caches":state.caches.stats(),"events":state.events.stats()}))
 }
 
 async fn healthz() -> Json<Value> {
     Json(json!({"status": "ok"}))
 }
 
-async fn api_version(Extension(actor): Extension<AdminActor>) -> Json<Value> {
-    Json(json!({
+async fn api_version(
+    State(state): State<AppState>,
+    Extension(actor): Extension<AdminActor>,
+) -> Result<Json<Value>, ApiError> {
+    let directory_generation = crate::cache::configuration_generation(&state.pool).await?;
+    Ok(Json(json!({
         "api_version": "1.0.0",
         "features": ["node_packages", "overview_monitoring", "job_retry_links", "credentials", "node_record_removal", "dns_management", "authorization_groups"],
+        "directory_generation":directory_generation,
         "current_admin_token_id": actor.id,
         "service_version": env!("CARGO_PKG_VERSION"),
         "hysteria_version": "app/v2.12.3",
         "mihomo_version": "v1.19.31"
-    }))
+    })))
 }
 
 async fn readyz(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
@@ -296,8 +301,30 @@ async fn readyz(State(state): State<AppState>) -> Result<Json<Value>, ApiError> 
     Ok(Json(json!({"status": "ready", "database": "ok"})))
 }
 
-async fn openapi() -> Response {
-    let mut response = Response::new(Body::from(include_str!("../../../../openapi/openapi.yaml")));
+async fn openapi(headers: HeaderMap) -> Response {
+    use sha2::Digest;
+    const SPEC: &str = include_str!("../../../../openapi/openapi.yaml");
+    let etag = format!("\"{}\"", hex::encode(sha2::Sha256::digest(SPEC.as_bytes())));
+    let matched = headers
+        .get(header::IF_NONE_MATCH)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|values| {
+            values
+                .split(',')
+                .any(|v| v.trim() == etag || v.trim() == "*")
+        });
+    let mut response = if matched {
+        StatusCode::NOT_MODIFIED.into_response()
+    } else {
+        Response::new(Body::from(SPEC))
+    };
+    response
+        .headers_mut()
+        .insert(header::ETAG, etag.parse().unwrap());
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        "public, max-age=300, must-revalidate".parse().unwrap(),
+    );
     response.headers_mut().insert(
         header::CONTENT_TYPE,
         "application/yaml; charset=utf-8".parse().unwrap(),
@@ -357,27 +384,28 @@ fn stream_events(
     job_id: Option<String>,
 ) -> Sse<impl futures_core::Stream<Item = Result<Event, Infallible>>> {
     let output = stream! {
+        let mut updates=state.events.subscribe(state.pool.clone());
         loop {
-            let rows = if let Some(job_id) = &job_id {
-                sqlx::query("SELECT id, event_type, payload_json FROM job_events WHERE id > $1 AND job_id = $2 ORDER BY id LIMIT 100")
-                    .bind(cursor).bind(job_id).fetch_all(&state.pool).await
-            } else {
-                sqlx::query("SELECT id, event_type, payload_json FROM job_events WHERE id > $1 ORDER BY id LIMIT 100")
-                    .bind(cursor).fetch_all(&state.pool).await
-            };
-            match rows {
-                Ok(rows) => {
-                    for row in rows {
-                        let id: i64 = row.get("id");
-                        let event_type: String = row.get("event_type");
-                        let payload: Value = row.get("payload_json");
-                        cursor = id;
-                        yield Ok(Event::default().id(id.to_string()).event(event_type).data(payload.to_string()));
+            updates.borrow_and_update();
+            match state.events.read(cursor,job_id.as_deref()) {
+                crate::events::Read::Live(events,watermark)=>{
+                    for event in events {cursor=event.id;yield Ok(Event::default().id(event.id.to_string()).event(event.kind.clone()).data(event.data.clone()));}
+                    cursor=cursor.max(watermark);
+                }
+                crate::events::Read::Replay(until)=>{
+                    match crate::events::read_database(&state.pool,cursor,until,job_id.as_deref()).await {
+                        Ok(events)=>{
+                            let full=events.len()==256;
+                            for event in events {cursor=event.id;yield Ok(Event::default().id(event.id.to_string()).event(event.kind.clone()).data(event.data.clone()));}
+                            if !full {cursor=cursor.max(until);}
+                            continue;
+                        }
+                        Err(error)=>{tracing::warn!(%error,"event replay failed");tokio::time::sleep(Duration::from_secs(1)).await;continue;}
                     }
                 }
-                Err(error) => tracing::error!(%error, "failed to load persisted SSE events"),
+                crate::events::Read::Waiting=>{}
             }
-            tokio::time::sleep(Duration::from_secs(1)).await;
+            if updates.changed().await.is_err() {break;}
         }
     };
     Sse::new(output).keep_alive(axum::response::sse::KeepAlive::default())
@@ -460,10 +488,16 @@ async fn list_jobs(
     sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
         .execute(&mut *tx)
         .await?;
-    let total: i64 = sqlx::query_scalar(&format!("SELECT count(*) FROM jobs j WHERE {filter}"))
-        .bind(search)
-        .fetch_one(&mut *tx)
-        .await?;
+    let total: i64 = if search.is_empty() {
+        sqlx::query_scalar("SELECT coalesce(sum(total),0)::bigint FROM job_status_totals")
+            .fetch_one(&mut *tx)
+            .await?
+    } else {
+        sqlx::query_scalar(&format!("SELECT count(*) FROM jobs j WHERE {filter}"))
+            .bind(search)
+            .fetch_one(&mut *tx)
+            .await?
+    };
     let page_count = ((total + page_size - 1) / page_size).max(1);
     let page = requested_page.min(page_count);
     // Only validated SQL fragments are interpolated; all user values are bound.
@@ -1023,3 +1057,6 @@ mod tests {
         assert_eq!(event_cursor(Some(-1), &headers), 0);
     }
 }
+
+#[cfg(test)]
+mod backend_cache_tests;

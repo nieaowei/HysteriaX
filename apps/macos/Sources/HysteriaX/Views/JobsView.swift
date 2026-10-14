@@ -48,9 +48,9 @@ struct JobsView: View {
         }
     }
     private var sortDirection: String { sortOrder.first?.order == .forward ? "asc" : "desc" }
-    private var pageKey: String { "\(store.serviceAddress)|\(page)|\(pageSize)|\(query)|\(sortField)|\(sortDirection)" }
-    private var pageRequestKey: String { "\(pageKey)|\(store.isConnected)|\(store.lastUpdated?.timeIntervalSince1970 ?? 0)|\(retryPageToken)" }
-    private var currentPageResponse: JobsPage? { loadedPageKey == pageKey ? pageResponse : nil }
+    private var pageKey: String { store.listPageKey([String(page), String(pageSize), query, sortField, sortDirection]) }
+    private var pageRequestKey: String { "\(pageKey)|\(store.isConnected)|\(store.dataRefreshToken)|\(retryPageToken)" }
+    private var currentPageResponse: JobsPage? { store.cachedListPage(pageKey, as: JobsPage.self) ?? (loadedPageKey == pageKey ? pageResponse : nil) }
     private var totalJobs: Int { store.isConnected ? (currentPageResponse?.total ?? 0) : snapshotJobs.count }
     private var pageCount: Int { max(1, (totalJobs + pageSize - 1) / pageSize) }
     private var currentPage: Int { store.isConnected ? page : min(page, pageCount) }
@@ -74,7 +74,7 @@ struct JobsView: View {
     private var detailRequestKey: String {
         guard let selectedJobID else { return "none" }
         let updatedAt = visibleJobs.first { $0.id == selectedJobID }?.updatedAt ?? store.jobs.first { $0.id == selectedJobID }?.updatedAt ?? "detail"
-        return "\(store.serviceAddress):\(selectedJobID):\(updatedAt):\(store.isConnected):\(store.lastUpdated?.timeIntervalSince1970 ?? 0)"
+        return "\(store.serviceAddress):\(selectedJobID):\(updatedAt):\(store.isConnected):\(store.dataRefreshToken)"
     }
 
     var body: some View {
@@ -128,6 +128,7 @@ struct JobsView: View {
             selectedJobDetail = nil
         }
         .task(id: pageRequestKey) { await loadPage() }
+        .onDisappear { loadedPageKey = nil }
         .task(id: detailRequestKey) { await loadSelectedJobDetail() }
         .alert(L10n.text("任务操作失败"), isPresented: Binding(get: { actionError != nil }, set: { if !$0 { actionError = nil } })) {
             Button(L10n.text("好"), role: .cancel) { actionError = nil }
@@ -139,7 +140,7 @@ struct JobsView: View {
             if let pageError {
                 HStack {
                     Text(pageError).foregroundStyle(.red).textSelection(.enabled)
-                    Button(L10n.text("重试")) { retryPageToken = UUID() }
+                    Button(L10n.text("重试")) { loadedPageKey = nil; retryPageToken = UUID() }
                 }.font(.caption)
             }
             HStack(spacing: 12) {
@@ -181,7 +182,7 @@ struct JobsView: View {
         defer { if requestKey == pageRequestKey { isLoadingPage = false } }
         do {
             if !query.isEmpty { try await Task.sleep(for: .milliseconds(250)) }
-            let response = try await store.jobsPage(page: page, pageSize: pageSize, query: query, sort: sortField, order: sortDirection)
+            let response = try await store.jobsPage(page: page, pageSize: pageSize, query: query, sort: sortField, order: sortDirection, cacheKey: pageKey, revalidate: loadedPageKey != pageKey)
             guard !Task.isCancelled, requestKey == pageRequestKey else { return }
             page = response.page
             pageResponse = response

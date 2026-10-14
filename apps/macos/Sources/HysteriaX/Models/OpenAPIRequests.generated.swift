@@ -839,6 +839,7 @@ struct APIOperation<Request: Sendable, Response: Sendable>: Sendable {
 }
 
 enum APIEndpoints {
+    static let getCacheStatistics: APIOperation<NoRequest, [String: JSONValue]> = APIOperation<NoRequest, [String: JSONValue]>(method: "GET", path: "api/v1/cache", queryParameters: [:])
     static func listCredentials(page: Int? = nil, pageSize: Int? = nil, category: String? = nil, kind: String? = nil, q: String? = nil, sort: String? = nil, order: String? = nil) -> APIOperation<NoRequest, CredentialsPage> {
         APIOperation(method: "GET", path: "api/v1/credentials", queryParameters: ["page": page.map { String($0) }, "page_size": pageSize.map { String($0) }, "category": category.map { String($0) }, "kind": kind.map { String($0) }, "q": q.map { String($0) }, "sort": sort.map { String($0) }, "order": order.map { String($0) }].compactMapValues { $0 })
     }
@@ -865,8 +866,8 @@ enum APIEndpoints {
         APIOperation(method: "POST", path: "api/v1/credential-batches/\(id)/retry", queryParameters: [:])
     }
     static let getOverview: APIOperation<NoRequest, OverviewResponse> = APIOperation<NoRequest, OverviewResponse>(method: "GET", path: "api/v1/overview", queryParameters: [:])
-    static func getOverviewHistory(range: String, timezone: String, nodeID: String? = nil, source: String? = nil) -> APIOperation<NoRequest, OverviewHistory> {
-        APIOperation(method: "GET", path: "api/v1/overview/history", queryParameters: ["range": range, "timezone": timezone, "node_id": nodeID.map { String($0) }, "source": source.map { String($0) }].compactMapValues { $0 })
+    static func getOverviewHistory(metrics: String? = nil, range: String, timezone: String, nodeID: String? = nil, source: String? = nil) -> APIOperation<NoRequest, OverviewHistory> {
+        APIOperation(method: "GET", path: "api/v1/overview/history", queryParameters: ["metrics": metrics.map { String($0) }, "range": range, "timezone": timezone, "node_id": nodeID.map { String($0) }, "source": source.map { String($0) }].compactMapValues { $0 })
     }
     static func listNodes(page: Int? = nil, pageSize: Int? = nil, q: String? = nil, stateMatches: String? = nil, sort: String? = nil, order: String? = nil) -> APIOperation<NoRequest, NodesPage> {
         APIOperation(method: "GET", path: "api/v1/nodes", queryParameters: ["page": page.map { String($0) }, "page_size": pageSize.map { String($0) }, "q": q.map { String($0) }, "state_matches": stateMatches.map { String($0) }, "sort": sort.map { String($0) }, "order": order.map { String($0) }].compactMapValues { $0 })

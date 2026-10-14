@@ -163,13 +163,13 @@ pub async fn rotate(
 pub async fn download(State(state): State<AppState>, Path(token): Path<String>) -> Response {
     let result = async {
         let user_id = validate_subscription(&state, &token).await?;
-        let nodes = load_subscription_nodes(&state, &user_id).await?;
-        tracing::info!(
-            client = "legacy",
-            format = "mihomo",
-            "subscription format selected"
-        );
-        formats::render_subscription(&nodes, SubscriptionFormat::Mihomo, &ClientInfo::default())
+        cached_subscription(
+            &state,
+            &user_id,
+            SubscriptionFormat::Mihomo,
+            &ClientInfo::default(),
+        )
+        .await
     }
     .await;
     subscription_response(result, false)
@@ -190,8 +190,7 @@ pub async fn download_auto(
         let format = requested.or(client.format);
         tracing::info!(client = client.name, version = ?client.version, format = ?format, "subscription format selected");
         if let Some(format) = format {
-            let nodes = load_subscription_nodes(&state, &user_id).await?;
-            formats::render_subscription(&nodes, format, &client)
+            cached_subscription(&state,&user_id,format,&client).await
         } else {
             Ok(formats::selection_page(&auto_subscription_url(&token)))
         }
@@ -257,29 +256,149 @@ async fn validate_subscription(state: &AppState, token: &str) -> Result<String, 
     Ok(user_id)
 }
 
-async fn load_subscription_nodes(
+async fn cached_subscription(
     state: &AppState,
     user_id: &str,
-) -> Result<Vec<SubscriptionNode>, ApiError> {
-    let rows = sqlx::query("SELECT n.id, n.name, n.public_host, n.public_port, n.listen_addr, n.tls_sni, n.tls_skip_verify, n.state, n.deployed_config_enc, n.published_connection, a.credential_enc, a.user_id, a.mtls_credential_id, a.mtls_credential_version FROM node_assignments a JOIN nodes n ON n.id = a.node_id WHERE a.user_id = $1 AND n.state NOT IN ('deleting', 'delete_failed') AND n.deployed_revision IS NOT NULL AND n.deployed_config_enc IS NOT NULL ORDER BY lower(n.name) COLLATE \"C\", n.name COLLATE \"C\", n.id")
+    format: SubscriptionFormat,
+    client: &ClientInfo,
+) -> Result<Response, ApiError> {
+    // Qualification is always live; the cache contains only a response for this exact eligible set.
+    let rows=sqlx::query("SELECT n.id,p.config,coalesce(p.usage_bytes,0) usage_bytes,p.next_reset_at FROM node_assignments a JOIN nodes n ON n.id=a.node_id LEFT JOIN node_packages p ON p.node_id=n.id WHERE a.user_id=$1 AND n.state NOT IN ('deleting','delete_failed') AND n.deployed_revision IS NOT NULL AND n.deployed_config_enc IS NOT NULL ORDER BY lower(n.name) COLLATE \"C\",n.name COLLATE \"C\",n.id")
         .bind(user_id).fetch_all(&state.pool).await?;
+    let now = Utc::now();
+    let mut eligible = Vec::<String>::new();
+    for row in rows {
+        let package: crate::node_limits::Package =
+            serde_json::from_value(row.get::<Option<Value>, _>("config").unwrap_or(json!({})))
+                .map_err(|_| ApiError::internal())?;
+        let usage = if row
+            .get::<Option<DateTime<Utc>>, _>("next_reset_at")
+            .is_some_and(|at| at <= now)
+        {
+            0
+        } else {
+            row.get::<i64, _>("usage_bytes")
+        };
+        if !package.expires_at.is_some_and(|at| at <= now)
+            && !package.quota_bytes.is_some_and(|quota| usage >= quota)
+        {
+            eligible.push(row.get("id"));
+        }
+    }
+    let version = crate::cache_domains::version(
+        &state.pool,
+        &["node_config", "user_config", "credentials", "resources"],
+    )
+    .await?;
+    let key = format!(
+        "subscription:{user_id}:{version}:{format:?}:{}:{:?}:{}",
+        client.name,
+        client.version,
+        token_digest(&eligible.join("|"))
+    );
+    let response = state
+        .caches
+        .responses
+        .get(key, std::time::Duration::from_secs(300), false, || async {
+            let nodes = load_subscription_nodes_eligible(state, user_id, Some(&eligible))
+                .await
+                .map_err(IntoResponse::into_response)?;
+            let response = formats::render_subscription(&nodes, format, client)
+                .map_err(IntoResponse::into_response)?;
+            crate::cache::CachedResponse::capture(response).await
+        })
+        .await;
+    Ok(match response {
+        Ok(value) => value.response(),
+        Err(response) => response,
+    })
+}
+
+async fn load_subscription_nodes_eligible(
+    state: &AppState,
+    user_id: &str,
+    eligible: Option<&[String]>,
+) -> Result<Vec<SubscriptionNode>, ApiError> {
+    let rows = sqlx::query("SELECT n.id, n.name, n.public_host, n.public_port, n.listen_addr, n.tls_sni, n.tls_skip_verify, n.state, n.deployed_config_enc, n.published_connection, a.credential_enc, a.user_id, a.mtls_credential_id, a.mtls_credential_version FROM node_assignments a JOIN nodes n ON n.id = a.node_id WHERE a.user_id = $1 AND n.state NOT IN ('deleting', 'delete_failed') AND n.deployed_revision IS NOT NULL AND n.deployed_config_enc IS NOT NULL AND ($2::text[] IS NULL OR n.id=ANY($2)) ORDER BY lower(n.name) COLLATE \"C\", n.name COLLATE \"C\", n.id")
+        .bind(user_id).bind(eligible).fetch_all(&state.pool).await?;
+    let projection_version =
+        crate::cache_domains::version(&state.pool, &["node_config", "credentials", "resources"])
+            .await?;
+    let mut configs = std::collections::BTreeMap::new();
+    let mut keys = std::collections::BTreeSet::new();
+    for row in &rows {
+        let id: String = row.get("id");
+        let cipher: String = row.get("deployed_config_enc");
+        let key = format!(
+            "subscription-projection:{id}:{projection_version}:{}",
+            token_digest(&cipher)
+        );
+        let config = state
+            .caches
+            .values
+            .get(key, std::time::Duration::from_secs(300), false, || async {
+                let raw: Value = serde_json::from_str(&state.secrets.decrypt(&cipher)?)
+                    .map_err(|_| ApiError::internal())?;
+                let mut projection = serde_json::Map::new();
+                for field in ["bandwidth", "obfs", "realm", "ech"] {
+                    if let Some(value) = raw.get(field) {
+                        projection.insert(field.into(), value.clone());
+                    }
+                }
+                Ok::<_, ApiError>(Value::Object(projection))
+            })
+            .await?;
+        if let Some(path) = config["ech"]["keyPath"].as_str() {
+            let reference = crate::credentials::Reference::parse(path)
+                .map_err(|_| ApiError::bad_request("invalid ECH reference"))?;
+            keys.insert((reference.id, reference.version));
+        }
+        if let Some(identity) = row.get::<Option<String>, _>("mtls_credential_id") {
+            keys.insert((identity, row.get::<i64, _>("mtls_credential_version")));
+        }
+        configs.insert(id, config);
+    }
+    let materials = crate::credentials::load_many(
+        &state.pool,
+        &state.secrets,
+        &keys.into_iter().collect::<Vec<_>>(),
+    )
+    .await?;
     let mut nodes = Vec::new();
     for row in rows {
         let node_id: String = row.get("id");
-        if crate::node_limits::restricted(&state.pool, &node_id)
-            .await
-            .map_err(|_| ApiError::internal())?
+        if eligible.is_none()
+            && crate::node_limits::restricted(&state.pool, &node_id)
+                .await
+                .map_err(|_| ApiError::internal())?
         {
             continue;
         }
-        let node_config_enc: String = row.get("deployed_config_enc");
-        let config: Value = serde_json::from_str(&state.secrets.decrypt(&node_config_enc)?)
-            .map_err(|_| ApiError::internal())?;
-        let ech_config = subscription_ech_config(state, &node_id, &config).await?;
-        let realm_opts = subscription_realm_options(&config)?;
+        let config = configs.get(&node_id).ok_or_else(ApiError::internal)?;
+        let ech_config = subscription_ech_from_loaded(config, &materials)?;
+        let realm_opts = subscription_realm_options(config)?;
         let password_enc: String = row.get("credential_enc");
-        let identity =
-            crate::credentials::assignment_identity(&state.pool, &state.secrets, &row).await?;
+        let identity = if let Some(id) = row.get::<Option<String>, _>("mtls_credential_id") {
+            let version: i64 = row.get("mtls_credential_version");
+            let (kind, owner, _, payload, _) = materials
+                .get(&(id, version))
+                .ok_or_else(ApiError::internal)?;
+            if kind != "tls_identity" || owner.as_deref() != Some(user_id) {
+                return Err(ApiError::bad_request("invalid user-owned mTLS credential"));
+            }
+            Some((
+                payload["certificate"]
+                    .as_str()
+                    .ok_or_else(ApiError::internal)?
+                    .to_owned(),
+                payload["private_key"]
+                    .as_str()
+                    .ok_or_else(ApiError::internal)?
+                    .to_owned(),
+            ))
+        } else {
+            None
+        };
         let (client_certificate, client_private_key) = identity
             .map(|(c, k)| (Some(c), Some(k)))
             .unwrap_or((None, None));
@@ -312,11 +431,19 @@ async fn load_subscription_nodes(
             client_private_key,
             ech_config,
             realm_opts,
-            &config,
+            config,
         ));
     }
 
     Ok(nodes)
+}
+
+#[cfg(test)]
+async fn load_subscription_nodes(
+    state: &AppState,
+    user_id: &str,
+) -> Result<Vec<SubscriptionNode>, ApiError> {
+    load_subscription_nodes_eligible(state, user_id, None).await
 }
 
 #[cfg(test)]
@@ -514,32 +641,21 @@ fn subscription_realm_options(config: &Value) -> Result<Option<SubscriptionRealm
     }))
 }
 
-async fn subscription_ech_config(
-    state: &AppState,
-    node_id: &str,
+fn subscription_ech_from_loaded(
     config: &Value,
+    materials: &std::collections::BTreeMap<(String, i64), crate::credentials::LoadedCredential>,
 ) -> Result<Option<String>, ApiError> {
-    let Some(key_path) = config
-        .get("ech")
-        .and_then(Value::as_object)
-        .and_then(|ech| ech.get("keyPath"))
-        .and_then(Value::as_str)
-    else {
+    let Some(path) = config["ech"]["keyPath"].as_str() else {
         return Ok(None);
     };
-    let reference = crate::credentials::Reference::parse(key_path)
-        .map_err(|_| ApiError::bad_request("ECH key must reference a managed credential"))?;
-    let (kind, owner, _, payload, _) = crate::credentials::load(
-        &state.pool,
-        &state.secrets,
-        &reference.id,
-        reference.version,
-    )
-    .await?;
+    let reference = crate::credentials::Reference::parse(path)
+        .map_err(|_| ApiError::bad_request("invalid ECH reference"))?;
+    let (kind, owner, _, payload, _) = materials
+        .get(&(reference.id, reference.version))
+        .ok_or_else(ApiError::internal)?;
     if kind != "ech_key" || owner.is_some() || reference.field != "content" {
         return Err(ApiError::bad_request("invalid ECH credential"));
     }
-    let _ = node_id;
     Ok(Some(extract_ech_config_list(
         payload["content"].as_str().ok_or_else(ApiError::internal)?,
     )?))

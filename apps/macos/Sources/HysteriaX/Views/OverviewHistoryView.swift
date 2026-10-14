@@ -9,6 +9,7 @@ struct OverviewHistoryView: View {
     var category: OverviewHistoryCategory
     var isActive: Bool
     @State private var state: OverviewHistoryState
+    @State private var lastRefreshToken: UUID?
 
     init(store: ManagementStore, fixedNodeID: String? = nil, category: OverviewHistoryCategory = .traffic,
          isActive: Bool = true, range: String = "24h", state: OverviewHistoryState? = nil) {
@@ -19,11 +20,12 @@ struct OverviewHistoryView: View {
         if let state {
             _state = State(initialValue: state)
         } else {
-            let cached = store.cachedOverviewHistory(range: range, nodeID: fixedNodeID, source: "users")
+            let cached = store.cachedOverviewHistory(range: range, nodeID: fixedNodeID, source: "users", metrics: category == .traffic ? "traffic" : "quality")
             _state = State(initialValue: OverviewHistoryState(range: range, history: cached))
         }
     }
 
+    private var metrics: String { category == .traffic ? "traffic" : "quality" }
     private var range: String { state.range }
     private var source: String { state.source }
     private var nodeID: String { state.nodeID }
@@ -97,14 +99,16 @@ struct OverviewHistoryView: View {
         .accessibilityIdentifier(category == .traffic ? "overview.history.traffic" : "overview.history.quality")
         .task(id: requestKey) {
             state.loading = false
+            var bypassCache = lastRefreshToken != nil && lastRefreshToken != store.overviewHistoryRefreshToken
+            lastRefreshToken = store.overviewHistoryRefreshToken
             let query = "\(store.serviceAddress)|\(range)|\(source)|\(selectedNodeID ?? "all")"
-            if query != state.loadedQuery { state.replaceHistory(store.cachedOverviewHistory(range: range, nodeID: selectedNodeID, source: source)); state.error = nil; state.loadedQuery = query }
+            if query != state.loadedQuery { state.replaceHistory(store.cachedOverviewHistory(range: range, nodeID: selectedNodeID, source: source, metrics: metrics)); state.error = nil; state.loadedQuery = query }
             guard store.supportsOverviewMonitoring, isActive else { return }
             while !Task.isCancelled {
                 if store.isConnected {
                     state.loading = true
                     do {
-                        let value = try await store.overviewHistory(range: range, nodeID: selectedNodeID, source: source)
+                        let value = try await store.overviewHistory(range: range, nodeID: selectedNodeID, source: source, metrics: metrics, bypassCache: bypassCache)
                         guard !Task.isCancelled else { return }
                         state.replaceHistory(value); state.error = nil
                     } catch {
@@ -112,6 +116,7 @@ struct OverviewHistoryView: View {
                         state.error = L10n.text("趋势暂不可用：{0}", String(describing: (error.localizedDescription)))
                     }
                     state.loading = false
+                    bypassCache = false
                 }
                 do { try await Task.sleep(for: .seconds(60)) } catch { return }
             }

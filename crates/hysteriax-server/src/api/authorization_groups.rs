@@ -122,20 +122,71 @@ struct GroupInfo {
 type Pair = (String, String);
 
 pub async fn list(State(state): State<AppState>) -> Result<Json<Vec<Value>>, ApiError> {
-    let rows = sqlx::query(
-        "SELECT id FROM authorization_groups ORDER BY lower(name) COLLATE \"C\", name COLLATE \"C\", id",
-    )
-    .fetch_all(&state.pool)
-    .await?;
-    let mut groups = Vec::with_capacity(rows.len());
-    for row in rows {
-        let id: String = row.get("id");
-        let group = load_group(&state.pool, &id)
-            .await?
-            .ok_or_else(|| ApiError::not_found("authorization group"))?;
-        groups.push(group_json(&group));
+    let version =
+        crate::cache_domains::version(&state.pool, &["groups", "user_config", "node_config"])
+            .await?;
+    let value = state
+        .caches
+        .values
+        .get(
+            format!("group-directory:{version}"),
+            std::time::Duration::from_secs(60),
+            crate::cache::bypass(),
+            || async { Ok::<_, ApiError>(json!(read_directory(&state).await?)) },
+        )
+        .await?;
+    Ok(Json(
+        value.as_array().ok_or_else(ApiError::internal)?.clone(),
+    ))
+}
+
+async fn read_directory(state: &AppState) -> Result<Vec<Value>, ApiError> {
+    let mut tx = state.pool.begin().await?;
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+        .execute(&mut *tx)
+        .await?;
+    let rows=sqlx::query("SELECT id,name,revision,created_at,updated_at FROM authorization_groups ORDER BY lower(name) COLLATE \"C\",name COLLATE \"C\",id").fetch_all(&mut *tx).await?;
+    let users =
+        sqlx::query("SELECT group_id,user_id FROM authorization_group_users ORDER BY user_id")
+            .fetch_all(&mut *tx)
+            .await?;
+    let nodes =
+        sqlx::query("SELECT group_id,node_id FROM authorization_group_nodes ORDER BY node_id")
+            .fetch_all(&mut *tx)
+            .await?;
+    let mut user_map = std::collections::BTreeMap::<String, Vec<String>>::new();
+    let mut node_map = std::collections::BTreeMap::<String, Vec<String>>::new();
+    for row in users {
+        user_map
+            .entry(row.get("group_id"))
+            .or_default()
+            .push(row.get("user_id"));
     }
-    Ok(Json(groups))
+    for row in nodes {
+        node_map
+            .entry(row.get("group_id"))
+            .or_default()
+            .push(row.get("node_id"));
+    }
+    let groups = rows
+        .iter()
+        .map(|row| {
+            let id: String = row.get("id");
+            let user_ids = user_map.remove(&id).unwrap_or_default();
+            let node_ids = node_map.remove(&id).unwrap_or_default();
+            group_json(&GroupInfo {
+                id,
+                name: row.get("name"),
+                revision: row.get("revision"),
+                user_ids,
+                node_ids,
+                created_at: row.get("created_at"),
+                updated_at: row.get("updated_at"),
+            })
+        })
+        .collect();
+    tx.commit().await?;
+    Ok(groups)
 }
 
 pub async fn get(
@@ -451,7 +502,7 @@ fn sort_dedup(values: &mut Vec<String>) {
     values.dedup();
 }
 
-fn normalize_bindings(values: &mut Vec<MTLSBinding>) -> Result<(), ApiError> {
+fn normalize_bindings(values: &mut [MTLSBinding]) -> Result<(), ApiError> {
     values.sort_by(|left, right| {
         (&left.user_id, &left.node_id).cmp(&(&right.user_id, &right.node_id))
     });
@@ -698,6 +749,7 @@ fn preview_json(action: &str, token: String, result: Value, missing: Vec<Pair>) 
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn preview_data(
     state: &AppState,
     tx: &mut Transaction<'_, Postgres>,
