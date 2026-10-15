@@ -52,53 +52,83 @@ pub fn counter_delta(
 }
 
 pub async fn run(state: AppState) {
+    // Expiry enforcement must keep ticking even when SSH sampling is slow.
+    tokio::join!(sampling_loop(&state), expiration_loop(&state.pool));
+}
+
+async fn sampling_loop(state: &AppState) {
+    let mut tick = tokio::time::interval(Duration::from_secs(10));
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
-        if let Err(error) = collect_all(&state.pool, &state.secrets).await {
+        tick.tick().await;
+        if let Err(error) = collect_all(state).await {
             tracing::error!(%error, "traffic collection pass failed");
         }
-        if let Err(error) = schedule_expirations(&state.pool).await {
-            tracing::error!(%error, "failed to schedule expired-user revocations");
-        }
-        tokio::time::sleep(Duration::from_secs(10)).await;
     }
 }
 
-async fn collect_all(pool: &PgPool, secrets: &SecretBox) -> Result<()> {
-    let rows = sqlx::query("SELECT id FROM nodes WHERE deployed_revision IS NOT NULL AND state NOT IN ('deleting', 'delete_failed') ORDER BY id")
-        .fetch_all(pool)
-        .await?;
-    let cycle = Uuid::new_v4();
-    let cycle_started = chrono::Utc::now();
-    let expected_nodes = rows.len() as i64;
-    for row in rows {
-        let node_id: String = row.get("id");
-        if let Err(error) = sample_node(
-            pool,
-            secrets,
-            &node_id,
-            cycle,
-            cycle_started,
-            expected_nodes,
-        )
-        .await
-        {
-            tracing::warn!(node_id, %error, "traffic sample failed");
-            crate::overview::record_online(
-                pool,
-                &node_id,
-                cycle,
-                cycle_started,
-                expected_nodes,
-                None,
-            )
-            .await?;
-            crate::overview::finish_traffic_sample(pool, &node_id, cycle, "failed").await;
-            record_gap(pool, &node_id, classify_sample_error(&error)).await?;
-            sqlx::query("UPDATE nodes SET state = CASE WHEN state IN ('deployed', 'syncing') THEN 'unreachable' ELSE state END, updated_at = $1 WHERE id = $2")
-                .bind(now()).bind(&node_id).execute(pool).await?;
+async fn expiration_loop(pool: &PgPool) {
+    let mut tick = tokio::time::interval(Duration::from_secs(10));
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        tick.tick().await;
+        if let Err(error) = schedule_expirations(pool).await {
+            tracing::error!(%error, "failed to schedule expired-user revocations");
         }
     }
+}
+
+async fn collect_all(state: &AppState) -> Result<()> {
+    let ids: Vec<String> = sqlx::query_scalar("SELECT id FROM nodes WHERE deployed_revision IS NOT NULL AND state NOT IN ('deleting', 'delete_failed') ORDER BY id")
+        .fetch_all(&state.pool).await?;
+    let cycle = Uuid::new_v4();
+    let cycle_started = chrono::Utc::now();
+    let expected_nodes = ids.len() as i64;
+    collect_nodes(ids, |node_id| {
+        let state = state.clone();
+        async move {
+            let pool = &state.pool;
+            let result = tokio::time::timeout(Duration::from_secs(45), sample_node(
+                pool, &state.secrets, &node_id, cycle, cycle_started, expected_nodes,
+            )).await.unwrap_or_else(|_| Err(anyhow::anyhow!("traffic sample timed out")));
+            if let Err(error) = result {
+                tracing::warn!(node_id, %error, "traffic sample failed");
+                crate::overview::record_online(pool, &node_id, cycle, cycle_started, expected_nodes, None).await?;
+                crate::overview::finish_traffic_sample(pool, &node_id, cycle, "failed").await;
+                record_gap(pool, &node_id, classify_sample_error(&error)).await?;
+                sqlx::query("UPDATE nodes SET state = CASE WHEN state IN ('deployed', 'syncing') THEN 'unreachable' ELSE state END, updated_at = $1 WHERE id = $2")
+                    .bind(now()).bind(&node_id).execute(pool).await?;
+            }
+            Ok(())
+        }
+    }).await;
     Ok(())
+}
+
+async fn collect_nodes<F, Fut>(ids: Vec<String>, mut sample: F)
+where
+    F: FnMut(String) -> Fut,
+    Fut: std::future::Future<Output = Result<()>> + Send + 'static,
+{
+    let mut tasks = tokio::task::JoinSet::new();
+    let mut ids = ids.into_iter();
+    loop {
+        while tasks.len() < 4 {
+            let Some(id) = ids.next() else {
+                break;
+            };
+            let future = sample(id.clone());
+            tasks.spawn(async move { (id, future.await) });
+        }
+        match tasks.join_next().await {
+            Some(Ok((node_id, Err(error)))) => {
+                tracing::warn!(%node_id, %error, "traffic sample could not be saved")
+            }
+            Some(Err(error)) => tracing::error!(%error, "traffic sample task panicked"),
+            Some(Ok(_)) => {}
+            None => break,
+        }
+    }
 }
 
 async fn sample_node(
@@ -437,6 +467,65 @@ mod tests {
 
     fn counters(user_id: &str, tx: u64, rx: u64) -> serde_json::Map<String, serde_json::Value> {
         serde_json::Map::from_iter([(user_id.to_owned(), json!({"tx": tx, "rx": rx}))])
+    }
+
+    #[tokio::test]
+    async fn slow_and_failed_nodes_do_not_block_peers_and_concurrency_is_bounded() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        let active = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+        let completed = Arc::new(AtomicUsize::new(0));
+        let slow = Arc::new(tokio::sync::Notify::new());
+        let peers = Arc::new(tokio::sync::Notify::new());
+        let worker = {
+            let (active, peak, completed, slow, peers) = (
+                active.clone(),
+                peak.clone(),
+                completed.clone(),
+                slow.clone(),
+                peers.clone(),
+            );
+            tokio::spawn(async move {
+                super::collect_nodes((0..12).map(|i| i.to_string()).collect(), |id| {
+                    let (active, peak, completed, slow, peers) = (
+                        active.clone(),
+                        peak.clone(),
+                        completed.clone(),
+                        slow.clone(),
+                        peers.clone(),
+                    );
+                    async move {
+                        let count = active.fetch_add(1, Ordering::SeqCst) + 1;
+                        peak.fetch_max(count, Ordering::SeqCst);
+                        if id == "0" {
+                            slow.notified().await;
+                        } else {
+                            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                        }
+                        active.fetch_sub(1, Ordering::SeqCst);
+                        if completed.fetch_add(1, Ordering::SeqCst) == 10 {
+                            peers.notify_one();
+                        }
+                        if id == "1" {
+                            anyhow::bail!("injected sample failure");
+                        }
+                        Ok(())
+                    }
+                })
+                .await;
+            })
+        };
+        tokio::time::timeout(std::time::Duration::from_secs(2), peers.notified())
+            .await
+            .unwrap();
+        assert_eq!(completed.load(Ordering::SeqCst), 11);
+        assert_eq!(peak.load(Ordering::SeqCst), 4);
+        slow.notify_one();
+        worker.await.unwrap();
+        assert_eq!(completed.load(Ordering::SeqCst), 12);
     }
 
     #[test]
