@@ -485,12 +485,10 @@ async fn safe_error(
                 .await
                 {
                     for assignment in assignments {
-                        for field in ["credential_enc"] {
-                            if let Ok(Some(encrypted)) = assignment.try_get::<Option<String>, _>(field)
-                                && let Ok(secret) = secrets.decrypt(&encrypted)
-                            {
-                                secret_values.push(secret);
-                            }
+                        if let Ok(Some(encrypted)) = assignment.try_get::<Option<String>, _>("credential_enc")
+                            && let Ok(secret) = secrets.decrypt(&encrypted)
+                        {
+                            secret_values.push(secret);
                         }
                     }
                 }
