@@ -298,7 +298,7 @@ struct NodesView: View {
                     nodeTitle(node)
                     nodeActions(node)
                 }
-                LazyVGrid(columns: Array(repeating: GridItem(.flexible(minimum: 0), spacing: 12, alignment: .leading), count: node.dnsBinding == nil ? 4 : 5), alignment: .leading, spacing: 8) {
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(minimum: 0), spacing: 12, alignment: .leading), count: node.dnsBinding == nil ? 3 : 4), alignment: .leading, spacing: 8) {
                     nodeHeaderMetric(L10n.text("目标配置"), value: "v\(node.revision)")
                     nodeHeaderMetric(L10n.text("已部署配置"), value: node.deployedRevision.map { "v\($0)" } ?? L10n.text("尚未部署"))
                     nodeHeaderMetric(L10n.text("套餐有效期"), value: PackageDisplay.expiry(node.package))
@@ -316,7 +316,6 @@ struct NodesView: View {
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    nodeHeaderMetric(L10n.text("分配用户"), value: L10n.text("{0} 人", String(describing: (assignedUsers(node).count))))
                 }
             }
             .padding(16)
@@ -337,25 +336,15 @@ struct NodesView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.vertical, 4)
                     } label: { Label(L10n.text("采样与待办"), systemImage: "waveform.path") }
-                    DisclosureGroup(L10n.text("分配用户（{0}）", String(describing: (assignedUsers(node).count)))) {
-                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 180), alignment: .leading)], alignment: .leading, spacing: 10) {
-                            ForEach(assignedUsers(node)) { user in
-                                HStack {
-                                    Text(user.name)
-                                    Spacer()
-                                    Text(user.enabled ? L10n.text("启用") : L10n.text("已停用")).font(.caption).foregroundStyle(.secondary)
-                                }
-                            }
-                            if assignedUsers(node).isEmpty { Text(L10n.text("尚未分配用户")).foregroundStyle(.secondary) }
-                        }
-                        .padding(.top, 8)
-                    }
                     DisclosureGroup(L10n.text("节点记录")) {
                         VStack(alignment: .leading, spacing: 10) {
                             nodeMetric(L10n.text("节点 ID"), value: node.id)
+                                .frame(maxWidth: .infinity, alignment: .leading)
                             if let detail, detail.id == node.id {
-                                nodeMetric(L10n.text("创建时间"), value: DateDisplayText.local(detail.createdAt))
-                                nodeMetric(L10n.text("更新时间"), value: DateDisplayText.local(detail.updatedAt))
+                                LazyVGrid(columns: Array(repeating: GridItem(.flexible(minimum: 0), alignment: .leading), count: 2), alignment: .leading, spacing: 10) {
+                                    nodeMetric(L10n.text("创建时间"), value: DateDisplayText.local(detail.createdAt))
+                                    nodeMetric(L10n.text("更新时间"), value: DateDisplayText.local(detail.updatedAt))
+                                }
                             }
                         }
                         .padding(.top, 8)
@@ -447,10 +436,6 @@ struct NodesView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 4)
         } label: { Label(L10n.text("套餐与流量"), systemImage: "chart.bar") }
-    }
-
-    private func assignedUsers(_ node: NodeSummary) -> [UserSummary] {
-        store.users.filter { $0.assignments.contains { $0.nodeID == node.id } }
     }
 
     private func nodeHeaderMetric(_ title: String, value: String) -> some View {

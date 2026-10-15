@@ -269,9 +269,7 @@
 "出站名称不能重复。" = "Outbound names must be unique.";
 "分配于 {0}" = "Assigned on {0}";
 "分配或更换域名…" = "Assign or change domain…";
-"分配用户" = "Assigned users";
 "分配用户到节点" = "Assign user to node";
-"分配用户（{0}）" = "Assigned users ({0})";
 "分配节点" = "Assigned nodes";
 "分配节点…" = "Assign nodes…";
 "创建" = "Create";
@@ -447,7 +445,6 @@
 "将从管理服务中移除「{0}」及其用户分配和待办，保留任务历史。此操作不会卸载远端服务；失联服务器上的服务可能仍在运行。" = "Removes “{0}”, its user assignments and pending items from the management service, retaining task history. This does not uninstall the remote service; an unreachable server may still be running it.";
 "将本节点用量重置为零？" = "Reset this node's usage to zero?";
 "尚未写入远端" = "Not yet written remotely";
-"尚未分配用户" = "No users assigned";
 "尚未分配节点" = "No nodes assigned";
 "尚未检查" = "Not checked";
 "尚未确认" = "Not confirmed";
