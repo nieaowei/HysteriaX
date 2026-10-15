@@ -91,6 +91,15 @@ def main():
                 data=json.dumps({"name":"Recovery fixture SSH","kind":"ssh_password","payload":{"secret":"unused-password"}}).encode())
             with urllib.request.urlopen(credential_request) as response:
                 credential_id = json.loads(response.read())["id"]
+            # Create the node through the API so its encrypted configuration,
+            # deployment snapshot and credential references remain valid at restart.
+            node_request = urllib.request.Request(base + "/api/v1/nodes", method="POST",
+                headers={"Authorization": f"Bearer {admin_token}", "Content-Type": "application/json"},
+                data=json.dumps({"name":"Recovery node","ssh_host":"127.0.0.1","ssh_port":22,
+                    "ssh_username":"root","ssh_credential_id":credential_id,"ssh_credential_version":1,
+                    "public_host":"node.example.test","public_port":443,"listen_addr":":443","config":{}}).encode())
+            with urllib.request.urlopen(node_request) as response:
+                node_id = json.loads(response.read())["node"]["id"]
             stop(process)
             process = None
 
@@ -98,19 +107,10 @@ def main():
             timestamp = datetime(2026, 1, 1, tzinfo=timezone.utc)
             with database.connect() as connection:
                 connection.execute(
-                    "INSERT INTO nodes (id, name, ssh_host, ssh_port, ssh_username, ssh_credential_id, "
-                    "ssh_credential_version, public_host, public_port, listen_addr, node_token_hash, node_token_enc, "
-                    "traffic_stats_secret_enc, desired_config_enc, created_at, updated_at) "
-                    "VALUES ('recovery-node', 'Recovery node', '127.0.0.1', 22, 'root', %s, "
-                    "1, 'node.example.test', 443, ':443', 'node-hash', 'encrypted-token', "
-                    "'encrypted-stats', 'encrypted-config', %s, %s)",
-                    (credential_id, timestamp, timestamp),
-                )
-                connection.execute(
                     "INSERT INTO jobs (id, kind, node_id, target_revision, status, stage, payload_json, attempts, "
                     "available_at, created_at, updated_at, started_at) "
-                    "VALUES (%s, 'sync', 'recovery-node', 1, 'running', 'interrupted', '{}', 4, %s, %s, %s, %s)",
-                    (job_id, timestamp, timestamp, timestamp, timestamp),
+                    "VALUES (%s, 'sync', %s, 1, 'running', 'interrupted', '{}', 4, %s, %s, %s, %s)",
+                    (job_id, node_id, timestamp, timestamp, timestamp, timestamp),
                 )
 
             process = subprocess.Popen(
