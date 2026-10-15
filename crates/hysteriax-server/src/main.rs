@@ -79,6 +79,7 @@ async fn main() -> Result<()> {
     let probes = tokio::spawn(proxy_monitor::run(state.clone()));
     let limits = tokio::spawn(node_limits::run(state.clone()));
     let quota_rank = tokio::spawn(quota_rank::run(state.clone()));
+    let shutdown = state.shutdown.clone();
     let app = api::router(state);
 
     let address = env::var("HYSTERIAX_LISTEN_ADDR").unwrap_or_else(|_| "0.0.0.0:8080".to_owned());
@@ -86,36 +87,65 @@ async fn main() -> Result<()> {
         .await
         .with_context(|| format!("bind to {address}"))?;
     tracing::info!(%address, "HysteriaX management API listening");
-    let server = axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .into_future();
+    let server = serve_with_shutdown(
+        listener,
+        app,
+        shutdown.clone(),
+        shutdown_signal(),
+        Duration::from_secs(8),
+    );
     tokio::pin!(server);
     let monitor = monitor_instance_lock(&mut instance_lock);
     tokio::pin!(monitor);
-    tokio::select! {
-        result = &mut server => {
-            result.context("serve HTTP API")?;
-        }
+    let result = tokio::select! {
+        result = &mut server => result,
         result = &mut monitor => {
-            analytics.abort();
-            jobs.abort();
-            traffic.abort();
-            network.abort();
-            limits.abort();
-            probes.abort();
-            quota_rank.abort();
-            result?;
-            bail!("single-instance lock monitor stopped unexpectedly");
+            shutdown.send_replace(true);
+            result.and_then(|_| Err(anyhow::anyhow!("single-instance lock monitor stopped unexpectedly")))
+        }
+    };
+    // Abort and join before releasing the instance lock. Dropping worker JoinSets
+    // cancels their child jobs; persisted running work is recovered on startup.
+    let workers = [
+        analytics, jobs, traffic, network, limits, probes, quota_rank,
+    ];
+    for worker in &workers {
+        worker.abort();
+    }
+    for worker in workers {
+        let _ = worker.await;
+    }
+    result?;
+    Ok(())
+}
+
+async fn serve_with_shutdown(
+    listener: tokio::net::TcpListener,
+    app: axum::Router,
+    shutdown: tokio::sync::watch::Sender<bool>,
+    signal: impl std::future::Future<Output = ()>,
+    drain_timeout: Duration,
+) -> Result<()> {
+    let mut stopping = shutdown.subscribe();
+    let server = axum::serve(listener, app)
+        .with_graceful_shutdown(async move {
+            let _ = stopping.wait_for(|value| *value).await;
+        })
+        .into_future();
+    tokio::pin!(server, signal);
+    tokio::select! {
+        result = &mut server => return result.context("serve HTTP API"),
+        _ = &mut signal => { shutdown.send_replace(true); }
+    }
+    match tokio::time::timeout(drain_timeout, &mut server).await {
+        Ok(result) => result.context("drain HTTP requests"),
+        Err(_) => {
+            tracing::warn!(
+                "HTTP drain deadline reached; closing remaining connections on process exit"
+            );
+            Ok(())
         }
     }
-    analytics.abort();
-    jobs.abort();
-    traffic.abort();
-    network.abort();
-    limits.abort();
-    probes.abort();
-    quota_rank.abort();
-    Ok(())
 }
 
 async fn monitor_instance_lock(connection: &mut PgConnection) -> Result<()> {
@@ -174,4 +204,84 @@ async fn initialize_admin_token(pool: &PgPool) -> Result<()> {
     tx.commit().await?;
     tracing::warn!("created the initial administrator token hash");
     Ok(())
+}
+
+#[cfg(test)]
+mod shutdown_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn shutdown_closes_sse_and_bounds_unresponsive_requests() {
+        let state = AppState::new(
+            crate::db::test_pool().await,
+            SecretBox::from_base64("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA").unwrap(),
+        );
+        sqlx::query("INSERT INTO admin_tokens(id,token_hash,label,created_at) VALUES('admin',$1,'test',now())").bind(security::token_digest("test")).execute(&state.pool).await.unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let (signal, received) = tokio::sync::oneshot::channel();
+        let app = api::router(state.clone());
+        let server = tokio::spawn(serve_with_shutdown(
+            listener,
+            app,
+            state.shutdown.clone(),
+            async {
+                let _ = received.await;
+            },
+            Duration::from_secs(2),
+        ));
+        let mut stream = reqwest::Client::new()
+            .get(format!("{base}/api/v1/events"))
+            .bearer_auth("test")
+            .send()
+            .await
+            .unwrap();
+        signal.send(()).unwrap();
+        assert!(
+            tokio::time::timeout(Duration::from_secs(3), stream.chunk())
+                .await
+                .unwrap()
+                .unwrap()
+                .is_none()
+        );
+        tokio::time::timeout(Duration::from_secs(3), server)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/hang", listener.local_addr().unwrap());
+        let (entered, started) = tokio::sync::oneshot::channel();
+        let entered = std::sync::Arc::new(tokio::sync::Mutex::new(Some(entered)));
+        let app = axum::Router::new().route(
+            "/hang",
+            axum::routing::get(move || {
+                let entered = entered.clone();
+                async move {
+                    entered.lock().await.take().unwrap().send(()).unwrap();
+                    std::future::pending::<String>().await
+                }
+            }),
+        );
+        let (signal, received) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(serve_with_shutdown(
+            listener,
+            app,
+            tokio::sync::watch::channel(false).0,
+            async {
+                let _ = received.await;
+            },
+            Duration::from_millis(50),
+        ));
+        let request = tokio::spawn(async move { reqwest::get(url).await });
+        started.await.unwrap();
+        signal.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(1), server)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        request.abort();
+    }
 }

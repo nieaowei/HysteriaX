@@ -394,9 +394,11 @@ fn stream_events(
     admin_id: String,
 ) -> Sse<impl futures_core::Stream<Item = Result<Event, Infallible>>> {
     let output = stream! {
+        let mut shutdown = state.shutdown.subscribe();
         let mut authorization = state.admin_tokens_changed.subscribe();
         let mut updates=state.events.subscribe(state.pool.clone());
         loop {
+            if *shutdown.borrow() { break; }
             authorization.borrow_and_update();
             // Fail closed on database errors. Recheck before each replay/live batch
             // as well as on idle connections, including changes made outside the API.
@@ -407,14 +409,14 @@ fn stream_events(
             updates.borrow_and_update();
             match state.events.read(cursor,job_id.as_deref()) {
                 crate::events::Read::Live(events,watermark)=>{
-                    for event in events {cursor=event.id;yield Ok(Event::default().id(event.id.to_string()).event(event.kind.clone()).data(event.data.clone()));}
+                    for event in events {if *shutdown.borrow() {return;} cursor=event.id;yield Ok(Event::default().id(event.id.to_string()).event(event.kind.clone()).data(event.data.clone()));}
                     cursor=cursor.max(watermark);
                 }
                 crate::events::Read::Replay(until)=>{
                     match crate::events::read_database(&state.pool,cursor,until,job_id.as_deref()).await {
                         Ok(events)=>{
                             let full=events.len()==256;
-                            for event in events {cursor=event.id;yield Ok(Event::default().id(event.id.to_string()).event(event.kind.clone()).data(event.data.clone()));}
+                            for event in events {if *shutdown.borrow() {return;} cursor=event.id;yield Ok(Event::default().id(event.id.to_string()).event(event.kind.clone()).data(event.data.clone()));}
                             if !full {cursor=cursor.max(until);}
                             continue;
                         }
@@ -425,6 +427,7 @@ fn stream_events(
             }
             tokio::select! {
                 biased;
+                _ = shutdown.wait_for(|stopping| *stopping) => break,
                 _ = authorization.changed() => {},
                 changed = updates.changed() => { if changed.is_err() {break;} },
                 _ = tokio::time::sleep(Duration::from_secs(5)) => {},
