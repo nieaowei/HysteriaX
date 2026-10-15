@@ -164,3 +164,40 @@ fn credentials_pagination_rejects_invalid_parameters() {
         assert!(query.validate().is_err());
     }
 }
+
+#[tokio::test]
+async fn directory_status_order_matches_live_summaries_and_bad_expiry_falls_back() {
+    let state = fixture().await;
+    sqlx::query("INSERT INTO credential_versions(credential_id,version,payload_enc,metadata,created_at) SELECT id,2,'unused',jsonb_build_object('expires_at',CASE WHEN id='credential-002' THEN 'invalid' WHEN id='credential-003' THEN to_char(now()-interval '1 day','YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') WHEN id='credential-004' THEN to_char(now()+interval '8 days','YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') ELSE NULL END),now() FROM credentials WHERE id IN ('credential-002','credential-003','credential-004')")
+        .execute(&state.pool).await.unwrap();
+    sqlx::query(
+        "UPDATE credentials SET reminder_at=now()+interval '10 days' WHERE id='credential-002'",
+    )
+    .execute(&state.pool)
+    .await
+    .unwrap();
+    let result = page(
+        &state,
+        json!({"sort":"status","page_size":200,"category":"operations"}),
+    )
+    .await;
+    let entries = result["items"].as_array().unwrap();
+    let statuses = entries
+        .iter()
+        .map(|v| v["status"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert!(statuses.windows(2).all(|pair| pair[0] <= pair[1]));
+    let bad = page(
+        &state,
+        json!({"q":"Same","kind":"ssh_password","page_size":200}),
+    )
+    .await;
+    let fallback = bad["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|v| v["id"] == "credential-002")
+        .unwrap();
+    assert_eq!(fallback["status"], "expiring");
+    assert!(fallback["expires_at"].is_string());
+}

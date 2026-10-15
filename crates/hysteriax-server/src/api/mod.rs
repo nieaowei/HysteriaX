@@ -482,10 +482,14 @@ async fn list_jobs(
 ) -> Result<Json<JobsPage>, ApiError> {
     let (requested_page, page_size, sort, order) = query.validate()?;
     let search = query.q.as_deref().unwrap_or("").trim();
+    let pattern = literal_search_pattern(search);
     // A literal substring search: '%' and '_' must not become SQL wildcards.
-    let filter = "($1 = '' OR strpos(lower(concat_ws(' ', j.id, j.kind, j.stage, j.status, j.node_name, j.node_id, j.resource_name, j.resource_id, j.error_message)), lower($1)) > 0)";
+    let filter = "($1 = '' OR hysteriax_search_text(j.id,j.kind,j.stage,j.status,j.node_name,j.node_id,j.resource_name,j.resource_id,j.error_message) LIKE lower($1) ESCAPE '\\')";
     let mut tx = state.pool.begin().await?;
     sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("SET LOCAL plan_cache_mode=force_custom_plan")
         .execute(&mut *tx)
         .await?;
     let total: i64 = if search.is_empty() {
@@ -494,7 +498,7 @@ async fn list_jobs(
             .await?
     } else {
         sqlx::query_scalar(&format!("SELECT count(*) FROM jobs j WHERE {filter}"))
-            .bind(search)
+            .bind(&pattern)
             .fetch_one(&mut *tx)
             .await?
     };
@@ -502,7 +506,7 @@ async fn list_jobs(
     let page = requested_page.min(page_count);
     // Only validated SQL fragments are interpolated; all user values are bound.
     let rows = sqlx::query(&format!("SELECT j.*, (SELECT child.id FROM jobs child WHERE child.retry_of_job_id=j.id) retry_job_id FROM jobs j WHERE {filter} ORDER BY {sort} {order}, j.id {order} LIMIT $2 OFFSET $3"))
-        .bind(search).bind(page_size).bind((page - 1) * page_size)
+        .bind(&pattern).bind(page_size).bind((page - 1) * page_size)
         .fetch_all(&mut *tx).await?;
     tx.commit().await?;
     Ok(Json(JobsPage {
@@ -601,6 +605,20 @@ impl AuditQuery {
     }
 }
 
+/// Escape LIKE metacharacters while preserving the existing literal substring search.
+pub(crate) fn literal_search_pattern(search: &str) -> String {
+    if search.is_empty() {
+        return String::new();
+    }
+    format!(
+        "%{}%",
+        search
+            .replace('\\', "\\\\")
+            .replace('%', "\\%")
+            .replace('_', "\\_")
+    )
+}
+
 fn audit_matches(value: Option<&str>) -> Vec<&str> {
     value
         .unwrap_or("")
@@ -616,27 +634,37 @@ async fn list_audit_records(
 ) -> Result<Json<Value>, ApiError> {
     let (requested_page, page_size, sort, order) = query.validate()?;
     let search = query.q.as_deref().unwrap_or("").trim();
+    let pattern = literal_search_pattern(search);
     let actions = audit_matches(query.action_matches.as_deref());
     let entity_types = audit_matches(query.entity_type_matches.as_deref());
     let actors = audit_matches(query.actor_matches.as_deref());
     // The client resolves localized display labels to raw codes. All values remain bound.
-    let filter = "($1 = '' OR strpos(lower(concat_ws(' ', a.id, a.action, a.actor, a.entity_type, a.entity_id)), lower($1)) > 0 OR a.action = ANY($2) OR a.entity_type = ANY($3) OR a.actor = ANY($4))";
+    let filter = "($1 = '' OR hysteriax_search_text(a.id,a.action,a.actor,a.entity_type,a.entity_id) LIKE lower($1) ESCAPE '\\' OR a.action = ANY($2) OR a.entity_type = ANY($3) OR a.actor = ANY($4))";
     let mut tx = state.pool.begin().await?;
     sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
         .execute(&mut *tx)
         .await?;
-    let total: i64 = sqlx::query_scalar(&format!(
-        "SELECT count(*) FROM audit_records a WHERE {filter}"
-    ))
-    .bind(search)
-    .bind(&actions)
-    .bind(&entity_types)
-    .bind(&actors)
-    .fetch_one(&mut *tx)
-    .await?;
+    sqlx::query("SET LOCAL plan_cache_mode=force_custom_plan")
+        .execute(&mut *tx)
+        .await?;
+    let total: i64 = if search.is_empty() {
+        sqlx::query_scalar("SELECT total FROM audit_totals WHERE id")
+            .fetch_one(&mut *tx)
+            .await?
+    } else {
+        sqlx::query_scalar(&format!(
+            "SELECT count(*) FROM audit_records a WHERE {filter}"
+        ))
+        .bind(&pattern)
+        .bind(&actions)
+        .bind(&entity_types)
+        .bind(&actors)
+        .fetch_one(&mut *tx)
+        .await?
+    };
     let page = requested_page.min(((total + page_size - 1) / page_size).max(1));
     let rows = sqlx::query(&format!("SELECT a.* FROM audit_records a WHERE {filter} ORDER BY {sort} {order}, a.id {order} LIMIT $5 OFFSET $6"))
-        .bind(search).bind(&actions).bind(&entity_types).bind(&actors).bind(page_size).bind((page - 1) * page_size)
+        .bind(&pattern).bind(&actions).bind(&entity_types).bind(&actors).bind(page_size).bind((page - 1) * page_size)
         .fetch_all(&mut *tx).await?;
     tx.commit().await?;
     let items: Vec<Value> = rows.iter().map(|row| json!({
@@ -1060,3 +1088,6 @@ mod tests {
 
 #[cfg(test)]
 mod backend_cache_tests;
+
+#[cfg(test)]
+mod query_optimizer_tests;

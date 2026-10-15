@@ -1,0 +1,209 @@
+{
+  "image": "query-opt-20261015-v1",
+  "schema": 26,
+  "checks": [
+    "schema_0026",
+    "audit_totals_equal_source",
+    "pg_trgm_installed",
+    "rollup_rebuilds_use_parameterized_ranges",
+    "rollup_deletes_use_tid_lookups",
+    "job_and_audit_search_equal_previous_literal_semantics",
+    "credential_page_size_and_categories_preserved",
+    "exact_quality_history_contract_preserved"
+  ],
+  "rollups": [
+    {
+      "operation": "delete",
+      "target": "traffic_hour_totals",
+      "scans": [
+        {
+          "Node Type": "ModifyTable",
+          "Relation Name": "traffic_hour_totals",
+          "Plan Rows": 0
+        },
+        {
+          "Node Type": "Seq Scan",
+          "Relation Name": "traffic_dirty_hours",
+          "Plan Rows": 6
+        },
+        {
+          "Node Type": "Index Scan",
+          "Relation Name": "traffic_hour_totals",
+          "Index Name": "traffic_hour_window",
+          "Plan Rows": 1
+        },
+        {
+          "Node Type": "Tid Scan",
+          "Relation Name": "traffic_hour_totals",
+          "Plan Rows": 10
+        }
+      ]
+    },
+    {
+      "operation": "rebuild",
+      "source": "traffic_minute_totals",
+      "execution_ms": 0.988,
+      "source_rows": 120.0,
+      "scans": [
+        {
+          "Node Type": "Seq Scan",
+          "Relation Name": "traffic_dirty_hours",
+          "Actual Rows": 5.0,
+          "Actual Loops": 1,
+          "Shared Hit Blocks": 1,
+          "Shared Read Blocks": 0,
+          "Plan Rows": 6
+        },
+        {
+          "Node Type": "Bitmap Heap Scan",
+          "Relation Name": "traffic_minute_totals",
+          "Actual Rows": 24.0,
+          "Actual Loops": 5,
+          "Shared Hit Blocks": 77,
+          "Shared Read Blocks": 0,
+          "Plan Rows": 67
+        }
+      ]
+    },
+    {
+      "operation": "delete",
+      "target": "online_minute_totals",
+      "scans": [
+        {
+          "Node Type": "ModifyTable",
+          "Relation Name": "online_minute_totals",
+          "Plan Rows": 0
+        },
+        {
+          "Node Type": "Seq Scan",
+          "Relation Name": "online_dirty_minutes",
+          "Plan Rows": 1
+        },
+        {
+          "Node Type": "Index Scan",
+          "Relation Name": "online_minute_totals",
+          "Index Name": "online_minute_totals_pkey",
+          "Plan Rows": 1
+        },
+        {
+          "Node Type": "Tid Scan",
+          "Relation Name": "online_minute_totals",
+          "Plan Rows": 10
+        }
+      ]
+    },
+    {
+      "operation": "rebuild",
+      "source": "online_cycle_metrics",
+      "execution_ms": 0.222,
+      "source_rows": 0,
+      "scans": [
+        {
+          "Node Type": "Seq Scan",
+          "Relation Name": "online_dirty_minutes",
+          "Actual Rows": 0.0,
+          "Actual Loops": 1,
+          "Shared Hit Blocks": 1,
+          "Shared Read Blocks": 0,
+          "Plan Rows": 1
+        },
+        {
+          "Node Type": "Index Scan",
+          "Relation Name": "online_cycle_metrics",
+          "Index Name": "online_cycle_window",
+          "Actual Rows": 0,
+          "Actual Loops": 0,
+          "Shared Hit Blocks": 0,
+          "Shared Read Blocks": 0,
+          "Plan Rows": 205
+        }
+      ]
+    }
+  ],
+  "lists": [
+    {
+      "table": "jobs",
+      "query": "empty",
+      "ms": 344.49,
+      "total": 238
+    },
+    {
+      "table": "jobs",
+      "query": "literal_search",
+      "ms": 162.91,
+      "total": 28
+    },
+    {
+      "table": "jobs",
+      "query": "literal_search",
+      "ms": 57.52,
+      "total": 0
+    },
+    {
+      "table": "jobs",
+      "query": "literal_search",
+      "ms": 91.84,
+      "total": 0
+    },
+    {
+      "table": "jobs",
+      "query": "literal_search",
+      "ms": 57.44,
+      "total": 0
+    },
+    {
+      "table": "audit_records",
+      "query": "empty",
+      "ms": 62.26,
+      "total": 447
+    },
+    {
+      "table": "audit_records",
+      "query": "literal_search",
+      "ms": 29.13,
+      "total": 171
+    },
+    {
+      "table": "audit_records",
+      "query": "literal_search",
+      "ms": 67.29,
+      "total": 0
+    },
+    {
+      "table": "audit_records",
+      "query": "literal_search",
+      "ms": 77.48,
+      "total": 0
+    },
+    {
+      "table": "audit_records",
+      "query": "literal_search",
+      "ms": 25.57,
+      "total": 0
+    }
+  ],
+  "rollup_nonempty_queue_observed": true,
+  "indexes": [
+    "audit_action_page",
+    "audit_search_trgm",
+    "credential_name_page",
+    "jobs_search_trgm",
+    "jobs_status_page"
+  ],
+  "local_tests": 201,
+  "strict_clippy": "passed",
+  "populated_upgrade": "passed",
+  "rollback_test": "passed",
+  "api_healthy": true,
+  "billing_unchanged_by_migrations": true,
+  "dependency_containers_preserved": true,
+  "credential_baseline_comparison": {
+    "credential_baseline_comparison": "passed",
+    "queries": 12
+  },
+  "image_archive_sha256": "5827dd6edf8eb6b3f41a2ac6b83cd10f685506fd9c0c0af45e4be573058dd76d",
+  "binary_sha256": "88824428b1b50f1a10a8b2eada831dee3a82d1c478696ecd8d328d3247092adc",
+  "backup_directory": "/home/nieaowei/HysteriaX/backups/query-opt-20261015-v1",
+  "fresh_database_dump_restore": "passed",
+  "rollback_script_backed_up": true
+}

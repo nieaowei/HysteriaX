@@ -1,0 +1,1256 @@
+{
+  "date": "2026-10-15",
+  "timezone": "Asia/Shanghai",
+  "method": "Production read-only EXPLAIN ANALYZE with jit=off, force_custom_plan and 8s statement timeout; no configuration changes",
+  "table_statistics": [
+    {
+      "relname": "traffic_records",
+      "n_live_tup": 534558,
+      "seq_scan": 16919,
+      "seq_tup_read": 5493756125,
+      "idx_scan": 3414
+    },
+    {
+      "relname": "node_network_samples",
+      "n_live_tup": 393061,
+      "seq_scan": 20,
+      "seq_tup_read": 4196359,
+      "idx_scan": 307
+    },
+    {
+      "relname": "online_cycle_metrics",
+      "n_live_tup": 242125,
+      "seq_scan": 4469,
+      "seq_tup_read": 932881241,
+      "idx_scan": 26386
+    },
+    {
+      "relname": "online_samples",
+      "n_live_tup": 194100,
+      "seq_scan": 29,
+      "seq_tup_read": 2522643,
+      "idx_scan": 388931
+    },
+    {
+      "relname": "traffic_minute_totals",
+      "n_live_tup": 133141,
+      "seq_scan": 3130,
+      "seq_tup_read": 396325173,
+      "idx_scan": 242915
+    },
+    {
+      "relname": "online_minute_totals",
+      "n_live_tup": 82437,
+      "seq_scan": 9,
+      "seq_tup_read": 519935,
+      "idx_scan": 43225
+    },
+    {
+      "relname": "proxy_probe_samples",
+      "n_live_tup": 66212,
+      "seq_scan": 74,
+      "seq_tup_read": 4208373,
+      "idx_scan": 104329
+    },
+    {
+      "relname": "probe_minute_totals",
+      "n_live_tup": 66144,
+      "seq_scan": 8,
+      "seq_tup_read": 358033,
+      "idx_scan": 18289
+    },
+    {
+      "relname": "job_events",
+      "n_live_tup": 2430,
+      "seq_scan": 11,
+      "seq_tup_read": 25850,
+      "idx_scan": 956536
+    },
+    {
+      "relname": "traffic_hour_totals",
+      "n_live_tup": 2269,
+      "seq_scan": 167,
+      "seq_tup_read": 345881,
+      "idx_scan": 62366
+    },
+    {
+      "relname": "audit_records",
+      "n_live_tup": 447,
+      "seq_scan": 17217,
+      "seq_tup_read": 7536936,
+      "idx_scan": 17107
+    },
+    {
+      "relname": "job_cache_versions",
+      "n_live_tup": 238,
+      "seq_scan": 11,
+      "seq_tup_read": 2380,
+      "idx_scan": 0
+    },
+    {
+      "relname": "jobs",
+      "n_live_tup": 238,
+      "seq_scan": 68536,
+      "seq_tup_read": 16102543,
+      "idx_scan": 4666934
+    },
+    {
+      "relname": "job_retry_chain_members",
+      "n_live_tup": 238,
+      "seq_scan": 4,
+      "seq_tup_read": 0,
+      "idx_scan": 238
+    },
+    {
+      "relname": "data_gaps",
+      "n_live_tup": 109,
+      "seq_scan": 315209,
+      "seq_tup_read": 18753932,
+      "idx_scan": 0
+    },
+    {
+      "relname": "dns_operations",
+      "n_live_tup": 108,
+      "seq_scan": 16,
+      "seq_tup_read": 1628,
+      "idx_scan": 42
+    },
+    {
+      "relname": "credential_reference_edges",
+      "n_live_tup": 60,
+      "seq_scan": 125,
+      "seq_tup_read": 7380,
+      "idx_scan": 47
+    },
+    {
+      "relname": "dns_records",
+      "n_live_tup": 51,
+      "seq_scan": 200281,
+      "seq_tup_read": 10076448,
+      "idx_scan": 15892
+    },
+    {
+      "relname": "config_versions",
+      "n_live_tup": 42,
+      "seq_scan": 228416,
+      "seq_tup_read": 8647252,
+      "idx_scan": 0
+    },
+    {
+      "relname": "node_assignments",
+      "n_live_tup": 30,
+      "seq_scan": 841640,
+      "seq_tup_read": 26471458,
+      "idx_scan": 0
+    },
+    {
+      "relname": "job_retry_chain_state",
+      "n_live_tup": 27,
+      "seq_scan": 1577,
+      "seq_tup_read": 42498,
+      "idx_scan": 0
+    },
+    {
+      "relname": "job_failed_minute_totals",
+      "n_live_tup": 26,
+      "seq_scan": 1,
+      "seq_tup_read": 0,
+      "idx_scan": 1574
+    },
+    {
+      "relname": "_sqlx_migrations",
+      "n_live_tup": 24,
+      "seq_scan": 143,
+      "seq_tup_read": 2353,
+      "idx_scan": 0
+    },
+    {
+      "relname": "traffic_baselines",
+      "n_live_tup": 20,
+      "seq_scan": 422601,
+      "seq_tup_read": 8696409,
+      "idx_scan": 407850
+    },
+    {
+      "relname": "user_node_usage",
+      "n_live_tup": 20,
+      "seq_scan": 51,
+      "seq_tup_read": 1000,
+      "idx_scan": 84983
+    },
+    {
+      "relname": "cache_domain_versions",
+      "n_live_tup": 15,
+      "seq_scan": 984364,
+      "seq_tup_read": 14765445,
+      "idx_scan": 122
+    },
+    {
+      "relname": "kick_requests",
+      "n_live_tup": 10,
+      "seq_scan": 465394,
+      "seq_tup_read": 4939248,
+      "idx_scan": 6
+    },
+    {
+      "relname": "job_node_kick_totals",
+      "n_live_tup": 10,
+      "seq_scan": 1662,
+      "seq_tup_read": 16610,
+      "idx_scan": 39
+    },
+    {
+      "relname": "credentials",
+      "n_live_tup": 10,
+      "seq_scan": 739817,
+      "seq_tup_read": 9238543,
+      "idx_scan": 86683
+    },
+    {
+      "relname": "credential_versions",
+      "n_live_tup": 10,
+      "seq_scan": 664566,
+      "seq_tup_read": 8862155,
+      "idx_scan": 0
+    },
+    {
+      "relname": "users",
+      "n_live_tup": 7,
+      "seq_scan": 1603369,
+      "seq_tup_read": 9963075,
+      "idx_scan": 10058
+    },
+    {
+      "relname": "subscription_credentials",
+      "n_live_tup": 6,
+      "seq_scan": 17760,
+      "seq_tup_read": 105444,
+      "idx_scan": 0
+    },
+    {
+      "relname": "authorization_group_users",
+      "n_live_tup": 6,
+      "seq_scan": 1369947,
+      "seq_tup_read": 8149800,
+      "idx_scan": 0
+    },
+    {
+      "relname": "traffic_dirty_hours",
+      "n_live_tup": 5,
+      "seq_scan": 20274,
+      "seq_tup_read": 148225,
+      "idx_scan": 9813022
+    },
+    {
+      "relname": "node_packages",
+      "n_live_tup": 5,
+      "seq_scan": 7653692,
+      "seq_tup_read": 40788288,
+      "idx_scan": 2766012
+    },
+    {
+      "relname": "dns_bindings",
+      "n_live_tup": 5,
+      "seq_scan": 1338486,
+      "seq_tup_read": 6695223,
+      "idx_scan": 1
+    },
+    {
+      "relname": "nodes",
+      "n_live_tup": 5,
+      "seq_scan": 1900361,
+      "seq_tup_read": 9495397,
+      "idx_scan": 2004297
+    },
+    {
+      "relname": "monitoring_probe_state",
+      "n_live_tup": 5,
+      "seq_scan": 111451,
+      "seq_tup_read": 596572,
+      "idx_scan": 55740
+    },
+    {
+      "relname": "authorization_group_nodes",
+      "n_live_tup": 5,
+      "seq_scan": 1124727,
+      "seq_tup_read": 3589083,
+      "idx_scan": 0
+    },
+    {
+      "relname": "monitoring_leases",
+      "n_live_tup": 5,
+      "seq_scan": 14,
+      "seq_tup_read": 81,
+      "idx_scan": 46279
+    },
+    {
+      "relname": "job_status_totals",
+      "n_live_tup": 4,
+      "seq_scan": 255,
+      "seq_tup_read": 1016,
+      "idx_scan": 3148
+    },
+    {
+      "relname": "dns_zones",
+      "n_live_tup": 2,
+      "seq_scan": 37736,
+      "seq_tup_read": 75111,
+      "idx_scan": 0
+    },
+    {
+      "relname": "credential_migrations",
+      "n_live_tup": 2,
+      "seq_scan": 54,
+      "seq_tup_read": 86,
+      "idx_scan": 0
+    },
+    {
+      "relname": "batch_cache_versions",
+      "n_live_tup": 1,
+      "seq_scan": 1,
+      "seq_tup_read": 0,
+      "idx_scan": 2
+    },
+    {
+      "relname": "dns_connections",
+      "n_live_tup": 1,
+      "seq_scan": 35029,
+      "seq_tup_read": 35029,
+      "idx_scan": 0
+    },
+    {
+      "relname": "authorization_groups",
+      "n_live_tup": 1,
+      "seq_scan": 1351727,
+      "seq_tup_read": 1351727,
+      "idx_scan": 0
+    },
+    {
+      "relname": "authorization_group_previews",
+      "n_live_tup": 1,
+      "seq_scan": 20,
+      "seq_tup_read": 20,
+      "idx_scan": 0
+    },
+    {
+      "relname": "node_alerts",
+      "n_live_tup": 1,
+      "seq_scan": 3187281,
+      "seq_tup_read": 5247337,
+      "idx_scan": 0
+    },
+    {
+      "relname": "cache_generation",
+      "n_live_tup": 1,
+      "seq_scan": 1737079,
+      "seq_tup_read": 1737078,
+      "idx_scan": 942
+    },
+    {
+      "relname": "admin_tokens",
+      "n_live_tup": 1,
+      "seq_scan": 530943,
+      "seq_tup_read": 530943,
+      "idx_scan": 0
+    },
+    {
+      "relname": "analytics_dirty_cycles",
+      "n_live_tup": 0,
+      "seq_scan": 30792,
+      "seq_tup_read": 71105,
+      "idx_scan": 80392
+    },
+    {
+      "relname": "dns_credential_batch_items",
+      "n_live_tup": 0,
+      "seq_scan": 14,
+      "seq_tup_read": 0,
+      "idx_scan": 5
+    },
+    {
+      "relname": "credential_reference_dirty",
+      "n_live_tup": 0,
+      "seq_scan": 135,
+      "seq_tup_read": 0,
+      "idx_scan": 48
+    },
+    {
+      "relname": "credential_batch_items",
+      "n_live_tup": 0,
+      "seq_scan": 23,
+      "seq_tup_read": 23,
+      "idx_scan": 0
+    },
+    {
+      "relname": "credential_batches",
+      "n_live_tup": 0,
+      "seq_scan": 172,
+      "seq_tup_read": 106,
+      "idx_scan": 0
+    },
+    {
+      "relname": "online_dirty_minutes",
+      "n_live_tup": 0,
+      "seq_scan": 104739,
+      "seq_tup_read": 89799,
+      "idx_scan": 1565226
+    },
+    {
+      "relname": "monitoring_probe_tokens",
+      "n_live_tup": 0,
+      "seq_scan": 90133,
+      "seq_tup_read": 294647,
+      "idx_scan": 50439
+    },
+    {
+      "relname": "config_resources",
+      "n_live_tup": 0,
+      "seq_scan": 13,
+      "seq_tup_read": 0,
+      "idx_scan": 7
+    },
+    {
+      "relname": "deployment_probe_tokens",
+      "n_live_tup": 0,
+      "seq_scan": 11,
+      "seq_tup_read": 0,
+      "idx_scan": 48138
+    },
+    {
+      "relname": "job_retry_state_dirty",
+      "n_live_tup": 0,
+      "seq_scan": 11353,
+      "seq_tup_read": 479,
+      "idx_scan": 0
+    }
+  ],
+  "plans": [
+    {
+      "query": "audit_total",
+      "execution_ms": 74.441,
+      "scans": [
+        {
+          "Node Type": "Seq Scan",
+          "Relation Name": "audit_records",
+          "Actual Rows": 447.0,
+          "Actual Loops": 1,
+          "Shared Hit Blocks": 6,
+          "Shared Read Blocks": 12
+        }
+      ]
+    },
+    {
+      "query": "audit_search",
+      "execution_ms": 1.119,
+      "scans": [
+        {
+          "Node Type": "Seq Scan",
+          "Relation Name": "audit_records",
+          "Actual Rows": 171.0,
+          "Actual Loops": 1,
+          "Rows Removed by Filter": 276,
+          "Shared Hit Blocks": 18,
+          "Shared Read Blocks": 0
+        }
+      ]
+    },
+    {
+      "query": "jobs_search",
+      "execution_ms": 102.36,
+      "scans": [
+        {
+          "Node Type": "Seq Scan",
+          "Relation Name": "jobs",
+          "Actual Rows": 28.0,
+          "Actual Loops": 1,
+          "Rows Removed by Filter": 210,
+          "Shared Hit Blocks": 0,
+          "Shared Read Blocks": 29
+        }
+      ]
+    },
+    {
+      "query": "jobs_default_page",
+      "execution_ms": 18.647,
+      "scans": [
+        {
+          "Node Type": "Index Scan",
+          "Relation Name": "jobs",
+          "Index Name": "jobs_created_id_idx",
+          "Actual Rows": 50.0,
+          "Actual Loops": 1,
+          "Shared Hit Blocks": 80,
+          "Shared Read Blocks": 2
+        },
+        {
+          "Node Type": "Index Scan",
+          "Relation Name": "jobs",
+          "Index Name": "jobs_retry_parent_idx",
+          "Actual Rows": 0.04,
+          "Actual Loops": 50,
+          "Shared Hit Blocks": 52,
+          "Shared Read Blocks": 0
+        }
+      ]
+    },
+    {
+      "query": "jobs_status_page",
+      "execution_ms": 58.143,
+      "scans": [
+        {
+          "Node Type": "Index Scan",
+          "Relation Name": "jobs",
+          "Index Name": "jobs_status_available_idx",
+          "Actual Rows": 238.0,
+          "Actual Loops": 1,
+          "Shared Hit Blocks": 181,
+          "Shared Read Blocks": 2
+        },
+        {
+          "Node Type": "Index Scan",
+          "Relation Name": "jobs",
+          "Index Name": "jobs_retry_parent_idx",
+          "Actual Rows": 0.12,
+          "Actual Loops": 50,
+          "Shared Hit Blocks": 56,
+          "Shared Read Blocks": 0
+        }
+      ]
+    },
+    {
+      "query": "audit_action_page",
+      "execution_ms": 0.649,
+      "scans": [
+        {
+          "Node Type": "Seq Scan",
+          "Relation Name": "audit_records",
+          "Actual Rows": 447.0,
+          "Actual Loops": 1,
+          "Shared Hit Blocks": 18,
+          "Shared Read Blocks": 0
+        }
+      ]
+    },
+    {
+      "query": "credential_catalog",
+      "execution_ms": 0.491,
+      "scans": [
+        {
+          "Node Type": "Seq Scan",
+          "Relation Name": "credential_versions",
+          "Actual Rows": 10.0,
+          "Actual Loops": 1,
+          "Shared Hit Blocks": 1,
+          "Shared Read Blocks": 0
+        },
+        {
+          "Node Type": "Seq Scan",
+          "Relation Name": "credentials",
+          "Actual Rows": 10.0,
+          "Actual Loops": 1,
+          "Shared Hit Blocks": 1,
+          "Shared Read Blocks": 0
+        }
+      ]
+    },
+    {
+      "query": "refresh_hour_totals",
+      "execution_ms": 535.486,
+      "scans": [
+        {
+          "Node Type": "Seq Scan",
+          "Relation Name": "traffic_minute_totals",
+          "Actual Rows": 66570.5,
+          "Actual Loops": 2,
+          "Shared Hit Blocks": 2261,
+          "Shared Read Blocks": 0
+        },
+        {
+          "Node Type": "Seq Scan",
+          "Relation Name": "traffic_dirty_hours",
+          "Actual Rows": 5.0,
+          "Actual Loops": 1,
+          "Shared Hit Blocks": 1,
+          "Shared Read Blocks": 0
+        }
+      ]
+    },
+    {
+      "query": "refresh_online_minutes",
+      "execution_ms": 15.601,
+      "scans": [
+        {
+          "Node Type": "Seq Scan",
+          "Relation Name": "online_cycle_metrics",
+          "Actual Rows": 1.0,
+          "Actual Loops": 3,
+          "Shared Hit Blocks": 6,
+          "Shared Read Blocks": 0
+        },
+        {
+          "Node Type": "Seq Scan",
+          "Relation Name": "online_dirty_minutes",
+          "Actual Rows": 0.0,
+          "Actual Loops": 3,
+          "Shared Hit Blocks": 3,
+          "Shared Read Blocks": 0
+        }
+      ]
+    },
+    {
+      "query": "expiration_scan",
+      "execution_ms": 0.053,
+      "scans": [
+        {
+          "Node Type": "Seq Scan",
+          "Relation Name": "users",
+          "Actual Rows": 0.0,
+          "Actual Loops": 1,
+          "Rows Removed by Filter": 7,
+          "Shared Hit Blocks": 1,
+          "Shared Read Blocks": 0
+        }
+      ]
+    },
+    {
+      "query": "probe_retention",
+      "execution_ms": 0.077,
+      "scans": [
+        {
+          "Node Type": "Index Scan",
+          "Relation Name": "proxy_probe_samples",
+          "Index Name": "proxy_probe_samples_time_idx",
+          "Actual Rows": 0.0,
+          "Actual Loops": 1,
+          "Shared Hit Blocks": 2,
+          "Shared Read Blocks": 0
+        }
+      ]
+    },
+    {
+      "query": "online_retention",
+      "execution_ms": 0.073,
+      "scans": [
+        {
+          "Node Type": "Index Scan",
+          "Relation Name": "online_samples",
+          "Index Name": "online_samples_time_idx",
+          "Actual Rows": 0.0,
+          "Actual Loops": 1,
+          "Shared Hit Blocks": 3,
+          "Shared Read Blocks": 0
+        }
+      ]
+    },
+    {
+      "query": "traffic_users_1d_aligned",
+      "execution_ms": 1.454,
+      "scans": [
+        {
+          "Node Type": "Index Scan",
+          "Relation Name": "traffic_hour_totals",
+          "Index Name": "traffic_hour_window",
+          "Actual Rows": 5.0,
+          "Actual Loops": 24,
+          "Shared Hit Blocks": 103,
+          "Shared Read Blocks": 0
+        },
+        {
+          "Node Type": "Seq Scan",
+          "Relation Name": "traffic_dirty_hours",
+          "Actual Rows": 0.0,
+          "Actual Loops": 1,
+          "Rows Removed by Filter": 5,
+          "Shared Hit Blocks": 1,
+          "Shared Read Blocks": 0
+        },
+        {
+          "Node Type": "Seq Scan",
+          "Relation Name": "traffic_dirty_hours",
+          "Actual Rows": 0.0,
+          "Actual Loops": 1,
+          "Rows Removed by Filter": 5,
+          "Shared Hit Blocks": 1,
+          "Shared Read Blocks": 0
+        },
+        {
+          "Node Type": "Bitmap Heap Scan",
+          "Relation Name": "traffic_minute_totals",
+          "Actual Rows": 0,
+          "Actual Loops": 0,
+          "Rows Removed by Filter": 0,
+          "Shared Hit Blocks": 0,
+          "Shared Read Blocks": 0
+        },
+        {
+          "Node Type": "Index Scan",
+          "Relation Name": "traffic_records",
+          "Index Name": "traffic_records_time_idx",
+          "Actual Rows": 0,
+          "Actual Loops": 0,
+          "Shared Hit Blocks": 0,
+          "Shared Read Blocks": 0
+        }
+      ]
+    },
+    {
+      "query": "traffic_users_7d_aligned",
+      "execution_ms": 2.403,
+      "scans": [
+        {
+          "Node Type": "Index Scan",
+          "Relation Name": "traffic_hour_totals",
+          "Index Name": "traffic_hour_window",
+          "Actual Rows": 112.0,
+          "Actual Loops": 7,
+          "Shared Hit Blocks": 739,
+          "Shared Read Blocks": 0
+        },
+        {
+          "Node Type": "Seq Scan",
+          "Relation Name": "traffic_dirty_hours",
+          "Actual Rows": 0.0,
+          "Actual Loops": 1,
+          "Rows Removed by Filter": 5,
+          "Shared Hit Blocks": 1,
+          "Shared Read Blocks": 0
+        },
+        {
+          "Node Type": "Seq Scan",
+          "Relation Name": "traffic_dirty_hours",
+          "Actual Rows": 0.0,
+          "Actual Loops": 1,
+          "Rows Removed by Filter": 5,
+          "Shared Hit Blocks": 1,
+          "Shared Read Blocks": 0
+        },
+        {
+          "Node Type": "Bitmap Heap Scan",
+          "Relation Name": "traffic_minute_totals",
+          "Actual Rows": 0,
+          "Actual Loops": 0,
+          "Rows Removed by Filter": 0,
+          "Shared Hit Blocks": 0,
+          "Shared Read Blocks": 0
+        },
+        {
+          "Node Type": "Index Scan",
+          "Relation Name": "traffic_records",
+          "Index Name": "traffic_records_time_idx",
+          "Actual Rows": 0,
+          "Actual Loops": 0,
+          "Shared Hit Blocks": 0,
+          "Shared Read Blocks": 0
+        }
+      ]
+    },
+    {
+      "query": "traffic_users_30d_aligned",
+      "execution_ms": 2.946,
+      "scans": [
+        {
+          "Node Type": "Index Scan",
+          "Relation Name": "traffic_hour_totals",
+          "Index Name": "traffic_hour_window",
+          "Actual Rows": 37.03,
+          "Actual Loops": 30,
+          "Shared Hit Blocks": 1081,
+          "Shared Read Blocks": 0
+        },
+        {
+          "Node Type": "Seq Scan",
+          "Relation Name": "traffic_dirty_hours",
+          "Actual Rows": 0.0,
+          "Actual Loops": 1,
+          "Rows Removed by Filter": 5,
+          "Shared Hit Blocks": 1,
+          "Shared Read Blocks": 0
+        },
+        {
+          "Node Type": "Seq Scan",
+          "Relation Name": "traffic_dirty_hours",
+          "Actual Rows": 0.0,
+          "Actual Loops": 1,
+          "Rows Removed by Filter": 5,
+          "Shared Hit Blocks": 1,
+          "Shared Read Blocks": 0
+        },
+        {
+          "Node Type": "Bitmap Heap Scan",
+          "Relation Name": "traffic_minute_totals",
+          "Actual Rows": 0,
+          "Actual Loops": 0,
+          "Rows Removed by Filter": 0,
+          "Shared Hit Blocks": 0,
+          "Shared Read Blocks": 0
+        },
+        {
+          "Node Type": "Index Scan",
+          "Relation Name": "traffic_records",
+          "Index Name": "traffic_records_time_idx",
+          "Actual Rows": 0,
+          "Actual Loops": 0,
+          "Shared Hit Blocks": 0,
+          "Shared Read Blocks": 0
+        }
+      ]
+    },
+    {
+      "query": "traffic_network_1d_aligned",
+      "execution_ms": 2.872,
+      "scans": [
+        {
+          "Node Type": "Index Scan",
+          "Relation Name": "traffic_hour_totals",
+          "Index Name": "traffic_hour_window",
+          "Actual Rows": 5.0,
+          "Actual Loops": 24,
+          "Shared Hit Blocks": 90,
+          "Shared Read Blocks": 0
+        },
+        {
+          "Node Type": "Seq Scan",
+          "Relation Name": "traffic_dirty_hours",
+          "Actual Rows": 5.0,
+          "Actual Loops": 1,
+          "Rows Removed by Filter": 0,
+          "Shared Hit Blocks": 1,
+          "Shared Read Blocks": 0
+        },
+        {
+          "Node Type": "Seq Scan",
+          "Relation Name": "traffic_dirty_hours",
+          "Actual Rows": 5.0,
+          "Actual Loops": 1,
+          "Rows Removed by Filter": 0,
+          "Shared Hit Blocks": 1,
+          "Shared Read Blocks": 0
+        },
+        {
+          "Node Type": "Index Scan",
+          "Relation Name": "traffic_minute_totals",
+          "Index Name": "traffic_minute_window",
+          "Actual Rows": 0,
+          "Actual Loops": 0,
+          "Rows Removed by Filter": 0,
+          "Shared Hit Blocks": 0,
+          "Shared Read Blocks": 0
+        },
+        {
+          "Node Type": "Index Scan",
+          "Relation Name": "node_network_samples",
+          "Index Name": "node_network_samples_time_idx",
+          "Actual Rows": 0,
+          "Actual Loops": 0,
+          "Shared Hit Blocks": 0,
+          "Shared Read Blocks": 0
+        }
+      ]
+    },
+    {
+      "query": "traffic_network_7d_aligned",
+      "execution_ms": 2.252,
+      "scans": [
+        {
+          "Node Type": "Index Scan",
+          "Relation Name": "traffic_hour_totals",
+          "Index Name": "traffic_hour_window",
+          "Actual Rows": 115.0,
+          "Actual Loops": 7,
+          "Shared Hit Blocks": 752,
+          "Shared Read Blocks": 0
+        },
+        {
+          "Node Type": "Seq Scan",
+          "Relation Name": "traffic_dirty_hours",
+          "Actual Rows": 5.0,
+          "Actual Loops": 1,
+          "Rows Removed by Filter": 0,
+          "Shared Hit Blocks": 1,
+          "Shared Read Blocks": 0
+        },
+        {
+          "Node Type": "Seq Scan",
+          "Relation Name": "traffic_dirty_hours",
+          "Actual Rows": 5.0,
+          "Actual Loops": 1,
+          "Rows Removed by Filter": 0,
+          "Shared Hit Blocks": 1,
+          "Shared Read Blocks": 0
+        },
+        {
+          "Node Type": "Bitmap Heap Scan",
+          "Relation Name": "traffic_minute_totals",
+          "Actual Rows": 0,
+          "Actual Loops": 0,
+          "Rows Removed by Filter": 0,
+          "Shared Hit Blocks": 0,
+          "Shared Read Blocks": 0
+        },
+        {
+          "Node Type": "Index Scan",
+          "Relation Name": "node_network_samples",
+          "Index Name": "node_network_samples_time_idx",
+          "Actual Rows": 0,
+          "Actual Loops": 0,
+          "Shared Hit Blocks": 0,
+          "Shared Read Blocks": 0
+        }
+      ]
+    },
+    {
+      "query": "traffic_network_30d_aligned",
+      "execution_ms": 2.874,
+      "scans": [
+        {
+          "Node Type": "Index Scan",
+          "Relation Name": "traffic_hour_totals",
+          "Index Name": "traffic_hour_window",
+          "Actual Rows": 37.6,
+          "Actual Loops": 30,
+          "Shared Hit Blocks": 1105,
+          "Shared Read Blocks": 0
+        },
+        {
+          "Node Type": "Seq Scan",
+          "Relation Name": "traffic_dirty_hours",
+          "Actual Rows": 5.0,
+          "Actual Loops": 1,
+          "Rows Removed by Filter": 0,
+          "Shared Hit Blocks": 1,
+          "Shared Read Blocks": 0
+        },
+        {
+          "Node Type": "Seq Scan",
+          "Relation Name": "traffic_dirty_hours",
+          "Actual Rows": 5.0,
+          "Actual Loops": 1,
+          "Rows Removed by Filter": 0,
+          "Shared Hit Blocks": 1,
+          "Shared Read Blocks": 0
+        },
+        {
+          "Node Type": "Index Scan",
+          "Relation Name": "traffic_minute_totals",
+          "Index Name": "traffic_minute_window",
+          "Actual Rows": 0,
+          "Actual Loops": 0,
+          "Rows Removed by Filter": 0,
+          "Shared Hit Blocks": 0,
+          "Shared Read Blocks": 0
+        },
+        {
+          "Node Type": "Index Scan",
+          "Relation Name": "node_network_samples",
+          "Index Name": "node_network_samples_time_idx",
+          "Actual Rows": 0,
+          "Actual Loops": 0,
+          "Shared Hit Blocks": 0,
+          "Shared Read Blocks": 0
+        }
+      ]
+    },
+    {
+      "query": "probe_1d",
+      "execution_ms": 16.577,
+      "scans": [
+        {
+          "Node Type": "Index Scan",
+          "Relation Name": "probe_minute_totals",
+          "Index Name": "probe_minute_window",
+          "Actual Rows": 298.12,
+          "Actual Loops": 24,
+          "Shared Hit Blocks": 3426,
+          "Shared Read Blocks": 0
+        },
+        {
+          "Node Type": "Bitmap Heap Scan",
+          "Relation Name": "proxy_probe_samples",
+          "Actual Rows": 0,
+          "Actual Loops": 0,
+          "Rows Removed by Filter": 0,
+          "Shared Hit Blocks": 0,
+          "Shared Read Blocks": 0
+        },
+        {
+          "Node Type": "Bitmap Heap Scan",
+          "Relation Name": "proxy_probe_samples",
+          "Actual Rows": 7143.0,
+          "Actual Loops": 1,
+          "Rows Removed by Filter": 12,
+          "Shared Hit Blocks": 496,
+          "Shared Read Blocks": 0
+        }
+      ]
+    },
+    {
+      "query": "probe_7d",
+      "execution_ms": 1916.778,
+      "scans": [
+        {
+          "Node Type": "Bitmap Heap Scan",
+          "Relation Name": "probe_minute_totals",
+          "Actual Rows": 6761.71,
+          "Actual Loops": 7,
+          "Shared Hit Blocks": 4538,
+          "Shared Read Blocks": 429
+        },
+        {
+          "Node Type": "Bitmap Heap Scan",
+          "Relation Name": "proxy_probe_samples",
+          "Actual Rows": 0,
+          "Actual Loops": 0,
+          "Rows Removed by Filter": 0,
+          "Shared Hit Blocks": 0,
+          "Shared Read Blocks": 0
+        },
+        {
+          "Node Type": "Seq Scan",
+          "Relation Name": "proxy_probe_samples",
+          "Actual Rows": 47260.0,
+          "Actual Loops": 1,
+          "Rows Removed by Filter": 18952,
+          "Shared Hit Blocks": 1414,
+          "Shared Read Blocks": 4
+        }
+      ]
+    },
+    {
+      "query": "probe_30d",
+      "execution_ms": 238.264,
+      "scans": [
+        {
+          "Node Type": "Index Scan",
+          "Relation Name": "probe_minute_totals",
+          "Index Name": "probe_minute_window",
+          "Actual Rows": 2203.13,
+          "Actual Loops": 30,
+          "Shared Hit Blocks": 61984,
+          "Shared Read Blocks": 202
+        },
+        {
+          "Node Type": "Bitmap Heap Scan",
+          "Relation Name": "proxy_probe_samples",
+          "Actual Rows": 0,
+          "Actual Loops": 0,
+          "Rows Removed by Filter": 0,
+          "Shared Hit Blocks": 0,
+          "Shared Read Blocks": 0
+        },
+        {
+          "Node Type": "Seq Scan",
+          "Relation Name": "proxy_probe_samples",
+          "Actual Rows": 65747.0,
+          "Actual Loops": 1,
+          "Rows Removed by Filter": 465,
+          "Shared Hit Blocks": 1418,
+          "Shared Read Blocks": 0
+        }
+      ]
+    },
+    {
+      "query": "traffic_users_7d_edge_0s",
+      "execution_ms": 357.107,
+      "scans": [
+        {
+          "Node Type": "Index Scan",
+          "Relation Name": "traffic_hour_totals",
+          "Index Name": "traffic_hour_window",
+          "Actual Rows": 107.14,
+          "Actual Loops": 7,
+          "Shared Hit Blocks": 700,
+          "Shared Read Blocks": 0
+        },
+        {
+          "Node Type": "Seq Scan",
+          "Relation Name": "traffic_dirty_hours",
+          "Actual Rows": 0.0,
+          "Actual Loops": 1,
+          "Rows Removed by Filter": 1,
+          "Shared Hit Blocks": 1,
+          "Shared Read Blocks": 0
+        },
+        {
+          "Node Type": "Seq Scan",
+          "Relation Name": "traffic_dirty_hours",
+          "Actual Rows": 0.0,
+          "Actual Loops": 1,
+          "Rows Removed by Filter": 1,
+          "Shared Hit Blocks": 1,
+          "Shared Read Blocks": 0
+        },
+        {
+          "Node Type": "Bitmap Heap Scan",
+          "Relation Name": "traffic_minute_totals",
+          "Actual Rows": 145.71,
+          "Actual Loops": 14,
+          "Rows Removed by Filter": 0,
+          "Shared Hit Blocks": 594,
+          "Shared Read Blocks": 68
+        },
+        {
+          "Node Type": "Index Scan",
+          "Relation Name": "traffic_records",
+          "Index Name": "traffic_records_time_idx",
+          "Actual Rows": 0,
+          "Actual Loops": 0,
+          "Shared Hit Blocks": 0,
+          "Shared Read Blocks": 0
+        }
+      ]
+    },
+    {
+      "query": "traffic_users_7d_edge_17s",
+      "execution_ms": 749.754,
+      "scans": [
+        {
+          "Node Type": "Index Scan",
+          "Relation Name": "traffic_hour_totals",
+          "Index Name": "traffic_hour_window",
+          "Actual Rows": 107.14,
+          "Actual Loops": 7,
+          "Shared Hit Blocks": 700,
+          "Shared Read Blocks": 0
+        },
+        {
+          "Node Type": "Seq Scan",
+          "Relation Name": "traffic_dirty_hours",
+          "Actual Rows": 0.0,
+          "Actual Loops": 1,
+          "Rows Removed by Filter": 2,
+          "Shared Hit Blocks": 1,
+          "Shared Read Blocks": 0
+        },
+        {
+          "Node Type": "Seq Scan",
+          "Relation Name": "traffic_dirty_hours",
+          "Actual Rows": 0.0,
+          "Actual Loops": 1,
+          "Rows Removed by Filter": 2,
+          "Shared Hit Blocks": 1,
+          "Shared Read Blocks": 0
+        },
+        {
+          "Node Type": "Bitmap Heap Scan",
+          "Relation Name": "traffic_minute_totals",
+          "Actual Rows": 143.29,
+          "Actual Loops": 14,
+          "Rows Removed by Filter": 0,
+          "Shared Hit Blocks": 662,
+          "Shared Read Blocks": 0
+        },
+        {
+          "Node Type": "Index Scan",
+          "Relation Name": "traffic_records",
+          "Index Name": "traffic_records_time_idx",
+          "Actual Rows": 20.86,
+          "Actual Loops": 14,
+          "Shared Hit Blocks": 67,
+          "Shared Read Blocks": 75
+        }
+      ]
+    },
+    {
+      "query": "traffic_network_7d_edge_0s",
+      "execution_ms": 274.26,
+      "scans": [
+        {
+          "Node Type": "Index Scan",
+          "Relation Name": "traffic_hour_totals",
+          "Index Name": "traffic_hour_window",
+          "Actual Rows": 110.0,
+          "Actual Loops": 7,
+          "Shared Hit Blocks": 712,
+          "Shared Read Blocks": 0
+        },
+        {
+          "Node Type": "Seq Scan",
+          "Relation Name": "traffic_dirty_hours",
+          "Actual Rows": 5.0,
+          "Actual Loops": 1,
+          "Rows Removed by Filter": 0,
+          "Shared Hit Blocks": 1,
+          "Shared Read Blocks": 0
+        },
+        {
+          "Node Type": "Seq Scan",
+          "Relation Name": "traffic_dirty_hours",
+          "Actual Rows": 5.0,
+          "Actual Loops": 1,
+          "Rows Removed by Filter": 0,
+          "Shared Hit Blocks": 1,
+          "Shared Read Blocks": 0
+        },
+        {
+          "Node Type": "Bitmap Heap Scan",
+          "Relation Name": "traffic_minute_totals",
+          "Actual Rows": 150.0,
+          "Actual Loops": 14,
+          "Rows Removed by Filter": 0,
+          "Shared Hit Blocks": 186,
+          "Shared Read Blocks": 34
+        },
+        {
+          "Node Type": "Index Scan",
+          "Relation Name": "node_network_samples",
+          "Index Name": "node_network_samples_time_idx",
+          "Actual Rows": 0,
+          "Actual Loops": 0,
+          "Shared Hit Blocks": 0,
+          "Shared Read Blocks": 0
+        }
+      ]
+    },
+    {
+      "query": "traffic_network_7d_edge_17s",
+      "execution_ms": 528.966,
+      "scans": [
+        {
+          "Node Type": "Index Scan",
+          "Relation Name": "traffic_hour_totals",
+          "Index Name": "traffic_hour_window",
+          "Actual Rows": 110.0,
+          "Actual Loops": 7,
+          "Shared Hit Blocks": 712,
+          "Shared Read Blocks": 0
+        },
+        {
+          "Node Type": "Seq Scan",
+          "Relation Name": "traffic_dirty_hours",
+          "Actual Rows": 5.0,
+          "Actual Loops": 1,
+          "Rows Removed by Filter": 0,
+          "Shared Hit Blocks": 1,
+          "Shared Read Blocks": 0
+        },
+        {
+          "Node Type": "Seq Scan",
+          "Relation Name": "traffic_dirty_hours",
+          "Actual Rows": 5.0,
+          "Actual Loops": 1,
+          "Rows Removed by Filter": 0,
+          "Shared Hit Blocks": 1,
+          "Shared Read Blocks": 0
+        },
+        {
+          "Node Type": "Bitmap Heap Scan",
+          "Relation Name": "traffic_minute_totals",
+          "Actual Rows": 147.5,
+          "Actual Loops": 14,
+          "Rows Removed by Filter": 0,
+          "Shared Hit Blocks": 217,
+          "Shared Read Blocks": 0
+        },
+        {
+          "Node Type": "Index Scan",
+          "Relation Name": "node_network_samples",
+          "Index Name": "node_network_samples_time_idx",
+          "Actual Rows": 15.14,
+          "Actual Loops": 14,
+          "Shared Hit Blocks": 161,
+          "Shared Read Blocks": 80
+        }
+      ]
+    }
+  ]
+}

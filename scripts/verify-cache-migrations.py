@@ -24,11 +24,14 @@ def main():
         connection.execute("INSERT INTO jobs(id,node_id,node_name,kind,status,stage,payload_json,available_at,created_at,updated_at,finished_at,error_message) VALUES('root','n','Node','kick','failed','failed','{\"node_limit\":true}',now(),now(),now(),now(),'initial')")
         connection.execute("INSERT INTO jobs(id,node_id,node_name,kind,status,stage,retry_of_job_id,available_at,created_at,updated_at) VALUES('retry','n','Node','kick','queued','queued','root',now(),now(),now())")
         connection.execute("INSERT INTO jobs(id,node_id,node_name,kind,status,stage,payload_json,available_at,created_at,updated_at,finished_at) VALUES('orphan','deleted-node','Deleted','kick','failed','failed','{\"node_limit\":true}',now(),now(),now(),now())")
+        connection.execute("INSERT INTO audit_records(id,actor,action,entity_type,entity_id,detail_json,created_at) VALUES('audit-upgrade','admin','node.created','node','n','{}',now())")
         connection.commit()
         for migration in migrations:
             if int(migration.name.split('_')[0]) > 15:
                 connection.execute(migration.read_text())
                 connection.commit()
+        assert connection.execute("SELECT total FROM audit_totals WHERE id").fetchone() == (1,)
+        assert connection.execute("SELECT count(*) FROM jobs WHERE hysteriax_search_text(id,kind,stage,status,node_name,node_id,resource_name,resource_id,error_message) LIKE '%deleted%'").fetchone() == (1,)
         assert connection.execute("SELECT source,tx::bigint,rx::bigint,samples FROM traffic_minute_totals ORDER BY source").fetchall() == [('network',70,80,1),('users',40,60,2)]
         assert connection.execute("SELECT tx::bigint,rx::bigint,samples FROM user_node_usage").fetchone() == (40,60,2)
         assert connection.execute("SELECT attempts,successes FROM probe_minute_totals").fetchone() == (2,1)

@@ -85,39 +85,48 @@ async fn online_minute_rollups_preserve_weighted_averages_unknowns_and_dirty_fal
         if phase == 2 {
             refresh(&pool).await.unwrap();
         }
-        let start = anchor - Duration::days(1);
-        let actual = sqlx::query(include_str!("online_history.sql"))
-            .bind("hour")
-            .bind("UTC")
-            .bind(start)
-            .bind(anchor)
-            .bind(Option::<String>::None)
-            .fetch_all(&pool)
-            .await
-            .unwrap();
-        let raw=sqlx::query("SELECT date_bin(interval '1 hour',started_at,$1) bucket,avg(users)::double precision users_avg,max(users)::double precision users_peak,avg(connections)::double precision connections_avg,max(connections)::double precision connections_peak,min(covered)::bigint covered_nodes,bool_or(incomplete) incomplete FROM online_cycle_metrics WHERE scope_node_id='' AND started_at>=$1 AND started_at<$2 GROUP BY bucket ORDER BY bucket").bind(start).bind(anchor).fetch_all(&pool).await.unwrap();
-        assert_eq!(actual.len(), raw.len());
-        for (a, b) in actual.iter().zip(raw.iter()) {
-            for field in [
-                "users_avg",
-                "users_peak",
-                "connections_avg",
-                "connections_peak",
-            ] {
-                assert_eq!(
-                    a.get::<Option<f64>, _>(field),
-                    b.get::<Option<f64>, _>(field),
-                    "{field}"
-                );
+        for end in [anchor, anchor + Duration::seconds(43)] {
+            for (unit, days) in [("hour", 1), ("rolling_day", 7), ("rolling_day", 30)] {
+                let start = end - Duration::days(days);
+                for scope in [None, Some("n1"), Some("n2")] {
+                    let actual = sqlx::query(include_str!("online_history.sql"))
+                        .bind(unit)
+                        .bind("UTC")
+                        .bind(start)
+                        .bind(end)
+                        .bind(scope)
+                        .fetch_all(&pool)
+                        .await
+                        .unwrap();
+                    let raw = sqlx::query("SELECT date_bin(CASE WHEN $1='hour' THEN interval '1 hour' ELSE interval '24 hours' END,started_at,$2) bucket,avg(users)::double precision users_avg,max(users)::double precision users_peak,avg(connections)::double precision connections_avg,max(connections)::double precision connections_peak,min(covered)::bigint covered_nodes,bool_or(incomplete) incomplete,min(traffic_covered)::bigint covered,max(expected)::bigint expected,bool_or(traffic_incomplete) traffic_incomplete FROM online_cycle_metrics WHERE scope_node_id=coalesce($4,'') AND started_at>=$2 AND started_at<$3 GROUP BY bucket ORDER BY bucket")
+                        .bind(unit).bind(start).bind(end).bind(scope).fetch_all(&pool).await.unwrap();
+                    assert_eq!(actual.len(), raw.len());
+                    for (a, b) in actual.iter().zip(raw.iter()) {
+                        assert_eq!(
+                            a.get::<DateTime<Utc>, _>("bucket"),
+                            b.get::<DateTime<Utc>, _>("bucket")
+                        );
+                        for field in [
+                            "users_avg",
+                            "users_peak",
+                            "connections_avg",
+                            "connections_peak",
+                        ] {
+                            assert_eq!(
+                                a.get::<Option<f64>, _>(field),
+                                b.get::<Option<f64>, _>(field),
+                                "{field}"
+                            );
+                        }
+                        for field in ["covered_nodes", "covered", "expected"] {
+                            assert_eq!(a.get::<i64, _>(field), b.get::<i64, _>(field), "{field}");
+                        }
+                        for field in ["incomplete", "traffic_incomplete"] {
+                            assert_eq!(a.get::<bool, _>(field), b.get::<bool, _>(field), "{field}");
+                        }
+                    }
+                }
             }
-            assert_eq!(
-                a.get::<i64, _>("covered_nodes"),
-                b.get::<i64, _>("covered_nodes")
-            );
-            assert_eq!(
-                a.get::<bool, _>("incomplete"),
-                b.get::<bool, _>("incomplete")
-            );
         }
     }
 }
@@ -227,4 +236,176 @@ async fn task_counters_and_retry_state_match_raw_after_status_and_chain_changes(
             .unwrap(),
         1
     );
+}
+
+#[tokio::test]
+async fn aligned_online_history_skips_cycles_until_an_edge_or_dirty_minute_needs_them() {
+    let pool = super::tests::seed().await;
+    let anchor: DateTime<Utc> = "2026-10-15T12:00:00Z".parse().unwrap();
+    sqlx::query("INSERT INTO online_cycle_metrics(cycle_id,scope_node_id,started_at,users,connections,covered,expected,incomplete,traffic_covered,traffic_incomplete) SELECT gen_random_uuid(),scope,$1::timestamptz-i*interval '10 seconds',1,2,1,1,false,1,false FROM generate_series(1,2400) i CROSS JOIN unnest(ARRAY['','n1']) scope")
+        .bind(anchor).execute(&pool).await.unwrap();
+    refresh(&pool).await.unwrap();
+    sqlx::raw_sql(
+        "ANALYZE online_cycle_metrics; ANALYZE online_minute_totals; ANALYZE online_dirty_minutes",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    fn cycle_scan_loops(plan: &serde_json::Value) -> u64 {
+        let own = if plan["Relation Name"] == "online_cycle_metrics" {
+            plan["Actual Loops"].as_u64().unwrap_or(0)
+        } else {
+            0
+        };
+        own + plan["Plans"]
+            .as_array()
+            .map(|children| children.iter().map(cycle_scan_loops).sum::<u64>())
+            .unwrap_or(0)
+    }
+    for phase in 0..3 {
+        if phase == 2 {
+            sqlx::query("UPDATE online_cycle_metrics SET connections=connections+3 WHERE started_at=$1::timestamptz-interval '10 seconds'")
+                .bind(anchor).execute(&pool).await.unwrap();
+        }
+        let end = anchor
+            + if phase == 1 {
+                Duration::seconds(17)
+            } else {
+                Duration::zero()
+            };
+        for scope in [None, Some("n1")] {
+            let mut tx = pool.begin().await.unwrap();
+            sqlx::raw_sql("SET LOCAL jit=off; SET LOCAL plan_cache_mode=force_custom_plan")
+                .execute(&mut *tx)
+                .await
+                .unwrap();
+            let explain = format!(
+                "EXPLAIN (ANALYZE, FORMAT JSON) {}",
+                include_str!("online_history.sql")
+            );
+            let row = sqlx::query(&explain)
+                .bind("hour")
+                .bind("UTC")
+                .bind(end - Duration::days(1))
+                .bind(end)
+                .bind(scope)
+                .fetch_one(&mut *tx)
+                .await
+                .unwrap();
+            let plan: serde_json::Value = row.get("QUERY PLAN");
+            assert_eq!(
+                cycle_scan_loops(&plan[0]["Plan"]) > 0,
+                phase != 0,
+                "scope={scope:?}, phase={phase}"
+            );
+            tx.rollback().await.unwrap();
+        }
+    }
+}
+
+#[tokio::test]
+async fn rollup_refresh_reads_only_dirty_ranges_and_skips_empty_queues() {
+    let pool = super::tests::seed().await;
+    let anchor: DateTime<Utc> = "2026-10-15T12:00:00Z".parse().unwrap();
+    sqlx::query("INSERT INTO traffic_minute_totals(source,node_id,minute,tx,rx,samples,incomplete_samples) SELECT 'users','n1',$1::timestamptz-i*interval '1 minute',1,2,1,0 FROM generate_series(1,20000)i")
+        .bind(anchor).execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO online_cycle_metrics(cycle_id,scope_node_id,started_at,users,connections,covered,expected,incomplete,traffic_covered,traffic_incomplete) SELECT gen_random_uuid(),'n1',$1::timestamptz-i*interval '1 minute',1,2,1,1,false,1,false FROM generate_series(1,6000)i")
+        .bind(anchor).execute(&pool).await.unwrap();
+    sqlx::raw_sql("DELETE FROM traffic_dirty_hours; DELETE FROM online_dirty_minutes; ANALYZE traffic_minute_totals; ANALYZE online_cycle_metrics").execute(&pool).await.unwrap();
+    sqlx::raw_sql("INSERT INTO traffic_hour_totals SELECT source,node_id,hysteriax_hour(minute),sum(tx),sum(rx),sum(samples),sum(incomplete_samples) FROM traffic_minute_totals GROUP BY source,node_id,hysteriax_hour(minute); INSERT INTO online_minute_totals SELECT scope_node_id,hysteriax_minute(started_at),count(*),count(users),coalesce(sum(users),0),max(users),count(connections),coalesce(sum(connections),0),max(connections),min(covered),max(expected),bool_or(incomplete),min(traffic_covered),bool_or(traffic_incomplete) FROM online_cycle_metrics GROUP BY scope_node_id,hysteriax_minute(started_at)")
+        .execute(&pool).await.unwrap();
+    fn read_rows(plan: &serde_json::Value, table: &str) -> f64 {
+        let own = if plan["Relation Name"] == table {
+            plan["Actual Rows"].as_f64().unwrap_or(0.0)
+                * plan["Actual Loops"].as_f64().unwrap_or(0.0)
+        } else {
+            0.0
+        };
+        own + plan["Plans"]
+            .as_array()
+            .map(|children| {
+                children
+                    .iter()
+                    .map(|child| read_rows(child, table))
+                    .sum::<f64>()
+            })
+            .unwrap_or(0.0)
+    }
+    for dirty in [false, true] {
+        if dirty {
+            sqlx::query("INSERT INTO traffic_dirty_hours VALUES('users','n1',$1::timestamptz-interval '1 hour')").bind(anchor).execute(&pool).await.unwrap();
+            sqlx::query(
+                "INSERT INTO online_dirty_minutes VALUES('n1',$1::timestamptz-interval '1 minute')",
+            )
+            .bind(anchor)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        for statement in include_str!("refresh_rollups.sql")
+            .split(';')
+            .filter(|s| s.contains("ctid=ANY"))
+        {
+            let table = if statement.contains("traffic_hour_totals") {
+                "traffic_hour_totals"
+            } else {
+                "online_minute_totals"
+            };
+            let mut tx = pool.begin().await.unwrap();
+            sqlx::raw_sql("SET LOCAL jit=off; SET LOCAL plan_cache_mode=force_custom_plan")
+                .execute(&mut *tx)
+                .await
+                .unwrap();
+            let row = sqlx::query(&format!("EXPLAIN (ANALYZE,FORMAT JSON) {statement}"))
+                .fetch_one(&mut *tx)
+                .await
+                .unwrap();
+            let plan: serde_json::Value = row.get("QUERY PLAN");
+            let scanned = read_rows(&plan[0]["Plan"], table);
+            assert!(scanned < 100.0, "{table}: {scanned} rows, plan={plan}");
+            assert_eq!(scanned > 0.0, dirty, "{table}");
+            tx.rollback().await.unwrap();
+        }
+        for statement in include_str!("refresh_rollups.sql")
+            .split(';')
+            .filter(|s| s.trim().starts_with("INSERT"))
+        {
+            let (_, select) = statement.trim().split_once('\n').unwrap();
+            let table = if select.contains("traffic_minute_totals") {
+                "traffic_minute_totals"
+            } else {
+                "online_cycle_metrics"
+            };
+            let mut tx = pool.begin().await.unwrap();
+            sqlx::raw_sql("SET LOCAL jit=off; SET LOCAL plan_cache_mode=force_custom_plan")
+                .execute(&mut *tx)
+                .await
+                .unwrap();
+            let row = sqlx::query(&format!("EXPLAIN (ANALYZE,FORMAT JSON) {select}"))
+                .fetch_one(&mut *tx)
+                .await
+                .unwrap();
+            let plan: serde_json::Value = row.get("QUERY PLAN");
+            let scanned = read_rows(&plan[0]["Plan"], table);
+            assert!(scanned < 100.0, "{table}: {scanned} rows, plan={plan}");
+            assert_eq!(scanned > 0.0, dirty, "{table}");
+            tx.rollback().await.unwrap();
+        }
+    }
+    refresh(&pool).await.unwrap();
+    let samples: i64 = sqlx::query_scalar(
+        "SELECT samples FROM traffic_hour_totals WHERE source='users' AND node_id='n1' AND hour='2026-10-15T11:00:00Z'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(samples, 60);
+    let users: i64 = sqlx::query_scalar(
+        "SELECT users_sum::bigint FROM online_minute_totals WHERE scope_node_id='n1' AND minute='2026-10-15T11:59:00Z'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(users, 1);
 }
