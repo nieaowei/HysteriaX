@@ -37,6 +37,7 @@ paths:
   /credentials:
     get:
       operationId: listCredentials
+      summary: List managed and business credentials with pagination
       description: "Always returns a page. Defaults to page 1 with 50 items; page_size is limited to 200. Search, filters and sorting apply even when paging parameters are omitted."
       x-swift-include-optional-query: true
       parameters:
@@ -59,6 +60,7 @@ paths:
           $ref: '#/components/responses/Error'
     post:
       operationId: createCredential
+      summary: Create a managed credential
       responses:
         '201':
           description: Credential management result
@@ -79,6 +81,7 @@ paths:
   /credentials/{id}:
     get:
       operationId: getCredential
+      summary: Get credential metadata, versions and references
       responses:
         '200':
           description: Credential management result
@@ -92,6 +95,7 @@ paths:
           $ref: '#/components/responses/Error'
     patch:
       operationId: updateCredential
+      summary: Update credential metadata
       responses:
         '200':
           description: Credential management result
@@ -111,6 +115,7 @@ paths:
               $ref: '#/components/schemas/CredentialPatch'
     delete:
       operationId: deleteCredential
+      summary: Delete an unreferenced managed credential
       parameters:
       - name: expected_revision
         in: query
@@ -131,6 +136,7 @@ paths:
   /credentials/{id}/versions:
     post:
       operationId: publishCredentialVersion
+      summary: Publish a new immutable credential version
       responses:
         '202':
           description: Credential management result
@@ -157,6 +163,7 @@ paths:
   /credentials/{id}/references:
     get:
       operationId: getCredentialReferences
+      summary: List current and historical credential references
       responses:
         '200':
           description: Credential management result
@@ -179,6 +186,7 @@ paths:
   /credential-batches/{id}:
     get:
       operationId: getCredentialBatch
+      summary: Get credential application batch progress
       responses:
         '200':
           description: Credential management result
@@ -199,6 +207,7 @@ paths:
   /credential-batches/{id}/retry:
     post:
       operationId: retryCredentialBatch
+      summary: Retry failed credential application targets
       responses:
         '202':
           description: Credential management result
@@ -232,11 +241,12 @@ paths:
   /overview/nodes:
     get:
       operationId: listOverviewNodes
+      summary: List node monitoring summaries with search and pagination
       x-swift-include-optional-query: true
       parameters:
       - { name: page, in: query, schema: { type: integer, minimum: 1, default: 1 } }
       - { name: page_size, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 20 } }
-      - { name: q, in: query, schema: { type: string }, description: Literal case-insensitive search across node names, IDs and public/SSH addresses. }
+      - { name: q, in: query, schema: { type: string }, description: "Literal case-insensitive search across node names, IDs and public/SSH addresses." }
       responses:
         '200':
           description: Paginated latest node monitoring samples, ordered by name and ID.
@@ -2292,7 +2302,7 @@ components:
           type: [string, 'null']
           description: Node name captured when the job was created; retained after node rename or deletion.
         retry_of_job_id: { type: [string, 'null'], description: Prior failed or unsuccessful retry attempt. }
-        retry_job_id: { type: [string, 'null'], description: Direct retry attempt, when present. }
+        retry_job_id: { type: [string, 'null'], description: "Direct retry attempt, when present." }
         target_revision: { type: [integer, 'null'] }
         status: { type: string }
         stage: { type: string }
