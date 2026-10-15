@@ -180,7 +180,10 @@ pub async fn policy(
     };
     let mut revision = version(&state.pool, &dependencies(path, query)).await?;
     if path == "/api/v1/overview" || path == "/api/v1/overview/nodes" {
-        revision.push_str(";overview_schema=2");
+        revision.push_str(";overview_schema=3");
+    }
+    if path == "/api/v1/overview" {
+        revision.push_str(&format!(";quota_second={}", chrono::Utc::now().timestamp()));
     }
     if path == "/api/v1/overview/history" {
         revision.push_str(&format!(

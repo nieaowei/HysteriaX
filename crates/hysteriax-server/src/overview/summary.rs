@@ -92,7 +92,10 @@ pub(super) struct SummaryData {
     pub(super) generated_at: DateTime<Utc>,
 }
 
-pub(super) async fn load(pool: &PgPool) -> Result<SummaryData, ApiError> {
+pub(super) async fn load(
+    pool: &PgPool,
+    quota_rank: &crate::quota_rank::QuotaRank,
+) -> Result<SummaryData, ApiError> {
     let mut tx = pool.begin().await?;
     sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
         .execute(&mut *tx)
@@ -115,10 +118,7 @@ pub(super) async fn load(pool: &PgPool) -> Result<SummaryData, ApiError> {
     .bind(now + Duration::days(7))
     .fetch_all(&mut *tx)
     .await?;
-    let quota_ids = sqlx::query_scalar(include_str!("summary_quota.sql"))
-        .bind(now)
-        .fetch_all(&mut *tx)
-        .await?;
+    let quota_ids = quota_rank.ids_on(&mut tx, now).await?;
     let task = sqlx::query(include_str!("summary_tasks.sql"))
         .bind(now - Duration::hours(24))
         .fetch_one(&mut *tx)

@@ -16,6 +16,7 @@ mod monitoring;
 mod node_limits;
 mod overview;
 mod proxy_monitor;
+mod quota_rank;
 mod redis_cache;
 mod security;
 mod ssh;
@@ -77,6 +78,7 @@ async fn main() -> Result<()> {
     let network = tokio::spawn(node_limits::collect(state.clone()));
     let probes = tokio::spawn(proxy_monitor::run(state.clone()));
     let limits = tokio::spawn(node_limits::run(state.clone()));
+    let quota_rank = tokio::spawn(quota_rank::run(state.clone()));
     let app = api::router(state);
 
     let address = env::var("HYSTERIAX_LISTEN_ADDR").unwrap_or_else(|_| "0.0.0.0:8080".to_owned());
@@ -101,6 +103,7 @@ async fn main() -> Result<()> {
             network.abort();
             limits.abort();
             probes.abort();
+            quota_rank.abort();
             result?;
             bail!("single-instance lock monitor stopped unexpectedly");
         }
@@ -111,6 +114,7 @@ async fn main() -> Result<()> {
     network.abort();
     limits.abort();
     probes.abort();
+    quota_rank.abort();
     Ok(())
 }
 

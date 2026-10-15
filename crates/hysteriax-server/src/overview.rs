@@ -223,7 +223,7 @@ pub async fn get(State(state): State<AppState>) -> Result<Json<Value>, ApiError>
         task,
         failures,
         generated_at: now,
-    } = summary::load(&state.pool).await?;
+    } = summary::load(&state.pool, &state.quota_rank).await?;
     let mut quota_candidates = BTreeMap::new();
     let mut issues = Vec::new();
     let mut totals = MonitoringTotals::default();

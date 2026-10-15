@@ -46,7 +46,7 @@ impl RedisCache {
             crate::security::token_digest(logical)
         )
     }
-    async fn command<T: redis::FromRedisValue>(&self, cmd: redis::Cmd) -> Option<T> {
+    pub(crate) async fn command<T: redis::FromRedisValue>(&self, cmd: redis::Cmd) -> Option<T> {
         if !self.available() {
             return None;
         }
