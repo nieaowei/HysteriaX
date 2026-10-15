@@ -15,8 +15,9 @@ const MAX_PARALLEL_NODES: usize = 4;
 const MAX_ATTEMPTS: i64 = 3;
 
 pub async fn run(state: AppState) {
-    if let Err(error) = recover_interrupted(&state.pool).await {
+    while let Err(error) = recover_interrupted(&state.pool).await {
         tracing::error!(%error, "failed to recover interrupted HysteriaX jobs");
+        tokio::time::sleep(Duration::from_secs(1)).await;
     }
 
     let mut tasks = JoinSet::new();
@@ -126,17 +127,19 @@ async fn claim_next(pool: &PgPool) -> Result<Option<JobInput>, sqlx::Error> {
 }
 
 async fn job_is_running(pool: &PgPool, id: &str) -> bool {
-    match sqlx::query_scalar::<_, bool>(
-        "SELECT EXISTS(SELECT 1 FROM jobs WHERE id=$1 AND status='running')",
-    )
-    .bind(id)
-    .fetch_one(pool)
-    .await
-    {
-        Ok(running) => running,
-        Err(error) => {
-            tracing::error!(job_id=id,%error,"failed to check job cancellation");
-            false
+    loop {
+        match sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS(SELECT 1 FROM jobs WHERE id=$1 AND status='running')",
+        )
+        .bind(id)
+        .fetch_one(pool)
+        .await
+        {
+            Ok(running) => return running,
+            Err(error) => {
+                tracing::error!(job_id=id,%error,"failed to check job cancellation");
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
         }
     }
 }
@@ -174,9 +177,7 @@ async fn execute_one(state: AppState, job: JobInput) {
     };
     match result {
         Ok(output) => {
-            if let Err(error) = succeed(&state.pool, &job, output).await {
-                tracing::error!(job_id = %job.id, %error, "failed to persist job result");
-            }
+            retry_persistence(|| succeed(&state.pool, &job, output.clone())).await;
         }
         Err(error) => {
             let message = safe_error(&state.pool, &state.secrets, &job, &error).await;
@@ -194,20 +195,40 @@ async fn execute_one(state: AppState, job: JobInput) {
                 job.kind == "kick" && crate::kick_requests::transport_error(&error);
             let rolled_back = was_rolled_back(&error);
             let rollback_failed = was_rollback_failed(&error);
-            if let Err(persist_error) = fail(
-                &state.pool,
-                &job,
-                &message,
-                retry,
-                rolled_back,
-                rollback_failed,
-                waiting_recovery,
-            )
-            .await
-            {
-                tracing::error!(job_id = %job.id, error = %persist_error, "failed to persist job failure");
+            retry_persistence(|| {
+                fail(
+                    &state.pool,
+                    &job,
+                    &message,
+                    retry,
+                    rolled_back,
+                    rollback_failed,
+                    waiting_recovery,
+                )
+            })
+            .await;
+        }
+    }
+}
+
+// Keep the worker slot and completed output until the transaction is acknowledged.
+// Both completion transactions guard on status='running', so an uncertain commit
+// can be retried without duplicate events or repeating remote side effects.
+async fn retry_persistence<F, Fut>(mut persist: F)
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<(), sqlx::Error>>,
+{
+    let mut delay = 1;
+    loop {
+        match persist().await {
+            Ok(()) => return,
+            Err(error) => {
+                tracing::error!(%error, "job persistence failed; retrying without repeating remote work")
             }
         }
+        tokio::time::sleep(Duration::from_secs(delay)).await;
+        delay = (delay * 2).min(30);
     }
 }
 
@@ -551,6 +572,45 @@ mod tests {
             .execute(pool)
             .await
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn completion_retries_transaction_failure_without_duplicate_events() {
+        let pool = test_pool().await;
+        insert_running_job(&pool).await;
+        sqlx::raw_sql("CREATE SEQUENCE completion_attempt; CREATE FUNCTION reject_first_completion() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF nextval('completion_attempt') = 1 THEN RAISE EXCEPTION 'injected failure'; END IF; RETURN NEW; END $$; CREATE TRIGGER reject_completion BEFORE INSERT ON job_events FOR EACH ROW EXECUTE FUNCTION reject_first_completion();").execute(&pool).await.unwrap();
+        let job = JobInput {
+            id: "job-running".into(),
+            kind: "sync".into(),
+            node_id: None,
+            target_revision: None,
+            payload: json!({}),
+            attempts: 2,
+        };
+        let output = crate::deployment::JobOutput {
+            stage: "done".into(),
+            result: json!({}),
+            node_state: None,
+            deployed_revision: None,
+            deployed_config: None,
+            deployed_sha256: None,
+            published_connection: None,
+            delete_node: false,
+        };
+        super::retry_persistence(|| super::succeed(&pool, &job, output.clone())).await;
+        // Retrying an uncertain commit is also idempotent.
+        super::succeed(&pool, &job, output).await.unwrap();
+        let status: String = sqlx::query_scalar("SELECT status FROM jobs WHERE id='job-running'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(status, "succeeded");
+        let count: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM job_events WHERE job_id='job-running'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(count, 1);
     }
 
     #[tokio::test]

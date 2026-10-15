@@ -31,7 +31,7 @@ pub struct JobInput {
     pub attempts: i64,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct JobOutput {
     pub stage: String,
     pub result: Value,
