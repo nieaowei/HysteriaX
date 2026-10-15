@@ -28,6 +28,12 @@ struct CredentialEditorView: View {
 
     private var kinds: [String] { allowedKinds ?? ["ssh_private_key", "ssh_password", "tls_identity", "ca_certificate", "ech_key", "dns", "api_token"] }
     var body: some View {
+        directoryContent
+            .task(id: "\(store.dataRefreshToken):\(kind)") { if kind == "tls_identity" && allowsUserOwnership { await store.prepareDirectories([.users]) } }
+            .disabled([ManagementStore.Directory.users].contains { store.loadingDirectories.contains($0) })
+    }
+
+    private var directoryContent: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text(replacing == nil ? L10n.text("创建凭据") : L10n.text("发布新版本")).font(.title2.bold())
             Form {

@@ -38,8 +38,12 @@ final class OverviewTransport: URLProtocol, @unchecked Sendable {
             lock.lock(); defer { lock.unlock() }
             if ["/api/v1/nodes", "/api/v1/users", "/api/v1/credentials", "/api/v1/jobs", "/api/v1/audit", "/api/v1/dns/records"].contains(path) { pageRequests += 1 }
             if path.hasSuffix("version") {
-                let features = mode == "legacy" ? "[]" : "[\"overview_monitoring\",\"job_retry_links\",\"node_record_removal\"]"
+                let features = mode == "legacy" ? "[]" : "[\"overview_monitoring\",\"job_retry_links\",\"node_record_removal\",\"client_summary\"]"
                 return (200, Data("{\"api_version\":\"1.0.0\",\"directory_generation\":1,\"service_version\":\"test\",\"hysteria_version\":\"test\",\"mihomo_version\":\"test\",\"features\":\(features)}".utf8))
+            }
+            if path == "/api/v1/client/summary" {
+                let fixture = try! JSONSerialization.jsonObject(with: nodes) as! [[String: Any]]
+                return (200, try! JSONSerialization.data(withJSONObject: ["node_count":235,"user_total":400,"user_enabled":380,"user_expired":2,"user_expiring":3,"user_depleted":1,"notification_nodes":fixture,"notification_credentials":[]]))
             }
             if path == "/api/v1/overview/nodes" {
                 monitoringRequest = request
@@ -82,9 +86,9 @@ final class OverviewTransport: URLProtocol, @unchecked Sendable {
                 if size == 200 { directoryRequests += 1 }
                 let requested = Int(parameters.first { $0.name == "page" }?.value ?? "1")!
                 let fixture = try! JSONSerialization.jsonObject(with: nodes) as! [[String: Any]]
-                let items: [[String: Any]] = size == 200 ? (1...235).map { index in
+                let items: [[String: Any]] = parameters.contains { $0.name == "q" && !($0.value ?? "").isEmpty } ? [] : (1...235).map { index in
                     var node = fixture[0]; node["id"] = "node-\(index)"; return node
-                } : []
+                }
                 let page = min(requested, max(1, (items.count + size - 1) / size))
                 return (200, try! JSONSerialization.data(withJSONObject: ["items": Array(items.dropFirst((page - 1) * size).prefix(size)), "total": items.count, "page": page, "page_size": size]))
             }
@@ -156,7 +160,9 @@ struct OverviewNetworkChecks {
         }
         await store.refresh()
         precondition(store.isConnected && store.supportsOverviewMonitoring && store.overview?.nodeCount == 1)
-        precondition(store.nodes.count == 235 && Set(store.nodes.map(\.id)).count == 235, "refresh must read all pages without duplicates")
+        precondition(store.nodes.count == 50 && Set(store.nodes.map(\.id)).count == 50, "bootstrap must load only the first page")
+        precondition(store.clientSummary?.nodeCount == 235 && store.clientSummary?.userTotal == 400)
+        precondition(OverviewTransport.responses.recordedDirectoryCount() == 0, "bootstrap must not traverse directories")
         precondition(store.supportsJobRetryLinks && store.supportsNodeRecordRemoval)
         let monitorKey = store.listPageKey(["3", "20", ""])
         let monitoring = try await store.overviewNodesPage(page: 3, pageSize: 20, query: "", cacheKey: monitorKey, revalidate: true)
@@ -175,8 +181,18 @@ struct OverviewNetworkChecks {
         precondition(store.isConnected && OverviewTransport.responses.recordedDirectoryCount() == directoryCount, "periodic overview refresh must not reload unchanged directories")
         precondition(store.dataRefreshToken != refreshToken)
         await store.refresh()
-        precondition(OverviewTransport.responses.recordedDirectoryCount() > directoryCount, "manual refresh must reload directories")
+        precondition(OverviewTransport.responses.recordedDirectoryCount() == directoryCount, "manual refresh must remain bounded")
         precondition(OverviewTransport.responses.recordedNodesPage()!.value(forHTTPHeaderField: "Cache-Control") == "no-cache")
+        async let first: Void = store.prepareDirectory(.nodes)
+        async let second: Void = store.prepareDirectory(.nodes)
+        _ = await (first, second)
+        precondition(store.nodes.count == 235 && Set(store.nodes.map(\.id)).count == 235)
+        precondition(OverviewTransport.responses.recordedDirectoryCount() == directoryCount + 2, "on-demand directory reads must be deduplicated")
+        await store.refresh()
+        precondition(store.nodes.count == 50 && OverviewTransport.responses.recordedDirectoryCount() == directoryCount + 2, "refresh must not eagerly rebuild selector directories")
+        let restored = UserDefaults.standard.data(forKey: "displaySnapshot.\(store.serviceAddress)")!
+        let display = try JSONSerialization.jsonObject(with: restored) as! [String: Any]
+        precondition((display["nodes"] as! [Any]).count <= 50, "disk snapshots must remain bounded")
         let removedNode = store.nodes[0]
         try await store.removeNodeRecord(removedNode)
         let removalRequest = OverviewTransport.responses.recordedRemovals().last!
@@ -244,7 +260,7 @@ struct OverviewNetworkChecks {
         precondition(auditParameters.contains(URLQueryItem(name: "action_matches", value: "user.deleted")))
         precondition(auditParameters.contains(URLQueryItem(name: "page", value: "2")))
         precondition(auditParameters.contains(URLQueryItem(name: "sort", value: "entity_id")))
-        try await store.retryJob(store.jobs[0], on: store.nodes[0])
+        try await store.retryJob(store.jobs[0], on: removedNode)
         let retryRequest = OverviewTransport.responses.recordedRetry()!
         precondition(retryRequest.url!.path == "/api/v1/jobs/job-1/retry" && retryRequest.httpMethod == "POST")
         var retryBody = retryRequest.httpBody ?? Data()
@@ -283,6 +299,7 @@ struct OverviewNetworkChecks {
         OverviewTransport.responses.setMode("legacy")
         await store.refresh()
         precondition(store.isConnected && !store.supportsOverviewMonitoring && !store.supportsJobRetryLinks && store.overview == nil)
+        precondition(store.nodes.count == 235, "legacy servers must retain complete-directory behavior until upgraded")
         precondition(!store.supportsNodeRecordRemoval)
         let removalCount = OverviewTransport.responses.recordedRemovals().count
         do { try await store.removeNodeRecord(store.nodes[0]); preconditionFailure("Legacy service must not receive a record-removal request") } catch {}

@@ -283,6 +283,7 @@ struct JobsView: View {
             }
         }
         .fixedSize()
+        .task(id: "\(store.dataRefreshToken):\(job.nodeID ?? "")") { await store.prepareNode(job.nodeID) }
     }
 
     @ViewBuilder private func fingerprintResult(_ job: JobSummary) -> some View {

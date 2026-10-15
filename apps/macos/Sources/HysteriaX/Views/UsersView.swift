@@ -347,6 +347,9 @@ private struct UserDirectoryView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
+        .task(id: "\(user.id):\(store.dataRefreshToken)") {
+            for assignment in user.assignments { await store.prepareNode(assignment.nodeID) }
+        }
     }
 
     private func userDetailTitle(_ user: UserSummary) -> some View {

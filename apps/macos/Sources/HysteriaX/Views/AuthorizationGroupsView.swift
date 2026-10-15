@@ -26,6 +26,12 @@ struct AuthorizationGroupsView: View {
     }
 
     var body: some View {
+        directoryContent
+            .task(id: store.dataRefreshToken) { await store.prepareDirectories([.nodes, .users]) }
+            .disabled([ManagementStore.Directory.nodes, .users].contains { store.loadingDirectories.contains($0) })
+    }
+
+    private var directoryContent: some View {
         // Keep the data/content subtree outside the per-frame geometry closure.
         let sidebarContent = groupList
         let detailContent = selectedDetail

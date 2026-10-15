@@ -14,6 +14,16 @@ servers:
 security:
   - BearerAuth: []
 paths:
+  /client/summary:
+    get:
+      operationId: getClientSummary
+      summary: Get global user counts and notification candidates without listing directories
+      responses:
+        '200':
+          description: Current counters and only nodes or managed credentials requiring notifications
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ClientSummary' }
   /cache:
     get:
       operationId: getCacheStatistics
@@ -1625,6 +1635,22 @@ components:
         application/json:
           schema: { $ref: '#/components/schemas/APIErrorResponse' }
   schemas:
+    ClientSummary:
+      type: object
+      required: [node_count, user_total, user_enabled, user_expired, user_expiring, user_depleted, notification_nodes, notification_credentials]
+      properties:
+        node_count: { type: integer }
+        user_total: { type: integer }
+        user_enabled: { type: integer }
+        user_expired: { type: integer }
+        user_expiring: { type: integer }
+        user_depleted: { type: integer }
+        notification_nodes:
+          type: array
+          items: { $ref: '#/components/schemas/NodeSummary' }
+        notification_credentials:
+          type: array
+          items: { $ref: '#/components/schemas/CredentialSummary' }
     Revision:
       type: object
       required: [expected_revision]

@@ -1,4 +1,5 @@
 pub(crate) mod authorization_groups;
+mod client_summary;
 pub(crate) mod credentials;
 pub(crate) mod dns;
 pub(crate) mod job_retries;
@@ -148,6 +149,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/users/{id}/quota/reset", post(users::reset_quota))
         .route("/api/v1/jobs", get(list_jobs))
         .route("/api/v1/version", get(api_version))
+        .route("/api/v1/client/summary", get(client_summary::get))
         .route("/api/v1/overview", get(crate::overview::get))
         .route("/api/v1/overview/nodes", get(crate::overview::list_nodes))
         .route("/api/v1/overview/history", get(crate::overview::history))
@@ -286,7 +288,7 @@ async fn api_version(
     let directory_generation = crate::cache::configuration_generation(&state.pool).await?;
     Ok(Json(json!({
         "api_version": "1.0.0",
-        "features": ["node_packages", "overview_monitoring", "job_retry_links", "credentials", "node_record_removal", "dns_management", "authorization_groups"],
+        "features": ["client_summary", "node_packages", "overview_monitoring", "job_retry_links", "credentials", "node_record_removal", "dns_management", "authorization_groups"],
         "directory_generation":directory_generation,
         "current_admin_token_id": actor.id,
         "service_version": env!("CARGO_PKG_VERSION"),

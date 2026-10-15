@@ -64,6 +64,12 @@ struct AuthorizationGroupEditorView: View {
     }
 
     var body: some View {
+        directoryContent
+            .task(id: store.dataRefreshToken) { await store.prepareDirectories([.nodes, .users, .credentials]) }
+            .disabled([ManagementStore.Directory.nodes, .users, .credentials].contains { store.loadingDirectories.contains($0) })
+    }
+
+    private var directoryContent: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text(receipt == nil ? title : L10n.text("授权组已更新"))
                 .font(.title2.bold())

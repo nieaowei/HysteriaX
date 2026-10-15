@@ -452,7 +452,7 @@ struct ProxyConfigurationView: View {
         }
         .padding(20)
         .frame(minWidth: 820, idealWidth: 1080, minHeight: 760)
-        .task(id: nodeID) { await load() }
+        .task(id: nodeID) { await load(); await store.prepareDirectory(.credentials) }
         .sheet(item: $creatingCredential) { target in
             CredentialEditorView(store: store, initialKind: target.kind, allowedKinds: [target.kind], allowsUserOwnership: false) { receipt in
                 let prefix = "credential://\(receipt.id)/\(receipt.version ?? 1)/"

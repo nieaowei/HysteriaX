@@ -85,7 +85,7 @@ struct CredentialsView: View {
             ToolbarItemGroup {
                 Picker(L10n.text("类型"), selection: $type) {
                     Text(L10n.text("全部类型")).tag("")
-                    ForEach(Array(Set(categoryEntries.map(\.kind))).sorted(), id: \.self) {
+                    ForEach(["ssh_private_key", "ssh_password", "tls_identity", "ca_certificate", "ech_key", "dns", "api_token", "admin_token", "subscription_token", "user_credential"], id: \.self) {
                         Text(CredentialDisplay.kind($0)).tag($0)
                     }
                 }

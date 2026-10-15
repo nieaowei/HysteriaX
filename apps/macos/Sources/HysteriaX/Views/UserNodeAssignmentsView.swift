@@ -33,6 +33,12 @@ struct UserNodeAssignmentsView: View {
     }
 
     var body: some View {
+        directoryContent
+            .task(id: store.dataRefreshToken) { await store.prepareDirectories([.nodes, .credentials]) }
+            .disabled([ManagementStore.Directory.nodes, .credentials].contains { store.loadingDirectories.contains($0) })
+    }
+
+    private var directoryContent: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text(L10n.text("分配节点")).font(.title.bold())
             Text(L10n.text("为 {0} 勾选可用节点，取消勾选即可移除。", String(describing: (user.name))))

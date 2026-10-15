@@ -64,7 +64,7 @@ response_models = %w[
   ActiveSubscription SubscriptionStatus NodeUsageSummary DataFreshness PendingRevocation
   UserUsageResponse JobDetailResponse HysteriaAuthResponse
   CreatedEntity NodeReceipt APIHealth APIVersion APIErrorDetail APIErrorResponse
-  AdminTokenSummary AdminTokenReceipt ServerMonitoring
+  ClientSummary AdminTokenSummary AdminTokenReceipt ServerMonitoring
   OverviewIssue OverviewNode OverviewNodesPage OverviewResponse OverviewBucket OverviewHistory
 ]
 identifiable_models = %w[AuthorizationGroupSummary DNSConnection DNSZone DNSRecord CredentialSummary CredentialDetail CredentialBatch NodeSummary NodeDetail UserSummary JobSummary AuditSummary NodeResource AdminTokenSummary]

@@ -71,6 +71,12 @@ struct DNSRecordBindingPicker: View {
     @State private var key = UUID().uuidString
 
     var body: some View {
+        directoryContent
+            .task(id: store.dataRefreshToken) { await store.prepareDirectories([.nodes]) }
+            .disabled([ManagementStore.Directory.nodes].contains { store.loadingDirectories.contains($0) })
+    }
+
+    private var directoryContent: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text(L10n.text("绑定 {0}", String(describing: (record.name)))).font(.title2.bold())
             Picker(L10n.text("节点"), selection: $nodeID) {

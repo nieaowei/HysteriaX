@@ -372,3 +372,59 @@ async fn revoked_administrator_loses_existing_global_and_job_streams() {
     );
     task.abort();
 }
+
+#[tokio::test]
+async fn client_summary_counts_all_users_and_finds_notifications_beyond_first_page() {
+    let (state, base, task) = server().await;
+    sqlx::query("INSERT INTO users(id,name,enabled,expires_at,quota_bytes,usage_bytes,created_at,updated_at) SELECT 'bulk-'||i,'Bulk '||i,i<>235,CASE WHEN i=234 THEN now()-interval '1 day' WHEN i=233 THEN now()+interval '1 day' END,CASE WHEN i=232 THEN 10 END,CASE WHEN i=232 THEN 10 ELSE 0 END,now(),now() FROM generate_series(1,235) i").execute(&state.pool).await.unwrap();
+    sqlx::query("INSERT INTO nodes(id,name,ssh_host,ssh_port,ssh_username,ssh_auth_type,ssh_secret_enc,public_host,public_port,listen_addr,node_token_hash,node_token_enc,traffic_stats_secret_enc,desired_config_enc,created_at,updated_at) SELECT 'node-'||i,'Node '||i,'localhost',22,'root','password','PRIVATE-SSH','example.test',443,':443','hash-'||i,'PRIVATE-TOKEN','PRIVATE-STATS','PRIVATE-CONFIG',now(),now() FROM generate_series(1,235) i").execute(&state.pool).await.unwrap();
+    sqlx::query("INSERT INTO node_packages(node_id,period_id,config,usage_bytes) VALUES('node-235','test','{\"quota_bytes\":10}',10)").execute(&state.pool).await.unwrap();
+    sqlx::query("INSERT INTO credentials(id,name,kind,archived,created_at,updated_at) SELECT 'credential-'||i,'Credential '||i,'ssh_password',i=234,now(),now() FROM generate_series(1,235) i").execute(&state.pool).await.unwrap();
+    sqlx::query(
+        "UPDATE credentials SET reminder_at=now()+interval '1 day' WHERE id='credential-235'",
+    )
+    .execute(&state.pool)
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO credential_versions(credential_id,version,payload_enc,metadata,created_at) SELECT id,1,'PRIVATE-CREDENTIAL',CASE WHEN id='credential-235' THEN '{\"expires_at\":\"invalid\"}'::jsonb WHEN id='credential-234' THEN jsonb_build_object('expires_at',now()+interval '1 day') ELSE '{}'::jsonb END,now() FROM credentials").execute(&state.pool).await.unwrap();
+    let client = reqwest::Client::new();
+    let response = client
+        .get(format!("{base}/api/v1/client/summary"))
+        .bearer_auth("admin-a")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.text().await.unwrap();
+    assert!(!body.contains("PRIVATE-"));
+    let summary: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(summary["node_count"], 235);
+    assert_eq!(summary["user_total"], 236);
+    assert_eq!(summary["user_enabled"], 235);
+    assert_eq!(summary["user_expired"], 1);
+    assert_eq!(summary["user_expiring"], 1);
+    assert_eq!(summary["user_depleted"], 1);
+    assert_eq!(summary["notification_nodes"].as_array().unwrap().len(), 1);
+    assert_eq!(summary["notification_nodes"][0]["id"], "node-235");
+    assert_eq!(
+        summary["notification_credentials"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        summary["notification_credentials"][0]["id"],
+        "credential-235"
+    );
+    assert_eq!(
+        client
+            .get(format!("{base}/api/v1/client/summary"))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    task.abort();
+}

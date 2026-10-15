@@ -10,6 +10,7 @@ private struct ClientDisplaySnapshot: Codable {
     let updatedAt: Date
     let serverMonitoring: ServerMonitoring?
     let overview: OverviewResponse?
+    var clientSummary: ClientSummary? = nil
 }
 
 @MainActor
@@ -41,6 +42,12 @@ final class ManagementStore {
     var serverMonitoringError: String?
     var overviewMonitoringPage: OverviewNodesPage?
     var overviewMonitoringPageKey: String?
+    var clientSummary: ClientSummary?
+    var supportsClientSummary = false
+    enum Directory: String, Hashable { case nodes, users, credentials }
+    private var loadedDirectories: Set<Directory> = []
+    private var directoryTasks: [Directory: Task<Void, Never>] = [:]
+    var loadingDirectories: Set<Directory> = []
     var overview: OverviewResponse?
     var overviewError: String?
     var overviewHistoryRefreshToken = UUID()
@@ -108,6 +115,12 @@ final class ManagementStore {
         overviewMonitoringPageKey = nil
         serviceGeneration = UUID()
         directoryGeneration = nil
+        for task in directoryTasks.values { task.cancel() }
+        directoryTasks = [:]
+        loadedDirectories = []
+        loadingDirectories = []
+        clientSummary = nil
+        supportsClientSummary = version.features?.contains("client_summary") == true
         overviewRequestGeneration = UUID()
         if serviceChanged {
             historyCache = [:]
@@ -155,8 +168,8 @@ final class ManagementStore {
             guard connectionGeneration == serviceGeneration else { throw CancellationError() }
             isConnected = true
             errorMessage = nil
-            await (nodeNotifications ?? .shared).deliver(nodes: nodes, service: serviceAddress)
-            await (nodeNotifications ?? .shared).deliver(credentials: credentials, service: serviceAddress)
+            await (nodeNotifications ?? .shared).deliver(nodes: clientSummary?.notificationNodes ?? nodes, service: serviceAddress)
+            await (nodeNotifications ?? .shared).deliver(credentials: clientSummary?.notificationCredentials ?? credentials, service: serviceAddress)
         } catch {
             guard connectionGeneration == serviceGeneration else { throw CancellationError() }
             isConnected = false
@@ -186,9 +199,15 @@ final class ManagementStore {
             let version: APIVersion = try await api.get(APIEndpoints.getAPIVersion)
             currentAdminTokenID = version.currentAdminTokenId
             guard version.apiVersion == "1.0.0" else { throw APIClientError.incompatibleAPI(version.apiVersion) }
+            supportsClientSummary = version.features?.contains("client_summary") == true
             let changed=forceDirectories || directoryGeneration != version.directoryGeneration || !isConnected
             if changed && !forceDirectories { listPageCache.invalidate() }
-            if changed { try await loadData(using: api, bypassCache: forceDirectories); directoryGeneration=version.directoryGeneration }
+            if changed {
+                for task in directoryTasks.values { task.cancel() }
+                directoryTasks = [:]; loadedDirectories = []; loadingDirectories = []
+                try await loadData(using: api, bypassCache: forceDirectories)
+                directoryGeneration=version.directoryGeneration
+            }
             guard refreshGeneration == serviceGeneration, !Task.isCancelled else { return }
             supportsDNSManagement = version.features?.contains("dns_management") == true
             supportsNodePackages = version.features?.contains("node_packages") == true
@@ -199,13 +218,14 @@ final class ManagementStore {
             isConnected = true
             if changed { await refreshAuthorizationGroups() }
             errorMessage = nil
-            await (nodeNotifications ?? .shared).deliver(nodes: nodes, service: serviceAddress)
-            await (nodeNotifications ?? .shared).deliver(credentials: credentials, service: serviceAddress)
             if !changed {
+                await refreshClientSummary(using: api)
                 let monitoring=await fetchServerMonitoring(using:api)
                 guard refreshGeneration==serviceGeneration,!Task.isCancelled else {return}
                 serverMonitoring=monitoring.value ?? serverMonitoring; serverMonitoringError=monitoring.error
             }
+            await (nodeNotifications ?? .shared).deliver(nodes: clientSummary?.notificationNodes ?? nodes, service: serviceAddress)
+            await (nodeNotifications ?? .shared).deliver(credentials: clientSummary?.notificationCredentials ?? credentials, service: serviceAddress)
             await refreshOverview(bypassCache: forceDirectories)
             dataRefreshToken=UUID()
             if changed { await refreshDNS(bypassCache: forceDirectories) }
@@ -227,7 +247,7 @@ final class ManagementStore {
             guard generation == serviceGeneration, request == overviewRequestGeneration, !Task.isCancelled else { return }
             overview = value
             overviewError = nil
-            let snapshot = ClientDisplaySnapshot(credentials: credentials, nodes: nodes, users: users, jobs: jobs, auditRecords: auditRecords, updatedAt: lastUpdated ?? Date(), serverMonitoring: serverMonitoring, overview: value)
+            let snapshot = ClientDisplaySnapshot(credentials: Array(credentials.prefix(50)), nodes: Array(nodes.prefix(50)), users: Array(users.prefix(50)), jobs: jobs, auditRecords: auditRecords, updatedAt: lastUpdated ?? Date(), serverMonitoring: serverMonitoring, overview: value, clientSummary: clientSummary)
             if let data = try? JSONEncoder().encode(snapshot) { UserDefaults.standard.set(data, forKey: displaySnapshotKey) }
         } catch {
             guard generation == serviceGeneration, request == overviewRequestGeneration, !Task.isCancelled else { return }
@@ -308,7 +328,9 @@ final class ManagementStore {
     }
 
     func nodesPage(page: Int, pageSize: Int, query: String, sort: String, order: String, cacheKey: String? = nil, revalidate: Bool = false) async throws -> NodesPage {
-        try await loadListPage(APIEndpoints.listNodes(page: page, pageSize: pageSize, q: query, stateMatches: NodeDisplayText.matchingStates(query), sort: sort, order: order), cacheKey: cacheKey, ttl: 15, revalidate: revalidate)
+        let result: NodesPage = try await loadListPage(APIEndpoints.listNodes(page: page, pageSize: pageSize, q: query, stateMatches: NodeDisplayText.matchingStates(query), sort: sort, order: order), cacheKey: cacheKey, ttl: 15, revalidate: revalidate)
+        if !loadedDirectories.contains(.nodes) { nodes = result.items }
+        return result
     }
 
     func nodeDetail(_ nodeID: String) async throws -> NodeDetail {
@@ -324,7 +346,9 @@ final class ManagementStore {
     }
 
     func usersPage(page: Int, pageSize: Int, query: String, order: String, cacheKey: String? = nil, revalidate: Bool = false) async throws -> UsersPage {
-        try await loadListPage(APIEndpoints.listUsers(page: page, pageSize: pageSize, q: query, sort: "name", order: order), cacheKey: cacheKey, ttl: 15, revalidate: revalidate)
+        let result: UsersPage = try await loadListPage(APIEndpoints.listUsers(page: page, pageSize: pageSize, q: query, sort: "name", order: order), cacheKey: cacheKey, ttl: 15, revalidate: revalidate)
+        if !loadedDirectories.contains(.users) { users = result.items }
+        return result
     }
 
     func auditPage(page: Int, pageSize: Int, query: String, sort: String, order: String, cacheKey: String? = nil, revalidate: Bool = false) async throws -> AuditPage {
@@ -642,8 +666,8 @@ final class ManagementStore {
             try await loadData(using: nextAPI)
             isConnected = true
             errorMessage = nil
-            await (nodeNotifications ?? .shared).deliver(nodes: nodes, service: serviceAddress)
-            await (nodeNotifications ?? .shared).deliver(credentials: credentials, service: serviceAddress)
+            await (nodeNotifications ?? .shared).deliver(nodes: clientSummary?.notificationNodes ?? nodes, service: serviceAddress)
+            await (nodeNotifications ?? .shared).deliver(credentials: clientSummary?.notificationCredentials ?? credentials, service: serviceAddress)
         } catch {
             isConnected = false
             errorMessage = L10n.text("新令牌已保存并切换，但服务暂不可用：{0}", String(describing: (error.localizedDescription)))
@@ -667,18 +691,18 @@ final class ManagementStore {
     private func loadData(using client: APIClient, bypassCache: Bool = false) async throws {
         let generation = serviceGeneration
         async let loadedMonitoring = fetchServerMonitoring(using: client)
-        async let loadedCredentials: [CredentialSummary] = client.collectPages(bypassCache: bypassCache) { APIEndpoints.listCredentials(page: $0, pageSize: 200) }
-        async let loadedNodes: [NodeSummary] = client.collectPages(bypassCache: bypassCache) { APIEndpoints.listNodes(page: $0, pageSize: 200) }
-        async let loadedUsers: [UserSummary] = client.collectPages(bypassCache: bypassCache) { APIEndpoints.listUsers(page: $0, pageSize: 200) }
+        async let loadedCredentials: CredentialsPage = client.get(APIEndpoints.listCredentials(page: 1, pageSize: 50), bypassCache: bypassCache)
+        async let loadedNodes: NodesPage = client.get(APIEndpoints.listNodes(page: 1, pageSize: 50), bypassCache: bypassCache)
+        async let loadedUsers: UsersPage = client.get(APIEndpoints.listUsers(page: 1, pageSize: 50), bypassCache: bypassCache)
         async let loadedJobs: JobsPage = client.get(APIEndpoints.listJobs(pageSize: 200), bypassCache: bypassCache)
         async let loadedAudit: AuditPage = client.get(APIEndpoints.listAuditRecords(pageSize: 200), bypassCache: bypassCache)
         async let loadedAdminTokens: [AdminTokenSummary] = client.get(APIEndpoints.listAdminTokens)
         let tokens = try await loadedAdminTokens
         let monitoring = await loadedMonitoring
         let snapshot = try await ClientDisplaySnapshot(
-            credentials: loadedCredentials,
-            nodes: loadedNodes,
-            users: loadedUsers,
+            credentials: loadedCredentials.items,
+            nodes: loadedNodes.items,
+            users: loadedUsers.items,
             jobs: loadedJobs.items,
             auditRecords: loadedAudit.items,
             updatedAt: Date(),
@@ -694,10 +718,92 @@ final class ManagementStore {
         jobs = snapshot.jobs
         auditRecords = snapshot.auditRecords
         adminTokens = tokens
+        if !supportsClientSummary {
+            // Older servers have no independent counters/notification candidates.
+            // Preserve their complete-data behavior until the server is upgraded.
+            async let oldNodes: [NodeSummary] = client.collectPages(bypassCache: bypassCache) { APIEndpoints.listNodes(page: $0, pageSize: 200) }
+            async let oldUsers: [UserSummary] = client.collectPages(bypassCache: bypassCache) { APIEndpoints.listUsers(page: $0, pageSize: 200) }
+            async let oldCredentials: [CredentialSummary] = client.collectPages(bypassCache: bypassCache) { APIEndpoints.listCredentials(page: $0, pageSize: 200) }
+            let legacy = try await (oldNodes, oldUsers, oldCredentials)
+            guard generation == serviceGeneration, !Task.isCancelled else { throw CancellationError() }
+            nodes = legacy.0; users = legacy.1; credentials = legacy.2
+            loadedDirectories = [.nodes, .users, .credentials]
+        }
+        await refreshClientSummary(using: client)
+        guard generation == serviceGeneration, !Task.isCancelled else { throw CancellationError() }
         lastUpdated = snapshot.updatedAt
-        if let data = try? JSONEncoder().encode(snapshot) {
+        var display = snapshot
+        display.clientSummary = clientSummary
+        if let data = try? JSONEncoder().encode(display) {
             UserDefaults.standard.set(data, forKey: displaySnapshotKey)
         }
+    }
+
+    private func refreshClientSummary(using client: APIClient) async {
+        guard supportsClientSummary else { clientSummary = nil; return }
+        let generation = serviceGeneration
+        do {
+            let value = try await client.get(APIEndpoints.getClientSummary)
+            guard generation == serviceGeneration, !Task.isCancelled else { return }
+            clientSummary = value
+        } catch {
+            // Keep the last complete summary; list pages are never treated as global totals.
+        }
+    }
+
+    // Full directories are needed only by legacy bulk-selection controls. Deduplicate
+    // those explicit reads and invalidate them on committed configuration changes.
+    func prepareDirectory(_ directory: Directory) async {
+        guard !loadedDirectories.contains(directory), let client = try? requireConnectedAPI() else { return }
+        if let task = directoryTasks[directory] { await task.value; return }
+        let generation = serviceGeneration
+        let request = listCacheSession
+        loadingDirectories.insert(directory)
+        let task = Task { [weak self] in
+            guard let self else { return }
+            do {
+                switch directory {
+                case .nodes:
+                    let values: [NodeSummary] = try await client.collectPages { APIEndpoints.listNodes(page: $0, pageSize: 200) }
+                    guard generation == self.serviceGeneration, request == self.listCacheSession, !Task.isCancelled else { return }
+                    self.nodes = values
+                case .users:
+                    let values: [UserSummary] = try await client.collectPages { APIEndpoints.listUsers(page: $0, pageSize: 200) }
+                    guard generation == self.serviceGeneration, request == self.listCacheSession, !Task.isCancelled else { return }
+                    self.users = values
+                case .credentials:
+                    let values: [CredentialSummary] = try await client.collectPages { APIEndpoints.listCredentials(page: $0, pageSize: 200) }
+                    guard generation == self.serviceGeneration, request == self.listCacheSession, !Task.isCancelled else { return }
+                    self.credentials = values
+                }
+                self.loadedDirectories.insert(directory)
+            } catch {
+                guard generation == self.serviceGeneration, !Task.isCancelled else { return }
+                self.errorMessage = error.localizedDescription
+            }
+            guard generation == self.serviceGeneration, !Task.isCancelled else { return }
+            self.loadingDirectories.remove(directory)
+            self.directoryTasks[directory] = nil
+        }
+        directoryTasks[directory] = task
+        await task.value
+    }
+
+    func prepareDirectories(_ directories: [Directory]) async {
+        for directory in directories { await prepareDirectory(directory) }
+    }
+
+    func prepareNode(_ id: String?) async {
+        guard let id else { return }
+        do {
+            let generation = serviceGeneration
+            let detail = try await nodeDetail(id)
+            let value = try JSONDecoder().decode(NodeSummary.self, from: JSONEncoder().encode(detail))
+            guard generation == serviceGeneration, !Task.isCancelled else { return }
+            nodes.removeAll { $0.id == id }
+            if !loadedDirectories.contains(.nodes) { nodes = Array(nodes.suffix(199)) }
+            nodes.append(value)
+        } catch { }
     }
 
     private func fetchServerMonitoring(using client: APIClient) async -> (value: ServerMonitoring?, error: String?) {
@@ -715,12 +821,13 @@ final class ManagementStore {
         if let data = UserDefaults.standard.data(forKey: "overviewHistory.\(serviceAddress)"), let values = try? JSONDecoder().decode([String: OverviewHistory].self, from: data) { historyCache = values }
         guard let data = UserDefaults.standard.data(forKey: displaySnapshotKey),
               let snapshot = try? JSONDecoder().decode(ClientDisplaySnapshot.self, from: data) else { return }
-        credentials = snapshot.credentials ?? []
-        nodes = snapshot.nodes
-        users = snapshot.users
+        credentials = Array((snapshot.credentials ?? []).prefix(50))
+        nodes = Array(snapshot.nodes.prefix(50))
+        users = Array(snapshot.users.prefix(50))
         jobs = snapshot.jobs
         auditRecords = snapshot.auditRecords
         serverMonitoring = snapshot.serverMonitoring
+        clientSummary = snapshot.clientSummary
         overview = snapshot.overview
         supportsOverviewMonitoring = snapshot.overview != nil
         lastUpdated = snapshot.updatedAt

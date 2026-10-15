@@ -90,8 +90,8 @@ struct OverviewView: View {
                 }
             } else {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 180))], spacing: 16) {
-                    summaryCard(L10n.text("节点"), value: "\(store.nodes.count)", symbol: "server.rack")
-                    summaryCard(L10n.text("用户"), value: "\(store.users.count)", symbol: "person.2")
+                    summaryCard(L10n.text("节点"), value: "\(store.clientSummary?.nodeCount ?? store.nodes.count)", symbol: "server.rack")
+                    summaryCard(L10n.text("用户"), value: "\(store.clientSummary?.userTotal ?? store.users.count)", symbol: "person.2")
                     summaryCard(L10n.text("最近任务中待处理"), value: "\(store.jobs.filter { $0.status == "queued" || $0.status == "running" }.count)", symbol: "hourglass")
                     summaryCard(L10n.text("需关注节点"), value: "\(nodesNeedingAttention)", symbol: "exclamationmark.triangle")
                 }
@@ -152,13 +152,13 @@ struct OverviewView: View {
 
     private var userSummarySection: some View {
         let now = Date()
-        let enabled = store.users.filter(\.enabled).count
-        let expired = store.users.filter { DateDisplayText.parse($0.expiresAt).map { $0 <= now } ?? false }.count
-        let expiring = store.users.filter { DateDisplayText.parse($0.expiresAt).map { $0 > now && $0 <= now.addingTimeInterval(7 * 86400) } ?? false }.count
-        let depleted = store.users.filter { user in user.quotaBytes.map { user.usageBytes >= $0 } ?? false }.count
+        let enabled = store.clientSummary?.userEnabled ?? store.users.filter(\.enabled).count
+        let expired = store.clientSummary?.userExpired ?? store.users.filter { DateDisplayText.parse($0.expiresAt).map { $0 <= now } ?? false }.count
+        let expiring = store.clientSummary?.userExpiring ?? store.users.filter { DateDisplayText.parse($0.expiresAt).map { $0 > now && $0 <= now.addingTimeInterval(7 * 86400) } ?? false }.count
+        let depleted = store.clientSummary?.userDepleted ?? store.users.filter { user in user.quotaBytes.map { user.usageBytes >= $0 } ?? false }.count
         return OverviewCard(L10n.text("用户状态"), systemImage: "person.2") {
             VStack(alignment: .leading, spacing: 6) {
-                Text(L10n.text("全部 {0} · 启用 {1} · 停用 {2}", String(describing: (store.users.count)), String(describing: (enabled)), String(describing: (store.users.count - enabled))))
+                Text(L10n.text("全部 {0} · 启用 {1} · 停用 {2}", String(describing: (store.clientSummary?.userTotal ?? store.users.count)), String(describing: (enabled)), String(describing: ((store.clientSummary?.userTotal ?? store.users.count) - enabled))))
                 Text(L10n.text("已过期 {0} · 7 天内到期 {1} · 额度耗尽 {2}", String(describing: (expired)), String(describing: (expiring)), String(describing: (depleted)))).foregroundStyle(.secondary)
                 Text(L10n.text("到期与额度分类可能重叠；启用状态不代表用户在线。")).font(.caption).foregroundStyle(.secondary)
             }.frame(maxWidth: .infinity, alignment: .leading)

@@ -1269,6 +1269,28 @@ struct APIErrorResponse: Codable, Sendable {
     }
 }
 
+struct ClientSummary: Codable, Sendable {
+    let nodeCount: Int
+    let userTotal: Int
+    let userEnabled: Int
+    let userExpired: Int
+    let userExpiring: Int
+    let userDepleted: Int
+    let notificationNodes: [NodeSummary]
+    let notificationCredentials: [CredentialSummary]
+
+    enum CodingKeys: String, CodingKey {
+        case nodeCount = "node_count"
+        case userTotal = "user_total"
+        case userEnabled = "user_enabled"
+        case userExpired = "user_expired"
+        case userExpiring = "user_expiring"
+        case userDepleted = "user_depleted"
+        case notificationNodes = "notification_nodes"
+        case notificationCredentials = "notification_credentials"
+    }
+}
+
 struct AdminTokenSummary: Codable, Sendable, Identifiable {
     let id: String
     let label: String

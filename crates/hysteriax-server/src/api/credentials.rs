@@ -49,7 +49,7 @@ fn name(value: &str) -> Result<&str, ApiError> {
     Ok(value)
 }
 
-fn summary(row: &sqlx::postgres::PgRow) -> Value {
+pub(super) fn summary(row: &sqlx::postgres::PgRow) -> Value {
     let metadata: Value = row.get("metadata");
     let reminder: Option<DateTime<Utc>> = row.get("reminder_at");
     let expires = metadata

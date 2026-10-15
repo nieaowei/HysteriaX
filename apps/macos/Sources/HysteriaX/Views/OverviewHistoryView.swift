@@ -36,6 +36,12 @@ struct OverviewHistoryView: View {
     private var requestKey: String { "\(store.serviceAddress)|\(store.isConnected)|\(store.supportsOverviewMonitoring)|\(range)|\(source)|\(selectedNodeID ?? "all")|\(store.overviewHistoryRefreshToken)|\(isActive)" }
 
     var body: some View {
+        directoryContent
+            .task(id: store.dataRefreshToken) { await store.prepareDirectories([.nodes]) }
+            .disabled([ManagementStore.Directory.nodes].contains { store.loadingDirectories.contains($0) })
+    }
+
+    private var directoryContent: some View {
         @Bindable var query = state
         return OverviewCard(category == .traffic ? L10n.text("流量趋势") : L10n.text("连接与质量趋势"), systemImage: category == .traffic ? "chart.bar.xaxis" : "chart.xyaxis.line", isRefreshing: loading) {
             VStack(alignment: .leading, spacing: 14) {

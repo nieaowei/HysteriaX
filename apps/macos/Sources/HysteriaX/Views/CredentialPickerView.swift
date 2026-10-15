@@ -12,6 +12,12 @@ struct CredentialPickerView: View {
         store.credentials.filter { kinds.contains($0.kind) && (dnsProvider == nil || $0.metadata["provider"]?.stringValue == dnsProvider) && $0.ownerUserId == ownerUserID && (!$0.archived || $0.id == selection) }
     }
     var body: some View {
+        directoryContent
+            .task(id: store.dataRefreshToken) { await store.prepareDirectories([.credentials]) }
+            .disabled([ManagementStore.Directory.credentials].contains { store.loadingDirectories.contains($0) })
+    }
+
+    private var directoryContent: some View {
         HStack {
             Picker(title, selection: $selection) {
                 Text(L10n.text("选择凭据")).tag("")

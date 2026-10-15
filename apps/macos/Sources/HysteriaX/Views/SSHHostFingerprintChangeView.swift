@@ -17,6 +17,9 @@ struct SSHHostFingerprintChangeView: View {
     }
 
     var body: some View {
+        fingerprintContent.task(id: store.dataRefreshToken) { await store.prepareNode(job.nodeID) }
+    }
+    private var fingerprintContent: some View {
         GroupBox(L10n.text("SSH 主机指纹已更换")) {
             VStack(alignment: .leading, spacing: 10) {
                 fingerprints
