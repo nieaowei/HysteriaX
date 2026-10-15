@@ -36,9 +36,21 @@ Node creation offers four address modes:
   their targets or TTL.
 
 Node allocation creates DNS-only records. A node owns one primary connection
-hostname; a hostname cannot be bound to multiple nodes. SSH addresses are
-independent from public DNS targets. There is no background IP discovery or
-DDNS: subsequent target changes are explicit edits.
+hostname; a hostname cannot be bound to multiple nodes.
+
+Saving a public IP in the node's SSH address now queues an update to the bound
+hostname's matching A (IPv4) or AAAA (IPv6) record. This includes saving the same
+SSH IP again to repair a target left behind by an older server. The record keeps
+its hostname, type, TTL and DNS-only status. The SSH edit, DNS intent and task are
+committed together; the client reports queued DNS updates separately from a
+completed provider write. An unfinished DNS write must finish or be retried before
+saving SSH again. Provider-side changes still require refresh and review.
+
+Private/local SSH addresses, SSH hostnames, CNAME bindings and the other address
+family remain independent. This does not create a missing address-family record
+or discover public addresses in the background. Explicit DNS target editing
+remains available. Changing a public SSH IP now follows it even if the previous
+DNS target was different.
 
 **Domain assignment does not enable or modify ACME.** After creating the node,
 open its proxy configuration, choose ACME or an uploaded TLS identity, and use

@@ -382,12 +382,24 @@ mod tests {
             Json(json!({"success":false,"errors":[{"message":"fixture-provider-token"}]})),
         )
     }
+    async fn update(
+        State(remote): State<Remote>,
+        Path(id): Path<String>,
+        Json(mut record): Json<Value>,
+    ) -> Json<Value> {
+        record["id"] = json!(id);
+        let mut records = remote.records.lock().unwrap();
+        let existing = records.iter_mut().find(|row| row["id"] == id).unwrap();
+        *existing = record.clone();
+        remote.writes.fetch_add(1, Ordering::SeqCst);
+        Json(json!({"success":true,"result":record}))
+    }
     async fn provider(remote: Remote) -> (Cloudflare, tokio::task::JoinHandle<()>) {
         let app = Router::new()
             .route("/zones/remote-zone/dns_records", get(list).post(create))
             .route(
                 "/zones/remote-zone/dns_records/{id}",
-                get(read).delete(delete),
+                get(read).patch(update).delete(delete),
             )
             .with_state(remote);
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -398,6 +410,97 @@ mod tests {
         .unwrap();
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         (provider, server)
+    }
+
+    #[tokio::test]
+    async fn ssh_address_change_reaches_provider_and_replay_does_not_write_twice() {
+        let (state, ssh, _, _) = crate::dns::tests::fixture().await;
+        let (node, ids) = crate::dns::tests::allocated_node(&state, &ssh).await;
+        let old = sqlx::query("SELECT id,remote_snapshot FROM dns_records")
+            .fetch_all(&state.pool)
+            .await
+            .unwrap();
+        let remote = Remote {
+            records: Arc::new(Mutex::new(
+                old.iter()
+                    .map(|row| {
+                        let mut value: Value = row.get("remote_snapshot");
+                        value["id"] = json!(row.get::<String, _>("id"));
+                        value
+                    })
+                    .collect(),
+            )),
+            writes: Arc::new(AtomicUsize::new(0)),
+        };
+        let (provider, server) = provider(remote.clone()).await;
+        let Json(receipt) = crate::api::nodes::patch(
+            State(state.clone()),
+            axum::extract::Path(node.clone()),
+            Json(
+                serde_json::from_value(json!({"expected_revision":1,"ssh_host":"9.9.9.9"}))
+                    .unwrap(),
+            ),
+        )
+        .await
+        .unwrap();
+        let row = sqlx::query("SELECT * FROM jobs WHERE id=$1")
+            .bind(receipt["dns_job_ids"][0].as_str())
+            .fetch_one(&state.pool)
+            .await
+            .unwrap();
+        let job = JobInput {
+            id: row.get("id"),
+            kind: row.get("kind"),
+            node_id: Some(node),
+            target_revision: None,
+            payload: row.get("payload_json"),
+            attempts: 1,
+        };
+        let operation = job.payload["dns_operation_id"].as_str().unwrap();
+        let payload: Value = sqlx::query_scalar("SELECT payload FROM dns_operations WHERE id=$1")
+            .bind(operation)
+            .fetch_one(&state.pool)
+            .await
+            .unwrap();
+        write_record(
+            &state.pool,
+            &provider,
+            &job,
+            operation,
+            "record-update",
+            &ids[0],
+            &payload,
+        )
+        .await
+        .unwrap();
+        execute(&state.pool, &state.secrets, &job).await.unwrap();
+        assert_eq!(remote.writes.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            remote
+                .records
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|r| r["id"] == ids[0])
+                .unwrap()["content"],
+            "9.9.9.9"
+        );
+        let row = sqlx::query("SELECT content,state,desired FROM dns_records WHERE id=$1")
+            .bind(&ids[0])
+            .fetch_one(&state.pool)
+            .await
+            .unwrap();
+        assert_eq!(row.get::<String, _>("content"), "9.9.9.9");
+        assert_eq!(row.get::<String, _>("state"), "synced");
+        assert!(row.get::<Option<Value>, _>("desired").is_none());
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM jobs WHERE kind='dns-record-check'")
+                .fetch_one(&state.pool)
+                .await
+                .unwrap(),
+            1
+        );
+        server.abort();
     }
 
     #[tokio::test]

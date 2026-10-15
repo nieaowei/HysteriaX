@@ -1375,3 +1375,9 @@
 
 "共 {0} 个节点 · 第 {1} / {2} 页" = "{0} nodes · Page {1} of {2}";
 "搜索节点名称、ID 或地址" = "Search node name, ID or address";
+
+"基本信息及 SSH 已保存，已排队更新 {0} 条 DNS 记录。" = "Basic information and SSH saved. {0} DNS record update(s) queued.";
+
+"同步 SSH 地址到 DNS" = "Sync SSH address to DNS";
+
+"保存公网 SSH IP 会同步更新绑定域名下同地址族的 DNS 记录。" = "Saving a public SSH IP also updates the bound DNS record of the same address family.";

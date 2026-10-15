@@ -44,6 +44,7 @@ final class ManagementStore {
     var overviewMonitoringPageKey: String?
     var clientSummary: ClientSummary?
     var supportsClientSummary = false
+    var supportsSSHDNSSync = false
     enum Directory: String, Hashable { case nodes, users, credentials }
     private var loadedDirectories: Set<Directory> = []
     private var directoryTasks: [Directory: Task<Void, Never>] = [:]
@@ -138,6 +139,7 @@ final class ManagementStore {
             requestedDNSRecordID = nil
             supportsNodeRecordRemoval = false
             supportsAuthorizationGroups = false
+            supportsSSHDNSSync = false
             serverMonitoring = nil
             serverMonitoringError = nil
             nodes = []
@@ -178,6 +180,7 @@ final class ManagementStore {
         }
         supportsDNSManagement = version.features?.contains("dns_management") == true
         supportsNodePackages = version.features?.contains("node_packages") == true
+        supportsSSHDNSSync = version.features?.contains("ssh_dns_sync") == true
         supportsOverviewMonitoring = version.features?.contains("overview_monitoring") == true
         supportsJobRetryLinks = version.features?.contains("job_retry_links") == true
         supportsNodeRecordRemoval = version.features?.contains("node_record_removal") == true
@@ -211,6 +214,7 @@ final class ManagementStore {
             guard refreshGeneration == serviceGeneration, !Task.isCancelled else { return }
             supportsDNSManagement = version.features?.contains("dns_management") == true
             supportsNodePackages = version.features?.contains("node_packages") == true
+            supportsSSHDNSSync = version.features?.contains("ssh_dns_sync") == true
             supportsOverviewMonitoring = version.features?.contains("overview_monitoring") == true
             supportsJobRetryLinks = version.features?.contains("job_retry_links") == true
             supportsNodeRecordRemoval = version.features?.contains("node_record_removal") == true
@@ -397,10 +401,12 @@ final class ManagementStore {
         await refresh()
     }
 
-    func updateServerConfiguration(nodeID: String, request: NodePatchRequest) async throws {
+    @discardableResult
+    func updateServerConfiguration(nodeID: String, request: NodePatchRequest) async throws -> NodeUpdateResponse {
         let api = try requireConnectedAPI()
-        let _: NodeUpdateResponse = try await api.patch(APIEndpoints.updateNode(id: nodeID), body: request)
+        let response: NodeUpdateResponse = try await api.patch(APIEndpoints.updateNode(id: nodeID), body: request)
         await refresh()
+        return response
     }
 
     func updateNodePackage(_ detail: NodeDetail, package: NodePackage) async throws {

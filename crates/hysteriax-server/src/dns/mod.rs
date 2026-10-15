@@ -263,3 +263,6 @@ mod validation_tests {
 
 #[cfg(test)]
 pub(crate) mod tests;
+
+#[cfg(test)]
+mod ssh_target_tests;

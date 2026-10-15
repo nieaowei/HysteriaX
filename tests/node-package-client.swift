@@ -72,6 +72,10 @@ import Foundation
         precondition(replacement.sshCredentialId == "replacement-credential" && replacement.sshCredentialVersion == 2)
         server.sshPort = "65536"
         do { _ = try server.request(revision: 7, originalAuthType: "password"); preconditionFailure("invalid port accepted") } catch { }
+        let queuedDNS = try decoder.decode(NodeUpdateResponse.self, from: Data(#"{"id":"node","name":"Node","revision":2,"state":"deployed","sync_job_queued":false,"dns_job_ids":["dns-job"]}"#.utf8))
+        precondition(queuedDNS.dnsJobIds == ["dns-job"])
+        let oldNodeUpdate = try decoder.decode(NodeUpdateResponse.self, from: Data(#"{"id":"node","name":"Node","revision":2,"state":"deployed","sync_job_queued":false}"#.utf8))
+        precondition(oldNodeUpdate.dnsJobIds == nil)
         let usageOperation = APIEndpoints.updateNodeUsage(id: "node")
         precondition(usageOperation.method == "PUT" && usageOperation.path == "api/v1/nodes/node/usage")
         let modern = try decoder.decode(NodeSummary.self, from: Data(#"{"id":"node","name":"Node","revision":1,"state":"deployed","package_usage":{"usage_bytes":800,"restricted":false,"reasons":[],"freshness":"fresh","alerts":[{"id":"event","kind":"traffic_warning","created_at":"2026-10-03T00:00:00Z"}]}}"#.utf8))

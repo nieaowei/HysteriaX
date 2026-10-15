@@ -431,6 +431,7 @@ pub async fn patch(
         )));
     }
 
+    let ssh_host_supplied = input.ssh_host.is_some();
     let name: String = input.name.unwrap_or_else(|| current.get("name"));
     let ssh_host: String = input.ssh_host.unwrap_or_else(|| current.get("ssh_host"));
     let ssh_port: u16 = input
@@ -637,6 +638,11 @@ pub async fn patch(
     if let Some(package) = &input.package {
         crate::node_limits::save(&mut tx, &id, package).await?;
     }
+    let dns_job_ids = if ssh_host_supplied {
+        crate::dns::binding::sync_ssh_target_in_tx(&mut tx, &id, next_revision, &ssh_host).await?
+    } else {
+        Vec::new()
+    };
     let sync_required = config_changed
         || connection_changed
         || listener_changed
@@ -647,11 +653,11 @@ pub async fn patch(
         enqueue_job_in_tx(&mut tx, "sync", Some(&id), Some(next_revision)).await?;
     }
     sqlx::query("INSERT INTO audit_records (id, actor, action, entity_type, entity_id, detail_json, created_at) VALUES ($1, 'admin', 'node.updated', 'node', $2, $3, $4)")
-        .bind(Uuid::new_v4().to_string()).bind(&id).bind(json!({"revision": next_revision, "config_changed": config_changed, "proxy_probe_url_changed": proxy_probe_url_changed, "traffic_stats_port_changed": traffic_stats_port_changed, "package_changed": input.package.is_some(), "package": input.package})).bind(updated_at)
+        .bind(Uuid::new_v4().to_string()).bind(&id).bind(json!({"revision": next_revision, "config_changed": config_changed, "proxy_probe_url_changed": proxy_probe_url_changed, "traffic_stats_port_changed": traffic_stats_port_changed, "package_changed": input.package.is_some(), "package": input.package, "dns_job_ids": dns_job_ids})).bind(updated_at)
         .execute(&mut *tx).await?;
     tx.commit().await?;
     Ok(Json(
-        json!({"id": id, "name": name.trim(), "revision": next_revision, "state": current.get::<String, _>("state"), "traffic_stats_port": traffic_stats_port, "proxy_probe_url": proxy_probe_url, "sync_job_queued": sync_required}),
+        json!({"id": id, "name": name.trim(), "revision": next_revision, "state": current.get::<String, _>("state"), "traffic_stats_port": traffic_stats_port, "proxy_probe_url": proxy_probe_url, "sync_job_queued": sync_required, "dns_job_ids": dns_job_ids}),
     ))
 }
 

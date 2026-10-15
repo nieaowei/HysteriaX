@@ -251,6 +251,99 @@ pub async fn bind_in_tx(
     Ok(result)
 }
 
+/// Persist a DNS write together with an explicitly saved public SSH IP. A
+/// repeated save also repairs targets left behind by older server versions.
+/// Hostname/private SSH endpoints and the other address family stay independent.
+pub async fn sync_ssh_target_in_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    node: &str,
+    revision: i64,
+    ssh_host: &str,
+) -> Result<Vec<String>, ApiError> {
+    let Ok(ip) = ssh_host.trim().parse::<std::net::IpAddr>() else {
+        return Ok(vec![]);
+    };
+    let content = ip.to_string();
+    if !public_ip(&content) {
+        return Ok(vec![]);
+    }
+    let kind = if ip.is_ipv4() { "A" } else { "AAAA" };
+    let records = sqlx::query("SELECT r.* FROM dns_bindings b JOIN LATERAL jsonb_array_elements_text(b.record_ids) ids(id) ON true JOIN dns_records r ON r.id=ids.id WHERE b.node_id=$1 AND r.zone_id=b.zone_id AND r.name=b.hostname AND r.record_type=$2 AND r.deleted_at IS NULL ORDER BY r.id")
+        .bind(node).bind(kind).fetch_all(&mut **tx).await?;
+    if records.len() > 1 {
+        return Err(ApiError::conflict(
+            "bound DNS address records are ambiguous; refresh and repair before saving SSH",
+        ));
+    }
+    let mut jobs = Vec::new();
+    for row in records {
+        if row.get::<Option<Value>, _>("desired").is_some() {
+            return Err(ApiError::conflict(
+                "bound DNS record has an unfinished operation; finish or retry that task before saving SSH",
+            ));
+        }
+        if row
+            .get::<String, _>("content")
+            .parse::<std::net::IpAddr>()
+            .ok()
+            == Some(ip)
+        {
+            continue;
+        }
+        if row.get::<bool, _>("proxied") || row.get::<String, _>("state") != "synced" {
+            return Err(ApiError::conflict(
+                "bound DNS record must be synced and DNS-only before saving SSH",
+            ));
+        }
+        let baseline = row
+            .get::<Option<Value>, _>("remote_snapshot")
+            .ok_or_else(|| ApiError::conflict("refresh the bound DNS record before saving SSH"))?;
+        if row.get::<Option<String>, _>("provider_record_id").is_none() {
+            return Err(ApiError::conflict(
+                "bound DNS provider record is missing; refresh before saving SSH",
+            ));
+        }
+        let zone_id: String = row.get("zone_id");
+        let zone = zone_for_write(tx, &zone_id).await?;
+        let record = RecordInput {
+            name: row.get("name"),
+            record_type: kind.into(),
+            content: content.clone(),
+            ttl: row.get("ttl"),
+            proxied: false,
+        }
+        .normalize(&zone.get::<String, _>("name"))
+        .map_err(|e| ApiError::bad_request(e.to_string()))?;
+        let id: String = row.get("id");
+        let desired = record.remote();
+        let key = format!("node-ssh:{node}:{revision}:{id}");
+        let connection: String = zone.get("connection_id");
+        let receipt = super::enqueue(tx, super::Operation {
+            key: &key,
+            request: &json!({"node_id":node,"node_revision":revision,"record_id":id,"desired":desired}),
+            connection: &connection, version: zone.get("credential_version"),
+            resource_type: "dns_record", resource: &id, resource_name: &record.name,
+            resource_key: format!("dns-zone:{zone_id}"), action: "record-update",
+            payload: json!({"desired":desired,"baseline":baseline}), node: Some(node),
+        }).await?;
+        sqlx::query("UPDATE dns_records SET desired=$1,state='pending',resolution_status='unchecked',revision=revision+1,updated_at=now() WHERE id=$2")
+            .bind(&desired).bind(&id).execute(&mut **tx).await?;
+        let job = receipt["job_id"]
+            .as_str()
+            .ok_or_else(ApiError::internal)?
+            .to_owned();
+        super::audit(
+            tx,
+            "node.ssh_target_updated",
+            node,
+            json!({"record_id":id,"job_id":job,"target":content}),
+        )
+        .await?;
+        jobs.push(job);
+    }
+    Ok(jobs)
+}
+
 pub async fn change_hostname_in_tx(
     state: &AppState,
     tx: &mut Transaction<'_, Postgres>,

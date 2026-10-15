@@ -32,6 +32,10 @@ struct ServerConfigurationView: View {
                     Section(L10n.text("基本信息与 SSH")) {
                         TextField(L10n.text("服务器名称"), text: $draft.name)
                         TextField(L10n.text("SSH 地址"), text: $draft.sshHost)
+                        if store.supportsSSHDNSSync && detail.dnsBinding != nil {
+                            Text(L10n.text("保存公网 SSH IP 会同步更新绑定域名下同地址族的 DNS 记录。"))
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
                         TextField(L10n.text("SSH 端口"), text: $draft.sshPort)
                         TextField(L10n.text("SSH 用户"), text: $draft.sshUsername)
                         CredentialPickerView(store: store, selection: $draft.sshCredentialId, kinds: ["ssh_private_key", "ssh_password"], title: L10n.text("SSH 凭据"))
@@ -113,11 +117,15 @@ struct ServerConfigurationView: View {
             Task {
                 defer { isSaving = false }
                 do {
-                    try await store.updateServerConfiguration(nodeID: nodeID, request: request)
+                    let receipt = try await store.updateServerConfiguration(nodeID: nodeID, request: request)
                     let updated = try await store.nodeDetail(nodeID)
                     self.detail = updated
                     draft = ServerConfigurationDraft(updated)
-                    message = L10n.text("基本信息及 SSH 已保存。")
+                    if let count = receipt.dnsJobIds?.count, count > 0 {
+                        message = L10n.text("基本信息及 SSH 已保存，已排队更新 {0} 条 DNS 记录。", String(count))
+                    } else {
+                        message = L10n.text("基本信息及 SSH 已保存。")
+                    }
                 } catch { message = error.localizedDescription }
             }
         } catch { message = error.localizedDescription }

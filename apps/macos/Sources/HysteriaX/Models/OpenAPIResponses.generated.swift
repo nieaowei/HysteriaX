@@ -1028,6 +1028,7 @@ struct NodeUpdateResponse: Codable, Sendable {
     let state: String
     let trafficStatsPort: Int?
     let syncJobQueued: Bool
+    let dnsJobIds: [String]?
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -1036,6 +1037,7 @@ struct NodeUpdateResponse: Codable, Sendable {
         case state
         case trafficStatsPort = "traffic_stats_port"
         case syncJobQueued = "sync_job_queued"
+        case dnsJobIds = "dns_job_ids"
     }
 }
 

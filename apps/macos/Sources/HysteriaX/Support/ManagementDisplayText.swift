@@ -313,6 +313,7 @@ enum AuditDisplayText {
             "dns.connection-refresh": L10n.text("刷新 DNS 域名"),
             "dns.zone-refresh": L10n.text("刷新 DNS 记录"),
             "dns.record-create": L10n.text("创建 DNS 记录"),
+            "dns.node.ssh_target_updated": L10n.text("同步 SSH 地址到 DNS"),
             "dns.record-update": L10n.text("修改 DNS 记录"),
             "dns.record-delete": L10n.text("删除 DNS 记录"),
             "dns.record-check": L10n.text("验证 DNS 解析"),

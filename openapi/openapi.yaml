@@ -2409,6 +2409,10 @@ components:
         state: { type: string }
         traffic_stats_port: { type: integer, minimum: 1, maximum: 65535 }
         sync_job_queued: { type: boolean }
+        dns_job_ids:
+          type: array
+          description: DNS record updates queued transactionally when saving a public SSH IP for a bound node.
+          items: { type: string, format: uuid }
     UserUpdateResponse:
       type: object
       required: [id, name, enabled, expires_at, quota_bytes, revision]

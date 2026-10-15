@@ -288,7 +288,7 @@ async fn api_version(
     let directory_generation = crate::cache::configuration_generation(&state.pool).await?;
     Ok(Json(json!({
         "api_version": "1.0.0",
-        "features": ["client_summary", "node_packages", "overview_monitoring", "job_retry_links", "credentials", "node_record_removal", "dns_management", "authorization_groups"],
+        "features": ["ssh_dns_sync", "client_summary", "node_packages", "overview_monitoring", "job_retry_links", "credentials", "node_record_removal", "dns_management", "authorization_groups"],
         "directory_generation":directory_generation,
         "current_admin_token_id": actor.id,
         "service_version": env!("CARGO_PKG_VERSION"),
