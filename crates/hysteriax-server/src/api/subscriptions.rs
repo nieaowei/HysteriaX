@@ -310,7 +310,7 @@ async fn cached_subscription(
         .await;
     Ok(match response {
         Ok(value) => value.response(),
-        Err(response) => response,
+        Err(response) => *response,
     })
 }
 

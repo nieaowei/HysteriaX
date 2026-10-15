@@ -251,7 +251,7 @@ pub struct CachedResponse {
     pub body: Bytes,
 }
 impl CachedResponse {
-    pub async fn capture(response: Response) -> Result<Self, Response> {
+    pub async fn capture(response: Response) -> Result<Self, Box<Response>> {
         if response.status() != StatusCode::OK
             || response
                 .body()
@@ -259,12 +259,12 @@ impl CachedResponse {
                 .upper()
                 .is_none_or(|size| size > 2 * 1024 * 1024)
         {
-            return Err(response);
+            return Err(Box::new(response));
         }
         let (parts, body) = response.into_parts();
         let bytes = to_bytes(body, 2 * 1024 * 1024)
             .await
-            .map_err(|_| ApiError::internal().into_response())?;
+            .map_err(|_| Box::new(ApiError::internal().into_response()))?;
         Ok(Self {
             status: parts.status,
             headers: parts.headers,
@@ -427,7 +427,7 @@ pub async fn middleware(State(state): State<AppState>, request: Request, next: N
         .await
     {
         Ok(cached) => cached.response(),
-        Err(response) => response,
+        Err(response) => *response,
     };
     state.caches.record(
         route,
