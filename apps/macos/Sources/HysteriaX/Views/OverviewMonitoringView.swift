@@ -30,30 +30,7 @@ struct OverviewMonitoringView: View {
                     packageRisks
                 }
                 if section == .quality {
-                OverviewCard(L10n.text("节点监控"), systemImage: "server.rack") {
-                    VStack(alignment: .leading, spacing: 10) {
-                        HStack {
-                            Text(L10n.text("已采集节点在线用户 {0} · 连接 {1}", String(describing: (overview.onlineUsers.map(String.init) ?? "—")), String(describing: (overview.connections.map(String.init) ?? "—")))).fontWeight(.medium)
-                            Spacer()
-                            Text(L10n.text("覆盖 {0} / {1}", String(describing: (overview.coveredNodes)), String(describing: (overview.eligibleNodes)))).foregroundStyle(.secondary)
-                        }
-                        ForEach(overview.nodes) { node in
-                            Button { viewState.inspectedNode = node } label: {
-                                HStack {
-                                    VStack(alignment: .leading, spacing: 3) {
-                                        Text(node.name).fontWeight(.medium)
-                                        Text(L10n.text("部署：{0} · 在线统计：{1}", String(describing: (OverviewDisplay.status(node.deploymentState))), String(describing: (OverviewDisplay.status(node.onlineStatus))))).font(.caption).foregroundStyle(.secondary)
-                                    }
-                                    Spacer()
-                                    Text(OverviewDisplay.status(node.probeStatus)).foregroundStyle(node.probeStatus == "failed" ? Color.red : node.probeStatus == "healthy" ? Color.green : Color.secondary)
-                                    Text(OverviewDisplay.milliseconds(node.latencyMs)).monospacedDigit().frame(width: 76, alignment: .trailing)
-                                    Image(systemName: "chevron.right").foregroundStyle(.secondary)
-                                }.padding(.vertical, 4).contentShape(Rectangle())
-                            }.buttonStyle(.plain).accessibilityIdentifier("overview.node.\(node.nodeID)")
-                        }
-                        if overview.nodes.isEmpty { Text(L10n.text("添加并部署节点后开始监控。")).foregroundStyle(.secondary) }
-                    }.frame(maxWidth: .infinity, alignment: .leading)
-                }
+                    monitoringNodes(overview)
                 }
             } else if store.supportsOverviewMonitoring {
                 OverviewCard(L10n.text("监控信息"), systemImage: "network") { Text(store.overviewError ?? L10n.text("正在获取概览监控…")).frame(maxWidth: .infinity, alignment: .leading) }
@@ -61,9 +38,99 @@ struct OverviewMonitoringView: View {
         }
     }
 
+    private var nodeQuery: String { viewState.nodeQuery.trimmingCharacters(in: .whitespacesAndNewlines) }
+    private var nodePageKey: String { store.listPageKey([String(viewState.nodePage), String(viewState.nodePageSize), nodeQuery]) }
+    private var nodeRequestKey: String { "\(nodePageKey)|\(store.isConnected)|\(store.dataRefreshToken)|\(viewState.nodeRetryToken)" }
+    private var nodePageResponse: OverviewNodesPage? {
+        store.cachedOverviewNodesPage(nodePageKey) ?? (viewState.nodeLoadedKey == nodePageKey ? viewState.nodePageResponse : nil)
+    }
+    private var nodePageCount: Int { max(1, ((nodePageResponse?.total ?? 0) + viewState.nodePageSize - 1) / viewState.nodePageSize) }
+
+    private func monitoringNodes(_ overview: OverviewResponse) -> some View {
+        @Bindable var state = viewState
+        return OverviewCard(L10n.text("节点监控"), systemImage: "server.rack", isRefreshing: state.nodePageLoading) {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Text(L10n.text("已采集节点在线用户 {0} · 连接 {1}", overview.onlineUsers.map(String.init) ?? "—", overview.connections.map(String.init) ?? "—")).fontWeight(.medium)
+                    Spacer()
+                    Text(L10n.text("覆盖 {0} / {1}", String(overview.coveredNodes), String(overview.eligibleNodes))).foregroundStyle(.secondary)
+                }
+                TextField(L10n.text("搜索节点名称、ID 或地址"), text: $state.nodeQuery)
+                    .textFieldStyle(.roundedBorder).accessibilityIdentifier("overview.nodes.search")
+                ForEach(nodePageResponse?.items ?? []) { node in
+                    Button { state.inspectedNode = node } label: {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(node.name).fontWeight(.medium)
+                                Text(L10n.text("部署：{0} · 在线统计：{1}", OverviewDisplay.status(node.deploymentState), OverviewDisplay.status(node.onlineStatus))).font(.caption).foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Text(OverviewDisplay.status(node.probeStatus)).foregroundStyle(node.probeStatus == "failed" ? Color.red : node.probeStatus == "healthy" ? Color.green : Color.secondary)
+                            Text(OverviewDisplay.milliseconds(node.latencyMs)).monospacedDigit().frame(width: 76, alignment: .trailing)
+                            Image(systemName: "chevron.right").foregroundStyle(.secondary)
+                        }.padding(.vertical, 4).contentShape(Rectangle())
+                    }.buttonStyle(.plain).accessibilityIdentifier("overview.node.\(node.nodeID)")
+                }
+                if let error = state.nodePageError {
+                    HStack {
+                        Text(error).font(.caption).foregroundStyle(.orange)
+                        Button(L10n.text("重试")) { state.nodeLoadedKey = nil; state.nodeRetryToken = UUID() }
+                    }
+                } else if nodePageResponse?.items.isEmpty == true {
+                    Text(L10n.text(nodeQuery.isEmpty ? "添加并部署节点后开始监控。" : "没有匹配的节点")).foregroundStyle(.secondary)
+                }
+                ViewThatFits(in: .horizontal) {
+                    HStack { nodePageLabel; Spacer(); nodePagingControls }
+                    VStack(alignment: .leading, spacing: 8) { nodePageLabel; nodePagingControls }
+                }
+            }.frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .accessibilityIdentifier("overview.nodes.pagination")
+        .onChange(of: state.nodeQuery) { _, _ in state.nodePage = 1 }
+        .onChange(of: state.nodePageSize) { _, _ in state.nodePage = 1 }
+        .task(id: nodeRequestKey) { await loadMonitoringNodes() }
+        .onDisappear { state.nodeLoadedKey = nil }
+    }
+
+    private var nodePageLabel: some View {
+        Text(nodePageResponse.map { response in
+            L10n.text("共 {0} 个节点 · 第 {1} / {2} 页", String(response.total), String(response.page), String(nodePageCount))
+        } ?? " ")
+        .font(.caption).monospacedDigit().foregroundStyle(.secondary)
+    }
+    private var nodePagingControls: some View {
+        @Bindable var state = viewState
+        return HStack {
+            Picker(L10n.text("每页条数"), selection: $state.nodePageSize) {
+                ForEach([10, 20, 50, 100, 200], id: \.self) { Text(String($0)).tag($0) }
+            }.fixedSize()
+            Button(L10n.text("上一页")) { state.nodePage -= 1 }.disabled(state.nodePage <= 1)
+            Button(L10n.text("下一页")) { state.nodePage += 1 }.disabled(state.nodePage >= nodePageCount)
+        }
+    }
+    private func loadMonitoringNodes() async {
+        let key = nodePageKey
+        let request = nodeRequestKey
+        guard store.isConnected else { viewState.nodePageLoading = false; return }
+        viewState.nodePageLoading = true
+        viewState.nodePageError = nil
+        defer { if request == nodeRequestKey { viewState.nodePageLoading = false } }
+        do {
+            if !nodeQuery.isEmpty { try await Task.sleep(for: .milliseconds(250)) }
+            let response = try await store.overviewNodesPage(page: viewState.nodePage, pageSize: viewState.nodePageSize, query: nodeQuery, cacheKey: key, revalidate: viewState.nodeLoadedKey != key)
+            guard !Task.isCancelled, request == nodeRequestKey else { return }
+            viewState.nodePage = response.page
+            viewState.nodePageResponse = response
+            viewState.nodeLoadedKey = nodePageKey
+        } catch {
+            guard !Task.isCancelled, request == nodeRequestKey else { return }
+            viewState.nodePageError = error.localizedDescription
+        }
+    }
+
     private func metricCards(_ overview: OverviewResponse) -> some View {
         Group {
-                    metric(L10n.text("节点健康"), value: "\(overview.nodes.filter { $0.probeStatus == "healthy" }.count) / \(overview.nodeCount)", detail: L10n.text("公网探测健康 / 全部节点"), symbol: "server.rack")
+                    metric(L10n.text("节点健康"), value: "\(overview.healthyNodes) / \(overview.nodeCount)", detail: L10n.text("公网探测健康 / 全部节点"), symbol: "server.rack")
                     metric(L10n.text("需处理节点"), value: "\(overview.attentionNodes)", detail: L10n.text("{0} 项当前提醒", String(describing: (overview.issues.count))), symbol: "exclamationmark.triangle")
                     Button(action: showQuota) { metric(L10n.text("套餐风险"), value: "\(overview.riskNodes)", detail: L10n.text("到期、额度预警或受限节点"), symbol: "gauge.with.dots.needle.67percent") }.buttonStyle(.plain).accessibilityIdentifier("overview.quotaShortcut")
                     metric(L10n.text("任务"), value: "\(overview.queuedJobs + overview.runningJobs)", detail: L10n.text("排队 {0} · 执行 {1} · 24h 失败 {2}", String(describing: (overview.queuedJobs)), String(describing: (overview.runningJobs)), String(describing: (overview.failedJobs24h))), symbol: "hourglass")
@@ -117,7 +184,7 @@ struct OverviewMonitoringView: View {
         OverviewCard(L10n.text("节点额度排行"), systemImage: "gauge.with.dots.needle.67percent") {
             VStack(alignment: .leading, spacing: 16) {
                 if overview.quotaRank.isEmpty { Text(L10n.text("暂无设置流量额度的节点")).foregroundStyle(.secondary) }
-                ForEach(overview.quotaRank) { node in
+                ForEach(overview.quotaRank.prefix(10)) { node in
                     Button { navigate(OverviewDestination(section: "nodes", entityID: node.id)) } label: {
                         VStack(alignment: .leading, spacing: 6) {
                             HStack { Text(node.name).fontWeight(.medium); Spacer(); Text(PackageDisplay.usage(node.package, node.packageUsage)).font(.caption) }

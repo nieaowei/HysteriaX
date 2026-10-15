@@ -5,6 +5,9 @@ final class OverviewTransport: URLProtocol, @unchecked Sendable {
         let lock = NSLock()
         var mode = "advanced"
         var overview = Data()
+        var monitoring = Data()
+        var monitoringRequest: URLRequest?
+        func recordedMonitoring() -> URLRequest? { lock.lock(); defer { lock.unlock() }; return monitoringRequest }
         var nodes = Data()
         var history = Data()
         var jobs = Data("[]".utf8)
@@ -37,6 +40,22 @@ final class OverviewTransport: URLProtocol, @unchecked Sendable {
             if path.hasSuffix("version") {
                 let features = mode == "legacy" ? "[]" : "[\"overview_monitoring\",\"job_retry_links\",\"node_record_removal\"]"
                 return (200, Data("{\"api_version\":\"1.0.0\",\"directory_generation\":1,\"service_version\":\"test\",\"hysteria_version\":\"test\",\"mihomo_version\":\"test\",\"features\":\(features)}".utf8))
+            }
+            if path == "/api/v1/overview/nodes" {
+                monitoringRequest = request
+                let parameters = URLComponents(url: url, resolvingAgainstBaseURL: false)!.queryItems ?? []
+                let size = Int(parameters.first { $0.name == "page_size" }?.value ?? "20")!
+                let requested = Int(parameters.first { $0.name == "page" }?.value ?? "1")!
+                let search = parameters.first { $0.name == "q" }?.value ?? ""
+                var response = try! JSONSerialization.jsonObject(with: monitoring) as! [String: Any]
+                let template = (response["items"] as! [[String: Any]])[0]
+                let items = (1...235).map { i -> [String: Any] in
+                    var item = template; item["node_id"] = "monitor-\(i)"; item["name"] = "Monitoring \(i)"; return item
+                }.filter { search.isEmpty || ($0["name"] as! String).localizedCaseInsensitiveContains(search) }
+                let page = min(requested,max(1,(items.count+size-1)/size))
+                response["items"] = Array(items.dropFirst((page-1)*size).prefix(size))
+                response["total"] = items.count; response["page"] = page; response["page_size"] = size
+                return (200,try! JSONSerialization.data(withJSONObject: response))
             }
             if path.hasSuffix("overview/history") {
                 var body = try! JSONSerialization.jsonObject(with: history) as! [String: Any]
@@ -119,6 +138,7 @@ struct OverviewSilentNotifications: NodeNotificationTransport {
 struct OverviewNetworkChecks {
     @MainActor static func main() async throws {
         let folder = CommandLine.arguments[1]
+        OverviewTransport.responses.monitoring = try Data(contentsOf: URL(fileURLWithPath: folder + "/overview-nodes.json"))
         OverviewTransport.responses.overview = try Data(contentsOf: URL(fileURLWithPath: folder + "/overview.json"))
         OverviewTransport.responses.jobs = try Data(contentsOf: URL(fileURLWithPath: folder + "/jobs.json"))
         OverviewTransport.responses.nodes = try Data(contentsOf: URL(fileURLWithPath: folder + "/nodes.json"))
@@ -138,6 +158,17 @@ struct OverviewNetworkChecks {
         precondition(store.isConnected && store.supportsOverviewMonitoring && store.overview?.nodeCount == 1)
         precondition(store.nodes.count == 235 && Set(store.nodes.map(\.id)).count == 235, "refresh must read all pages without duplicates")
         precondition(store.supportsJobRetryLinks && store.supportsNodeRecordRemoval)
+        let monitorKey = store.listPageKey(["3", "20", ""])
+        let monitoring = try await store.overviewNodesPage(page: 3, pageSize: 20, query: "", cacheKey: monitorKey, revalidate: true)
+        precondition(monitoring.total == 235 && monitoring.items.count == 20 && monitoring.items[0].nodeID == "monitor-41")
+        precondition(store.cachedOverviewNodesPage(monitorKey)?.page == 3)
+        let monitorSearch = "Monitoring 235"
+        let searchKey = store.listPageKey(["1", "20", monitorSearch])
+        let matched = try await store.overviewNodesPage(page: 1, pageSize: 20, query: monitorSearch, cacheKey: searchKey, revalidate: true)
+        precondition(matched.total == 1 && matched.items[0].nodeID == "monitor-235")
+        let monitorQuery = URLComponents(url: OverviewTransport.responses.recordedMonitoring()!.url!, resolvingAgainstBaseURL: false)!.queryItems!
+        precondition(monitorQuery.contains(URLQueryItem(name: "q", value: monitorSearch)))
+        precondition(store.overview?.nodeCount == 1, "monitoring filters must not replace global summary metrics")
         let directoryCount = OverviewTransport.responses.recordedDirectoryCount()
         let refreshToken = store.dataRefreshToken
         await store.refresh(forceDirectories: false)

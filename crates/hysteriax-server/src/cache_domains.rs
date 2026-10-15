@@ -31,6 +31,17 @@ pub fn dependencies(path: &str, query: &[(String, String)]) -> Vec<&'static str>
         }
         return deps;
     }
+    if path == "/api/v1/overview/nodes" {
+        return vec![
+            "node_config",
+            "nodes",
+            "online",
+            "probe",
+            "network",
+            "gaps",
+            "jobs",
+        ];
+    }
     if path == "/api/v1/overview" {
         return vec![
             "node_config",
@@ -168,6 +179,9 @@ pub async fn policy(
         ttl
     };
     let mut revision = version(&state.pool, &dependencies(path, query)).await?;
+    if path == "/api/v1/overview" || path == "/api/v1/overview/nodes" {
+        revision.push_str(";overview_schema=2");
+    }
     if path == "/api/v1/overview/history" {
         revision.push_str(&format!(
             ";minute={}",

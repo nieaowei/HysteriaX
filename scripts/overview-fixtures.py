@@ -14,7 +14,9 @@ usage = {"usage_bytes": 85_000_000_000, "restricted": False, "reasons": [], "nex
 nodes = [{"id": "node-1", "name": "东京主节点", "revision": 3, "deployed_revision": 3, "state": "deployed", "package": package, "package_usage": usage, "last_sample_at": stamp, "data_freshness": "fresh"}]
 monitor = {"node_id": "node-1", "name": "东京主节点", "deployment_state": "deployed", "online_status": "fresh", "online_users": 4, "connections": 6, "online_sampled_at": stamp, "probe_status": "failed", "inlet_status": "ok", "probe_sampled_at": stamp, "latency_ms": 123.4, "connection_ms": 450.0, "external_status": "failed", "reason": "外部探测目标返回错误"}
 issues = [{"id": "node:node-1:proxy_probe", "entity_type": "node", "entity_id": "node-1", "name": "东京主节点", "kind": "proxy_probe", "severity": 1, "reason": "外部目标持续探测失败", "occurred_at": stamp}]
-overview = {"generated_at": stamp, "node_count": 1, "node_states": {"deployed": 1}, "attention_nodes": 1, "risk_nodes": 1, "queued_jobs": 1, "running_jobs": 2, "failed_jobs_24h": 3, "online_users": 4, "connections": 6, "eligible_nodes": 1, "covered_nodes": 1, "issues": issues, "nodes": [monitor], "quota_rank": nodes}
+overview = {"generated_at": stamp, "node_count": 1, "node_states": {"deployed": 1}, "attention_nodes": 1, "risk_nodes": 1, "queued_jobs": 1, "running_jobs": 2, "failed_jobs_24h": 3, "online_users": 4, "connections": 6, "eligible_nodes": 1, "covered_nodes": 1, "issues": issues, "healthy_nodes": 0, "quota_rank": nodes}
+monitoring_page = {"items": [monitor], "total": 1, "page": 1, "page_size": 20, "generated_at": stamp}
+(folder / "overview-nodes.json").write_text(json.dumps(monitoring_page, ensure_ascii=False))
 buckets = []
 for index in range(7):
     at = now - dt.timedelta(days=7-index)

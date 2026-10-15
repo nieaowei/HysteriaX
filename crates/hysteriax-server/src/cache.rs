@@ -368,7 +368,7 @@ fn ttl(path: &str) -> Option<Duration> {
     }
     Some(Duration::from_secs(if path == "/api/v1/overview/history" {
         60
-    } else if path == "/api/v1/overview" {
+    } else if path == "/api/v1/overview" || path == "/api/v1/overview/nodes" {
         3
     } else if path.starts_with("/api/v1/jobs") || path.starts_with("/api/v1/credential-batches") {
         1

@@ -15,6 +15,11 @@ final class OverviewSceneState {
         for tab in [summary, traffic, quality] {
             tab.scrollOffset = .zero
             tab.inspectedNode = nil
+            tab.nodeQuery = ""
+            tab.nodePage = 1
+            tab.nodePageResponse = nil
+            tab.nodeLoadedKey = nil
+            tab.nodePageError = nil
             tab.history.nodeID = ""
             tab.history.replaceHistory(nil)
             tab.history.loadedQuery = ""
@@ -28,6 +33,14 @@ final class OverviewTabState {
     let history = OverviewHistoryState()
     var showAllIssues = false
     var inspectedNode: OverviewNode?
+    var nodeQuery = ""
+    var nodePage = 1
+    var nodePageSize = 20
+    var nodePageResponse: OverviewNodesPage?
+    var nodeLoadedKey: String?
+    var nodePageLoading = false
+    var nodePageError: String?
+    var nodeRetryToken = UUID()
     // Scrolling must not invalidate the entire page on every pixel.
     @ObservationIgnored var scrollOffset: CGPoint = .zero
     @ObservationIgnored var handledQuotaRequest: UUID?

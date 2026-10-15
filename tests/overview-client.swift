@@ -14,6 +14,8 @@ struct OverviewClientChecks {
         store.serverMonitoring = try JSONDecoder().decode(ServerMonitoring.self, from: Data(contentsOf: URL(fileURLWithPath: fixture + "/server-monitoring.json")))
         store.jobs = try JSONDecoder().decode([JobSummary].self, from: Data(contentsOf: URL(fileURLWithPath: fixture + "/jobs.json")))
         store.overview = try JSONDecoder().decode(OverviewResponse.self, from: Data(contentsOf: URL(fileURLWithPath: fixture + "/overview.json")))
+        store.overviewMonitoringPage = try JSONDecoder().decode(OverviewNodesPage.self, from: Data(contentsOf: URL(fileURLWithPath: fixture + "/overview-nodes.json")))
+        store.overviewMonitoringPageKey = store.listPageKey(["1", "20", ""])
         let history = try JSONDecoder().decode(OverviewHistory.self, from: Data(contentsOf: URL(fileURLWithPath: fixture + "/history.json")))
         store.cacheOverviewHistory(history, nodeID: nil)
         store.cacheOverviewHistory(history, nodeID: nil, metrics: "traffic")
@@ -30,7 +32,7 @@ struct OverviewClientChecks {
         store.lastUpdated = Date()
         precondition(store.cachedOverviewHistory(range: "7d", nodeID: nil, source: "users")?.buckets.count == 7)
         precondition(store.cachedOverviewHistory(range: "7d", nodeID: "other-node", source: "users") == nil)
-        precondition(store.overview?.nodes[0].inletStatus == "ok")
+        precondition(store.overviewMonitoringPage?.items[0].inletStatus == "ok")
         precondition(history.buckets[0].txBytes == nil && history.buckets[0].incomplete)
         let prepared = OverviewHistoryDisplay(recent)
         precondition(prepared.buckets.count == 24 && prepared.incompleteCount == 1)
@@ -56,11 +58,13 @@ struct OverviewClientChecks {
             ("traffic-wide-light", 1100, .light, "24h"), ("traffic-narrow-dark", 700, .dark, "24h"),
             ("traffic-7d-light", 1100, .light, "7d"), ("traffic-7d-dark", 700, .dark, "7d"),
             ("traffic-30d-light", 1100, .light, "30d"), ("traffic-30d-dark", 700, .dark, "30d"),
+            ("monitor-wide-light", 1100, .light, "24h"), ("monitor-narrow-dark", 550, .dark, "24h"),
             ("quality-wide-light", 1100, .light, "24h"), ("quality-narrow-dark", 700, .dark, "24h")
         ]
         for (name, width, scheme, range) in layouts {
             let page: AnyView
-            if name.hasPrefix("traffic-") { page = AnyView(OverviewHistoryView(store: store, isActive: false, range: range)) }
+            if name.hasPrefix("monitor-") { page = AnyView(OverviewMonitoringView(store: store, navigate: { _ in }, section: .quality)) }
+            else if name.hasPrefix("traffic-") { page = AnyView(OverviewHistoryView(store: store, isActive: false, range: range)) }
             else if name.hasPrefix("quality-") { page = AnyView(OverviewHistoryView(store: store, category: .quality, isActive: false, range: range)) }
             else { page = AnyView(OverviewView(store: store)) }
             let content = page.frame(width: width, height: 1600).environment(\.colorScheme, scheme).background(scheme == .dark ? Color(red: 0.12, green: 0.12, blue: 0.13) : Color.white)

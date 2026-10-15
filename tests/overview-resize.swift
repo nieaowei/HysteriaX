@@ -49,6 +49,8 @@ import SwiftUI
         store.jobs = try decode([JobSummary].self,"jobs")
         store.users = try decode([UserSummary].self,"users")
         store.overview = try decode(OverviewResponse.self,"overview")
+        store.overviewMonitoringPage = try JSONDecoder().decode(OverviewNodesPage.self, from: Data(contentsOf: URL(fileURLWithPath: folder + "/overview-nodes.json")))
+        store.overviewMonitoringPageKey = store.listPageKey(["1", "20", ""])
         store.serverMonitoring = try decode(ServerMonitoring.self,"server-monitoring")
         store.supportsOverviewMonitoring = true
         store.cacheOverviewHistory(try decode(OverviewHistory.self,"history-24h"),nodeID:nil)

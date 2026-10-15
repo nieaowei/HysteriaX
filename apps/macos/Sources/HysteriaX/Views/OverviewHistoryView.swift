@@ -37,7 +37,7 @@ struct OverviewHistoryView: View {
 
     var body: some View {
         @Bindable var query = state
-        return OverviewCard(category == .traffic ? L10n.text("流量趋势") : L10n.text("连接与质量趋势"), systemImage: category == .traffic ? "chart.bar.xaxis" : "chart.xyaxis.line") {
+        return OverviewCard(category == .traffic ? L10n.text("流量趋势") : L10n.text("连接与质量趋势"), systemImage: category == .traffic ? "chart.bar.xaxis" : "chart.xyaxis.line", isRefreshing: loading) {
             VStack(alignment: .leading, spacing: 14) {
                 OverviewFilterLayout {
                     Picker(L10n.text("时间"), selection: $query.range) { Text(L10n.text("24 小时")).tag("24h"); Text(L10n.text("7 天")).tag("7d"); Text(L10n.text("30 天")).tag("30d") }
@@ -53,7 +53,6 @@ struct OverviewHistoryView: View {
                             .layoutValue(key: OverviewControlWidth.self, value: 220)
                             .accessibilityIdentifier("overview.history.node").accessibilityValue(store.nodes.first { $0.id == nodeID }?.name ?? L10n.text("全部节点"))
                     }
-                    if loading { ProgressView().controlSize(.small).layoutValue(key: OverviewControlWidth.self, value: 20) }
                 }
                 if let error { Text(error).font(.caption).foregroundStyle(.orange) }
                 if let history {

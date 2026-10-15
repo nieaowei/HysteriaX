@@ -84,6 +84,135 @@ fn package_warning(kind: &str) -> &str {
     }
 }
 
+#[derive(Default)]
+struct MonitoringTotals {
+    active_ids: BTreeSet<String>,
+    connection_count: i64,
+    covered: i64,
+    eligible: i64,
+    healthy: i64,
+}
+
+fn monitoring_node(
+    reading: &summary::NodeReading,
+    node: &Value,
+    now: DateTime<Utc>,
+    totals: &mut MonitoringTotals,
+    issues: &mut Vec<Value>,
+) -> Result<Value, ApiError> {
+    let id = node["id"].as_str().unwrap_or_default();
+    let name = node["name"].as_str().unwrap_or_default();
+    let status = node["state"].as_str().unwrap_or("unknown");
+    let mut online_status = "unknown";
+    let mut sampled_at: Option<DateTime<Utc>> = None;
+    let mut node_users: Option<usize> = None;
+    let mut node_connections: Option<i64> = None;
+    let is_eligible =
+        !node["deployed_revision"].is_null() && !matches!(status, "deleting" | "delete_failed");
+    if is_eligible {
+        totals.eligible += 1;
+    }
+    if let Some(at) = reading.online_sampled_at {
+        sampled_at = Some(at);
+        online_status = if now - at > Duration::seconds(90) {
+            "stale"
+        } else if reading.online_status.as_deref() == Some("ok") {
+            "fresh"
+        } else {
+            "failed"
+        };
+        if online_status == "fresh" && is_eligible {
+            totals.covered += 1;
+            let values = reading
+                .online_connections
+                .as_ref()
+                .ok_or_else(ApiError::internal)?;
+            let map = values.as_object().cloned().unwrap_or_default();
+            node_users = Some(map.len());
+            let total = map.values().filter_map(Value::as_i64).sum::<i64>();
+            node_connections = Some(total);
+            totals.connection_count += total;
+            totals.active_ids.extend(map.keys().cloned());
+        }
+    }
+    let mut probe_status = "unknown";
+    let mut inlet_status = "unknown";
+    let mut probe_at: Option<DateTime<Utc>> = None;
+    let mut latency: Option<f64> = None;
+    let mut connection_ms: Option<f64> = None;
+    let mut external: Option<String> = None;
+    let mut reason: Option<String> = None;
+    if let Some(at) = reading.probe_sampled_at {
+        probe_at = Some(at);
+        latency = reading.probe_latency_ms;
+        connection_ms = reading.probe_connection_ms;
+        external = reading.probe_external_status.clone();
+        reason = reading.probe_reason.clone();
+        let revision = reading.probe_revision.ok_or_else(ApiError::internal)?;
+        inlet_status = if reading.probe_status.as_deref() == Some("ok") {
+            "ok"
+        } else if reading.probe_status.as_deref() == Some("unconfigured") {
+            "unconfigured"
+        } else {
+            "failed"
+        };
+        let health = &reading.probe_health;
+        let current = node["deployed_revision"].as_i64();
+        probe_status =
+            if now - at > Duration::seconds(180) || current != Some(revision) || !is_eligible {
+                "unknown"
+            } else {
+                match health.as_deref() {
+                    Some("healthy") => "healthy",
+                    Some("failed") => "failed",
+                    Some("unconfigured") => "unconfigured",
+                    _ => "checking",
+                }
+            };
+        if probe_status == "failed" {
+            issues.push(issue(
+                "node",
+                id,
+                name,
+                "proxy_probe",
+                1,
+                if external.as_deref() == Some("failed") {
+                    "外部目标持续探测失败"
+                } else {
+                    "公网入口与转发持续探测失败"
+                },
+                json!(at),
+            ));
+        } else if matches!(probe_status, "unknown" | "unconfigured") && is_eligible {
+            issues.push(issue(
+                "node",
+                id,
+                name,
+                "proxy_unknown",
+                3,
+                "代理探测未配置或已陈旧",
+                json!(at),
+            ));
+        }
+    } else if is_eligible {
+        issues.push(issue(
+            "node",
+            id,
+            name,
+            "proxy_unknown",
+            3,
+            "尚无代理探测数据",
+            Value::Null,
+        ));
+    }
+    if probe_status == "healthy" {
+        totals.healthy += 1;
+    }
+    Ok(
+        json!({"node_id":id,"name":name,"deployment_state":status,"online_status":online_status,"online_users":node_users,"connections":node_connections,"online_sampled_at":sampled_at,"probe_status":probe_status,"inlet_status":if probe_status=="unknown"{"unknown"}else{inlet_status},"probe_sampled_at":probe_at,"latency_ms":latency,"connection_ms":connection_ms,"external_status":external,"reason":reason}),
+    )
+}
+
 pub async fn get(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
     let summary::SummaryData {
         nodes,
@@ -97,12 +226,8 @@ pub async fn get(State(state): State<AppState>) -> Result<Json<Value>, ApiError>
     } = summary::load(&state.pool).await?;
     let mut quota_candidates = BTreeMap::new();
     let mut issues = Vec::new();
-    let mut monitor_nodes = Vec::new();
+    let mut totals = MonitoringTotals::default();
     let mut risk_nodes = 0;
-    let mut active_ids = BTreeSet::new();
-    let mut connection_count = 0_i64;
-    let mut covered = 0;
-    let mut eligible = 0;
     for reading in &nodes {
         let node = reading.summary(now)?;
         let id = node["id"].as_str().unwrap_or_default();
@@ -218,109 +343,7 @@ pub async fn get(State(state): State<AppState>) -> Result<Json<Value>, ApiError>
                 usage["sampled_at"].clone(),
             ));
         }
-        let mut online_status = "unknown";
-        let mut sampled_at: Option<DateTime<Utc>> = None;
-        let mut node_users: Option<usize> = None;
-        let mut node_connections: Option<i64> = None;
-        let is_eligible =
-            !node["deployed_revision"].is_null() && !matches!(status, "deleting" | "delete_failed");
-        if is_eligible {
-            eligible += 1;
-        }
-        if let Some(at) = reading.online_sampled_at {
-            sampled_at = Some(at);
-            online_status = if now - at > Duration::seconds(90) {
-                "stale"
-            } else if reading.online_status.as_deref() == Some("ok") {
-                "fresh"
-            } else {
-                "failed"
-            };
-            if online_status == "fresh" && is_eligible {
-                covered += 1;
-                let values = reading
-                    .online_connections
-                    .as_ref()
-                    .ok_or_else(ApiError::internal)?;
-                let map = values.as_object().cloned().unwrap_or_default();
-                node_users = Some(map.len());
-                let total = map.values().filter_map(Value::as_i64).sum::<i64>();
-                node_connections = Some(total);
-                connection_count += total;
-                active_ids.extend(map.keys().cloned());
-            }
-        }
-        let mut probe_status = "unknown";
-        let mut inlet_status = "unknown";
-        let mut probe_at: Option<DateTime<Utc>> = None;
-        let mut latency: Option<f64> = None;
-        let mut connection_ms: Option<f64> = None;
-        let mut external: Option<String> = None;
-        let mut reason: Option<String> = None;
-        if let Some(at) = reading.probe_sampled_at {
-            probe_at = Some(at);
-            latency = reading.probe_latency_ms;
-            connection_ms = reading.probe_connection_ms;
-            external = reading.probe_external_status.clone();
-            reason = reading.probe_reason.clone();
-            let revision = reading.probe_revision.ok_or_else(ApiError::internal)?;
-            inlet_status = if reading.probe_status.as_deref() == Some("ok") {
-                "ok"
-            } else if reading.probe_status.as_deref() == Some("unconfigured") {
-                "unconfigured"
-            } else {
-                "failed"
-            };
-            let health = &reading.probe_health;
-            let current = node["deployed_revision"].as_i64();
-            probe_status =
-                if now - at > Duration::seconds(180) || current != Some(revision) || !is_eligible {
-                    "unknown"
-                } else {
-                    match health.as_deref() {
-                        Some("healthy") => "healthy",
-                        Some("failed") => "failed",
-                        Some("unconfigured") => "unconfigured",
-                        _ => "checking",
-                    }
-                };
-            if probe_status == "failed" {
-                issues.push(issue(
-                    "node",
-                    id,
-                    name,
-                    "proxy_probe",
-                    1,
-                    if external.as_deref() == Some("failed") {
-                        "外部目标持续探测失败"
-                    } else {
-                        "公网入口与转发持续探测失败"
-                    },
-                    json!(at),
-                ));
-            } else if matches!(probe_status, "unknown" | "unconfigured") && is_eligible {
-                issues.push(issue(
-                    "node",
-                    id,
-                    name,
-                    "proxy_unknown",
-                    3,
-                    "代理探测未配置或已陈旧",
-                    json!(at),
-                ));
-            }
-        } else if is_eligible {
-            issues.push(issue(
-                "node",
-                id,
-                name,
-                "proxy_unknown",
-                3,
-                "尚无代理探测数据",
-                Value::Null,
-            ));
-        }
-        monitor_nodes.push(json!({"node_id":id,"name":name,"deployment_state":status,"online_status":online_status,"online_users":node_users,"connections":node_connections,"online_sampled_at":sampled_at,"probe_status":probe_status,"inlet_status":if probe_status=="unknown"{"unknown"}else{inlet_status},"probe_sampled_at":probe_at,"latency_ms":latency,"connection_ms":connection_ms,"external_status":external,"reason":reason}));
+        monitoring_node(reading, &node, now, &mut totals, &mut issues)?;
     }
     for user in &users {
         if let Some(expiry) = user.expires_at
@@ -393,7 +416,65 @@ pub async fn get(State(state): State<AppState>) -> Result<Json<Value>, ApiError>
         .map(|id| quota_candidates.remove(id).ok_or_else(ApiError::internal))
         .collect::<Result<_, _>>()?;
     Ok(Json(
-        json!({"generated_at":now,"node_count":node_count,"node_states":states,"attention_nodes":attention,"risk_nodes":risk_nodes,"queued_jobs":task.get::<i64,_>("queued"),"running_jobs":task.get::<i64,_>("running"),"failed_jobs_24h":task.get::<i64,_>("failed"),"online_users":if covered>0 {Some(active_ids.len())}else{None},"connections":if covered>0 {Some(connection_count)}else{None},"eligible_nodes":eligible,"covered_nodes":covered,"issues":issues,"nodes":monitor_nodes,"quota_rank":quota_rank}),
+        json!({"generated_at":now,"node_count":node_count,"node_states":states,"attention_nodes":attention,"risk_nodes":risk_nodes,"queued_jobs":task.get::<i64,_>("queued"),"running_jobs":task.get::<i64,_>("running"),"failed_jobs_24h":task.get::<i64,_>("failed"),"online_users":if totals.covered>0 {Some(totals.active_ids.len())}else{None},"connections":if totals.covered>0 {Some(totals.connection_count)}else{None},"eligible_nodes":totals.eligible,"covered_nodes":totals.covered,"issues":issues,"healthy_nodes":totals.healthy,"quota_rank":quota_rank}),
+    ))
+}
+
+#[derive(Default, Deserialize)]
+pub(crate) struct MonitoringNodesQuery {
+    page: Option<i64>,
+    page_size: Option<i64>,
+    q: Option<String>,
+}
+
+pub(crate) async fn list_nodes(
+    State(state): State<AppState>,
+    Query(query): Query<MonitoringNodesQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let requested = query.page.unwrap_or(1);
+    let size = query.page_size.unwrap_or(20);
+    if requested < 1 || !(1..=200).contains(&size) {
+        return Err(ApiError::bad_request(
+            "page must be positive and page_size must be between 1 and 200",
+        ));
+    }
+    let search = query.q.as_deref().unwrap_or("").trim();
+    let pattern = crate::api::literal_search_pattern(search);
+    let filter =
+        "($1='' OR hysteriax_search_text(id,name,public_host,ssh_host) LIKE lower($1) ESCAPE '\\')";
+    let mut tx = state.pool.begin().await?;
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("SET LOCAL plan_cache_mode=force_custom_plan")
+        .execute(&mut *tx)
+        .await?;
+    let total: i64 = sqlx::query_scalar(&format!("SELECT count(*) FROM nodes WHERE {filter}"))
+        .bind(&pattern)
+        .fetch_one(&mut *tx)
+        .await?;
+    let page = requested.min(((total + size - 1) / size).max(1));
+    let ids:Vec<String>=sqlx::query_scalar(&format!("SELECT id FROM nodes WHERE {filter} ORDER BY lower(name) COLLATE \"C\",name COLLATE \"C\",id LIMIT $2 OFFSET $3"))
+        .bind(&pattern).bind(size).bind((page-1)*size).fetch_all(&mut *tx).await?;
+    let readings = summary::read_nodes_on(&mut tx, Some(&ids)).await?;
+    let now = Utc::now();
+    let mut totals = MonitoringTotals::default();
+    let mut issues = Vec::new();
+    let items = readings
+        .iter()
+        .map(|reading| {
+            monitoring_node(
+                reading,
+                &reading.summary(now)?,
+                now,
+                &mut totals,
+                &mut issues,
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    tx.commit().await?;
+    Ok(Json(
+        json!({"items":items,"total":total,"page":page,"page_size":size,"generated_at":now}),
     ))
 }
 

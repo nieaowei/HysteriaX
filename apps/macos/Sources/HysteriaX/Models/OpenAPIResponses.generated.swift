@@ -1385,6 +1385,22 @@ struct OverviewNode: Codable, Sendable {
     }
 }
 
+struct OverviewNodesPage: Codable, Sendable {
+    let items: [OverviewNode]
+    let total: Int
+    let page: Int
+    let pageSize: Int
+    let generatedAt: String
+
+    enum CodingKeys: String, CodingKey {
+        case items
+        case total
+        case page
+        case pageSize = "page_size"
+        case generatedAt = "generated_at"
+    }
+}
+
 struct OverviewResponse: Codable, Sendable {
     let generatedAt: String
     let nodeCount: Int64
@@ -1399,7 +1415,7 @@ struct OverviewResponse: Codable, Sendable {
     let eligibleNodes: Int64
     let coveredNodes: Int64
     let issues: [OverviewIssue]
-    let nodes: [OverviewNode]
+    let healthyNodes: Int64
     let quotaRank: [NodeSummary]
 
     enum CodingKeys: String, CodingKey {
@@ -1416,7 +1432,7 @@ struct OverviewResponse: Codable, Sendable {
         case eligibleNodes = "eligible_nodes"
         case coveredNodes = "covered_nodes"
         case issues
-        case nodes
+        case healthyNodes = "healthy_nodes"
         case quotaRank = "quota_rank"
     }
 }

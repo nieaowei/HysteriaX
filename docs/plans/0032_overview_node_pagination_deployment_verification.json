@@ -1,0 +1,71 @@
+{
+  "image": "overview-pages-20261015-v1",
+  "schema": 27,
+  "checks": [
+    "authenticated_pagination",
+    "summary_has_global_health_count_without_full_node_array",
+    "stable_complete_pagination",
+    "last_page_clamping",
+    "name_id_public_and_ssh_search",
+    "literal_wildcard_search",
+    "invalid_parameters_rejected",
+    "global_counts_unchanged_by_search",
+    "monitoring_search_gin_index_installed"
+  ],
+  "pages": [
+    {
+      "page": 1,
+      "items": 2,
+      "total": 5,
+      "ms": 36.23
+    },
+    {
+      "page": 2,
+      "items": 2,
+      "total": 5,
+      "ms": 39.08
+    },
+    {
+      "page": 3,
+      "items": 1,
+      "total": 5,
+      "ms": 103.78
+    }
+  ],
+  "searches": [
+    {
+      "field": "id",
+      "total": 1,
+      "ms": 21.25
+    },
+    {
+      "field": "name",
+      "total": 1,
+      "ms": 90.89
+    },
+    {
+      "field": "public_host",
+      "total": 1,
+      "ms": 124.47
+    },
+    {
+      "field": "ssh_host",
+      "total": 1,
+      "ms": 135.06
+    }
+  ],
+  "api_healthy": true,
+  "billing_unchanged_by_migration": true,
+  "dependency_containers_preserved": true,
+  "backend_tests": 202,
+  "strict_clippy": "passed",
+  "client_network_tests": "passed",
+  "client_layout_rendering": "passed",
+  "localization": "passed",
+  "client_build_and_launch": "passed",
+  "openapi_codegen_check": "passed",
+  "rollback_test": "passed",
+  "binary_sha256": "01f7c4efc27c57b88b564ffeb1ab5a4eebec1ea63b20b55607462554a73475e0",
+  "image_archive_sha256": "6f693a633a94e5787409c75edbf8ea90c7eba6b25d09f127b06b7025129f045f",
+  "backup_directory": "/home/nieaowei/HysteriaX/backups/overview-pages-20261015-v1"
+}

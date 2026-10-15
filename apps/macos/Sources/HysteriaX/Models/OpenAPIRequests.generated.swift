@@ -866,6 +866,9 @@ enum APIEndpoints {
         APIOperation(method: "POST", path: "api/v1/credential-batches/\(id)/retry", queryParameters: [:])
     }
     static let getOverview: APIOperation<NoRequest, OverviewResponse> = APIOperation<NoRequest, OverviewResponse>(method: "GET", path: "api/v1/overview", queryParameters: [:])
+    static func listOverviewNodes(page: Int? = nil, pageSize: Int? = nil, q: String? = nil) -> APIOperation<NoRequest, OverviewNodesPage> {
+        APIOperation(method: "GET", path: "api/v1/overview/nodes", queryParameters: ["page": page.map { String($0) }, "page_size": pageSize.map { String($0) }, "q": q.map { String($0) }].compactMapValues { $0 })
+    }
     static func getOverviewHistory(metrics: String? = nil, range: String, timezone: String, nodeID: String? = nil, source: String? = nil) -> APIOperation<NoRequest, OverviewHistory> {
         APIOperation(method: "GET", path: "api/v1/overview/history", queryParameters: ["metrics": metrics.map { String($0) }, "range": range, "timezone": timezone, "node_id": nodeID.map { String($0) }, "source": source.map { String($0) }].compactMapValues { $0 })
     }

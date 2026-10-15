@@ -5,7 +5,7 @@ struct OverviewNodeInspector: View {
     let selected: OverviewNode
     let close: () -> Void
     let navigate: (OverviewDestination) -> Void
-    private var node: OverviewNode { store.overview?.nodes.first { $0.nodeID == selected.nodeID } ?? selected }
+    private var node: OverviewNode { store.overviewMonitoringPage?.items.first { $0.nodeID == selected.nodeID } ?? selected }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {

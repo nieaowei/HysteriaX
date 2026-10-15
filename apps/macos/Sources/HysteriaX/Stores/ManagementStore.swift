@@ -39,6 +39,8 @@ final class ManagementStore {
     var currentAdminTokenID: String?
     var serverMonitoring: ServerMonitoring?
     var serverMonitoringError: String?
+    var overviewMonitoringPage: OverviewNodesPage?
+    var overviewMonitoringPageKey: String?
     var overview: OverviewResponse?
     var overviewError: String?
     var overviewHistoryRefreshToken = UUID()
@@ -102,6 +104,8 @@ final class ManagementStore {
         try KeychainStore.saveToken(token)
         listPageCache.invalidate(clear: true)
         listCacheSession = UUID()
+        overviewMonitoringPage = nil
+        overviewMonitoringPageKey = nil
         serviceGeneration = UUID()
         directoryGeneration = nil
         overviewRequestGeneration = UUID()
@@ -229,6 +233,17 @@ final class ManagementStore {
             guard generation == serviceGeneration, request == overviewRequestGeneration, !Task.isCancelled else { return }
             overviewError = L10n.text("概览监控暂不可用：{0}", String(describing: (error.localizedDescription)))
         }
+    }
+
+    func overviewNodesPage(page: Int, pageSize: Int, query: String, cacheKey: String, revalidate: Bool) async throws -> OverviewNodesPage {
+        let response = try await loadListPage(APIEndpoints.listOverviewNodes(page: page, pageSize: pageSize, q: query), cacheKey: cacheKey, ttl: 3, revalidate: revalidate)
+        overviewMonitoringPage = response
+        overviewMonitoringPageKey = cacheKey
+        return response
+    }
+
+    func cachedOverviewNodesPage(_ key: String) -> OverviewNodesPage? {
+        cachedListPage(key, as: OverviewNodesPage.self) ?? (overviewMonitoringPageKey == key ? overviewMonitoringPage : nil)
     }
 
     func overviewHistory(range: String, nodeID: String?, source: String, metrics: String = "all", bypassCache: Bool = false) async throws -> OverviewHistory {
@@ -734,7 +749,7 @@ final class ManagementStore {
                         UserDefaults.standard.set(eventID, forKey: "lastEventID.\(self.serviceAddress)")
                         let now = Date()
                         if now.timeIntervalSince(lastRefresh) >= 1 {
-                            self.listPageCache.invalidate(types: [NodesPage.self, UsersPage.self, JobsPage.self].map { String(reflecting: $0) })
+                            self.listPageCache.invalidate(types: [NodesPage.self, UsersPage.self, JobsPage.self, OverviewNodesPage.self].map { String(reflecting: $0) })
                             await self.refresh(forceDirectories: false)
                             lastRefresh = now
                         }

@@ -100,7 +100,7 @@ def main():
                 api(path, "PATCH", {"expected_revision": detail()["revision"], "config": {"tls": {"cert": refs[0], "key": refs[1]}}})
                 configured = wait_for(lambda: (value if (value := detail())["deployed_revision"] == value["revision"] and value["state"] == "deployed" else None), "automatic configuration deployment", 300)
                 print("Disposable real Hysteria node deployed", flush=True)
-                def monitor(): return api("/api/v1/overview")["nodes"][0]
+                def monitor(): return api("/api/v1/overview/nodes")["items"][0]
                 healthy = wait_for(lambda: (v if (v := monitor())["probe_status"] == "healthy" else None), "two successful public probes", 160)
                 assert healthy["inlet_status"] == "ok"
                 assert healthy["external_status"] == (None if args.restart_only else "ok")

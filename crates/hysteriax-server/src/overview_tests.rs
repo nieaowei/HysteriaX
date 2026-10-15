@@ -856,13 +856,19 @@ async fn summary_uses_constant_queries_and_ignores_unrelated_secrets_for_large_c
     );
     assert_eq!(value["node_count"], 237);
     assert_eq!(value["node_states"]["deployed"], 237);
-    assert_eq!(value["nodes"].as_array().unwrap().len(), 237);
+    assert!(
+        value.get("nodes").is_none(),
+        "summary must not include the unpaginated monitoring directory"
+    );
     let rank = value["quota_rank"].as_array().unwrap();
     assert_eq!(
         rank.iter()
             .map(|node| node["id"].as_str().unwrap())
             .collect::<Vec<_>>(),
-        vec!["bulk-233", "bulk-234", "bulk-232", "bulk-231", "bulk-230"]
+        vec![
+            "bulk-233", "bulk-234", "bulk-232", "bulk-231", "bulk-230", "bulk-229", "bulk-228",
+            "bulk-227", "bulk-226", "bulk-225"
+        ]
     );
     for node in rank {
         assert!(node["package"].is_object() && node["package_usage"].is_object());
@@ -935,7 +941,11 @@ async fn summary_batches_latest_monitoring_and_preserves_package_and_warning_rul
     assert_eq!(value["covered_nodes"], 1);
     assert_eq!(value["online_users"], 1);
     assert_eq!(value["connections"], 7);
-    let monitoring = value["nodes"].as_array().unwrap();
+    let Json(monitoring_page) =
+        list_nodes(State(state.clone()), Query(MonitoringNodesQuery::default()))
+            .await
+            .unwrap();
+    let monitoring = monitoring_page["items"].as_array().unwrap();
     let first_monitor = monitoring
         .iter()
         .find(|node| node["node_id"] == *first)
@@ -998,7 +1008,83 @@ async fn summary_of_empty_database_preserves_unknown_monitoring_and_zero_counts(
     assert_eq!(value["risk_nodes"], 0);
     assert_eq!(value["queued_jobs"], 0);
     assert!(value["online_users"].is_null() && value["connections"].is_null());
-    for key in ["issues", "nodes", "quota_rank"] {
+    for key in ["issues", "quota_rank"] {
         assert_eq!(value[key], json!([]));
     }
+}
+
+#[tokio::test]
+async fn monitoring_nodes_page_searches_all_nodes_and_keeps_summary_global() {
+    let (state, nodes, _) = fixture_with_connections(1).await;
+    sqlx::query("INSERT INTO nodes(id,name,ssh_host,ssh_port,ssh_username,ssh_credential_id,ssh_credential_version,public_host,public_port,listen_addr,node_token_hash,node_token_enc,traffic_stats_secret_enc,desired_config_enc,desired_revision,deployed_revision,state,last_sample_at,created_at,updated_at) SELECT 'monitor-'||lpad(i::text,3,'0'),CASE WHEN i=235 THEN '历史%_节点' ELSE 'Monitoring' END,'10.0.0.'||i,22,'root',ssh_credential_id,ssh_credential_version,'monitor.example.test',443,':443','monitor-hash-'||i,'unused','unused','INVALID-UNRELATED-CIPHER',1,1,'deployed',now(),now(),now() FROM nodes CROSS JOIN generate_series(1,235)i WHERE id=$1")
+        .bind(&nodes[0]).execute(&state.pool).await.unwrap();
+    let mut ids = std::collections::BTreeSet::new();
+    for page in 1..=12 {
+        let Json(value) = list_nodes(
+            State(state.clone()),
+            Query(MonitoringNodesQuery {
+                page: Some(page),
+                page_size: Some(20),
+                q: None,
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(value["total"], 237);
+        assert!(value["items"].as_array().unwrap().len() <= 20);
+        for row in value["items"].as_array().unwrap() {
+            assert!(ids.insert(row["node_id"].as_str().unwrap().to_owned()));
+            assert!(row.get("config").is_none());
+            assert!(row.get("ssh").is_none());
+        }
+    }
+    assert_eq!(ids.len(), 237);
+    for search in ["历史%_", "monitor-235", "10.0.0.235"] {
+        let Json(value) = list_nodes(
+            State(state.clone()),
+            Query(MonitoringNodesQuery {
+                page: Some(i64::MAX),
+                page_size: Some(20),
+                q: Some(search.into()),
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(value["total"], 1);
+        assert_eq!(value["page"], 1);
+        assert_eq!(value["items"][0]["node_id"], "monitor-235");
+    }
+    let Json(empty) = list_nodes(
+        State(state.clone()),
+        Query(MonitoringNodesQuery {
+            q: Some("' OR true --".into()),
+            ..Default::default()
+        }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(empty["total"], 0);
+    assert_eq!(empty["items"], json!([]));
+    for query in [
+        MonitoringNodesQuery {
+            page: Some(0),
+            ..Default::default()
+        },
+        MonitoringNodesQuery {
+            page_size: Some(201),
+            ..Default::default()
+        },
+    ] {
+        assert_eq!(
+            list_nodes(State(state.clone()), Query(query))
+                .await
+                .unwrap_err()
+                .status,
+            axum::http::StatusCode::BAD_REQUEST
+        );
+    }
+    let Json(summary) = get(State(state)).await.unwrap();
+    assert_eq!(summary["node_count"], 237);
+    assert!(summary.get("nodes").is_none());
+    assert_eq!(summary["healthy_nodes"], 0);
 }

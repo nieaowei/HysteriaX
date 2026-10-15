@@ -1374,3 +1374,4 @@
 "共 {0} 项凭据 · 第 {1} / {2} 页" = "{0} credentials · Page {1} of {2}";
 
 "共 {0} 个节点 · 第 {1} / {2} 页" = "{0} nodes · Page {1} of {2}";
+"搜索节点名称、ID 或地址" = "Search node name, ID or address";

@@ -101,6 +101,12 @@ async fn query_index_upgrade_can_roll_back_without_losing_source_rows() {
     let pool = crate::db::test_pool().await;
     sqlx::query("INSERT INTO audit_records(id,actor,action,entity_type,entity_id,detail_json,created_at) VALUES('kept','admin','test','test','test','{}',now())").execute(&pool).await.unwrap();
     sqlx::raw_sql(include_str!(
+        "../../../../scripts/rollback-overview-node-pagination.sql"
+    ))
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::raw_sql(include_str!(
         "../../../../scripts/rollback-query-optimization.sql"
     ))
     .execute(&pool)

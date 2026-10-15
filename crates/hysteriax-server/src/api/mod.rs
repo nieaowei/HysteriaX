@@ -149,6 +149,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/jobs", get(list_jobs))
         .route("/api/v1/version", get(api_version))
         .route("/api/v1/overview", get(crate::overview::get))
+        .route("/api/v1/overview/nodes", get(crate::overview::list_nodes))
         .route("/api/v1/overview/history", get(crate::overview::history))
         .route("/api/v1/server/monitoring", get(crate::monitoring::get))
         .route("/api/v1/jobs/{id}", get(get_job))
