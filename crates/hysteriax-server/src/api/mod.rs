@@ -341,14 +341,21 @@ struct EventsQuery {
 
 async fn events(
     State(state): State<AppState>,
+    Extension(actor): Extension<AdminActor>,
     Query(query): Query<EventsQuery>,
     headers: HeaderMap,
 ) -> Sse<impl futures_core::Stream<Item = Result<Event, Infallible>>> {
-    stream_events(state, event_cursor(query.after, &headers), query.job_id)
+    stream_events(
+        state,
+        event_cursor(query.after, &headers),
+        query.job_id,
+        actor.id,
+    )
 }
 
 async fn job_events(
     State(state): State<AppState>,
+    Extension(actor): Extension<AdminActor>,
     Path(id): Path<String>,
     Query(query): Query<EventsQuery>,
     headers: HeaderMap,
@@ -364,6 +371,7 @@ async fn job_events(
         state,
         event_cursor(query.after, &headers),
         Some(id),
+        actor.id,
     ))
 }
 
@@ -383,10 +391,19 @@ fn stream_events(
     state: AppState,
     mut cursor: i64,
     job_id: Option<String>,
+    admin_id: String,
 ) -> Sse<impl futures_core::Stream<Item = Result<Event, Infallible>>> {
     let output = stream! {
+        let mut authorization = state.admin_tokens_changed.subscribe();
         let mut updates=state.events.subscribe(state.pool.clone());
         loop {
+            authorization.borrow_and_update();
+            // Fail closed on database errors. Recheck before each replay/live batch
+            // as well as on idle connections, including changes made outside the API.
+            let active = tokio::time::timeout(Duration::from_secs(2), sqlx::query_scalar::<_, bool>(
+                "SELECT EXISTS(SELECT 1 FROM admin_tokens WHERE id=$1 AND revoked_at IS NULL)"
+            ).bind(&admin_id).fetch_one(&state.pool)).await;
+            if !matches!(active, Ok(Ok(true))) { break; }
             updates.borrow_and_update();
             match state.events.read(cursor,job_id.as_deref()) {
                 crate::events::Read::Live(events,watermark)=>{
@@ -406,7 +423,12 @@ fn stream_events(
                 }
                 crate::events::Read::Waiting=>{}
             }
-            if updates.changed().await.is_err() {break;}
+            tokio::select! {
+                biased;
+                _ = authorization.changed() => {},
+                changed = updates.changed() => { if changed.is_err() {break;} },
+                _ = tokio::time::sleep(Duration::from_secs(5)) => {},
+            }
         }
     };
     Sse::new(output).keep_alive(axum::response::sse::KeepAlive::default())
@@ -759,6 +781,9 @@ async fn revoke_admin_token(
     }
     sqlx::query("INSERT INTO audit_records(id,actor,action,entity_type,entity_id,detail_json,created_at) VALUES($1,$2,'admin_token.revoked','admin_token',$3,'{}',$4)").bind(Uuid::new_v4().to_string()).bind(actor.id).bind(&id).bind(now()).execute(&mut *tx).await?;
     tx.commit().await?;
+    state
+        .admin_tokens_changed
+        .send_modify(|version| *version = version.wrapping_add(1));
     Ok(StatusCode::NO_CONTENT)
 }
 

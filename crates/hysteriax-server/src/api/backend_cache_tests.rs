@@ -293,3 +293,82 @@ async fn terminal_job_cache_survives_unrelated_jobs_and_invalidates_on_retry() {
     assert_eq!(retried["job"]["retry_job_id"], "retry");
     task.abort();
 }
+
+#[tokio::test]
+async fn revoked_administrator_loses_existing_global_and_job_streams() {
+    let (state, base, task) = server().await;
+    sqlx::query("INSERT INTO jobs(id,kind,status,stage,available_at,created_at,updated_at) VALUES('stream-job','sync','succeeded','done',now(),now(),now())").execute(&state.pool).await.unwrap();
+    let client = reqwest::Client::new();
+    let mut global = client
+        .get(format!("{base}/api/v1/events"))
+        .bearer_auth("admin-a")
+        .send()
+        .await
+        .unwrap();
+    let mut job = client
+        .get(format!("{base}/api/v1/jobs/stream-job/events"))
+        .bearer_auth("admin-a")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(global.status(), StatusCode::OK);
+    assert_eq!(job.status(), StatusCode::OK);
+    assert_eq!(
+        client
+            .delete(format!("{base}/api/v1/admin/tokens/admin-a"))
+            .bearer_auth("admin-b")
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+    for response in [&mut global, &mut job] {
+        assert!(
+            tokio::time::timeout(Duration::from_secs(3), response.chunk())
+                .await
+                .unwrap()
+                .unwrap()
+                .is_none()
+        );
+    }
+    assert_eq!(
+        client
+            .get(format!("{base}/api/v1/version"))
+            .bearer_auth("admin-b")
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::OK
+    );
+    assert_eq!(
+        client
+            .get(format!("{base}/api/v1/events"))
+            .bearer_auth("admin-a")
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    // A database-only revocation is caught by the periodic fallback.
+    let mut survivor = client
+        .get(format!("{base}/api/v1/events"))
+        .bearer_auth("admin-b")
+        .send()
+        .await
+        .unwrap();
+    sqlx::query("UPDATE admin_tokens SET revoked_at=now() WHERE id='admin-b'")
+        .execute(&state.pool)
+        .await
+        .unwrap();
+    assert!(
+        tokio::time::timeout(Duration::from_secs(7), survivor.chunk())
+            .await
+            .unwrap()
+            .unwrap()
+            .is_none()
+    );
+    task.abort();
+}

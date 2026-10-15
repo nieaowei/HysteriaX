@@ -12,6 +12,7 @@ pub struct AppState {
     pub events: Arc<crate::events::EventHub>,
     pub secrets: Arc<SecretBox>,
     pub monitor: Arc<crate::monitoring::Monitor>,
+    pub admin_tokens_changed: tokio::sync::watch::Sender<u64>,
     pub removed_nodes: tokio::sync::broadcast::Sender<String>,
 }
 
@@ -26,6 +27,7 @@ impl AppState {
             events: Arc::new(crate::events::EventHub::new()),
             secrets,
             monitor: Arc::new(crate::monitoring::Monitor::new()),
+            admin_tokens_changed: tokio::sync::watch::channel(0).0,
             removed_nodes: tokio::sync::broadcast::channel(256).0,
         }
     }
