@@ -1193,7 +1193,10 @@ async fn uninstall(pool: &PgPool, secrets: &SecretBox, job: &JobInput) -> Result
     .await?;
     let script = "set -eu\nROOT=/opt/hysteriax\nETC=/etc/hysteriax\nif [ ! -f \"$ROOT/.hysteriax-managed\" ]; then\n  if [ -e \"$ROOT\" ] || [ -e \"$ETC\" ] || [ -e /etc/systemd/system/hysteriax.service ] || getent passwd hysteriax >/dev/null 2>&1; then echo 'HysteriaX ownership marker is missing; refusing to remove remote files' >&2; exit 55; fi\n  exit 0\nfi\nsystemctl stop hysteriax.service || true\nsystemctl disable hysteriax.service || true\nrm -f /etc/systemd/system/hysteriax.service\nsystemctl daemon-reload\nrm -rf \"$ROOT\" \"$ETC\" /var/lib/hysteriax\nuserdel hysteriax || true\ngroupdel hysteriax || true\n";
     session
-        .execute_checked(&root_command(environment.privilege != "root", script))
+        .execute_checked_with_timeout(
+            &root_command(environment.privilege != "root", script),
+            Duration::from_secs(180),
+        )
         .await?;
     Ok(JobOutput {
         stage: "remote_uninstalled".to_owned(),
@@ -1310,7 +1313,7 @@ exit 53
 "#
     );
     session
-        .execute_checked(&command(&apply))
+        .execute_checked_with_timeout(&command(&apply), Duration::from_secs(180))
         .await
         .with_context(|| {
             format!("install or restart managed Hysteria service for node {node_id}")
@@ -1324,7 +1327,10 @@ async fn rollback_managed_node(
 ) -> Result<()> {
     let script = "set -eu\nROOT=/opt/hysteriax\nETC=/etc/hysteriax\nif [ -f \"$ROOT/config.previous\" ]; then\n  cp -a \"$ROOT/config.previous\" \"$ETC/config.yaml\"\n  [ ! -f \"$ROOT/hysteria.previous\" ] || cp -a \"$ROOT/hysteria.previous\" \"$ROOT/hysteria\"\n  [ ! -f \"$ROOT/hysteriax.service.previous\" ] || cp -a \"$ROOT/hysteriax.service.previous\" /etc/systemd/system/hysteriax.service\n  systemctl daemon-reload\n  systemctl restart hysteriax.service\n  systemctl is-active --quiet hysteriax.service\nelse\n  systemctl stop hysteriax.service || true\n  systemctl disable hysteriax.service || true\n  rm -f /etc/systemd/system/hysteriax.service \"$ROOT/hysteria\" \"$ETC/config.yaml\" \"$ROOT/.hysteriax-managed\"\n  userdel hysteriax || true\n  groupdel hysteriax || true\n  rm -rf \"$ROOT\" \"$ETC\" /var/lib/hysteriax\nfi\n";
     session
-        .execute_checked(&root_command(environment.privilege != "root", script))
+        .execute_checked_with_timeout(
+            &root_command(environment.privilege != "root", script),
+            Duration::from_secs(180),
+        )
         .await?;
     Ok(())
 }

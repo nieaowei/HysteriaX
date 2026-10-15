@@ -32,6 +32,10 @@ pub enum SshError {
     ClientsStillOnline { remaining: u64 },
     #[error("SSH connection failed: {0}")]
     Transport(String),
+    #[error("SSH operation exceeded its execution deadline; remote state requires verification")]
+    OperationTimedOut,
+    #[error("SSH response exceeded its output limit; remote state requires verification")]
+    OutputLimitExceeded,
     #[error("remote command failed with exit code {code}: {stderr}")]
     Command { code: u32, stderr: String },
 }
@@ -164,29 +168,80 @@ pub async fn connect(node: &SshNode) -> Result<FingerprintResult> {
 
 impl SshSession {
     pub async fn execute(&self, command: &str) -> Result<CommandOutput> {
-        let mut channel = self.handle.channel_open_session().await?;
-        channel.exec(true, command).await?;
-        let mut stdout = Vec::new();
-        let mut stderr = Vec::new();
-        let mut exit_code = None;
-        while let Some(message) = channel.wait().await {
-            match message {
-                ChannelMsg::Data { data } => stdout.extend_from_slice(&data),
-                ChannelMsg::ExtendedData { data, ext: 1 } => stderr.extend_from_slice(&data),
-                ChannelMsg::ExitStatus { exit_status } => exit_code = Some(exit_status),
-                ChannelMsg::Close => break,
-                _ => {}
+        self.execute_with_limits(command, Duration::from_secs(60), 4 * 1024 * 1024)
+            .await
+    }
+
+    async fn execute_with_limits(
+        &self,
+        command: &str,
+        timeout: Duration,
+        max_output: usize,
+    ) -> Result<CommandOutput> {
+        let deadline = tokio::time::Instant::now() + timeout;
+        let mut channel = tokio::time::timeout_at(deadline, self.handle.channel_open_session())
+            .await
+            .map_err(|_| SshError::OperationTimedOut)??;
+        let result = tokio::time::timeout_at(deadline, async {
+            channel.exec(true, command).await?;
+            let mut stdout = Vec::new();
+            let mut stderr = Vec::new();
+            let mut exit_code = None;
+            while let Some(message) = channel.wait().await {
+                match message {
+                    ChannelMsg::Data { data } => {
+                        if data.len() > max_output.saturating_sub(stdout.len() + stderr.len()) {
+                            return Err(SshError::OutputLimitExceeded.into());
+                        }
+                        stdout.extend_from_slice(&data);
+                    }
+                    ChannelMsg::ExtendedData { data, ext: 1 } => {
+                        if data.len() > max_output.saturating_sub(stdout.len() + stderr.len()) {
+                            return Err(SshError::OutputLimitExceeded.into());
+                        }
+                        stderr.extend_from_slice(&data);
+                    }
+                    ChannelMsg::ExitStatus { exit_status } => exit_code = Some(exit_status),
+                    ChannelMsg::Close => break,
+                    _ => {}
+                }
             }
-        }
-        Ok(CommandOutput {
-            code: exit_code.unwrap_or(255),
-            stdout: String::from_utf8_lossy(&stdout).into_owned(),
-            stderr: String::from_utf8_lossy(&stderr).into_owned(),
+            Ok(CommandOutput {
+                code: exit_code.unwrap_or(255),
+                stdout: String::from_utf8_lossy(&stdout).into_owned(),
+                stderr: String::from_utf8_lossy(&stderr).into_owned(),
+            })
         })
+        .await
+        .unwrap_or_else(|_| Err(SshError::OperationTimedOut.into()));
+        if result.is_err() {
+            // SSH signals are best effort. Never classify uncertain execution as
+            // a retryable transport error: a peer may ignore TERM/close.
+            let _ = tokio::time::timeout(Duration::from_secs(1), async {
+                let _ = channel.signal(russh::Sig::TERM).await;
+                let _ = channel.close().await;
+            })
+            .await;
+        }
+        result
+    }
+
+    pub async fn execute_checked_with_timeout(
+        &self,
+        command: &str,
+        timeout: Duration,
+    ) -> Result<String> {
+        Self::check_output(
+            self.execute_with_limits(command, timeout, 4 * 1024 * 1024)
+                .await?,
+        )
     }
 
     pub async fn execute_checked(&self, command: &str) -> Result<String> {
-        let output = self.execute(command).await?;
+        Self::check_output(self.execute(command).await?)
+    }
+
+    fn check_output(output: CommandOutput) -> Result<String> {
         if output.code != 0 {
             let stderr = sanitize_remote_output(&output.stderr);
             return Err(SshError::Command {
@@ -199,18 +254,22 @@ impl SshSession {
     }
 
     pub async fn upload(&self, remote_path: &str, contents: &[u8]) -> Result<()> {
-        let channel = self.handle.channel_open_session().await?;
-        channel.request_subsystem(true, "sftp").await?;
-        let sftp = SftpSession::new(channel.into_stream()).await?;
-        let mut file = sftp.create(remote_path).await?;
-        file.write_all(contents).await?;
-        file.close().await?;
-        // `create` returns an open file handle, so close it before closing the
-        // SFTP session to ensure all file data has reached the remote host.
-        // The SFTP session's `write` convenience method only opens existing
-        // files with `WRITE`, which fails for deployment staging files.
-        sftp.close().await?;
-        Ok(())
+        tokio::time::timeout(Duration::from_secs(120), async {
+            let channel = self.handle.channel_open_session().await?;
+            channel.request_subsystem(true, "sftp").await?;
+            let sftp = SftpSession::new(channel.into_stream()).await?;
+            let mut file = sftp.create(remote_path).await?;
+            file.write_all(contents).await?;
+            file.close().await?;
+            // `create` returns an open file handle, so close it before closing the
+            // SFTP session to ensure all file data has reached the remote host.
+            // The SFTP session's `write` convenience method only opens existing
+            // files with `WRITE`, which fails for deployment staging files.
+            sftp.close().await?;
+            Ok(())
+        })
+        .await
+        .map_err(|_| SshError::OperationTimedOut)?
     }
 
     pub async fn loopback_http_get(&self, port: u32, path: &str, secret: &str) -> Result<Vec<u8>> {
@@ -268,7 +327,12 @@ impl SshSession {
             let mut response = Vec::new();
             while let Some(message) = channel.wait().await {
                 match message {
-                    ChannelMsg::Data { data } => response.extend_from_slice(&data),
+                    ChannelMsg::Data { data } => {
+                        if data.len() > (16 * 1024 * 1024usize).saturating_sub(response.len()) {
+                            return Err(SshError::OutputLimitExceeded.into());
+                        }
+                        response.extend_from_slice(&data);
+                    },
                     ChannelMsg::Eof | ChannelMsg::Close => break,
                     _ => {}
                 }
@@ -419,3 +483,7 @@ mod tests {
         assert!(!supported_release("centos", "9"));
     }
 }
+
+#[cfg(test)]
+#[path = "ssh_execution_tests.rs"]
+mod execution_tests;
