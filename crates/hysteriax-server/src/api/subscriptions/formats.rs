@@ -428,27 +428,10 @@ pub(super) fn render_subscription(
             render_mihomo_template(&compatible)?,
             "application/yaml; charset=utf-8",
         ),
-        SubscriptionFormat::Singbox => {
-            let mut outbounds = vec![json!({"type": "direct", "tag": "DIRECT"})];
-            outbounds.extend(compatible.iter().map(|n| n.singbox()));
-            let final_tag = if compatible.is_empty() {
-                "DIRECT"
-            } else {
-                "节点选择"
-            };
-            if !compatible.is_empty() {
-                let mut names: Vec<_> = compatible.iter().map(|n| n.name.clone()).collect();
-                let default = names[0].clone();
-                names.push("DIRECT".into());
-                outbounds.push(json!({"type": "selector", "tag": "节点选择", "outbounds": names, "default": default}));
-            }
-            let config = json!({"inbounds": [{"type": "mixed", "tag": "mixed-in", "listen": "127.0.0.1", "listen_port": 7890}],
-                "outbounds": outbounds, "route": {"final": final_tag}});
-            (
-                serde_json::to_string_pretty(&config).map_err(|_| ApiError::internal())?,
-                "application/json; charset=utf-8",
-            )
-        }
+        SubscriptionFormat::Singbox => (
+            render_singbox_template(&compatible)?,
+            "application/json; charset=utf-8",
+        ),
         SubscriptionFormat::Uri | SubscriptionFormat::Base64 => {
             let mut body = compatible
                 .iter()
@@ -473,6 +456,69 @@ pub(super) fn render_subscription(
         HeaderValue::from_str(&filtered.to_string()).unwrap(),
     );
     Ok(response)
+}
+
+/// Keep connection credentials dynamic; the template contains only shared policy.
+fn render_singbox_template(nodes: &[&SubscriptionNode]) -> Result<String, ApiError> {
+    let mut config: Value = serde_json::from_str(include_str!("singbox-template.json"))
+        .map_err(|_| ApiError::internal())?;
+    let groups = config["outbounds"]
+        .as_array_mut()
+        .ok_or_else(ApiError::internal)?;
+    // The supplied policy keeps Singapore out of the general selection groups.
+    let mut selectable: Vec<_> = nodes
+        .iter()
+        .copied()
+        .filter(|node| !node.name.contains("新加坡"))
+        .collect();
+    if selectable.is_empty() {
+        selectable.extend_from_slice(nodes);
+    }
+    for group in groups.iter_mut() {
+        if let Some(entries) = group["outbounds"].as_array() {
+            let mut names = Vec::new();
+            for entry in entries {
+                let tag = entry.as_str().ok_or_else(ApiError::internal)?;
+                if let Some(region) = tag.strip_prefix("{{").and_then(|s| s.strip_suffix("}}")) {
+                    let matches: Vec<_> = selectable
+                        .iter()
+                        .filter(|node| region == "nodes" || node.name.contains(region))
+                        .map(|node| json!(node.name))
+                        .collect();
+                    // Missing regions still have a usable proxy; empty subscriptions use direct.
+                    if matches.is_empty() {
+                        names.extend(selectable.iter().map(|node| json!(node.name)));
+                    } else {
+                        names.extend(matches);
+                    }
+                } else {
+                    names.push(entry.clone());
+                }
+            }
+            if names.is_empty() {
+                names.push(json!("直连"));
+            }
+            if let Some(preferred) = group["default"]
+                .as_str()
+                .and_then(|s| s.strip_prefix("{{"))
+                .and_then(|s| s.strip_suffix("}}"))
+            {
+                group["default"] = names
+                    .iter()
+                    .find(|name| {
+                        name.as_str()
+                            .is_some_and(|name| name.starts_with(preferred))
+                    })
+                    .unwrap_or(&names[0])
+                    .clone();
+            }
+            group["outbounds"] = json!(names);
+        }
+    }
+    let mut outbounds: Vec<_> = nodes.iter().map(|node| node.singbox()).collect();
+    outbounds.append(groups);
+    config["outbounds"] = json!(outbounds);
+    serde_json::to_string_pretty(&config).map_err(|_| ApiError::internal())
 }
 
 fn render_mihomo_template(nodes: &[&SubscriptionNode]) -> Result<String, ApiError> {
@@ -822,9 +868,72 @@ mod tests {
                 }
                 SubscriptionFormat::Singbox => {
                     let v: Value = serde_json::from_slice(&body).unwrap();
-                    assert_eq!(v["route"]["final"], "DIRECT");
+                    assert_eq!(v["route"]["final"], "默认代理");
+                    assert_eq!(v["outbounds"][0]["outbounds"], json!(["直连"]));
                 }
                 _ => assert!(body.is_empty()),
+            }
+        }
+    }
+
+    #[test]
+    fn singbox_template_resolves_groups_for_current_assignments() {
+        let mut nodes = Vec::new();
+        for name in [
+            "新加坡-new",
+            "美国旧金山-new",
+            "美国硅谷-new",
+            "韩国春川-new",
+            "香港家宽-new",
+        ] {
+            let mut n = node();
+            n.name = name.into();
+            nodes.push(n);
+        }
+        for assigned in [nodes.iter().collect::<Vec<_>>(), vec![&nodes[0]], vec![]] {
+            let body = render_singbox_template(&assigned).unwrap();
+            let config: Value = serde_json::from_str(&body).unwrap();
+            let outbounds = config["outbounds"].as_array().unwrap();
+            let tags: Vec<_> = outbounds
+                .iter()
+                .map(|o| o["tag"].as_str().unwrap())
+                .collect();
+            assert!(!body.contains("{{"));
+            assert!(!body.contains("hx_"));
+            assert_eq!(
+                outbounds
+                    .iter()
+                    .filter(|o| o["type"] == "hysteria2")
+                    .count(),
+                assigned.len()
+            );
+            for outbound in outbounds {
+                if let Some(members) = outbound["outbounds"].as_array() {
+                    assert!(!members.is_empty());
+                    for member in members {
+                        assert!(tags.contains(&member.as_str().unwrap()));
+                        assert_ne!(member, &outbound["tag"]);
+                    }
+                    if let Some(default) = outbound.get("default") {
+                        assert!(members.contains(default));
+                    }
+                }
+            }
+            if assigned.len() > 1 {
+                let group = |tag| outbounds.iter().find(|o| o["tag"] == tag).unwrap();
+                assert_eq!(group("默认代理")["default"], "韩国春川-new");
+                assert_eq!(group("手动选择")["default"], "美国硅谷-new");
+                assert_eq!(
+                    group("美国节点")["outbounds"],
+                    json!(["美国旧金山-new", "美国硅谷-new"])
+                );
+                assert!(
+                    !group("自动选择")["outbounds"]
+                        .as_array()
+                        .unwrap()
+                        .contains(&json!("新加坡-new"))
+                );
+                assert_eq!(group("日本节点")["outbounds"].as_array().unwrap().len(), 4);
             }
         }
     }

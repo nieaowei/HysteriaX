@@ -1,7 +1,11 @@
 use super::*;
 
 async fn fixture() -> AppState {
-    let pool = crate::db::test_pool().await;
+    fixture_with_connections(1).await
+}
+
+async fn fixture_with_connections(connections: u32) -> AppState {
+    let pool = crate::db::test_pool_with_max_connections(connections).await;
     let state = AppState::new(
         pool,
         crate::security::SecretBox::from_base64("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
@@ -19,6 +23,73 @@ async fn fixture() -> AppState {
         .bind(cipher).execute(&state.pool).await.unwrap();
     sqlx::query("INSERT INTO node_assignments(user_id,node_id,credential_hash,credential_enc,created_at) VALUES('user','node','PRIVATE-USER-HASH','PRIVATE-USER-MUST-NOT-LEAK',now())").execute(&state.pool).await.unwrap();
     state
+}
+
+#[tokio::test]
+async fn clean_credential_reads_do_not_wait_for_the_global_write_lock() {
+    let state = fixture_with_connections(4).await;
+    crate::credentials::reference_index::initialize(&state.pool, &state.secrets)
+        .await
+        .unwrap();
+    let mut writer = crate::db::begin_write(&state.pool).await.unwrap();
+    // An uncommitted configuration is invisible together with its dirty marker.
+    sqlx::query("UPDATE nodes SET name='Uncommitted' WHERE id='node'")
+        .execute(&mut *writer)
+        .await
+        .unwrap();
+    let id = "00000000-0000-4000-8000-000000000001";
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        assert_eq!(page(&state, json!({})).await["total"], 238);
+        let detail = get(State(state.clone()), Path(id.to_owned()))
+            .await
+            .unwrap()
+            .0;
+        assert!(!detail["references"].as_array().unwrap().is_empty());
+        let refs = references(State(state.clone()), Path(id.to_owned()))
+            .await
+            .unwrap()
+            .0;
+        assert!(!refs.is_empty());
+    })
+    .await
+    .expect("clean GETs must complete while another connection holds the write lock");
+    writer.rollback().await.unwrap();
+}
+
+#[tokio::test]
+async fn dirty_credential_reads_rebuild_edges_and_keep_a_consistent_snapshot() {
+    let state = fixture_with_connections(3).await;
+    let id = "00000000-0000-4000-8000-000000000001";
+    let detail = get(State(state.clone()), Path(id.to_owned()))
+        .await
+        .unwrap()
+        .0;
+    assert!(
+        detail["references"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["source"] == "desired")
+    );
+    let mut snapshot = crate::credentials::reference_index::begin_read(&state.pool, &state.secrets)
+        .await
+        .unwrap();
+    let cipher = state.secrets.encrypt("{}").unwrap();
+    sqlx::query("UPDATE nodes SET desired_config_enc=$1,deployed_config_enc=$1 WHERE id='node'")
+        .bind(cipher)
+        .execute(&state.pool)
+        .await
+        .unwrap();
+    let old = read_references_on(&mut snapshot, id).await.unwrap();
+    assert!(old.iter().any(|r| r["source"] == "desired"));
+    snapshot.commit().await.unwrap();
+    let current = find_references(&state, id).await.unwrap();
+    assert!(
+        !current
+            .iter()
+            .any(|r| r["source"] == "desired" || r["source"] == "deployed")
+    );
+    assert!(current.iter().any(|r| r["source"] == "ssh"));
 }
 
 async fn page(state: &AppState, query: Value) -> Value {

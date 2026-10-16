@@ -1,0 +1,102 @@
+{
+  "status": "deployed_healthy",
+  "server": "Server1",
+  "service_url": "https://hysteriax.cc",
+  "source_commit": "153a5d3db7606a050907d1c16fd71ac2ae789df0",
+  "source_state": "Working tree includes the validated 0042 changes and existing sing-box template changes; exact build sources archived in the server backup.",
+  "build": {
+    "image": "nieaowei/hysteriax-server:optimization-20261016-0042",
+    "image_id": "sha256:2f37bc5ace2016025315867b60e4eafefe864477a94591c56784818a70450caf",
+    "platform": "linux/amd64",
+    "binary_sha256": "22574228df9e59791d79046a894fc4be7d968a8a4039c674f78ba485ed5d0811",
+    "archive_sha256": "18b8b9fa218f640d22b780d58825084ba32be9b9b0b103a29c0b811dad856119",
+    "archive_bytes": 56718459,
+    "local_smoke_passed": true,
+    "source_manifest_sha256": "cca5ff3cac7b2a890e7d2eb4cb15fa864ff66580717b969026fd53a008d552b2",
+    "delivery": "Local Docker buildx image, SCP archive upload, remote docker load",
+    "remote_loaded_image_id": "sha256:1368337e340a6bef6e9578c7df4a7560253e58ff33e7965977a82a9b2b8c31ba",
+    "rootfs_layers_identical_after_load": true,
+    "loaded_binary_matches_local": true,
+    "rootfs_layers": [
+      "sha256:e58989146fcec76699871403b9897b5c014af1ccd85f5a9300a215e7975525d7",
+      "sha256:2d6317c28f4eea927eaf9b76ccff4dde40db4c5c16ac7628d83b035c832f8749",
+      "sha256:addb57ffeccd9915167f4ee90e44c750c3c526069c7e6e9f900b4c9666de45eb",
+      "sha256:32a29baf9aaa6bec2c4a8b619e3d6964404abb1cf9074def1a720530bc566070"
+    ],
+    "source_archive_sha256": "31d9ec0829bed1d561198dda90a7cd7ac23c86861363f15c86542ba8f5721548",
+    "complete_source_manifest_sha256": "795ab5fedb6d9f05748e66343be4067cab469756c5abd3d6b3b24be7d6f11ad0",
+    "runtime_configuration_identical_after_load": true
+  },
+  "deployment": {
+    "started_at": "2026-10-16T04:13:14.484498+00:00",
+    "completed_at": "2026-10-16T04:15:07.670297+00:00",
+    "image": "nieaowei/hysteriax-server:optimization-20261016-0042",
+    "backup_directory": "/home/nieaowei/HysteriaX/backups/optimization-20261016-0042",
+    "previous_image": "nieaowei/hysteriax-server:singbox-template-20261016",
+    "schema_before": 28,
+    "schema_after": 29,
+    "indexes": [
+      "traffic_records_node_time_idx",
+      "traffic_records_user_node_time_idx"
+    ],
+    "configuration_preserved": true,
+    "billing_unchanged_during_migration": true,
+    "dependencies_preserved": true,
+    "counts": {
+      "nodes": 5,
+      "users": 7,
+      "credentials": 11,
+      "traffic_records": 628736
+    }
+  },
+  "verification": {
+    "checked_at": "2026-10-16T04:15:46.564979+00:00",
+    "image": "nieaowei/hysteriax-server:optimization-20261016-0042",
+    "health": "healthy",
+    "restart_count": 0,
+    "binary_sha256": "22574228df9e59791d79046a894fc4be7d968a8a4039c674f78ba485ed5d0811",
+    "pages": {
+      "nodes": {
+        "total": 5,
+        "returned": 5
+      },
+      "users": {
+        "total": 7,
+        "returned": 7
+      },
+      "credentials": {
+        "total": 48,
+        "returned": 48
+      }
+    },
+    "credential_details_and_references_checked": 3,
+    "singbox_subscriptions_verified": 6,
+    "summary_counts_match": true,
+    "unauthenticated_credentials_rejected": true,
+    "ready": true
+  },
+  "sampling_observation": {
+    "checked_at": "2026-10-16T04:16:07.885862+00:00",
+    "observation_seconds": 25,
+    "nodes_observed": 5,
+    "nodes_with_advanced_samples": 5,
+    "health": "healthy",
+    "restart_count": 0
+  },
+  "backup": {
+    "bytes": 43444564,
+    "sha256": "1ebde533c55043a1cada122714f956acf23df51bc9d44469c9bad1c15a08906e"
+  },
+  "backup_files_present": {
+    "hysteriax.dump": true,
+    ".env": true,
+    "compose.yaml": true,
+    "rollback.sh": true,
+    "source.tar.gz": true,
+    "complete-source-manifest.json": true
+  },
+  "startup_log_error_lines": 0,
+  "rollback_script": "/home/nieaowei/HysteriaX/backups/optimization-20261016-0042/rollback.sh",
+  "rollback_behavior": "Stop API, revert schema 0029 indexes to 0028 with the guarded rollback SQL, restore previous .env and start previous sing-box image. Automatic failure recovery installed; no live rollback was needed or exercised.",
+  "validation_scope": "Local linux/amd64 container smoke plus read-only live API/subscription checks; no test users, credentials, jobs or quota/config changes created."
+}

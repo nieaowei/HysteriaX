@@ -123,7 +123,7 @@ struct OverviewMonitoringView: View {
             viewState.nodePageResponse = response
             viewState.nodeLoadedKey = nodePageKey
         } catch {
-            guard !Task.isCancelled, request == nodeRequestKey else { return }
+            guard !Task.isCancelled, !isRequestCancellation(error), request == nodeRequestKey else { return }
             viewState.nodePageError = error.localizedDescription
         }
     }

@@ -11,6 +11,10 @@ private final class Context {
 struct ListPageCacheTests {
     @MainActor
     static func main() async throws {
+        precondition(isRequestCancellation(CancellationError()))
+        precondition(isRequestCancellation(URLError(.cancelled)))
+        precondition(isRequestCancellation(NSError(domain: NSURLErrorDomain, code: NSURLErrorCancelled)))
+        precondition(!isRequestCancellation(URLError(.timedOut)))
         let context = Context()
         let cache = ListPageCache(maxEntries: 2, maxBytes: 1024, now: { context.time })
         let first: Int = try await cache.load("nodes:page1", ttl: 15) { bypass in
@@ -57,7 +61,8 @@ struct ListPageCacheTests {
         while context.gate == nil { await Task.yield() }
         cache.invalidate(clear: true)
         context.gate!.resume(returning: 6); context.gate = nil
-        do { _ = try await stale.value; preconditionFailure("old connection result") } catch {}
+        do { _ = try await stale.value; preconditionFailure("old connection result") }
+        catch { precondition(isRequestCancellation(error)) }
         precondition(cache.peek("old-service", as: Int.self) == nil)
         for index in 1...3 {
             context.time = context.time.addingTimeInterval(1)

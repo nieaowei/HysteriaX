@@ -21,6 +21,10 @@ pub struct CounterDelta {
     pub gap_reason: Option<&'static str>,
 }
 
+#[cfg(test)]
+#[path = "traffic/optimization_benchmark.rs"]
+mod optimization_benchmark;
+
 pub fn counter_delta(
     previous: Option<(&str, u64, u64)>,
     current_instance: &str,

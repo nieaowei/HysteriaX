@@ -4,6 +4,22 @@ final class OverviewTransport: URLProtocol, @unchecked Sendable {
     final class Responses: @unchecked Sendable {
         let lock = NSLock()
         var mode = "advanced"
+        private var versionRequests = 0
+        private var holdVersions = false
+        private var heldVersions: [@Sendable () -> Void] = []
+        func versionCount() -> Int { lock.lock(); defer { lock.unlock() }; return versionRequests }
+        func heldVersionCount() -> Int { lock.lock(); defer { lock.unlock() }; return heldVersions.count }
+        func setHoldVersions(_ hold: Bool) { lock.lock(); defer { lock.unlock() }; holdVersions = hold }
+        func holdVersion(_ deliver: @escaping @Sendable () -> Void) -> Bool {
+            lock.lock(); defer { lock.unlock() }
+            guard holdVersions else { return false }
+            heldVersions.append(deliver)
+            return true
+        }
+        func releaseVersion() {
+            lock.lock(); let deliver = heldVersions.removeFirst(); lock.unlock()
+            deliver()
+        }
         var overview = Data()
         var monitoring = Data()
         var monitoringRequest: URLRequest?
@@ -38,6 +54,8 @@ final class OverviewTransport: URLProtocol, @unchecked Sendable {
             lock.lock(); defer { lock.unlock() }
             if ["/api/v1/nodes", "/api/v1/users", "/api/v1/credentials", "/api/v1/jobs", "/api/v1/audit", "/api/v1/dns/records"].contains(path) { pageRequests += 1 }
             if path.hasSuffix("version") {
+                versionRequests += 1
+                if mode == "version-failure" { return (503, Data()) }
                 let features = mode == "legacy" ? "[]" : "[\"overview_monitoring\",\"job_retry_links\",\"node_record_removal\",\"client_summary\"]"
                 return (200, Data("{\"api_version\":\"1.0.0\",\"directory_generation\":1,\"service_version\":\"test\",\"hysteria_version\":\"test\",\"mihomo_version\":\"test\",\"features\":\(features)}".utf8))
             }
@@ -124,6 +142,7 @@ final class OverviewTransport: URLProtocol, @unchecked Sendable {
             client?.urlProtocol(self, didLoad: body)
             client?.urlProtocolDidFinishLoading(self)
         }
+        if request.url!.path.hasSuffix("version"), Self.responses.holdVersion(deliver) { return }
         if request.url!.path.hasSuffix("overview/history") { DispatchQueue.global().asyncAfter(deadline: .now() + 0.2, execute: deliver) } else { deliver() }
     }
     private let stateLock = NSLock()
@@ -140,6 +159,14 @@ struct OverviewSilentNotifications: NodeNotificationTransport {
 
 @main
 struct OverviewNetworkChecks {
+    @MainActor static func waitForHeldVersion() async throws {
+        let deadline = Date().addingTimeInterval(5)
+        while OverviewTransport.responses.heldVersionCount() == 0, Date() < deadline {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        precondition(OverviewTransport.responses.heldVersionCount() == 1)
+    }
+
     @MainActor static func main() async throws {
         let folder = CommandLine.arguments[1]
         OverviewTransport.responses.monitoring = try Data(contentsOf: URL(fileURLWithPath: folder + "/overview-nodes.json"))
@@ -164,6 +191,41 @@ struct OverviewNetworkChecks {
         precondition(store.clientSummary?.nodeCount == 235 && store.clientSummary?.userTotal == 400)
         precondition(OverviewTransport.responses.recordedDirectoryCount() == 0, "bootstrap must not traverse directories")
         precondition(store.supportsJobRetryLinks && store.supportsNodeRecordRemoval)
+        // Freeze each version response to deterministically exercise overlapping
+        // refresh triggers without relying on network timing.
+        let versionsBefore = OverviewTransport.responses.versionCount()
+        OverviewTransport.responses.setHoldVersions(true)
+        var refreshWaitersCompleted = 0
+        let ordinary = Task { await store.refresh(forceDirectories: false); refreshWaitersCompleted += 1 }
+        try await waitForHeldVersion()
+        let joining = Task { await store.refresh(forceDirectories: false); refreshWaitersCompleted += 1 }
+        let forceA = Task { await store.refresh(); refreshWaitersCompleted += 1 }
+        let forceB = Task { await store.refresh(); refreshWaitersCompleted += 1 }
+        for _ in 0..<20 { await Task.yield() }
+        ordinary.cancel() // Cancelling a consumer must not cancel the shared round.
+        precondition(store.isLoading && refreshWaitersCompleted == 0)
+        precondition(OverviewTransport.responses.versionCount() == versionsBefore + 1)
+        OverviewTransport.responses.releaseVersion()
+        try await waitForHeldVersion()
+        precondition(OverviewTransport.responses.versionCount() == versionsBefore + 2)
+        precondition(store.isLoading && refreshWaitersCompleted == 0)
+        let forceC = Task { await store.refresh(); refreshWaitersCompleted += 1 }
+        let forceD = Task { await store.refresh(); refreshWaitersCompleted += 1 }
+        for _ in 0..<20 { await Task.yield() }
+        OverviewTransport.responses.releaseVersion()
+        try await waitForHeldVersion()
+        precondition(OverviewTransport.responses.versionCount() == versionsBefore + 3)
+        OverviewTransport.responses.setHoldVersions(false)
+        OverviewTransport.responses.releaseVersion()
+        await ordinary.value; await joining.value; await forceA.value; await forceB.value; await forceC.value; await forceD.value
+        precondition(refreshWaitersCompleted == 6 && !store.isLoading && store.isConnected)
+        precondition(OverviewTransport.responses.versionCount() == versionsBefore + 3)
+        OverviewTransport.responses.setMode("version-failure")
+        await store.refresh(forceDirectories: false)
+        precondition(!store.isConnected && !store.isLoading && store.errorMessage != nil)
+        OverviewTransport.responses.setMode("advanced")
+        await store.refresh(forceDirectories: false)
+        precondition(store.isConnected && !store.isLoading && store.errorMessage == nil)
         let monitorKey = store.listPageKey(["3", "20", ""])
         let monitoring = try await store.overviewNodesPage(page: 3, pageSize: 20, query: "", cacheKey: monitorKey, revalidate: true)
         precondition(monitoring.total == 235 && monitoring.items.count == 20 && monitoring.items[0].nodeID == "monitor-41")
@@ -284,8 +346,16 @@ struct OverviewNetworkChecks {
         let oldSession = store.listCacheSession
         let oldService = store.serviceAddress
         let switching = Task { try await store.overviewHistory(range: "30d", nodeID: nil, source: "users") }
+        OverviewTransport.responses.setHoldVersions(true)
+        let oldRefresh = Task { await store.refresh(forceDirectories: false) }
+        try await waitForHeldVersion()
+        precondition(store.isLoading)
+        OverviewTransport.responses.setHoldVersions(false)
         try await Task.sleep(for: .milliseconds(30))
         try await store.connect(serviceAddress: "https://overview-other-fixture.invalid", token: "test-only", session: session)
+        OverviewTransport.responses.releaseVersion()
+        await oldRefresh.value
+        precondition(!store.isLoading && store.isConnected, "old refresh cleanup must not alter the new session")
         precondition(store.listCacheSession != oldSession)
         precondition(store.cachedListPage(sharedKey, as: JobsPage.self) == nil)
         do { _ = try await switching.value; preconditionFailure("Previous-service history should not be applied") } catch {}

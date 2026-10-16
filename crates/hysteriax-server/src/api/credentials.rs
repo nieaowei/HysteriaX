@@ -183,7 +183,8 @@ pub(crate) async fn list(
     let kind = query.kind.as_deref().unwrap_or("");
     let category = query.category.as_deref().unwrap_or("all");
     let filter = "($1='all' OR (owner_user_id IS NOT NULL)=($1='user')) AND ($2='' OR kind=$2) AND ($3='' OR lower(name) LIKE lower($3) ESCAPE '\\')";
-    let mut tx = crate::db::begin_write(&state.pool).await?;
+    let mut tx =
+        crate::credentials::reference_index::begin_read(&state.pool, &state.secrets).await?;
     sqlx::query("SET LOCAL plan_cache_mode=force_custom_plan")
         .execute(&mut *tx)
         .await?;
@@ -228,9 +229,6 @@ pub(crate) async fn list(
             }
             _ => return Err(ApiError::internal()),
         }
-    }
-    if !managed.is_empty() {
-        crate::credentials::reference_index::ensure_on(&mut tx, &state.secrets).await?;
     }
     let entries = page_values_on(
         &mut tx,
@@ -285,12 +283,13 @@ pub async fn get(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
-    let mut tx = crate::db::begin_write(&state.pool).await?;
+    let mut tx =
+        crate::credentials::reference_index::begin_read(&state.pool, &state.secrets).await?;
     let row = sqlx::query("SELECT c.*,v.metadata FROM credentials c JOIN credential_versions v ON v.credential_id=c.id AND v.version=c.latest_version WHERE c.id=$1").bind(&id).fetch_optional(&mut *tx).await?.ok_or_else(||ApiError::not_found("credential"))?;
     let mut result = summary(&row);
     let versions = sqlx::query("SELECT version,metadata,created_at FROM credential_versions WHERE credential_id=$1 ORDER BY version DESC").bind(&id).fetch_all(&mut *tx).await?;
     result["versions"] = json!(versions.iter().map(|v|json!({"version":v.get::<i64,_>("version"),"metadata":v.get::<Value,_>("metadata"),"created_at":v.get::<DateTime<Utc>,_>("created_at")})).collect::<Vec<_>>());
-    result["references"] = json!(find_references_on(&mut tx, &state.secrets, &id).await?);
+    result["references"] = json!(read_references_on(&mut tx, &id).await?);
     let batches = sqlx::query(
         "SELECT id FROM credential_batches WHERE credential_id=$1 ORDER BY created_at DESC",
     )
@@ -514,8 +513,9 @@ pub async fn references(
 }
 
 pub(crate) async fn find_references(state: &AppState, id: &str) -> Result<Vec<Value>, ApiError> {
-    let mut tx = crate::db::begin_write(&state.pool).await?;
-    let references = find_references_on(&mut tx, &state.secrets, id).await?;
+    let mut tx =
+        crate::credentials::reference_index::begin_read(&state.pool, &state.secrets).await?;
+    let references = read_references_on(&mut tx, id).await?;
     tx.commit().await?;
     Ok(references)
 }
@@ -526,6 +526,13 @@ async fn find_references_on(
     id: &str,
 ) -> Result<Vec<Value>, ApiError> {
     crate::credentials::reference_index::ensure_on(connection, secrets).await?;
+    read_references_on(connection, id).await
+}
+
+async fn read_references_on(
+    connection: &mut sqlx::PgConnection,
+    id: &str,
+) -> Result<Vec<Value>, ApiError> {
     let mut out = Vec::new();
     for row in
         sqlx::query("SELECT id,name,credential_version FROM dns_connections WHERE credential_id=$1")

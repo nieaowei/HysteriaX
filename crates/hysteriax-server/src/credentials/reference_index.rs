@@ -2,7 +2,43 @@
 //! Every authoritative reference check drains committed dirty sources in its transaction.
 use crate::{db, error::ApiError, security::SecretBox};
 use serde_json::Value;
-use sqlx::{PgConnection, PgPool, Row};
+use sqlx::{PgConnection, PgPool, Postgres, Row, Transaction};
+
+/// Return one consistent snapshot with up-to-date reference edges. Readers never
+/// wait for the write lock when the snapshot contains no dirty sources.
+pub async fn begin_read<'a>(
+    pool: &'a PgPool,
+    secrets: &SecretBox,
+) -> Result<Transaction<'a, Postgres>, ApiError> {
+    begin_read_with_retries(pool, secrets, 2).await
+}
+
+async fn begin_read_with_retries<'a>(
+    pool: &'a PgPool,
+    secrets: &SecretBox,
+    retries: usize,
+) -> Result<Transaction<'a, Postgres>, ApiError> {
+    for _ in 0..retries {
+        let mut tx = pool.begin().await?;
+        sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+            .execute(&mut *tx)
+            .await?;
+        let dirty: bool =
+            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM credential_reference_dirty)")
+                .fetch_one(&mut *tx)
+                .await?;
+        if !dirty {
+            return Ok(tx);
+        }
+        tx.rollback().await?;
+        initialize(pool, secrets).await?;
+    }
+    // A busy writer can invalidate each new snapshot. Preserve the original
+    // authoritative path after a bounded number of maintenance attempts.
+    let mut tx = db::begin_write(pool).await?;
+    ensure_on(&mut tx, secrets).await?;
+    Ok(tx)
+}
 
 pub async fn ensure_on(connection: &mut PgConnection, secrets: &SecretBox) -> Result<(), ApiError> {
     sqlx::query("SELECT pg_advisory_xact_lock(62177345902811)")
@@ -114,6 +150,52 @@ mod tests {
         extract::{Extension, Path, Query, State},
     };
     use serde_json::json;
+    #[tokio::test]
+    async fn continually_dirtied_sources_use_bounded_write_fallback() {
+        let pool = crate::db::test_pool().await;
+        let secrets =
+            SecretBox::from_base64("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA").unwrap();
+        // Simulate a committed change immediately after each of the first two
+        // maintenance passes, without scheduler-dependent racing in the test.
+        sqlx::raw_sql("CREATE TABLE maintenance_passes(n integer); INSERT INTO maintenance_passes VALUES(0);
+            CREATE FUNCTION dirty_again() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
+              UPDATE maintenance_passes SET n=n+1;
+              IF (SELECT n FROM maintenance_passes)<=2 THEN
+                INSERT INTO credential_reference_dirty(kind,source_id) VALUES(OLD.kind,OLD.source_id) ON CONFLICT DO NOTHING;
+              END IF;
+              RETURN NULL;
+            END $$;
+            CREATE TRIGGER dirty_again AFTER DELETE ON credential_reference_dirty FOR EACH ROW EXECUTE FUNCTION dirty_again();
+            INSERT INTO credential_reference_dirty(kind,source_id) VALUES('node','missing');")
+            .execute(&pool).await.unwrap();
+        let mut tx = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            begin_read(&pool, &secrets),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let passes: i32 = sqlx::query_scalar("SELECT n FROM maintenance_passes")
+            .fetch_one(&mut *tx)
+            .await
+            .unwrap();
+        assert_eq!(
+            passes, 3,
+            "two read retries followed by one authoritative write pass"
+        );
+        let read_only: String = sqlx::query_scalar("SHOW transaction_read_only")
+            .fetch_one(&mut *tx)
+            .await
+            .unwrap();
+        assert_eq!(read_only, "off");
+        let dirty: bool =
+            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM credential_reference_dirty)")
+                .fetch_one(&mut *tx)
+                .await
+                .unwrap();
+        assert!(!dirty);
+        tx.commit().await.unwrap();
+    }
     #[tokio::test]
     async fn changed_and_historical_references_block_deletion_without_prior_index_refresh() {
         let state = crate::state::AppState::new(

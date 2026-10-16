@@ -1,6 +1,11 @@
 import Foundation
 import Observation
 
+/// Shared flights may be cancelled while the waiting view's task remains active.
+func isRequestCancellation(_ error: Error) -> Bool {
+    error is CancellationError || (error as? URLError)?.code == .cancelled
+}
+
 /// Shared across page lifetimes; stores summaries only, never credential payloads.
 @MainActor
 @Observable

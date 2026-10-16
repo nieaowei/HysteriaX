@@ -73,6 +73,8 @@ final class ManagementStore {
     private var api: APIClient?
     private var eventTask: Task<Void, Never>?
     private var refreshTask: Task<Void, Never>?
+    @ObservationIgnored private var refreshFlight: Task<Void, Never>?
+    @ObservationIgnored private var pendingForcedRefresh = false
     private var lastEventID: String? {
         UserDefaults.standard.string(forKey: "lastEventID.\(serviceAddress)")
     }
@@ -110,6 +112,10 @@ final class ManagementStore {
         let serviceChanged = normalizedAddress != self.serviceAddress
         let tokenChanged = previousToken != token
         try KeychainStore.saveToken(token)
+        refreshFlight?.cancel()
+        refreshFlight = nil
+        pendingForcedRefresh = false
+        isLoading = false
         listPageCache.invalidate(clear: true)
         listCacheSession = UUID()
         overviewMonitoringPage = nil
@@ -194,12 +200,40 @@ final class ManagementStore {
 
     func refresh(forceDirectories: Bool = true) async {
         guard let api else { isConnected = false; return }
+        if let flight = refreshFlight {
+            if forceDirectories { pendingForcedRefresh = true }
+            await flight.value
+            return
+        }
+        let generation = serviceGeneration
+        isLoading = true
+        pendingForcedRefresh = false
+        let flight = Task { [self] in
+            defer {
+                if generation == serviceGeneration {
+                    refreshFlight = nil
+                    pendingForcedRefresh = false
+                    isLoading = false
+                }
+            }
+            var force = forceDirectories
+            repeat {
+                await performRefresh(using: api, forceDirectories: force)
+                guard generation == serviceGeneration, !Task.isCancelled else { return }
+                force = pendingForcedRefresh
+                pendingForcedRefresh = false
+            } while force
+        }
+        refreshFlight = flight
+        await flight.value
+    }
+
+    private func performRefresh(using api: APIClient, forceDirectories: Bool) async {
         let refreshGeneration = serviceGeneration
         if forceDirectories { listPageCache.invalidate() }
-        isLoading = true
-        defer { if refreshGeneration == serviceGeneration { isLoading = false } }
         do {
             let version: APIVersion = try await api.get(APIEndpoints.getAPIVersion)
+            guard refreshGeneration == serviceGeneration, !Task.isCancelled else { return }
             currentAdminTokenID = version.currentAdminTokenId
             guard version.apiVersion == "1.0.0" else { throw APIClientError.incompatibleAPI(version.apiVersion) }
             supportsClientSummary = version.features?.contains("client_summary") == true
@@ -209,6 +243,7 @@ final class ManagementStore {
                 for task in directoryTasks.values { task.cancel() }
                 directoryTasks = [:]; loadedDirectories = []; loadingDirectories = []
                 try await loadData(using: api, bypassCache: forceDirectories)
+                guard refreshGeneration == serviceGeneration, !Task.isCancelled else { return }
                 directoryGeneration=version.directoryGeneration
             }
             guard refreshGeneration == serviceGeneration, !Task.isCancelled else { return }
@@ -221,6 +256,7 @@ final class ManagementStore {
             supportsAuthorizationGroups = version.features?.contains("authorization_groups") == true
             isConnected = true
             if changed { await refreshAuthorizationGroups() }
+            guard refreshGeneration == serviceGeneration, !Task.isCancelled else { return }
             errorMessage = nil
             if !changed {
                 await refreshClientSummary(using: api)
@@ -231,6 +267,7 @@ final class ManagementStore {
             await (nodeNotifications ?? .shared).deliver(nodes: clientSummary?.notificationNodes ?? nodes, service: serviceAddress)
             await (nodeNotifications ?? .shared).deliver(credentials: clientSummary?.notificationCredentials ?? credentials, service: serviceAddress)
             await refreshOverview(bypassCache: forceDirectories)
+            guard refreshGeneration == serviceGeneration, !Task.isCancelled else { return }
             dataRefreshToken=UUID()
             if changed { await refreshDNS(bypassCache: forceDirectories) }
         } catch {

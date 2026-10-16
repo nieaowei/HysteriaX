@@ -269,7 +269,7 @@ private struct UserDirectoryView: View {
             pageResponse = response
             loadedPageKey = pageKey
         } catch {
-            guard !Task.isCancelled, requestKey == pageRequestKey else { return }
+            guard !Task.isCancelled, !isRequestCancellation(error), requestKey == pageRequestKey else { return }
             pageError = error.localizedDescription
         }
     }
