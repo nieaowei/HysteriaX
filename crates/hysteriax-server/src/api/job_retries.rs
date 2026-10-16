@@ -39,7 +39,10 @@ pub async fn retry(
         .await?
     {
         let status: String = child.get("status");
-        if matches!(status.as_str(), "queued" | "running") {
+        if matches!(
+            status.as_str(),
+            "queued" | "running" | "waiting_confirmation"
+        ) {
             return Ok((
                 StatusCode::ACCEPTED,
                 Json(json!({"job_id":child.get::<String,_>("id"),"status":status})),
@@ -159,10 +162,8 @@ pub async fn retry(
             "node revision changed; reload before retrying",
         ));
     }
-    if matches!(
-        row.get::<String, _>("state").as_str(),
-        "deleting" | "delete_failed"
-    ) {
+    let state_value: String = row.get("state");
+    if !super::nodes::action_allowed(&state_value, retry_kind) {
         return Err(ApiError::conflict("node is being deleted"));
     }
     if retry_kind == "kick" {
@@ -196,11 +197,14 @@ pub async fn retry(
     } else {
         revision
     };
-    let payload = if retry_kind == "sync" {
+    let mut payload = if retry_kind == "sync" {
         json!({"force":true})
     } else {
         json!({})
     };
+    if retry_kind == "ssh-test" && state_value == "delete_failed" {
+        payload["delete_recovery"] = json!(true);
+    }
     let child = super::enqueue_job_with_payload_in_tx(
         &mut tx,
         retry_kind,

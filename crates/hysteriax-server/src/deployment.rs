@@ -152,7 +152,27 @@ async fn ssh_test(pool: &PgPool, secrets: &SecretBox, job: &JobInput) -> Result<
         "Loading the saved SSH connection.",
     )
     .await?;
-    let node = load_ssh_node(pool, secrets, node_id).await?;
+    // Capture the revision and connection from the same row. Confirmation must
+    // never authorize a key observed for an older SSH target or credential.
+    let row = sqlx::query("SELECT * FROM nodes WHERE id=$1")
+        .bind(node_id)
+        .fetch_one(pool)
+        .await?;
+    let delete_recovery = row.get::<String, _>("state") == "delete_failed";
+    anyhow::ensure!(
+        row.get::<String, _>("state") != "deleting",
+        "node is being deleted"
+    );
+    let revision: i64 = row.get("desired_revision");
+    if let Some(confirmed_revision) = job.payload["confirmed_revision"].as_i64() {
+        anyhow::ensure!(
+            revision == confirmed_revision,
+            "SSH connection changed after fingerprint confirmation; run a new SSH test"
+        );
+    }
+    let success_state =
+        ssh_test_success_state(pool, &row, job.payload["ssh_restore_state"].as_str()).await?;
+    let node = crate::credentials::ssh_node(pool, secrets, &row).await?;
     report_progress(
         pool,
         job,
@@ -161,34 +181,15 @@ async fn ssh_test(pool: &PgPool, secrets: &SecretBox, job: &JobInput) -> Result<
     )
     .await?;
     match ssh::connect(&node).await? {
-        FingerprintResult::NeedsConfirmation { fingerprint } => {
-            sqlx::query(
-                "UPDATE nodes SET state = 'needs_fingerprint', updated_at = $1 WHERE id = $2",
-            )
-            .bind(now())
-            .bind(node_id)
-            .execute(pool)
-            .await?;
-            Ok(JobOutput {
-                stage: "fingerprint_confirmation_required".to_owned(),
-                result: json!({"status": "needs_confirmation", "fingerprint": fingerprint}),
-                node_state: Some("needs_fingerprint".to_owned()),
-                deployed_revision: None,
-                deployed_config: None,
-                deployed_sha256: None,
-                published_connection: None,
-                delete_node: false,
-            })
-        }
-        FingerprintResult::Changed { expected, observed } => {
-            sqlx::query(
-                "UPDATE nodes SET state = 'fingerprint_changed', updated_at = $1 WHERE id = $2",
-            )
-            .bind(now())
-            .bind(node_id)
-            .execute(pool)
-            .await?;
-            bail!("SSH host key changed: expected {expected}; observed {observed}")
+        FingerprintResult::NeedsConfirmation { fingerprint }
+        | FingerprintResult::Changed {
+            observed: fingerprint,
+            ..
+        } => {
+            let mut output =
+                fingerprint_confirmation_output(&node, revision, fingerprint, delete_recovery);
+            output.result["ssh_restore_state"] = json!(success_state);
+            Ok(output)
         }
         FingerprintResult::Trusted(session) => {
             report_progress(
@@ -200,12 +201,13 @@ async fn ssh_test(pool: &PgPool, secrets: &SecretBox, job: &JobInput) -> Result<
             .await?;
             let environment = ssh::inspect_connected(&session).await?;
             remote_guard(&session, &environment, false, None).await?;
-            sqlx::query("UPDATE nodes SET state = 'ready', ssh_host_fingerprint = $1, updated_at = $2 WHERE id = $3")
-                .bind(&environment.fingerprint).bind(now()).bind(node_id).execute(pool).await?;
+            let mut result = environment_json(&environment);
+            result["node_revision"] = json!(revision);
+            result["delete_recovery"] = json!(delete_recovery);
             Ok(JobOutput {
                 stage: "environment_checked".to_owned(),
-                result: environment_json(&environment),
-                node_state: Some("ready".to_owned()),
+                result,
+                node_state: Some(success_state),
                 deployed_revision: None,
                 deployed_config: None,
                 deployed_sha256: None,
@@ -213,6 +215,69 @@ async fn ssh_test(pool: &PgPool, secrets: &SecretBox, job: &JobInput) -> Result<
                 delete_node: false,
             })
         }
+    }
+}
+
+// SSH verifies connectivity and privileges; it does not change deployment state.
+// Capture the state before entering fingerprint confirmation, and carry it through
+// the persisted pause so a reconnect cannot lose rollback/failure/drift warnings.
+async fn ssh_test_success_state(
+    pool: &PgPool,
+    row: &sqlx::postgres::PgRow,
+    previous: Option<&str>,
+) -> Result<String> {
+    let current: String = row.get("state");
+    if current == "delete_failed" {
+        return Ok(current);
+    }
+    let state = previous.unwrap_or(&current);
+    if matches!(
+        state,
+        "deployed" | "rolled_back" | "sync_failed" | "rollback_failed" | "drift" | "syncing"
+    ) {
+        return Ok(state.to_owned());
+    }
+    let Some(deployed) = row.get::<Option<i64>, _>("deployed_revision") else {
+        return Ok("ready".to_owned());
+    };
+    // A previous connectivity warning (or the former ready-state bug) must not
+    // erase a recorded deployment. Recover the last successful deployment kind.
+    let kind: Option<String> = sqlx::query_scalar("SELECT kind FROM jobs WHERE node_id=$1 AND target_revision=$2 AND status='succeeded' AND kind IN ('deploy','sync','rollback') ORDER BY finished_at DESC,created_at DESC,id DESC LIMIT 1")
+        .bind(row.get::<String,_>("id")).bind(deployed).fetch_optional(pool).await?;
+    Ok(if kind.as_deref() == Some("rollback") {
+        "rolled_back"
+    } else {
+        "deployed"
+    }
+    .to_owned())
+}
+
+fn fingerprint_confirmation_output(
+    node: &SshNode,
+    revision: i64,
+    fingerprint: String,
+    delete_recovery: bool,
+) -> JobOutput {
+    JobOutput {
+        stage: "fingerprint_confirmation_required".to_owned(),
+        result: json!({"status":"needs_confirmation","fingerprint":fingerprint,
+            "expected_fingerprint":node.host_fingerprint,"node_revision":revision,
+            "delete_recovery":delete_recovery}),
+        node_state: Some(
+            if delete_recovery {
+                "delete_failed"
+            } else if node.host_fingerprint.is_some() {
+                "fingerprint_changed"
+            } else {
+                "needs_fingerprint"
+            }
+            .to_owned(),
+        ),
+        deployed_revision: None,
+        deployed_config: None,
+        deployed_sha256: None,
+        published_connection: None,
+        delete_node: false,
     }
 }
 
@@ -260,6 +325,19 @@ async fn deploy_with_probe(
         .fetch_optional(pool)
         .await?
         .context("node was deleted before deployment")?;
+    anyhow::ensure!(
+        !matches!(
+            row.get::<String, _>("state").as_str(),
+            "deleting" | "delete_failed"
+        ),
+        "node is being deleted"
+    );
+    if let Some(confirmed_revision) = job.payload["confirmed_revision"].as_i64() {
+        anyhow::ensure!(
+            row.get::<i64, _>("desired_revision") == confirmed_revision,
+            "SSH connection changed after fingerprint confirmation; run a new SSH test"
+        );
+    }
     let snapshot_enc: Option<String> = sqlx::query_scalar(
         "SELECT config_enc FROM config_versions WHERE node_id = $1 AND revision = $2",
     )
@@ -312,14 +390,12 @@ async fn deploy_with_probe(
     let session = match ssh::connect(&ssh_node).await? {
         FingerprintResult::Trusted(session) => session,
         FingerprintResult::NeedsConfirmation { fingerprint } => {
-            sqlx::query(
-                "UPDATE nodes SET state = 'needs_fingerprint', updated_at = $1 WHERE id = $2",
-            )
-            .bind(now())
-            .bind(node_id)
-            .execute(pool)
-            .await?;
-            bail!("confirm this SSH host fingerprint before deploying: {fingerprint}")
+            return Ok(fingerprint_confirmation_output(
+                &ssh_node,
+                row.get("desired_revision"),
+                fingerprint,
+                false,
+            ));
         }
         FingerprintResult::Changed { expected, observed } => {
             sqlx::query(

@@ -5,6 +5,7 @@ pub(crate) mod dns;
 pub(crate) mod job_retries;
 pub(crate) mod nodes;
 pub(crate) mod resources;
+pub(crate) mod ssh_fingerprint;
 pub(crate) mod subscriptions;
 pub(crate) mod users;
 
@@ -35,6 +36,10 @@ pub(crate) struct AdminActor {
 
 pub fn router(state: AppState) -> Router {
     let admin = Router::new()
+        .route(
+            "/api/v1/jobs/{id}/confirm-fingerprint",
+            post(ssh_fingerprint::confirm),
+        )
         .route(
             "/api/v1/dns/connections",
             get(dns::list_connections).post(dns::create_connection),
@@ -288,7 +293,7 @@ async fn api_version(
     let directory_generation = crate::cache::configuration_generation(&state.pool).await?;
     Ok(Json(json!({
         "api_version": "1.0.0",
-        "features": ["ssh_dns_sync", "client_summary", "node_packages", "overview_monitoring", "job_retry_links", "credentials", "node_record_removal", "dns_management", "authorization_groups"],
+        "features": ["job_fingerprint_confirmation", "ssh_test_confirmation", "ssh_dns_sync", "client_summary", "node_packages", "overview_monitoring", "job_retry_links", "credentials", "node_record_removal", "dns_management", "authorization_groups"],
         "directory_generation":directory_generation,
         "current_admin_token_id": actor.id,
         "service_version": env!("CARGO_PKG_VERSION"),
@@ -821,6 +826,11 @@ pub(crate) async fn enqueue_job_with_payload_in_tx(
     revision: Option<i64>,
     job_payload: Value,
 ) -> Result<String, ApiError> {
+    if ssh_fingerprint::supports_confirmation(kind)
+        && let Some(node) = node_id
+    {
+        ssh_fingerprint::cancel_waiting(tx, node).await?;
+    }
     let job_payload = if kind == "kick" {
         let node = node_id.ok_or_else(|| ApiError::bad_request("kick requires node_id"))?;
         let (existing, payload) = crate::kick_requests::prepare(tx, node, &job_payload).await?;
@@ -888,7 +898,7 @@ pub(crate) async fn cancel_queued_node_jobs_in_tx(
     tx: &mut Transaction<'_, Postgres>,
     node_id: &str,
 ) -> Result<(), ApiError> {
-    let rows = sqlx::query("SELECT id, kind FROM jobs WHERE node_id = $1 AND status = 'queued'")
+    let rows = sqlx::query("SELECT id, kind FROM jobs WHERE node_id = $1 AND status IN ('queued', 'waiting_confirmation')")
         .bind(node_id)
         .fetch_all(&mut **tx)
         .await?;
@@ -896,7 +906,7 @@ pub(crate) async fn cancel_queued_node_jobs_in_tx(
         let id: String = row.get("id");
         let kind: String = row.get("kind");
         let timestamp = now();
-        sqlx::query("UPDATE jobs SET status = 'cancelled', stage = 'node_deleting', updated_at = $1, finished_at = $2 WHERE id = $3 AND status = 'queued'")
+        sqlx::query("UPDATE jobs SET status = 'cancelled', stage = 'node_deleting', updated_at = $1, finished_at = $2 WHERE id = $3 AND status IN ('queued', 'waiting_confirmation')")
             .bind(timestamp).bind(timestamp).bind(&id).execute(&mut **tx).await?;
         let payload = json!({"id": id, "kind": kind, "node_id": node_id, "status": "cancelled", "stage": "node_deleting"});
         sqlx::query("INSERT INTO job_events (job_id, event_type, payload_json, created_at) VALUES ($1, 'job.cancelled', $2, $3)")

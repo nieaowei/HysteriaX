@@ -1381,3 +1381,39 @@
 "同步 SSH 地址到 DNS" = "Sync SSH address to DNS";
 
 "保存公网 SSH IP 会同步更新绑定域名下同地址族的 DNS 记录。" = "Saving a public SSH IP also updates the bound DNS record of the same address family.";
+
+"信任并继续测试" = "Trust and Continue Test";
+
+"核对指纹后继续测试；确认后将重新连接并完成 SSH 认证和环境检查。" = "Verify the fingerprint to continue. The test will reconnect, authenticate and check the environment.";
+
+"我已通过可信渠道核对此 SSH 主机指纹" = "I have verified this SSH host fingerprint through a trusted channel";
+
+"指纹已确认，继续测试" = "Fingerprint Confirmed, Continuing Test";
+
+"指纹已保存，正在继续原 SSH 测试。" = "Fingerprint saved. Continuing the original SSH test.";
+
+"已读取 SSH 主机指纹，等待核对并信任。" = "SSH host fingerprint retrieved. Waiting for verification and trust.";
+
+"节点信息已变化，请重新运行 SSH 测试。" = "Node details changed. Run a new SSH test.";
+
+"SSH 主机指纹已信任，继续原测试。" = "SSH host fingerprint trusted. Continuing the original test.";
+
+"信任 SSH 主机指纹" = "Trust SSH Host Fingerprint";
+
+"核对指纹后将重新连接，验证主机密钥，再继续{0}。" = "After you verify the fingerprint, the connection will be re-established and the host key checked before continuing: {0}.";
+
+"指纹已保存，正在继续原任务。" = "Fingerprint saved. Continuing the original task.";
+
+"信任并继续部署" = "Trust and Continue Deployment";
+
+"信任并继续同步" = "Trust and Continue Sync";
+
+"信任并继续回滚" = "Trust and Continue Rollback";
+
+"可先运行 SSH 测试检查连接，修复后再重试删除。" = "Run an SSH test to check the connection, then retry deletion after fixing the issue.";
+
+"SSH 主机指纹已信任，继续原任务。" = "SSH host fingerprint trusted. Continuing the original task.";
+
+"指纹已确认，继续任务" = "Fingerprint Confirmed, Continuing Task";
+
+"节点或任务状态已变化，请刷新并重新发起操作。" = "The node or task state changed. Refresh and start the operation again.";

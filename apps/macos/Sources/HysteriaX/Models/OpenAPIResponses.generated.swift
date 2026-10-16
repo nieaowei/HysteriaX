@@ -788,6 +788,7 @@ struct UsersPage: Codable, Sendable {
 struct JobOutcome: Codable, Sendable {
     let status: String?
     let fingerprint: String?
+    let expectedFingerprint: String?
     let distribution: String?
     let version: String?
     let architecture: String?
@@ -797,6 +798,7 @@ struct JobOutcome: Codable, Sendable {
     enum CodingKeys: String, CodingKey {
         case status
         case fingerprint
+        case expectedFingerprint = "expected_fingerprint"
         case distribution
         case version
         case architecture

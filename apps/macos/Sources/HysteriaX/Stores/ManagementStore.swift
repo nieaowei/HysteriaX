@@ -501,6 +501,22 @@ final class ManagementStore {
         await refresh()
     }
 
+    func confirmJobFingerprint(_ job: JobSummary, fingerprint: String) async throws {
+        guard ["ssh-test", "deploy", "sync", "rollback"].contains(job.kind), job.status == "waiting_confirmation", let nodeID = job.nodeID else {
+            throw APIClientError.server(L10n.text("此任务没有可确认的 SSH 指纹变更。"))
+        }
+        let client = try requireConnectedAPI()
+        let generation = serviceGeneration
+        let node: NodeDetail = try await client.get(APIEndpoints.getNode(id: nodeID))
+        guard generation == serviceGeneration, !Task.isCancelled else { throw CancellationError() }
+        let _: JobReceipt = try await client.post(
+            APIEndpoints.confirmJobFingerprint(id: job.id),
+            body: JobFingerprintConfirmationRequest(expectedRevision: node.revision, fingerprint: fingerprint)
+        )
+        guard generation == serviceGeneration else { throw CancellationError() }
+        await refresh()
+    }
+
     func confirmHostFingerprint(nodeID: String, fingerprint: String) async throws {
         guard let node = nodes.first(where: { $0.id == nodeID }) else {
             throw APIClientError.server(L10n.text("找不到对应节点。"))

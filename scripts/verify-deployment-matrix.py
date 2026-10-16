@@ -287,7 +287,7 @@ def main():
                     deadline = time.time() + timeout
                     while time.time() < deadline:
                         detail = expect(f"/api/v1/jobs/{job_id}")
-                        if detail["job"]["status"] in ("succeeded", "failed", "cancelled", "rolled_back"):
+                        if detail["job"]["status"] in ("succeeded", "failed", "cancelled", "rolled_back", "waiting_confirmation"):
                             return detail
                         time.sleep(1)
                     raise TimeoutError(f"job {job_id} did not finish")
@@ -378,13 +378,16 @@ def main():
                     )["job_id"]
                     ssh_result = wait_job(ssh_job, timeout=90)
                     fingerprint = ((ssh_result.get("result") or {}).get("result") or {}).get("fingerprint")
-                    if ssh_result["job"]["status"] != "succeeded" or not fingerprint:
+                    if ssh_result["job"]["status"] != "waiting_confirmation" or not fingerprint:
                         raise RuntimeError(f"SSH fingerprint discovery failed for {node['name']}")
                     expect(
-                        f"/api/v1/nodes/{node['node_id']}",
-                        "PATCH",
-                        {"expected_revision": 1, "ssh_host_fingerprint": fingerprint},
+                        f"/api/v1/jobs/{ssh_job}/confirm-fingerprint",
+                        "POST",
+                        {"expected_revision": 1, "fingerprint": fingerprint},
+                        (202,),
                     )
+                    if wait_job(ssh_job)["job"]["status"] != "succeeded":
+                        raise RuntimeError("SSH test did not continue successfully on its original job")
 
                     def upload_resource(name, kind, content):
                         return expect(

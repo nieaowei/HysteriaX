@@ -731,6 +731,24 @@ struct UserAuthorizationGroupsUpdateRequest: Encodable, Sendable {
     }
 }
 
+struct JobFingerprintConfirmationRequest: Encodable, Sendable {
+    let expectedRevision: Int
+    let fingerprint: String
+
+    init(
+        expectedRevision: Int,
+        fingerprint: String
+    ) {
+        self.expectedRevision = expectedRevision
+        self.fingerprint = fingerprint
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case expectedRevision = "expected_revision"
+        case fingerprint
+    }
+}
+
 struct RevisionRequest: Encodable, Sendable {
     let expectedRevision: Int
 
@@ -978,6 +996,9 @@ enum APIEndpoints {
     static let getAPIVersion: APIOperation<NoRequest, APIVersion> = APIOperation<NoRequest, APIVersion>(method: "GET", path: "api/v1/version", queryParameters: [:])
     static func getJob(id: String) -> APIOperation<NoRequest, JobDetailResponse> {
         APIOperation(method: "GET", path: "api/v1/jobs/\(id)", queryParameters: [:])
+    }
+    static func confirmJobFingerprint(id: String) -> APIOperation<JobFingerprintConfirmationRequest, JobReceipt> {
+        APIOperation(method: "POST", path: "api/v1/jobs/\(id)/confirm-fingerprint", queryParameters: [:])
     }
     static func retryJob(id: String) -> APIOperation<RevisionRequest, JobReceipt> {
         APIOperation(method: "POST", path: "api/v1/jobs/\(id)/retry", queryParameters: [:])

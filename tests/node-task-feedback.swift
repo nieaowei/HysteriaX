@@ -7,6 +7,11 @@ import Foundation
                    result: nil, attempts: 0, createdAt: created, updatedAt: created, finishedAt: nil)
     }
     static func main() {
+        precondition(NodeTaskFeedback.allowsAction("ssh-test", state: "delete_failed"))
+        for action in ["ssh-test", "deploy", "sync", "rollback"] {
+            precondition(!NodeTaskFeedback.allowsAction(action, state: "deleting"))
+            if action != "ssh-test" { precondition(!NodeTaskFeedback.allowsAction(action, state: "delete_failed")) }
+        }
         let running = job("running", status: "running", created: "2026-10-07T01:00:00Z")
         let queued = job("queued", status: "queued", created: "2026-10-07T02:00:00Z")
         let succeeded = job("success", status: "succeeded", created: "2026-10-07T03:00:00Z")

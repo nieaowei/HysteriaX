@@ -88,12 +88,14 @@ def main():
                 node = created["node"]["id"]
                 path = f"/api/v1/nodes/{node}"
                 def detail(): return api(path)
-                def job(job_id):
-                    result = wait_for(lambda: (v if (v := api(f"/api/v1/jobs/{job_id}"))["job"]["status"] in ("succeeded", "failed", "rolled_back") else None), "job completion", 300)
-                    if result["job"]["status"] != "succeeded": raise RuntimeError(result["job"].get("error_message"))
+                def job(job_id, allow_confirmation=False):
+                    result = wait_for(lambda: (v if (v := api(f"/api/v1/jobs/{job_id}"))["job"]["status"] in ("succeeded", "failed", "rolled_back") + (("waiting_confirmation",) if allow_confirmation else ()) else None), "job completion", 300)
+                    if result["job"]["status"] != "succeeded" and not (allow_confirmation and result["job"]["status"] == "waiting_confirmation"): raise RuntimeError(result["job"].get("error_message"))
                     return result
-                fingerprint = job(api(path + "/ssh-test", "POST", {"expected_revision": 1})["job_id"])["result"]["result"]["fingerprint"]
-                api(path, "PATCH", {"expected_revision": 1, "ssh_host_fingerprint": fingerprint})
+                ssh_job = api(path + "/ssh-test", "POST", {"expected_revision": 1})["job_id"]
+                fingerprint = job(ssh_job, allow_confirmation=True)["result"]["result"]["fingerprint"]
+                api(f"/api/v1/jobs/{ssh_job}/confirm-fingerprint", "POST", {"expected_revision": 1, "fingerprint": fingerprint})
+                job(ssh_job)
                 cert, cert_key = temp / "cert.pem", temp / "key.pem"
                 matrix.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", str(cert_key), "-out", str(cert), "-days", "2", "-subj", "/CN=overview.test"])
                 refs = [api(path + "/resources", "POST", {"name": resource.name, "resource_kind": kind, "content_base64": base64.b64encode(resource.read_bytes()).decode()})["reference"] for resource, kind in [(cert, "certificate"), (cert_key, "private_key")]]

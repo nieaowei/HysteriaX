@@ -3,6 +3,9 @@ import Foundation
 @main
 struct ManagementDisplayTextTests {
     static func main() {
+        for kind in ["ssh-test", "deploy", "sync", "rollback"] {
+            precondition(JobDisplayText.fingerprintContinuation(kind).contains(JobDisplayText.kind(kind).replacingOccurrences(of: "SSH ", with: "")))
+        }
         let healthLog = JobDisplayText.logMessage(stage: "checking_health", message: "Waiting up to 180 seconds for the traffic and online statistics APIs, including certificate provisioning.")
         precondition(healthLog.contains("180 秒") && healthLog.contains("证书签发"))
         let kickLog = JobDisplayText.logMessage(stage: "checking_clients", message: "12 client device(s) remain online; requesting another kick.")

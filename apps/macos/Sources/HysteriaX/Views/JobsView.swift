@@ -278,7 +278,7 @@ struct JobsView: View {
                let node = store.nodes.first(where: { $0.id == job.nodeID }) {
                 Button(L10n.text("重试：{0}", String(describing: (retryLabel(action))))) { retry(job, on: node, action: action) }
                     .accessibilityIdentifier("jobs.retry.\(job.id)")
-                    .disabled(!store.isConnected || !store.supportsJobRetryLinks || ["needs_fingerprint", "fingerprint_changed"].contains(node.state))
+                    .disabled(!store.isConnected || !store.supportsJobRetryLinks || !NodeTaskFeedback.allowsAction(action, state: node.state) || (action != "ssh-test" && ["needs_fingerprint", "fingerprint_changed"].contains(node.state)))
                     .help(store.supportsJobRetryLinks ? L10n.text("创建关联重试，成功后自动移除失败提醒") : L10n.text("管理服务需更新后才能关联重试"))
             }
         }
@@ -291,7 +291,10 @@ struct JobsView: View {
             SSHHostFingerprintChangeView(store: store, job: job, change: change)
                 .id("\(store.serviceAddress):\(job.id)")
         }
-        if let fingerprint = job.result?.result?.fingerprint {
+        if ["ssh-test", "deploy", "sync", "rollback"].contains(job.kind), job.status == "waiting_confirmation", let fingerprint = job.result?.result?.fingerprint {
+            SSHJobFingerprintConfirmationView(store: store, job: job, fingerprint: fingerprint)
+                .id("\(store.serviceAddress):\(job.id):\(fingerprint)")
+        } else if job.status == "succeeded", job.result?.result?.status == "needs_confirmation", let fingerprint = job.result?.result?.fingerprint {
             GroupBox(L10n.text("SSH 主机指纹")) {
                 VStack(alignment: .leading, spacing: 10) {
                     Text(fingerprint).font(.system(.callout, design: .monospaced)).textSelection(.enabled)
@@ -383,6 +386,7 @@ struct JobsView: View {
         case "succeeded": .green
         case "failed": .orange
         case "running": .blue
+        case "waiting_confirmation": .orange
         default: .secondary
         }
     }

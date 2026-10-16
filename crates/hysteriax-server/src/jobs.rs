@@ -104,7 +104,7 @@ async fn recover_interrupted(pool: &PgPool) -> Result<(), sqlx::Error> {
 async fn claim_next(pool: &PgPool) -> Result<Option<JobInput>, sqlx::Error> {
     let timestamp = now();
     let mut tx = db::begin_write(pool).await?;
-    let row = sqlx::query("UPDATE jobs SET status = 'running', stage = 'starting', attempts = attempts + 1, started_at = COALESCE(started_at, $1), updated_at = $2 WHERE id = (SELECT candidate.id FROM jobs AS candidate WHERE candidate.status = 'queued' AND candidate.available_at <= $3 AND (candidate.node_id IS NULL OR NOT EXISTS (SELECT 1 FROM jobs AS active WHERE active.node_id = candidate.node_id AND active.status = 'running')) AND (candidate.kind NOT IN ('deploy','sync','rollback') OR NOT EXISTS (SELECT 1 FROM jobs AS dependency WHERE dependency.node_id=candidate.node_id AND dependency.kind LIKE 'dns-%' AND dependency.status IN ('queued','running'))) AND (candidate.resource_key IS NULL OR NOT EXISTS (SELECT 1 FROM jobs AS resource_active WHERE resource_active.resource_key=candidate.resource_key AND resource_active.status='running')) ORDER BY candidate.available_at, candidate.created_at, candidate.id LIMIT 1) RETURNING id, kind, node_id, target_revision, payload_json, attempts")
+    let row = sqlx::query("UPDATE jobs SET status = 'running', stage = 'starting', attempts = attempts + CASE WHEN stage='fingerprint_confirmed' THEN 0 ELSE 1 END, started_at = COALESCE(started_at, $1), updated_at = $2 WHERE id = (SELECT candidate.id FROM jobs AS candidate WHERE candidate.status = 'queued' AND candidate.available_at <= $3 AND (candidate.node_id IS NULL OR NOT EXISTS (SELECT 1 FROM jobs AS active WHERE active.node_id = candidate.node_id AND active.status = 'running')) AND (candidate.kind NOT IN ('deploy','sync','rollback') OR NOT EXISTS (SELECT 1 FROM jobs AS dependency WHERE dependency.node_id=candidate.node_id AND dependency.kind LIKE 'dns-%' AND dependency.status IN ('queued','running'))) AND (candidate.resource_key IS NULL OR NOT EXISTS (SELECT 1 FROM jobs AS resource_active WHERE resource_active.resource_key=candidate.resource_key AND resource_active.status='running')) ORDER BY candidate.available_at, candidate.created_at, candidate.id LIMIT 1) RETURNING id, kind, node_id, target_revision, payload_json, attempts")
         .bind(timestamp).bind(timestamp).bind(timestamp).fetch_optional(&mut *tx).await?;
     let job = if let Some(row) = row {
         let job = JobInput {
@@ -236,11 +236,73 @@ async fn succeed(pool: &PgPool, job: &JobInput, output: JobOutput) -> Result<(),
     let timestamp = now();
     let result = json!({"stage": output.stage, "result": output.result});
     let mut tx = db::begin_write(pool).await?;
+    if crate::api::ssh_fingerprint::supports_confirmation(&job.kind)
+        && output.stage == "fingerprint_confirmation_required"
+    {
+        let revision = output.result["node_revision"].as_i64().unwrap_or(-1);
+        let current: Option<i64> = sqlx::query_scalar("SELECT desired_revision FROM nodes WHERE id=$1 AND state!='deleting' AND (state!='delete_failed' OR $2)")
+            .bind(&job.node_id).bind(job.kind == "ssh-test" && output.result["delete_recovery"] == true).fetch_optional(&mut *tx).await?;
+        let valid = current == Some(revision);
+        let status = if valid {
+            "waiting_confirmation"
+        } else {
+            "cancelled"
+        };
+        let stage = if valid {
+            output.stage.as_str()
+        } else {
+            "superseded"
+        };
+        let changed = sqlx::query("UPDATE jobs SET status=$1,stage=$2,result_json=$3,error_message=NULL,updated_at=$4,finished_at=CASE WHEN $1='cancelled' THEN $4 ELSE NULL END WHERE id=$5 AND status='running'")
+            .bind(status).bind(stage).bind(&result).bind(timestamp).bind(&job.id).execute(&mut *tx).await?;
+        if changed.rows_affected() == 1 {
+            let log = json!({"created_at":timestamp,"stage":stage,"attempt":job.attempts,
+                "message":if valid { "SSH host fingerprint observed; waiting for explicit trust." } else { "SSH test superseded by a node change." }});
+            sqlx::query(
+                "UPDATE jobs SET logs_json=logs_json || jsonb_build_array($1::jsonb) WHERE id=$2",
+            )
+            .bind(log)
+            .bind(&job.id)
+            .execute(&mut *tx)
+            .await?;
+            if valid {
+                sqlx::query("UPDATE nodes SET state=$1,updated_at=$2 WHERE id=$3")
+                    .bind(&output.node_state)
+                    .bind(timestamp)
+                    .bind(&job.node_id)
+                    .execute(&mut *tx)
+                    .await?;
+            }
+            crate::kick_requests::event(&mut tx, &job.id,
+                if valid { "job.waiting_confirmation" } else { "job.cancelled" },
+                json!({"id":job.id,"kind":job.kind,"node_id":job.node_id,"status":status,"stage":stage,"result":output.result})).await?;
+        }
+        return tx.commit().await;
+    }
+    if job.kind == "ssh-test" && output.stage == "environment_checked" {
+        let current: Option<i64> = sqlx::query_scalar("SELECT desired_revision FROM nodes WHERE id=$1 AND state!='deleting' AND (state!='delete_failed' OR $2)")
+            .bind(&job.node_id).bind(job.kind == "ssh-test" && output.result["delete_recovery"] == true).fetch_optional(&mut *tx).await?;
+        if current != output.result["node_revision"].as_i64() || current.is_none() {
+            let changed = sqlx::query("UPDATE jobs SET status='cancelled',stage='superseded',updated_at=$1,finished_at=$1 WHERE id=$2 AND status='running'")
+                .bind(timestamp).bind(&job.id).execute(&mut *tx).await?;
+            if changed.rows_affected() == 1 {
+                crate::kick_requests::event(&mut tx,&job.id,"job.cancelled",json!({"id":job.id,"kind":job.kind,"node_id":job.node_id,"status":"cancelled","stage":"superseded"})).await?;
+            }
+            return tx.commit().await;
+        }
+    }
     let changed = sqlx::query("UPDATE jobs SET status = 'succeeded', stage = $1, result_json = $2, error_message = NULL, updated_at = $3, finished_at = $4 WHERE id = $5 AND status = 'running'")
         .bind(&output.stage).bind(result).bind(timestamp).bind(timestamp).bind(&job.id).execute(&mut *tx).await?;
     if changed.rows_affected() == 0 {
         tx.commit().await?;
         return Ok(());
+    }
+    if job.kind == "ssh-test" && output.stage == "environment_checked" {
+        sqlx::query("UPDATE nodes SET ssh_host_fingerprint=$1 WHERE id=$2")
+            .bind(output.result["fingerprint"].as_str())
+            .bind(&job.node_id)
+            .execute(&mut *tx)
+            .await?;
     }
     crate::kick_requests::finish(
         &mut tx,
@@ -284,7 +346,7 @@ async fn succeed(pool: &PgPool, job: &JobInput, output: JobOutput) -> Result<(),
     if output.delete_node
         && let Some(node_id) = &job.node_id
     {
-        let pending = sqlx::query("UPDATE jobs SET status = 'cancelled', stage = 'node_removed', updated_at = $1, finished_at = $1 WHERE node_id = $2 AND id <> $3 AND status IN ('queued', 'running') RETURNING id, kind")
+        let pending = sqlx::query("UPDATE jobs SET status = 'cancelled', stage = 'node_removed', updated_at = $1, finished_at = $1 WHERE node_id = $2 AND id <> $3 AND status IN ('queued', 'running', 'waiting_confirmation') RETURNING id, kind")
             .bind(timestamp)
             .bind(node_id)
             .bind(&job.id)
@@ -313,6 +375,7 @@ async fn succeed(pool: &PgPool, job: &JobInput, output: JobOutput) -> Result<(),
     if job.kind != "kick"
         && !output.delete_node
         && output.stage != "fingerprint_confirmation_required"
+        && output.result["delete_recovery"] != true
         && let Some(node) = &job.node_id
     {
         crate::kick_requests::schedule(&mut tx, Some(node), true)
@@ -384,6 +447,24 @@ async fn fail(
         tx.commit().await?;
         return Ok(());
     }
+    if job.kind == "ssh-test"
+        && !retry
+        && let Some(revision) = job.payload["confirmed_revision"].as_i64()
+    {
+        // Trust was saved, but authentication/environment checks failed. Do not
+        // leave the node claiming that the already-confirmed key still needs trust.
+        let previous = job.payload["ssh_restore_state"].as_str().unwrap_or("");
+        let state = if matches!(
+            previous,
+            "deployed" | "rolled_back" | "sync_failed" | "rollback_failed" | "drift" | "syncing"
+        ) {
+            previous
+        } else {
+            "unreachable"
+        };
+        sqlx::query("UPDATE nodes SET state=$4,updated_at=$1 WHERE id=$2 AND desired_revision=$3 AND ssh_host_fingerprint IS NOT NULL AND state IN ('needs_fingerprint','fingerprint_changed')")
+            .bind(timestamp).bind(&job.node_id).bind(revision).bind(state).execute(&mut *tx).await?;
+    }
     if let Some(node_id) = &job.node_id {
         let state = if rolled_back {
             Some("rolled_back")
@@ -407,7 +488,7 @@ async fn fail(
             None
         };
         if let Some(state) = state {
-            sqlx::query("UPDATE nodes SET state = CASE WHEN state = 'deleting' AND $1 != 'delete_failed' THEN state ELSE $2 END, updated_at = $3 WHERE id = $4")
+            sqlx::query("UPDATE nodes SET state = CASE WHEN state IN ('deleting','delete_failed') AND $1 != 'delete_failed' THEN state ELSE $2 END, updated_at = $3 WHERE id = $4")
                 .bind(state)
                 .bind(state)
                 .bind(timestamp)
@@ -1133,3 +1214,7 @@ mod dns_job_tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "ssh_confirmation_tests.rs"]
+mod ssh_confirmation_tests;

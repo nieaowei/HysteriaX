@@ -12,6 +12,9 @@ final class FingerprintTransport: URLProtocol, @unchecked Sendable {
         var conflict = false
         var retryID: String?
         var error = "SSH host key changed: expected \(oldFingerprint); observed \(newFingerprint)"
+        var kind = "ssh-test"
+        var testStatus = "failed"
+        var confirmations: [[String: Any]] = []
         var patches: [[String: Any]] = []
         var retries: [[String: Any]] = []
 
@@ -20,8 +23,9 @@ final class FingerprintTransport: URLProtocol, @unchecked Sendable {
             revision = 7; fingerprint = oldFingerprint; state = "fingerprint_changed"
             conflict = false; retryID = nil
             error = "SSH host key changed: expected \(oldFingerprint); observed \(newFingerprint)"
-            patches = []; retries = []
+            patches = []; retries = []; confirmations = []; testStatus = "failed"; kind = "ssh-test"
         }
+        func confirmationBodies() -> [[String: Any]] { lock.lock(); defer { lock.unlock() }; return confirmations }
         func patchBodies() -> [[String: Any]] { lock.lock(); defer { lock.unlock() }; return patches }
         func retryBodies() -> [[String: Any]] { lock.lock(); defer { lock.unlock() }; return retries }
         func mutate(_ block: (Responses) -> Void) { lock.lock(); defer { lock.unlock() }; block(self) }
@@ -36,9 +40,13 @@ final class FingerprintTransport: URLProtocol, @unchecked Sendable {
                 "config": [:], "yaml_preview": "", "public": ["host": "node.invalid", "port": 443, "listen_addr": ":443", "skip_cert_verify": false],
                 "created_at": "2026-10-05T00:00:00Z", "updated_at": "2026-10-05T00:00:00Z"
             ]
-            var job: [String: Any] = ["id": "job-1", "node_id": "node-1", "kind": "ssh-test", "status": "failed",
+            var job: [String: Any] = ["id": "job-1", "node_id": "node-1", "kind": kind, "status": testStatus,
                                       "stage": "failed", "attempts": 1, "error_message": error,
                                       "created_at": "2026-10-05T00:00:00Z", "updated_at": "2026-10-05T00:00:00Z"]
+            if testStatus == "waiting_confirmation" {
+                job["stage"] = "fingerprint_confirmation_required"
+                job["result"] = ["stage": "fingerprint_confirmation_required", "result": ["status": "needs_confirmation", "fingerprint": newFingerprint, "expected_fingerprint": oldFingerprint]]
+            }
             if let retryID { job["retry_job_id"] = retryID }
             func json(_ value: Any, _ status: Int = 200) -> (Int, Data) { (status, try! JSONSerialization.data(withJSONObject: value)) }
             if path.hasSuffix("version") {
@@ -55,6 +63,13 @@ final class FingerprintTransport: URLProtocol, @unchecked Sendable {
                 revision += 1; state = "ready"
                 node["revision"] = revision
                 return json(["id": "node-1", "name": "Fingerprint test", "state": "fingerprint_changed", "revision": revision, "sync_job_queued": false])
+            }
+            if path.hasSuffix("/confirm-fingerprint") {
+                let body = try! JSONSerialization.jsonObject(with: Self.body(request)) as! [String: Any]
+                confirmations.append(body)
+                if conflict { return json(["error": ["code": "conflict", "message": "node changed while saving"]], 409) }
+                testStatus = "queued"; fingerprint = newFingerprint; revision += 1
+                return json(["job_id": "job-1", "status": "queued"], 202)
             }
             if path.hasSuffix("/retry") {
                 retries.append(try! JSONSerialization.jsonObject(with: Self.body(request)) as! [String: Any])
@@ -164,10 +179,40 @@ struct SSHFingerprintClientChecks {
         do { try await store.confirmChangedHostFingerprint(job); preconditionFailure("Revision conflict must be surfaced") } catch {}
         let detail = try await store.nodeDetail("node-1")
         precondition(detail.ssh.hostFingerprint == oldFingerprint && detail.state == "fingerprint_changed")
+        // The suspended SSH test uses the dedicated confirmation operation and
+        // preserves its ID. It never creates a retry or performs a node PATCH.
+        FingerprintTransport.responses.reset()
+        FingerprintTransport.responses.mutate { $0.testStatus = "waiting_confirmation" }
+        await store.refresh()
+        let waiting = store.jobs[0]
+        precondition(NodeTaskFeedback.isActive(waiting))
+        precondition(!NodeTaskFeedback.blocksOperation(waiting))
+        precondition(JobDisplayText.status(waiting.status) != waiting.status)
+        precondition(waiting.result?.result?.expectedFingerprint == oldFingerprint)
+        try await store.confirmJobFingerprint(waiting, fingerprint: newFingerprint)
+        let confirmation = FingerprintTransport.responses.confirmationBodies().last!
+        precondition(confirmation["expected_revision"] as? Int == 7)
+        precondition(confirmation["fingerprint"] as? String == newFingerprint && confirmation.count == 2)
+        precondition(store.jobs[0].id == waiting.id && store.jobs[0].status == "queued")
+        precondition(FingerprintTransport.responses.patchBodies().isEmpty)
+        precondition(FingerprintTransport.responses.retryBodies().isEmpty)
+        FingerprintTransport.responses.mutate { $0.conflict = true }
+        do { try await store.confirmJobFingerprint(waiting, fingerprint: newFingerprint); preconditionFailure("Confirmation conflicts must be surfaced") } catch {}
+        for kind in ["deploy", "sync", "rollback"] {
+            FingerprintTransport.responses.reset()
+            FingerprintTransport.responses.mutate { $0.kind = kind; $0.testStatus = "waiting_confirmation" }
+            await store.refresh()
+            let operation = store.jobs[0]
+            try await store.confirmJobFingerprint(operation, fingerprint: newFingerprint)
+            precondition(store.jobs[0].id == operation.id && store.jobs[0].kind == kind && store.jobs[0].status == "queued")
+            precondition(FingerprintTransport.responses.confirmationBodies().count == 1)
+            precondition(FingerprintTransport.responses.patchBodies().isEmpty && FingerprintTransport.responses.retryBodies().isEmpty)
+        }
         store.isConnected = false
         let count = FingerprintTransport.responses.patchBodies().count
         do { try await store.confirmChangedHostFingerprint(job); preconditionFailure("Offline writes must be rejected") } catch {}
         precondition(FingerprintTransport.responses.patchBodies().count == count)
-        print("SSH fingerprint parsing, confirmation, fresh revisions, linked retry, stale-state rejection, conflicts and offline checks passed")
+        do { try await store.confirmJobFingerprint(waiting, fingerprint: newFingerprint); preconditionFailure("Offline continuation must be rejected") } catch {}
+        print("SSH test continuation on the original task, SSH fingerprint parsing, confirmation, fresh revisions, linked retry, stale-state rejection, conflicts and offline checks passed")
     }
 }

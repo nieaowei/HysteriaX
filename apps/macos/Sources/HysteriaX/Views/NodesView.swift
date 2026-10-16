@@ -369,7 +369,7 @@ struct NodesView: View {
     private func nodeActions(_ node: NodeSummary) -> some View {
         HStack(spacing: 8) {
             Button(L10n.text("SSH 测试")) { run(node, action: "ssh-test") }
-                .disabled(operationInProgress(node))
+                .disabled(operationInProgress(node) || !NodeTaskFeedback.allowsAction("ssh-test", state: node.state))
             Menu(L10n.text("配置")) {
                 Button(L10n.text("服务器配置")) { serverConfigurationNode = node }
                 Button(L10n.text("代理配置")) { configurationNode = node }
@@ -377,10 +377,10 @@ struct NodesView: View {
             Button(node.deployedRevision == nil ? L10n.text("部署") : L10n.text("同步")) {
                 run(node, action: node.deployedRevision == nil ? "deploy" : "sync")
             }
-            .disabled(operationInProgress(node))
+            .disabled(operationInProgress(node) || !NodeTaskFeedback.allowsAction("deploy", state: node.state))
             Menu(L10n.text("更多")) {
-                Button(L10n.text("部署")) { run(node, action: "deploy") }.disabled(operationInProgress(node))
-                Button(L10n.text("回滚")) { run(node, action: "rollback") }.disabled(node.deployedRevision == nil || operationInProgress(node))
+                Button(L10n.text("部署")) { run(node, action: "deploy") }.disabled(operationInProgress(node) || !NodeTaskFeedback.allowsAction("deploy", state: node.state))
+                Button(L10n.text("回滚")) { run(node, action: "rollback") }.disabled(node.deployedRevision == nil || operationInProgress(node) || !NodeTaskFeedback.allowsAction("rollback", state: node.state))
                 Divider()
                 Button(L10n.text("删除节点"), role: .destructive) { deletionNode = node; showingDeleteConfirmation = true }
                     .foregroundStyle(.red)
@@ -476,6 +476,10 @@ struct NodesView: View {
         if !tasks.isEmpty || submitting != nil || submitted != nil {
             GroupBox {
                 VStack(alignment: .leading, spacing: 10) {
+                    if node.state == "delete_failed" {
+                        Text(L10n.text("可先运行 SSH 测试检查连接，修复后再重试删除。"))
+                            .font(.callout).foregroundStyle(.secondary)
+                    }
                     if !store.isConnected {
                         Label(L10n.text("离线快照"), systemImage: "wifi.slash")
                             .font(.caption).foregroundStyle(.secondary)
@@ -501,7 +505,7 @@ struct NodesView: View {
                     ForEach(displayed) { job in
                         VStack(alignment: .leading, spacing: 4) {
                             HStack(spacing: 8) {
-                                if NodeTaskFeedback.isActive(job) && store.isConnected {
+                                if NodeTaskFeedback.isActive(job) && job.status != "waiting_confirmation" && store.isConnected {
                                     ProgressView().controlSize(.small)
                                 }
                                 Button(JobDisplayText.kind(job.kind)) { onOpenJob(job.id) }
@@ -550,13 +554,13 @@ struct NodesView: View {
         switch job.status {
         case "succeeded": .green
         case "queued", "running": .blue
-        case "failed", "rolled_back": .orange
+        case "failed", "rolled_back", "waiting_confirmation": .orange
         default: .secondary
         }
     }
 
     private func run(_ node: NodeSummary, action: String) {
-        guard store.isConnected, !operationInProgress(node) else { return }
+        guard store.isConnected, !operationInProgress(node), NodeTaskFeedback.allowsAction(action, state: node.state) else { return }
         let service = store.serviceAddress
         let submittedAt = Date()
         submittingActions[node.id] = action

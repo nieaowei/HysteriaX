@@ -632,6 +632,7 @@ pub async fn patch(
             "node changed while saving; reload before editing",
         ));
     }
+    super::ssh_fingerprint::cancel_waiting(&mut tx, &id).await?;
     sqlx::query("INSERT INTO config_versions (id, node_id, revision, config_enc, content_sha256, created_at) VALUES ($1, $2, $3, $4, $5, $6)")
         .bind(Uuid::new_v4().to_string()).bind(&id).bind(next_revision).bind(state.secrets.encrypt(&deployment_snapshot_json)?)
         .bind(hex::encode(Sha256::digest(deployment_snapshot_json.as_bytes()))).bind(updated_at).execute(&mut *tx).await?;
@@ -697,7 +698,7 @@ pub async fn remove_record(
             "finish or reconcile pending DNS writes before removing the node record",
         ));
     }
-    let cancelled = sqlx::query("UPDATE jobs SET status='cancelled',stage='node_removed',updated_at=now(),finished_at=now() WHERE node_id=$1 AND status IN ('queued','running') RETURNING id,kind")
+    let cancelled = sqlx::query("UPDATE jobs SET status='cancelled',stage='node_removed',updated_at=now(),finished_at=now() WHERE node_id=$1 AND status IN ('queued','running','waiting_confirmation') RETURNING id,kind")
         .bind(&id).fetch_all(&mut *tx).await?;
     for job in &cancelled {
         let job_id: String = job.get("id");
@@ -903,6 +904,10 @@ pub async fn rollback(
     .await
 }
 
+pub(crate) fn action_allowed(state: &str, kind: &str) -> bool {
+    state != "deleting" && (state != "delete_failed" || kind == "ssh-test")
+}
+
 async fn action(
     state: &AppState,
     id: &str,
@@ -916,7 +921,7 @@ async fn action(
         .ok_or_else(|| ApiError::not_found("node"))?;
     let revision: i64 = row.get("desired_revision");
     let state_value: String = row.get("state");
-    if matches!(state_value.as_str(), "deleting" | "delete_failed") {
+    if !action_allowed(&state_value, kind) {
         return Err(ApiError::conflict(
             "node is being deleted; retry deletion after checking the SSH state",
         ));
@@ -949,7 +954,7 @@ async fn action_to(
         .ok_or_else(|| ApiError::not_found("node"))?;
     let desired_revision: i64 = row.get("desired_revision");
     let state_value: String = row.get("state");
-    if matches!(state_value.as_str(), "deleting" | "delete_failed") {
+    if !action_allowed(&state_value, kind) {
         return Err(ApiError::conflict(
             "node is being deleted; retry deletion after checking the SSH state",
         ));
@@ -958,6 +963,10 @@ async fn action_to(
         return Err(ApiError::conflict(format!(
             "node revision is {desired_revision}; reload before starting {kind}"
         )));
+    }
+    let mut payload = payload;
+    if kind == "ssh-test" && state_value == "delete_failed" {
+        payload["delete_recovery"] = json!(true);
     }
     let mut tx = db::begin_write(&state.pool).await?;
     let job_id =

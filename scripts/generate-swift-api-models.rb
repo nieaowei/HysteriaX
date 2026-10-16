@@ -43,6 +43,7 @@ models = {
   "AuthorizationGroupDelete" => "AuthorizationGroupDeleteRequest",
   "UserAuthorizationGroupsPreview" => "UserAuthorizationGroupsPreviewRequest",
   "UserAuthorizationGroupsUpdate" => "UserAuthorizationGroupsUpdateRequest",
+  "JobFingerprintConfirmation" => "JobFingerprintConfirmationRequest",
   "Revision" => "RevisionRequest",
   "AssignmentRequest" => "AssignmentRequest",
   "AssignmentCertificateUpdate" => "AssignmentCertificateUpdateRequest",

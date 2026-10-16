@@ -22,10 +22,20 @@ enum JobDisplayText {
         }
     }
 
+    static func fingerprintContinuation(_ kind: String) -> String {
+        switch kind {
+        case "deploy": L10n.text("信任并继续部署")
+        case "sync": L10n.text("信任并继续同步")
+        case "rollback": L10n.text("信任并继续回滚")
+        default: L10n.text("信任并继续测试")
+        }
+    }
+
     static func status(_ value: String) -> String {
         switch value {
         case "queued": L10n.text("排队中")
         case "running": L10n.text("执行中")
+        case "waiting_confirmation": L10n.text("等待确认 SSH 指纹")
         case "succeeded": L10n.text("成功")
         case "failed": L10n.text("失败")
         case "rolled_back": L10n.text("已回滚")
@@ -63,6 +73,7 @@ enum JobDisplayText {
             "rolling_back": L10n.text("恢复上一版本"),
             "rolled_back": L10n.text("已回滚"),
             "rollback_failed": L10n.text("回滚失败"),
+            "fingerprint_confirmed": L10n.text("指纹已确认，继续任务"),
             "fingerprint_confirmation_required": L10n.text("等待确认 SSH 指纹"),
             "environment_checked": L10n.text("环境检查通过"),
             "kicking_clients": L10n.text("断开客户端"),
@@ -89,6 +100,10 @@ enum JobDisplayText {
             return L10n.text("正在等待流量统计和在线状态接口就绪（包括证书签发），最长等待 {0} 秒。", String(describing: (captures[0])))
         }
         let messages = [
+            "SSH host fingerprint observed; waiting for explicit trust.": L10n.text("已读取 SSH 主机指纹，等待核对并信任。"),
+            "SSH test superseded by a node change.": L10n.text("节点信息已变化，请重新运行 SSH 测试。"),
+            "SSH host fingerprint trusted; continuing the original operation.": L10n.text("SSH 主机指纹已信任，继续原任务。"),
+            "SSH host fingerprint trusted; continuing the original test.": L10n.text("SSH 主机指纹已信任，继续原测试。"),
             "Connecting to the node and verifying its pinned SSH host key.": L10n.text("正在连接节点并验证已保存的 SSH 主机指纹。"),
             "Running the pinned Hysteria client through the new server and forwarding a TCP request.": L10n.text("正在使用固定版本的 Hysteria 客户端连接新服务并验证 TCP 请求转发。"),
             "Requesting that the node disconnect the user's active client devices.": L10n.text("正在请求节点断开该用户的在线客户端。"),
@@ -119,6 +134,12 @@ enum JobDisplayText {
 
     // Translate known contexts while retaining unknown library errors and remote output.
     static func errorMessage(_ message: String) -> String {
+        if ["SSH test is no longer waiting for fingerprint confirmation",
+            "job is no longer waiting for fingerprint confirmation",
+            "node or observed fingerprint changed; run a new SSH test",
+            "SSH connection changed after fingerprint confirmation; run a new SSH test"].contains(message) {
+            return L10n.text("节点或任务状态已变化，请刷新并重新发起操作。")
+        }
         if let translated = errors[message] { return L10n.text(translated) }
         if let values = captures(#"^remote command failed with exit code (\d+): ([\s\S]*)$"#, in: message) {
             return L10n.text("远端命令执行失败（退出码 {0}）：{1}", String(describing: (values[0])), String(describing: (errorMessage(values[1]))))
@@ -283,6 +304,7 @@ enum AuditDisplayText {
             "node.usage_reset": L10n.text("重置节点套餐用量"),
             "node.usage_corrected": L10n.text("校正节点套餐用量"),
             "node.deleted": L10n.text("删除节点"),
+            "node.ssh_fingerprint_confirmed": L10n.text("信任 SSH 主机指纹"),
             "node.record_removed": L10n.text("移除节点管理记录"),
             "node.resource_uploaded": L10n.text("上传节点资源"),
             "node.resource_deleted": L10n.text("删除节点资源"),

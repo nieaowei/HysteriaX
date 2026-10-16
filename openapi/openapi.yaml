@@ -423,7 +423,8 @@ paths:
       - $ref: '#/components/parameters/Id'
     post:
       operationId: testNodeSSH
-      summary: Test node ssh
+      summary: Test node SSH
+      description: Allowed for delete_failed nodes to diagnose and confirm fingerprints while preserving deletion intent. Active deletion still rejects new tests. A successful recovery test does not automatically retry uninstall.
       requestBody:
         required: true
         content:
@@ -946,6 +947,26 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/JobDetailResponse' }
         '404': { $ref: '#/components/responses/Error' }
+  /jobs/{id}/confirm-fingerprint:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    post:
+      operationId: confirmJobFingerprint
+      summary: Trust the observed SSH host key and resume the same operation
+      description: Supports SSH tests and first-time trust during deploy, sync and rollback. Requires waiting_confirmation, the exact observed fingerprint and the unchanged node revision. Saves trust and queues the original job atomically. Rollback preserves its historical target; deploy/sync advance a current target only over the identical trust-only snapshot. SSH tests may recover delete_failed nodes without clearing deletion intent. A fresh connection verifies the key before authentication.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/JobFingerprintConfirmation' }
+      responses:
+        '202':
+          description: Original operation queued to continue
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/JobReceipt' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
   /jobs/{id}/retry:
     parameters:
       - $ref: '#/components/parameters/Id'
@@ -2248,11 +2269,19 @@ components:
         revocation_job_ids:
           type: array
           items: { type: string, format: uuid }
+    JobFingerprintConfirmation:
+      type: object
+      additionalProperties: false
+      required: [expected_revision, fingerprint]
+      properties:
+        expected_revision: { type: integer, minimum: 1 }
+        fingerprint: { type: string }
     JobOutcome:
       type: object
       properties:
         status: { type: string }
         fingerprint: { type: string }
+        expected_fingerprint: { type: [string, 'null'] }
         distribution: { type: string }
         version: { type: string }
         architecture: { type: string }

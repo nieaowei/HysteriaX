@@ -97,13 +97,14 @@ def main():
                 node_token = created["node_auth_token"]
 
                 def detail(): return api(path)
-                def wait_job(job_id):
-                    result = wait_for(lambda: (value if (value := api(f"/api/v1/jobs/{job_id}"))["job"]["status"] in ("succeeded", "failed", "rolled_back") else None), "job completion", 240)
-                    if result["job"]["status"] != "succeeded": raise RuntimeError(f"job failed: {result['job']['kind']}: {result['job'].get('error_message')}")
+                def wait_job(job_id, allow_confirmation=False):
+                    result = wait_for(lambda: (value if (value := api(f"/api/v1/jobs/{job_id}"))["job"]["status"] in ("succeeded", "failed", "rolled_back") + (("waiting_confirmation",) if allow_confirmation else ()) else None), "job completion", 240)
+                    if result["job"]["status"] != "succeeded" and not (allow_confirmation and result["job"]["status"] == "waiting_confirmation"): raise RuntimeError(f"job failed: {result['job']['kind']}: {result['job'].get('error_message')}")
                     return result
                 ssh_job = api(path + "/ssh-test", "POST", {"expected_revision": 1})["job_id"]
-                fingerprint = wait_job(ssh_job)["result"]["result"]["fingerprint"]
-                api(path, "PATCH", {"expected_revision": 1, "ssh_host_fingerprint": fingerprint})
+                fingerprint = wait_job(ssh_job, allow_confirmation=True)["result"]["result"]["fingerprint"]
+                api(f"/api/v1/jobs/{ssh_job}/confirm-fingerprint", "POST", {"expected_revision": 1, "fingerprint": fingerprint})
+                wait_job(ssh_job)
                 observed = wait_for(lambda: (value if (value := detail())["package_usage"]["freshness"] == "fresh" else None), "first network sample", 45)
                 assert observed["package_usage"]["interface"] == "eth0"
                 assert observed["package_usage"]["usage_bytes"] >= 123

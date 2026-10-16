@@ -99,12 +99,12 @@ def main():
                         raise RuntimeError("credential batch failed")
                     return result
 
-                def job_done(identity):
+                def job_done(identity, allow_confirmation=False):
                     def finished():
                         value = api(f"/api/v1/jobs/{identity}")
-                        return value if value["job"]["status"] in ("succeeded", "failed", "rolled_back") else None
+                        return value if (value["job"]["status"] in ("succeeded", "failed", "rolled_back") or (allow_confirmation and value["job"]["status"] == "waiting_confirmation")) else None
                     result = wait_for(finished, "node job completion")
-                    if result["job"]["status"] != "succeeded":
+                    if result["job"]["status"] != "succeeded" and not (allow_confirmation and result["job"]["status"] == "waiting_confirmation"):
                         raise RuntimeError("node verification job failed")
                     return result
 
@@ -122,8 +122,10 @@ def main():
                 for index, (_, ssh_port, udp_port) in enumerate(endpoints):
                     created = api("/api/v1/nodes", "POST", {"name": f"Credential node {index}", "ssh_host": "127.0.0.1", "ssh_port": ssh_port, "ssh_username": "root", "ssh_credential_id": ssh, "ssh_credential_version": 1, "public_host": "127.0.0.1", "public_port": udp_port, "listen_addr": ":443", "tls_sni": "credentials.example.test", "tls_skip_verify": True, "config": {"tls": {"cert": f"credential://{tls}/1/certificate", "key": f"credential://{tls}/1/private_key", "sniGuard": "disable"}}})
                     node = created["node"]["id"]
-                    fingerprint = job_done(api(f"/api/v1/nodes/{node}/ssh-test", "POST", {"expected_revision": 1})["job_id"])["result"]["result"]["fingerprint"]
-                    api(f"/api/v1/nodes/{node}", "PATCH", {"expected_revision": 1, "ssh_host_fingerprint": fingerprint})
+                    ssh_job = api(f"/api/v1/nodes/{node}/ssh-test", "POST", {"expected_revision": 1})["job_id"]
+                    fingerprint = job_done(ssh_job, allow_confirmation=True)["result"]["result"]["fingerprint"]
+                    api(f"/api/v1/jobs/{ssh_job}/confirm-fingerprint", "POST", {"expected_revision": 1, "fingerprint": fingerprint})
+                    job_done(ssh_job)
                     job_done(api(f"/api/v1/nodes/{node}/deploy", "POST", {"expected_revision": detail(node)["revision"]})["job_id"])
                     nodes.append(node)
                 print("Two real nodes deployed with one shared TLS identity and SSH credential.", flush=True)
