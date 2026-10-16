@@ -101,4 +101,4 @@ preserving runtime bytes and artifact filenames. It removes the old standalone
 objects after conversion and retains unused CA certificates as `ca_certificate`.
 A referenced invalid pair aborts migration. Restore the pre-upgrade database and
 matching image for rollback; old private-key objects cannot be recovered through
-the upgraded API. See [0008](plans/0008_tls_identity_consolidation_plan.md).
+the upgraded API.
