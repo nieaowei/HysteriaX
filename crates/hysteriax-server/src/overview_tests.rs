@@ -2,6 +2,105 @@ use super::*;
 use base64::Engine;
 
 #[tokio::test]
+async fn latest_monitoring_samples_use_node_indexes_for_empty_and_stale_nodes() {
+    let (state, nodes, _) = fixture().await;
+    // All history belongs to one stale node; the other has never been sampled.
+    // A global time scan must not walk this history to prove the second is empty.
+    sqlx::query("INSERT INTO online_samples(cycle_id,node_id,sampled_at,status) SELECT md5(i::text)::uuid,$1,now()-interval '2 days'-i*interval '1 second','ok' FROM generate_series(1,20000) i")
+        .bind(&nodes[0]).execute(&state.pool).await.unwrap();
+    sqlx::query("INSERT INTO proxy_probe_samples(node_id,revision,sampled_at,status,latency_ms) SELECT $1,1,now()-interval '2 days'-i*interval '1 second','ok',i FROM generate_series(1,20000) i")
+        .bind(&nodes[0]).execute(&state.pool).await.unwrap();
+    for table in ["nodes", "online_samples", "proxy_probe_samples"] {
+        sqlx::query(&format!("ANALYZE {table}"))
+            .execute(&state.pool)
+            .await
+            .unwrap();
+    }
+    let sql = include_str!("overview/summary_nodes.sql");
+    let rows = sqlx::query(sql)
+        .bind(Option::<Vec<String>>::None)
+        .fetch_all(&state.pool)
+        .await
+        .unwrap();
+    let empty = rows
+        .iter()
+        .find(|row| row.get::<String, _>("id") == nodes[1])
+        .unwrap();
+    assert!(
+        empty
+            .get::<Option<DateTime<Utc>>, _>("online_sampled_at")
+            .is_none()
+    );
+    assert!(
+        empty
+            .get::<Option<DateTime<Utc>>, _>("probe_sampled_at")
+            .is_none()
+    );
+    let stale = rows
+        .iter()
+        .find(|row| row.get::<String, _>("id") == nodes[0])
+        .unwrap();
+    assert!(stale.get::<DateTime<Utc>, _>("online_sampled_at") < Utc::now() - Duration::days(1));
+    assert_eq!(stale.get::<f64, _>("probe_latency_ms"), 1.0);
+
+    fn check_sample_scans(plan: &Value, indexes: &mut Vec<String>) {
+        if matches!(
+            plan["Relation Name"].as_str(),
+            Some("online_samples" | "proxy_probe_samples")
+        ) {
+            indexes.push(
+                plan["Index Name"]
+                    .as_str()
+                    .expect("latest sample must use an index")
+                    .to_owned(),
+            );
+            assert!(plan["Index Cond"].as_str().unwrap().contains("node_id"));
+            assert!(plan["Actual Rows"].as_f64().unwrap() <= 1.0);
+            assert!(plan["Rows Removed by Filter"].as_f64().unwrap_or(0.0) < 10.0);
+        }
+        if let Some(children) = plan["Plans"].as_array() {
+            for child in children {
+                check_sample_scans(child, indexes);
+            }
+        }
+    }
+    // Both overview (all nodes) and the paginated node directory use this SQL.
+    for ids in [None, Some(nodes.clone())] {
+        let row = sqlx::query(&format!("EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) {sql}"))
+            .bind(ids)
+            .fetch_one(&state.pool)
+            .await
+            .unwrap();
+        let plan: Value = row.get("QUERY PLAN");
+        let mut indexes = Vec::new();
+        check_sample_scans(&plan[0]["Plan"], &mut indexes);
+        assert!(indexes.contains(&"online_samples_node_latest_idx".to_owned()));
+        assert!(indexes.contains(&"proxy_probe_samples_node_latest_idx".to_owned()));
+    }
+    // Equal timestamps retain the existing id-descending tie break.
+    let at = DateTime::from_timestamp_micros(Utc::now().timestamp_micros()).unwrap();
+    for status in ["failed", "ok"] {
+        sqlx::query(
+            "INSERT INTO online_samples(cycle_id,node_id,sampled_at,status) VALUES($1,$2,$3,$4)",
+        )
+        .bind(Uuid::new_v4())
+        .bind(&nodes[0])
+        .bind(at)
+        .bind(status)
+        .execute(&state.pool)
+        .await
+        .unwrap();
+    }
+    let row = sqlx::query(sql)
+        .bind(Some(vec![nodes[0].clone()]))
+        .fetch_one(&state.pool)
+        .await
+        .unwrap();
+    assert_eq!(row.get::<String, _>("online_status"), "ok");
+    assert_eq!(row.get::<DateTime<Utc>, _>("online_sampled_at"), at);
+}
+
+#[tokio::test]
 async fn aligned_traffic_history_never_scans_raw_records() {
     let (state, nodes, user) = fixture().await;
     let anchor: DateTime<Utc> = "2026-10-14T12:00:00Z".parse().unwrap();

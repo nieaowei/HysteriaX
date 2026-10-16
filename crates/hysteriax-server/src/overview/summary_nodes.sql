@@ -31,11 +31,11 @@ LEFT JOIN gaps g ON g.node_id = n.id
 LEFT JOIN alerts a ON a.node_id = n.id
 LEFT JOIN LATERAL (
     SELECT sampled_at, status, connections FROM online_samples
-    WHERE node_id = n.id ORDER BY sampled_at DESC, id DESC LIMIT 1
+    WHERE node_id = n.id ORDER BY sampled_at DESC NULLS LAST, id DESC LIMIT 1
 ) o ON true
 LEFT JOIN LATERAL (
     SELECT sampled_at, revision, status, external_status, connection_ms, latency_ms, reason
-    FROM proxy_probe_samples WHERE node_id = n.id ORDER BY sampled_at DESC LIMIT 1
+    FROM proxy_probe_samples WHERE node_id = n.id ORDER BY sampled_at DESC NULLS LAST LIMIT 1
 ) probe ON true
 LEFT JOIN monitoring_probe_state health ON health.node_id = n.id AND health.revision = probe.revision
 WHERE ($1::text[] IS NULL OR n.id=ANY($1))

@@ -329,8 +329,28 @@ final class ManagementStore {
 
     func createNode(_ request: NodeCreateRequest) async throws -> CreatedEntity {
         let api = try requireConnectedAPI()
+        let generation = serviceGeneration
         let created: CreatedEntity = try await api.post(APIEndpoints.createNode, body: request)
-        await refresh()
+        guard generation == serviceGeneration else { return created }
+        if let node = created.node, !nodes.contains(where: { $0.id == node.id }) {
+            let summary = NodeSummary(
+                publishedConnection: nil, dnsBinding: nil, package: request.package, packageUsage: nil,
+                id: node.id, name: node.name, ssh: nil, revision: node.revision,
+                deployedRevision: nil, state: node.state, lastSampleAt: nil,
+                dataFreshness: "not_collected", mtlsRequired: nil, openGaps: nil,
+                pendingRevocations: nil, proxyProbeUrl: request.proxyProbeUrl
+            )
+            if !loadedDirectories.contains(.nodes) { nodes = Array(nodes.suffix(199)) }
+            nodes.append(summary)
+        }
+        listPageCache.invalidate(types: [NodesPage.self, OverviewNodesPage.self].map { String(reflecting: $0) })
+        dataRefreshToken = UUID()
+        // Creation has committed; unrelated directory/monitoring requests must
+        // not delay showing the receipt and its one-time authentication token.
+        Task { [weak self] in
+            guard let self, generation == self.serviceGeneration else { return }
+            await self.refresh()
+        }
         return created
     }
 

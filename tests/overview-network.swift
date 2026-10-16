@@ -53,6 +53,9 @@ final class OverviewTransport: URLProtocol, @unchecked Sendable {
             let path = url.path
             lock.lock(); defer { lock.unlock() }
             if ["/api/v1/nodes", "/api/v1/users", "/api/v1/credentials", "/api/v1/jobs", "/api/v1/audit", "/api/v1/dns/records"].contains(path) { pageRequests += 1 }
+            if path == "/api/v1/nodes", request.httpMethod == "POST" {
+                return (201, Data("{\"node\":{\"id\":\"created-node\",\"name\":\"Created node\",\"revision\":1,\"state\":\"new\"},\"node_auth_token\":\"test-created-token\"}".utf8))
+            }
             if path.hasSuffix("version") {
                 versionRequests += 1
                 if mode == "version-failure" { return (503, Data()) }
@@ -191,6 +194,29 @@ struct OverviewNetworkChecks {
         precondition(store.clientSummary?.nodeCount == 235 && store.clientSummary?.userTotal == 400)
         precondition(OverviewTransport.responses.recordedDirectoryCount() == 0, "bootstrap must not traverse directories")
         precondition(store.supportsJobRetryLinks && store.supportsNodeRecordRemoval)
+        // A committed creation must return its one-time token even while the
+        // following refresh is blocked on the network.
+        OverviewTransport.responses.setHoldVersions(true)
+        var creationCompleted = false
+        let creation = Task {
+            let receipt = try await store.createNode(NodeCreateRequest(
+                name: "Created node", sshHost: "127.0.0.1", sshPort: 22, sshUsername: "root",
+                publicHost: "node.example.test", publicPort: 443, listenAddr: ":443",
+                sshCredentialId: "fixture-ssh", sshCredentialVersion: 1
+            ))
+            precondition(receipt.nodeAuthToken == "test-created-token")
+            creationCompleted = true
+        }
+        try await waitForHeldVersion()
+        for _ in 0..<20 { await Task.yield() }
+        let returnedBeforeRefresh = creationCompleted
+        let cachedCreatedNode = store.nodes.contains { $0.id == "created-node" && $0.state == "new" }
+        OverviewTransport.responses.setHoldVersions(false)
+        OverviewTransport.responses.releaseVersion()
+        try await creation.value
+        await store.refresh(forceDirectories: false)
+        precondition(returnedBeforeRefresh, "creation must not await the background refresh")
+        precondition(cachedCreatedNode, "creation must update the local node directory immediately")
         // Freeze each version response to deterministically exercise overlapping
         // refresh triggers without relying on network timing.
         let versionsBefore = OverviewTransport.responses.versionCount()
