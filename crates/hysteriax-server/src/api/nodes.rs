@@ -191,14 +191,17 @@ pub(crate) async fn list(
                 let config: Value = serde_json::from_str(&state.secrets.decrypt(&cipher)?)
                     .map_err(|_| ApiError::internal())?;
                 Ok::<_, ApiError>(json!(
-                    config
-                        .pointer("/tls/clientCA")
-                        .and_then(Value::as_str)
-                        .is_some_and(|v| !v.trim().is_empty())
+                    crate::credentials::node_mtls::Settings::from_config(&config)?
+                        .authority()
+                        .is_some()
                 ))
             })
             .await?;
         node["mtls_required"] = (*mtls).clone();
+        node["mtls_state"] = json!(row.get::<String, _>("mtls_state"));
+        node["mtls_recovery_configured"] = json!(row.get::<bool, _>("mtls_recovery_configured"));
+        node["mtls_error"] = json!(row.get::<Option<String>, _>("mtls_error"));
+        node["mtls_generation"] = json!(row.get::<i64, _>("mtls_generation"));
         let kind: Option<String> = row.get("credential_kind");
         node["ssh"] = json!({"host":row.get::<String,_>("ssh_host"),"port":row.get::<i32,_>("ssh_port"),"username":row.get::<String,_>("ssh_username"),
             "auth_type":if kind.as_deref()==Some("ssh_password"){ "password" }else{ "private_key" },"credential_id":row.get::<Option<String>,_>("ssh_credential_id"),
@@ -289,6 +292,11 @@ pub async fn create(
         false,
     )
     .await?;
+    let mtls = crate::credentials::node_mtls::validate_input(&mut input.config)
+        .map_err(|e| ApiError::bad_request(e.to_string()))?;
+    crate::credentials::node_mtls::validate_binding(&state.pool, &state.secrets, &mtls, true)
+        .await
+        .map_err(|e| ApiError::bad_request(e.to_string()))?;
     crate::credentials::require_managed_config(&input.config)
         .map_err(|e| ApiError::bad_request(e.to_string()))?;
     let (resolved, _) =
@@ -356,12 +364,16 @@ pub async fn create(
     )
     .await
     .map_err(|e| ApiError::conflict(e.to_string()))?;
+    crate::credentials::node_mtls::check_binding(&mut tx, &mtls, true)
+        .await
+        .map_err(|e| ApiError::conflict(e.to_string()))?;
     sqlx::query("INSERT INTO nodes (id, name, ssh_host, ssh_port, ssh_username, ssh_credential_id, ssh_credential_version, ssh_host_fingerprint, public_host, public_port, listen_addr, traffic_stats_port, proxy_probe_url, tls_sni, tls_skip_verify, node_token_hash, node_token_enc, traffic_stats_secret_enc, desired_config_enc, desired_revision, state, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, 1, 'new', $20, $21)")
         .bind(&id).bind(input.name.trim()).bind(input.ssh_host.trim()).bind(i32::from(input.ssh_port))
         .bind(input.ssh_username.trim()).bind(&input.ssh_credential_id).bind(input.ssh_credential_version)
         .bind(input.ssh_host_fingerprint).bind(input.public_host.trim()).bind(i32::from(input.public_port))
         .bind(input.listen_addr.trim()).bind(i32::from(input.traffic_stats_port)).bind(&proxy_probe_url).bind(input.tls_sni).bind(input.tls_skip_verify).bind(token_digest(&token)).bind(node_token_enc)
         .bind(stats_secret_enc).bind(config_enc).bind(now).bind(now).execute(&mut *tx).await?;
+    crate::credentials::node_mtls::save_target(&mut tx, &id, 1, &mtls).await?;
     crate::node_limits::ensure(&mut tx, &id).await?;
     if let Some(package) = &input.package {
         crate::node_limits::save(&mut tx, &id, package).await?;
@@ -397,7 +409,7 @@ pub async fn create(
     Ok((
         StatusCode::CREATED,
         Json(json!({
-            "node": {"id": id, "name": input.name.trim(), "revision": 1, "state": "new", "traffic_stats_port": input.traffic_stats_port, "proxy_probe_url": proxy_probe_url, "mtls_required": input.config.get("tls").and_then(Value::as_object).and_then(|tls| tls.get("clientCA")).and_then(Value::as_str).is_some_and(|value| !value.trim().is_empty())},
+            "node": {"id": id, "name": input.name.trim(), "revision": 1, "state": "new", "traffic_stats_port": input.traffic_stats_port, "proxy_probe_url": proxy_probe_url, "mtls_required": mtls.authority().is_some()},
             "node_auth_token": token,
             "dns_allocation": dns_result,
             "note": "The node token is shown once here and is stored encrypted for server configuration generation."
@@ -421,9 +433,6 @@ pub async fn patch(
     let revision: i64 = current.get("desired_revision");
     if current.get::<String, _>("state") == "deleting" {
         return Err(ApiError::conflict("node deletion is in progress"));
-    }
-    if current.get::<String, _>("state") == "deleting" {
-        return Err(ApiError::conflict("node deletion is already in progress"));
     }
     if revision != input.expected_revision {
         return Err(ApiError::conflict(format!(
@@ -544,7 +553,7 @@ pub async fn patch(
     }
     let old_config_enc: String = current.get("desired_config_enc");
     let config_changed = input.config.is_some();
-    let config: Value = if let Some(config) = input.config {
+    let mut config: Value = if let Some(config) = input.config {
         config
     } else {
         serde_json::from_str(&state.secrets.decrypt(&old_config_enc)?)
@@ -558,6 +567,29 @@ pub async fn patch(
     validate_traffic_stats_port(traffic_stats_port)?;
     let (first_listen_port, hopping) = validate_listen_addr(&listen_addr)?;
     validate_hop_public_port(public_port, first_listen_port, hopping)?;
+    let previous_config: Value = serde_json::from_str(&state.secrets.decrypt(&old_config_enc)?)
+        .map_err(|_| ApiError::internal())?;
+    let previous_mtls = crate::credentials::node_mtls::Settings::from_config(&previous_config)?;
+    if config_changed
+        && current.get::<String, _>("mtls_state") == "needs_configuration"
+        && config.get("mtls").is_none()
+    {
+        return Err(ApiError::bad_request(
+            "select mtls.mode explicitly before recovering a reset node",
+        ));
+    }
+    let mtls = if config_changed {
+        crate::credentials::node_mtls::validate_input(&mut config)
+            .map_err(|e| ApiError::bad_request(e.to_string()))?
+    } else {
+        crate::credentials::node_mtls::Settings::from_config(&config)?
+    };
+    let new_ca = mtls.authority().map(|(id, _)| id) != previous_mtls.authority().map(|(id, _)| id);
+    if config_changed {
+        crate::credentials::node_mtls::validate_binding(&state.pool, &state.secrets, &mtls, new_ca)
+            .await
+            .map_err(|e| ApiError::bad_request(e.to_string()))?;
+    }
     crate::credentials::require_managed_config(&config)
         .map_err(|e| ApiError::bad_request(e.to_string()))?;
     let (resolved, _) =
@@ -603,24 +635,10 @@ pub async fn patch(
             "use the DNS binding operation to reassign or unbind the node domain",
         ));
     }
-    let m_tls_enabled = config
-        .get("tls")
-        .and_then(Value::as_object)
-        .and_then(|tls| tls.get("clientCA"))
-        .and_then(Value::as_str)
-        .is_some_and(|value| !value.trim().is_empty());
-    if m_tls_enabled {
-        let missing_client_credentials: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM node_assignments WHERE node_id = $1 AND (mtls_credential_id IS NULL OR mtls_credential_version IS NULL)",
-        )
-        .bind(&id)
-        .fetch_one(&mut *tx)
-        .await?;
-        if missing_client_credentials > 0 {
-            return Err(ApiError::conflict(
-                "assign matching client certificates to every user on this node before enabling mTLS",
-            ));
-        }
+    if config_changed {
+        crate::credentials::node_mtls::check_binding(&mut tx, &mtls, new_ca)
+            .await
+            .map_err(|e| ApiError::conflict(e.to_string()))?;
     }
     let updated = sqlx::query("UPDATE nodes SET name = $1, ssh_host = $2, ssh_port = $3, ssh_username = $4, ssh_credential_id = $5, ssh_credential_version = $6, ssh_host_fingerprint = $7, public_host = $8, public_port = $9, listen_addr = $10, traffic_stats_port = $11, proxy_probe_url = $12, tls_sni = $13, tls_skip_verify = $14, desired_config_enc = $15, desired_revision = $16, state = CASE WHEN $17 = TRUE AND state IN ('needs_fingerprint', 'fingerprint_changed') THEN 'ready' ELSE state END, updated_at = $18 WHERE id = $19 AND desired_revision = $20")
         .bind(name.trim()).bind(ssh_host.trim()).bind(i32::from(ssh_port)).bind(ssh_username.trim()).bind(&ssh_credential_id)
@@ -632,6 +650,13 @@ pub async fn patch(
             "node changed while saving; reload before editing",
         ));
     }
+    if config_changed {
+        sqlx::query("UPDATE nodes SET mtls_recovery_configured=TRUE WHERE id=$1")
+            .bind(&id)
+            .execute(&mut *tx)
+            .await?;
+    }
+    crate::credentials::node_mtls::save_target(&mut tx, &id, next_revision, &mtls).await?;
     super::ssh_fingerprint::cancel_waiting(&mut tx, &id).await?;
     sqlx::query("INSERT INTO config_versions (id, node_id, revision, config_enc, content_sha256, created_at) VALUES ($1, $2, $3, $4, $5, $6)")
         .bind(Uuid::new_v4().to_string()).bind(&id).bind(next_revision).bind(state.secrets.encrypt(&deployment_snapshot_json)?)
@@ -651,7 +676,16 @@ pub async fn patch(
         || traffic_stats_port_changed;
     if sync_required {
         supersede_queued_syncs_in_tx(&mut tx, &id).await?;
-        enqueue_job_in_tx(&mut tx, "sync", Some(&id), Some(next_revision)).await?;
+        let recovery =
+            config_changed && current.get::<String, _>("mtls_state") == "needs_configuration";
+        enqueue_job_with_payload_in_tx(
+            &mut tx,
+            "sync",
+            Some(&id),
+            Some(next_revision),
+            json!({"force": recovery}),
+        )
+        .await?;
     }
     sqlx::query("INSERT INTO audit_records (id, actor, action, entity_type, entity_id, detail_json, created_at) VALUES ($1, 'admin', 'node.updated', 'node', $2, $3, $4)")
         .bind(Uuid::new_v4().to_string()).bind(&id).bind(json!({"revision": next_revision, "config_changed": config_changed, "proxy_probe_url_changed": proxy_probe_url_changed, "traffic_stats_port_changed": traffic_stats_port_changed, "package_changed": input.package.is_some(), "package": input.package, "dns_job_ids": dns_job_ids})).bind(updated_at)
@@ -691,6 +725,11 @@ pub async fn remove_record(
             "a remote deployment, uninstall or credential update is still running; wait for it to finish before removing the node record",
         ));
     }
+    if managed_remote_trust(&mut tx, &id).await? {
+        return Err(ApiError::conflict(
+            "managed mTLS remote trust is still deployed or unconfirmed; recover SSH and uninstall or complete the switch before removing the node record",
+        ));
+    }
     let unresolved_dns: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM jobs j JOIN dns_operations o ON o.job_id=j.id WHERE j.node_id=$1 AND o.applied_at IS NULL AND o.action IN ('record-create','record-update','record-delete') AND j.status IN ('running','failed','queued'))")
         .bind(&id).fetch_one(&mut *tx).await?;
     if unresolved_dns {
@@ -719,11 +758,18 @@ pub async fn remove_record(
         .bind(&id)
         .execute(&mut *tx)
         .await?;
-    sqlx::query("INSERT INTO audit_records(id,actor,action,entity_type,entity_id,detail_json,created_at) VALUES($1,'admin','node.record_removed','node',$2,$3,now())")
-        .bind(Uuid::new_v4().to_string()).bind(&id).bind(json!({"node_name":node.get::<String,_>("name"),"expected_revision":expected,"remote_uninstall":false,"remote_service_may_be_running":true,"cancelled_jobs":cancelled.len(),"removed_assignments":assignments,"removed_pending_kicks":pending})).execute(&mut *tx).await?;
+    sqlx::query("INSERT INTO audit_records(id,actor,action,entity_type,entity_id,detail_json,created_at) VALUES($1,$4,'node.record_removed','node',$2,$3,now())")
+        .bind(Uuid::new_v4().to_string()).bind(&id).bind(json!({"node_name":node.get::<String,_>("name"),"expected_revision":expected,"remote_uninstall":false,"remote_service_may_be_running":true,"cancelled_jobs":cancelled.len(),"removed_assignments":assignments,"removed_pending_kicks":pending})).bind(super::audit_actor()).execute(&mut *tx).await?;
     tx.commit().await?;
     let _ = state.removed_nodes.send(id);
     Ok(StatusCode::NO_CONTENT)
+}
+
+async fn managed_remote_trust(
+    connection: &mut sqlx::PgConnection,
+    node: &str,
+) -> Result<bool, sqlx::Error> {
+    sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM mtls_node_trust WHERE node_id=$1 AND deployed UNION ALL SELECT 1 FROM mtls_live_activation_trust WHERE node_id=$1)").bind(node).fetch_one(connection).await
 }
 
 pub async fn delete(
@@ -773,6 +819,7 @@ pub async fn delete(
     let active_deployment: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM jobs WHERE node_id = $1 AND status = 'running' AND kind IN ('deploy', 'sync', 'rollback', 'uninstall', 'credential-apply')")
         .bind(&id).fetch_one(&mut *tx).await?;
     let never_installed = deployed_revision.is_none()
+        && !managed_remote_trust(&mut tx, &id).await?
         && active_deployment == 0
         && matches!(
             node_state.as_str(),
@@ -788,8 +835,8 @@ pub async fn delete(
             .bind(expected)
             .execute(&mut *tx)
             .await?;
-        sqlx::query("INSERT INTO audit_records (id, actor, action, entity_type, entity_id, detail_json, created_at) VALUES ($1, 'admin', 'node.deleted', 'node', $2, $3, $4)")
-            .bind(Uuid::new_v4().to_string()).bind(&id).bind(json!({"expected_revision": expected, "remote_install": false})).bind(now()).execute(&mut *tx).await?;
+        sqlx::query("INSERT INTO audit_records (id, actor, action, entity_type, entity_id, detail_json, created_at) VALUES ($1, $5, 'node.deleted', 'node', $2, $3, $4)")
+            .bind(Uuid::new_v4().to_string()).bind(&id).bind(json!({"expected_revision": expected, "remote_install": false})).bind(now()).bind(super::audit_actor()).execute(&mut *tx).await?;
         tx.commit().await?;
         let _ = state.removed_nodes.send(id);
         return Ok((StatusCode::NO_CONTENT, Json(Value::Null)));
@@ -814,8 +861,8 @@ pub async fn delete(
     }
     cancel_queued_node_jobs_in_tx(&mut tx, &id).await?;
     let job_id = enqueue_job_in_tx(&mut tx, "uninstall", Some(&id), Some(revision)).await?;
-    sqlx::query("INSERT INTO audit_records (id, actor, action, entity_type, entity_id, detail_json, created_at) VALUES ($1, 'admin', 'node.uninstall_requested', 'node', $2, $3, $4)")
-        .bind(Uuid::new_v4().to_string()).bind(&id).bind(json!({"job_id": job_id, "expected_revision": expected})).bind(now()).execute(&mut *tx).await?;
+    sqlx::query("INSERT INTO audit_records (id, actor, action, entity_type, entity_id, detail_json, created_at) VALUES ($1, $5, 'node.uninstall_requested', 'node', $2, $3, $4)")
+        .bind(Uuid::new_v4().to_string()).bind(&id).bind(json!({"job_id": job_id, "expected_revision": expected})).bind(now()).bind(super::audit_actor()).execute(&mut *tx).await?;
     tx.commit().await?;
     Ok((
         StatusCode::ACCEPTED,
@@ -947,11 +994,14 @@ async fn action_to(
     target_revision: i64,
     payload: Value,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
-    let row = sqlx::query("SELECT desired_revision, state FROM nodes WHERE id = $1")
-        .bind(id)
-        .fetch_optional(&state.pool)
-        .await?
-        .ok_or_else(|| ApiError::not_found("node"))?;
+    let mut tx = db::begin_write(&state.pool).await?;
+    let row = sqlx::query(
+        "SELECT desired_revision,state,mtls_state,mtls_recovery_configured FROM nodes WHERE id=$1",
+    )
+    .bind(id)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or_else(|| ApiError::not_found("node"))?;
     let desired_revision: i64 = row.get("desired_revision");
     let state_value: String = row.get("state");
     if !action_allowed(&state_value, kind) {
@@ -964,14 +1014,37 @@ async fn action_to(
             "node revision is {desired_revision}; reload before starting {kind}"
         )));
     }
+    let mtls_state: String = row.get("mtls_state");
+    if mtls_state == "needs_configuration"
+        && !row.get::<bool, _>("mtls_recovery_configured")
+        && kind != "ssh-test"
+    {
+        return Err(ApiError::conflict(
+            "node requires an explicit off or managed configuration before recovery deployment",
+        ));
+    }
+    if kind == "rollback" && mtls_state != "ready" {
+        return Err(ApiError::conflict(
+            "node activation must be recovered before historical rollback",
+        ));
+    }
     let mut payload = payload;
     if kind == "ssh-test" && state_value == "delete_failed" {
         payload["delete_recovery"] = json!(true);
     }
-    let mut tx = db::begin_write(&state.pool).await?;
-    let job_id =
+    let recovery = if kind == "sync" && payload["force"] == true {
+        crate::credentials::rotations::enqueue_explicit_recovery(&mut tx, &state.secrets, id)
+            .await
+            .map_err(|e| ApiError::conflict(e.to_string()))?
+    } else {
+        None
+    };
+    let job_id = if let Some(job) = recovery {
+        job
+    } else {
         enqueue_job_with_payload_in_tx(&mut tx, kind, Some(id), Some(target_revision), payload)
-            .await?;
+            .await?
+    };
     sqlx::query("INSERT INTO audit_records (id, actor, action, entity_type, entity_id, detail_json, created_at) VALUES ($1, 'admin', $2, 'node', $3, $4, $5)")
         .bind(Uuid::new_v4().to_string()).bind(format!("node.{kind}" )).bind(id).bind(json!({"job_id": job_id, "target_revision": target_revision})).bind(now())
         .execute(&mut *tx).await?;
@@ -986,12 +1059,9 @@ async fn node_json(state: &AppState, row: &sqlx::postgres::PgRow) -> Result<Valu
     let config_enc: String = row.get("desired_config_enc");
     let config: Value = serde_json::from_str(&state.secrets.decrypt(&config_enc)?)
         .map_err(|_| ApiError::internal())?;
-    let mtls_required = config
-        .get("tls")
-        .and_then(Value::as_object)
-        .and_then(|tls| tls.get("clientCA"))
-        .and_then(Value::as_str)
-        .is_some_and(|value| !value.trim().is_empty());
+    let mtls_required = crate::credentials::node_mtls::Settings::from_config(&config)?
+        .authority()
+        .is_some();
     let node_id: String = row.get("id");
     let last_sample_at: Option<chrono::DateTime<chrono::Utc>> = row.get("last_sample_at");
     let data_freshness = match last_sample_at.as_ref() {
@@ -1029,6 +1099,8 @@ async fn node_json(state: &AppState, row: &sqlx::postgres::PgRow) -> Result<Valu
                 &config,
             )
             .await?;
+            let resolved =
+                crate::credentials::node_mtls::preview(&state.pool, &node_id, &resolved).await?;
             let value = render_server_yaml_preview_with_traffic_stats_port(
                 &resolved,
                 row.get::<String, _>("listen_addr").as_str(),
@@ -1051,7 +1123,21 @@ async fn node_json(state: &AppState, row: &sqlx::postgres::PgRow) -> Result<Valu
         .bind(row.get::<String, _>("ssh_credential_id"))
         .fetch_one(&state.pool)
         .await?;
+    let deployed_mtls = row
+        .get::<Option<String>, _>("deployed_config_enc")
+        .map(|cipher| {
+            state
+                .secrets
+                .decrypt(&cipher)
+                .and_then(|value| Ok(serde_json::from_str::<Value>(&value)?))
+        })
+        .transpose()?
+        .map(|value| crate::credentials::node_mtls::Settings::from_config(&value))
+        .transpose()?;
+    let trust=sqlx::query("SELECT ca_id,ca_version,desired,deployed FROM mtls_node_trust WHERE node_id=$1 ORDER BY ca_id,ca_version").bind(&node_id).fetch_all(&state.pool).await?;
+    let mtls_status = json!({"target":crate::credentials::node_mtls::Settings::from_config(&config)?,"deployed":deployed_mtls,"trust":trust.into_iter().map(|row|json!({"ca_credential_id":row.get::<String,_>("ca_id"),"ca_credential_version":row.get::<i64,_>("ca_version"),"desired":row.get::<bool,_>("desired"),"deployed":row.get::<bool,_>("deployed")})).collect::<Vec<_>>()});
     Ok(json!({
+        "mtls":mtls_status,
         "package": package, "package_usage": package_usage,
         "id": node_id, "name": row.get::<String, _>("name"),
         "ssh": {"host": row.get::<String, _>("ssh_host"), "port": row.get::<i32, _>("ssh_port"), "username": row.get::<String, _>("ssh_username"), "auth_type": if credential_kind == "ssh_password" { "password" } else { "private_key" }, "credential_id": row.get::<String,_>("ssh_credential_id"), "credential_version": row.get::<i64,_>("ssh_credential_version"), "secret_configured": true, "host_fingerprint": row.get::<Option<String>, _>("ssh_host_fingerprint")},
@@ -1060,6 +1146,7 @@ async fn node_json(state: &AppState, row: &sqlx::postgres::PgRow) -> Result<Valu
         "public": {"host": row.get::<String, _>("public_host"), "port": row.get::<i32, _>("public_port"), "listen_addr": row.get::<String, _>("listen_addr"), "tls_sni": row.get::<Option<String>, _>("tls_sni"), "skip_cert_verify": row.get::<bool, _>("tls_skip_verify")},
         "traffic_stats_port": traffic_stats_port,
         "config": config, "yaml_preview": yaml_preview, "mtls_required": mtls_required,
+        "mtls_state":row.get::<String,_>("mtls_state"),"mtls_recovery_configured":row.get::<bool,_>("mtls_recovery_configured"),"mtls_error":row.get::<Option<String>,_>("mtls_error"),"mtls_generation":row.get::<i64,_>("mtls_generation"),
         "revision": row.get::<i64, _>("desired_revision"), "deployed_revision": row.get::<Option<i64>, _>("deployed_revision"),
         "state": row.get::<String, _>("state"), "last_seen_at": row.get::<Option<chrono::DateTime<chrono::Utc>>, _>("last_seen_at"),
         "proxy_probe_url": row.get::<Option<String>, _>("proxy_probe_url"),

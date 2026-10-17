@@ -28,6 +28,10 @@ models = {
   "DNSBindingRemove" => "DNSBindingRemoveRequest",
   "DNSRecordInput" => "DNSRecordInput",
   "DNSAllocation" => "DNSAllocation",
+  "CAIdentityCreate" => "CAIdentityCreateRequest",
+  "CAPolicyUpdate" => "CAPolicyUpdateRequest",
+  "CAIdentityPublish" => "CAIdentityPublishRequest",
+  "ManagedUserReissue" => "ManagedUserReissueRequest",
   "CredentialCreate" => "CredentialCreateRequest",
   "CredentialPatch" => "CredentialPatchRequest",
   "CredentialPublish" => "CredentialPublishRequest",
@@ -45,21 +49,19 @@ models = {
   "UserAuthorizationGroupsUpdate" => "UserAuthorizationGroupsUpdateRequest",
   "JobFingerprintConfirmation" => "JobFingerprintConfirmationRequest",
   "Revision" => "RevisionRequest",
-  "AssignmentRequest" => "AssignmentRequest",
-  "AssignmentCertificateUpdate" => "AssignmentCertificateUpdateRequest",
 }
 response_models = %w[
-  AuthorizationGroupReference AuthorizationGroupSource AuthorizationGroupSummary AuthorizationPair AuthorizationMTLSBinding
+  ManagedUserIdentity ManagedIdentityVersion ManagedCAPolicy CAIdentityReceipt CAPolicyReceipt CAIdentityState ManagedUserReissueReceipt ManagedIdentityReceipt CARotationState CARotationStatus CARotationNode CATrustCleanup CATrustCleanupNode
+  AuthorizationGroupReference AuthorizationGroupSource AuthorizationGroupSummary AuthorizationPair AuthorizationManagedIdentity AuthorizationIdentityResult
   AuthorizationChangePreview AuthorizationCreatedCredential AuthorizationGroupMutationResponse
   UserAuthorizationGroupsMutationResponse
   DNSConnection DNSZone DNSRecord DNSRecordsPage PublishedConnection DNSBinding DNSBindingResponse DNSActionReceipt DNSCredentialBatchItem
   CredentialSummary CredentialsPage CredentialDetail CredentialVersion CredentialReference CredentialReceipt
   CredentialBatch CredentialBatchItem CredentialBatchReceipt
   NodePackage NodePackageUsage NodeAlert NodeUsageUpdateResponse
-  NodeSummary NodesPage NodeSSHDetail NodeConnectionDetail NodeDetail
+  NodeMTLSSettings NodeMTLSTrust NodeMTLSStatus NodeSummary NodesPage NodeSSHDetail NodeConnectionDetail NodeDetail
   AssignmentInfo UserSummary UsersPage JobOutcome JobResult JobSummary JobsPage AuditSummary AuditPage
-  NodeResource ResourceReceipt AssignmentReceipt SubscriptionReceipt
-  AssignmentMutationResponse
+  NodeResource ResourceReceipt SubscriptionReceipt
   RotatedCredential RotatedCredentials JobReceipt
   NodeUpdateResponse UserUpdateResponse QuotaResetResponse
   ActiveSubscription SubscriptionStatus NodeUsageSummary DataFreshness PendingRevocation

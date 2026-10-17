@@ -263,7 +263,7 @@ async fn cached_subscription(
     client: &ClientInfo,
 ) -> Result<Response, ApiError> {
     // Qualification is always live; the cache contains only a response for this exact eligible set.
-    let rows=sqlx::query("SELECT n.id,p.config,coalesce(p.usage_bytes,0) usage_bytes,p.next_reset_at FROM node_assignments a JOIN nodes n ON n.id=a.node_id LEFT JOIN node_packages p ON p.node_id=n.id WHERE a.user_id=$1 AND n.state NOT IN ('deleting','delete_failed') AND n.deployed_revision IS NOT NULL AND n.deployed_config_enc IS NOT NULL ORDER BY lower(n.name) COLLATE \"C\",n.name COLLATE \"C\",n.id")
+    let rows=sqlx::query("SELECT n.id,p.config,coalesce(p.usage_bytes,0) usage_bytes,p.next_reset_at FROM node_assignments a JOIN nodes n ON n.id=a.node_id LEFT JOIN node_packages p ON p.node_id=n.id WHERE a.user_id=$1 AND n.state NOT IN ('deleting','delete_failed') AND n.mtls_state='ready' AND n.deployed_revision IS NOT NULL AND n.deployed_config_enc IS NOT NULL ORDER BY lower(n.name) COLLATE \"C\",n.name COLLATE \"C\",n.id")
         .bind(user_id).fetch_all(&state.pool).await?;
     let now = Utc::now();
     let mut eligible = Vec::<String>::new();
@@ -290,24 +290,41 @@ async fn cached_subscription(
         &["node_config", "user_config", "credentials", "resources"],
     )
     .await?;
+    let boundaries = sqlx::query("SELECT min(boundary) FILTER(WHERE boundary>$2) AS boundary,coalesce(jsonb_agg(jsonb_build_array(v.identity_id,v.credential_version,v.ca_version) ORDER BY v.identity_id,v.credential_version) FILTER(WHERE v.not_before<=$2 AND v.expires_at>$2),'[]'::jsonb) AS valid_versions FROM mtls_user_identities i JOIN mtls_user_versions v ON v.identity_id=i.id CROSS JOIN LATERAL (VALUES (v.not_before),(v.expires_at)) b(boundary) WHERE i.user_id=$1 AND NOT i.archived AND v.released AND NOT v.discarded")
+        .bind(user_id).bind(now).fetch_one(&state.pool).await?;
+    let boundary: Option<DateTime<Utc>> = boundaries.get("boundary");
     let key = format!(
-        "subscription:{user_id}:{version}:{format:?}:{}:{:?}:{}",
+        "subscription:{user_id}:{version}:{format:?}:{}:{:?}:{}:{}",
         client.name,
         client.version,
-        token_digest(&eligible.join("|"))
+        token_digest(&eligible.join("|")),
+        token_digest(&boundaries.get::<Value, _>("valid_versions").to_string())
     );
+    let monotonic_now = std::time::Instant::now();
+    let deadline =
+        boundary.map(|at| monotonic_now + (at - Utc::now()).to_std().unwrap_or_default());
     let response = state
         .caches
         .responses
-        .get(key, std::time::Duration::from_secs(300), false, || async {
-            let nodes = load_subscription_nodes_eligible(state, user_id, Some(&eligible))
-                .await
-                .map_err(IntoResponse::into_response)?;
-            let response = formats::render_subscription(&nodes, format, client)
-                .map_err(IntoResponse::into_response)?;
-            crate::cache::CachedResponse::capture(response).await
-        })
+        .get_until(
+            key,
+            std::time::Duration::from_secs(300),
+            deadline,
+            false,
+            || async {
+                let nodes = load_subscription_nodes_eligible(state, user_id, Some(&eligible))
+                    .await
+                    .map_err(IntoResponse::into_response)?;
+                let response = formats::render_subscription(&nodes, format, client)
+                    .map_err(IntoResponse::into_response)?;
+                crate::cache::CachedResponse::capture(response).await
+            },
+        )
         .await;
+    if boundary.is_some_and(|at| at <= Utc::now()) {
+        let nodes = load_subscription_nodes_eligible(state, user_id, Some(&eligible)).await?;
+        return formats::render_subscription(&nodes, format, client);
+    }
     Ok(match response {
         Ok(value) => value.response(),
         Err(response) => *response,
@@ -319,7 +336,7 @@ async fn load_subscription_nodes_eligible(
     user_id: &str,
     eligible: Option<&[String]>,
 ) -> Result<Vec<SubscriptionNode>, ApiError> {
-    let rows = sqlx::query("SELECT n.id, n.name, n.public_host, n.public_port, n.listen_addr, n.tls_sni, n.tls_skip_verify, n.state, n.deployed_config_enc, n.published_connection, a.credential_enc, a.user_id, a.mtls_credential_id, a.mtls_credential_version FROM node_assignments a JOIN nodes n ON n.id = a.node_id WHERE a.user_id = $1 AND n.state NOT IN ('deleting', 'delete_failed') AND n.deployed_revision IS NOT NULL AND n.deployed_config_enc IS NOT NULL AND ($2::text[] IS NULL OR n.id=ANY($2)) ORDER BY lower(n.name) COLLATE \"C\", n.name COLLATE \"C\", n.id")
+    let rows = sqlx::query("SELECT n.id, n.name, n.public_host, n.public_port, n.listen_addr, n.tls_sni, n.tls_skip_verify, n.state, n.deployed_config_enc, n.published_connection, a.credential_enc, a.user_id FROM node_assignments a JOIN nodes n ON n.id = a.node_id WHERE a.user_id = $1 AND n.state NOT IN ('deleting', 'delete_failed') AND n.mtls_state='ready' AND n.deployed_revision IS NOT NULL AND n.deployed_config_enc IS NOT NULL AND ($2::text[] IS NULL OR n.id=ANY($2)) ORDER BY lower(n.name) COLLATE \"C\", n.name COLLATE \"C\", n.id")
         .bind(user_id).bind(eligible).fetch_all(&state.pool).await?;
     let projection_version =
         crate::cache_domains::version(&state.pool, &["node_config", "credentials", "resources"])
@@ -340,7 +357,7 @@ async fn load_subscription_nodes_eligible(
                 let raw: Value = serde_json::from_str(&state.secrets.decrypt(&cipher)?)
                     .map_err(|_| ApiError::internal())?;
                 let mut projection = serde_json::Map::new();
-                for field in ["bandwidth", "obfs", "realm", "ech"] {
+                for field in ["bandwidth", "obfs", "realm", "ech", "mtls"] {
                     if let Some(value) = raw.get(field) {
                         projection.insert(field.into(), value.clone());
                     }
@@ -352,9 +369,6 @@ async fn load_subscription_nodes_eligible(
             let reference = crate::credentials::Reference::parse(path)
                 .map_err(|_| ApiError::bad_request("invalid ECH reference"))?;
             keys.insert((reference.id, reference.version));
-        }
-        if let Some(identity) = row.get::<Option<String>, _>("mtls_credential_id") {
-            keys.insert((identity, row.get::<i64, _>("mtls_credential_version")));
         }
         configs.insert(id, config);
     }
@@ -378,24 +392,22 @@ async fn load_subscription_nodes_eligible(
         let ech_config = subscription_ech_from_loaded(config, &materials)?;
         let realm_opts = subscription_realm_options(config)?;
         let password_enc: String = row.get("credential_enc");
-        let identity = if let Some(id) = row.get::<Option<String>, _>("mtls_credential_id") {
-            let version: i64 = row.get("mtls_credential_version");
-            let (kind, owner, _, payload, _) = materials
-                .get(&(id, version))
+        let identity = if config["mtls"]["mode"] == "managed" {
+            let ca = config["mtls"]["ca_credential_id"]
+                .as_str()
                 .ok_or_else(ApiError::internal)?;
-            if kind != "tls_identity" || owner.as_deref() != Some(user_id) {
-                return Err(ApiError::bad_request("invalid user-owned mTLS credential"));
-            }
-            Some((
-                payload["certificate"]
-                    .as_str()
-                    .ok_or_else(ApiError::internal)?
-                    .to_owned(),
-                payload["private_key"]
-                    .as_str()
-                    .ok_or_else(ApiError::internal)?
-                    .to_owned(),
-            ))
+            let Some(material) = crate::credentials::identities::for_node(
+                &state.pool,
+                &state.secrets,
+                user_id,
+                &node_id,
+                ca,
+            )
+            .await?
+            else {
+                continue;
+            };
+            Some(material)
         } else {
             None
         };
@@ -459,7 +471,7 @@ pub async fn hy2_auth(
     Path((node_id, node_token)): Path<(String, String)>,
     Json(input): Json<AuthRequest>,
 ) -> Result<Json<AuthResponse>, ApiError> {
-    let node = sqlx::query("SELECT node_token_hash, state FROM nodes WHERE id = $1")
+    let node = sqlx::query("SELECT node_token_hash, state,mtls_state FROM nodes WHERE id = $1")
         .bind(&node_id)
         .fetch_optional(&state.pool)
         .await?;
@@ -483,7 +495,7 @@ pub async fn hy2_auth(
 
     let auth_hash = token_digest(&input.auth);
     let probe_hash: Option<String> = sqlx::query_scalar(
-        "SELECT token_hash FROM deployment_probe_tokens WHERE node_id = $1 AND expires_at > $2",
+        "SELECT p.token_hash FROM deployment_probe_tokens p JOIN jobs j ON j.id=p.job_id JOIN nodes n ON n.id=p.node_id WHERE p.node_id=$1 AND p.expires_at>$2 AND j.status='running' AND j.node_id=p.node_id AND j.kind IN ('deploy','sync','rollback') AND (n.mtls_state='ready' OR EXISTS(SELECT 1 FROM mtls_activations a WHERE a.id=n.mtls_activation_id AND a.job_id=j.id AND a.phase IN ('activating','verified','recovery_required')))",
     )
     .bind(&node_id)
     .bind(now())
@@ -497,6 +509,9 @@ pub async fn hy2_auth(
             ok: true,
             id: format!("probe-{node_id}"),
         }));
+    }
+    if node.get::<String, _>("mtls_state") != "ready" {
+        return Ok(Json(AuthResponse::denied()));
     }
     let monitor_hash: Option<String> = sqlx::query_scalar(
         "SELECT token_hash FROM monitoring_probe_tokens WHERE node_id = $1 AND expires_at > now()",

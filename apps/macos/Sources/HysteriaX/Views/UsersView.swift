@@ -13,7 +13,7 @@ struct UsersView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if store.supportsAuthorizationGroups && selectedTab == "groups" {
+            if selectedTab == "groups" {
                 AuthorizationGroupsView(store: store, pageState: pageState, onOpenUser: { userID in
                     selectedTab = "users"
                     pageState.selectedUserID = userID
@@ -28,7 +28,7 @@ struct UsersView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .toolbar {
-            if store.supportsAuthorizationGroups {
+
                 ToolbarItem(placement: .principal) {
                     Picker(L10n.text("用户页面"), selection: $selectedTab) {
                         Text(L10n.text("用户")).tag("users")
@@ -37,7 +37,7 @@ struct UsersView: View {
                     .pickerStyle(.segmented)
                     .accessibilityIdentifier("users.authorizationTabs")
                 }
-            }
+
         }
         .task(id: initialSelection) {
             guard let initialSelection else { return }
@@ -53,11 +53,10 @@ private struct UserDirectoryView: View {
     @Bindable var pageState: AuthorizationPageState
     var onOpenAuthorizationGroup: (String) -> Void
     @State private var showingAddUser = false
-    @State private var assignmentUser: UserSummary?
     @State private var showingEditUser = false
+    @State private var certificateUser: UserSummary?
     @State private var membershipUser: UserSummary?
     @State private var pendingCreatedUserID: String?
-    @State private var assignmentTarget: AssignmentTarget?
     @State private var showingDeleteConfirmation = false
     @State private var alertTitle = ""
     @State private var alertMessage: String?
@@ -190,19 +189,11 @@ private struct UserDirectoryView: View {
         .sheet(item: $membershipUser) { user in
             UserAuthorizationGroupMembershipView(store: store, user: user)
         }
-        .sheet(item: $assignmentUser) { user in
-            UserNodeAssignmentsView(store: store, user: user)
+        .sheet(item: $certificateUser) { user in
+            UserManagedCertificatesView(store: store, user: user)
         }
-        .sheet(item: $assignmentTarget) { target in
-            UserAssignmentFormView(store: store, user: target.user, node: target.node, isUpdating: target.isUpdating) { credential in
-                if let credential {
-                    copy(credential, message: L10n.text("{0} 的连接密码已复制。请立即保存；服务端不会再次显示明文。", String(describing: (target.node.name))))
-                } else {
-                    alertTitle = L10n.text("mTLS 证书已更新")
-                    alertMessage = L10n.text("新的客户端证书和私钥已加密保存，并已排队断开现有连接。")
-                }
-            }
-        }
+
+
         .confirmationDialog(L10n.text("删除用户？"), isPresented: $showingDeleteConfirmation, titleVisibility: .visible) {
             Button(L10n.text("删除用户"), role: .destructive) {
                 if let user = selectedUser { delete(user) }
@@ -277,7 +268,6 @@ private struct UserDirectoryView: View {
     private func openCreatedUserGroups() {
         guard let userID = pendingCreatedUserID else { return }
         pendingCreatedUserID = nil
-        guard store.supportsAuthorizationGroups else { return }
         Task { @MainActor in
             var user = store.users.first { $0.id == userID }
             if user == nil { user = try? await store.userSummary(userID) }
@@ -297,7 +287,7 @@ private struct UserDirectoryView: View {
                     userMetric(L10n.text("已用流量"), value: formatBytes(user.usageBytes))
                     userMetric(L10n.text("流量额度"), value: user.quotaBytes.map(formatBytes) ?? L10n.text("不限"))
                     userMetric(L10n.text("到期时间"), value: user.expiresAt.map { DateDisplayText.local($0) } ?? L10n.text("不限"))
-                    userMetric(L10n.text(store.supportsAuthorizationGroups ? "有效节点" : "分配节点"), value: L10n.text("{0} 个", String(describing: (user.assignments.count))))
+                    userMetric(L10n.text("有效节点"), value: L10n.text("{0} 个", String(describing: (user.assignments.count))))
                 }
             }
             .padding(16)
@@ -307,7 +297,7 @@ private struct UserDirectoryView: View {
                     OverviewColumnsLayout(wideColumns: 2, wideMinimum: 576, narrowColumns: 1) {
                         userQuota(user)
                         VStack(alignment: .leading, spacing: 16) {
-                            if store.supportsAuthorizationGroups { userAuthorizationGroups(user) }
+                            userAuthorizationGroups(user)
                             userAssignments(user)
                         }
                     }
@@ -371,28 +361,12 @@ private struct UserDirectoryView: View {
 
     private func userDetailActions(_ user: UserSummary) -> some View {
         HStack(spacing: 8) {
-            if store.supportsAuthorizationGroups {
+
                 Button(L10n.text("管理授权组…"), systemImage: "person.3") { membershipUser = user }
                     .accessibilityIdentifier("users.manageAuthorizationGroups")
-            } else {
-                Button(L10n.text("分配节点…")) { assignmentUser = user }
-                    .accessibilityLabel(L10n.text("分配节点"))
-                    .accessibilityIdentifier("users.assignNodeMenu")
-            }
-            Menu(L10n.text("mTLS 证书")) {
-                ForEach(user.assignments, id: \.nodeID) { assignment in
-                    if let node = store.nodes.first(where: { $0.id == assignment.nodeID }) {
-                        Button(node.name) {
-                            assignmentTarget = AssignmentTarget(user: user, node: node, isUpdating: true)
-                        }
-                        .accessibilityLabel(node.name)
-                        .accessibilityIdentifier("users.mtlsNode.\(node.id)")
-                    }
-                }
-            }
-            .accessibilityLabel(L10n.text("mTLS 证书"))
-            .accessibilityIdentifier("users.mtlsMenu")
-            .disabled(user.assignments.isEmpty)
+
+            Button(L10n.text("托管证书…"), systemImage: "checkmark.shield") { certificateUser = user }
+                .accessibilityIdentifier("users.managedCertificates")
             Menu(L10n.text("订阅")) {
                 Button(L10n.text("复制当前订阅地址")) { copyCurrentSubscription(user) }
                     .accessibilityLabel(L10n.text("复制当前订阅地址"))
@@ -470,9 +444,9 @@ private struct UserDirectoryView: View {
                     HStack(alignment: .top, spacing: 12) {
                         VStack(alignment: .leading, spacing: 4) {
                             Text(nodeDisplayName(assignment.nodeID)).font(.callout.weight(.medium))
-                            Text(assignment.mtlsCredentialId == nil ? L10n.text("连接密码") : "mTLS · v\(assignment.mtlsCredentialVersion ?? 1)")
+                            Text((assignment.managedIdentityIds ?? []).isEmpty ? L10n.text("连接密码") : L10n.text("托管 mTLS"))
                                 .font(.caption).foregroundStyle(.secondary)
-                            if store.supportsAuthorizationGroups, let groups = assignment.sourceGroups, !groups.isEmpty {
+                            if let groups = assignment.sourceGroups, !groups.isEmpty {
                                 HStack(spacing: 6) {
                                     Text(L10n.text("来源组"))
                                         .font(.caption).foregroundStyle(.secondary)
@@ -488,21 +462,13 @@ private struct UserDirectoryView: View {
                                 .font(.caption).foregroundStyle(.secondary)
                         }
                         Spacer(minLength: 8)
-                        if let node = store.nodes.first(where: { $0.id == assignment.nodeID }) {
-                            Button(L10n.text("证书…")) {
-                                assignmentTarget = AssignmentTarget(user: user, node: node, isUpdating: true)
-                            }
-                            .disabled(!store.isConnected)
-                            .help(L10n.text("管理该节点的 mTLS 证书"))
-                            .accessibilityIdentifier("users.assignmentCertificate.\(node.id)")
-                        }
                     }
                     .padding(.vertical, 8)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         } label: {
-            Label(L10n.text(store.supportsAuthorizationGroups ? "有效节点（{0}）" : "已分配节点（{0}）", String(describing: (user.assignments.count))), systemImage: "server.rack")
+            Label(L10n.text("有效节点（{0}）", String(describing: (user.assignments.count))), systemImage: "server.rack")
         }
     }
 
@@ -735,147 +701,6 @@ private struct UserDirectoryView: View {
     }
 }
 
-private struct AssignmentTarget: Identifiable {
-    let user: UserSummary
-    let node: NodeSummary
-    let isUpdating: Bool
-
-    var id: String { "\(user.id):\(node.id):\(isUpdating)" }
-}
-
-private struct UserAssignmentFormView: View {
-    @Environment(\.dismiss) private var dismiss
-    @Bindable var store: ManagementStore
-    let user: UserSummary
-    let node: NodeSummary
-    let isUpdating: Bool
-    let onComplete: (String?) -> Void
-
-    @State private var mtlsCredentialID = ""
-    @State private var certificateData: Data?
-    @State private var privateKeyData: Data?
-    @State private var certificateName = ""
-    @State private var privateKeyName = ""
-    @State private var importPurpose = "certificate"
-    @State private var showingImporter = false
-    @State private var errorMessage: String?
-    @State private var isSaving = false
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text(isUpdating ? L10n.text("更新 mTLS 证书") : L10n.text("分配节点"))
-                .font(.title.bold())
-            Text("\(user.name) → \(node.name)")
-                .foregroundStyle(.secondary)
-                .accessibilityLabel("\(user.name) → \(node.name)")
-                .accessibilityIdentifier("user.assignment.summary")
-            Text(L10n.text("普通节点可留空。启用 mTLS 的节点需要匹配的客户端证书和私钥；订阅通过 HTTPS 返回这两份 PEM 内容，管理服务中会加密存储。"))
-                .font(.callout)
-                .foregroundStyle(.secondary)
-            Form {
-                CredentialPickerView(store: store, selection: $mtlsCredentialID, kinds: ["tls_identity"], ownerUserID: user.id, title: L10n.text("已有 mTLS 凭据"))
-                LabeledContent(L10n.text("客户端证书")) {
-                    HStack {
-                        Text(certificateName.isEmpty ? L10n.text("未选择") : certificateName)
-                            .foregroundStyle(.secondary)
-                        Spacer()
-                        Button(L10n.text("选择证书…")) { choose("certificate") }
-                    }
-                }
-                LabeledContent(L10n.text("客户端私钥")) {
-                    HStack {
-                        Text(privateKeyName.isEmpty ? L10n.text("未选择") : privateKeyName)
-                            .foregroundStyle(.secondary)
-                        Spacer()
-                        Button(L10n.text("选择私钥…")) { choose("private-key") }
-                    }
-                }
-            }
-            if let errorMessage {
-                Text(errorMessage).foregroundStyle(.red).font(.callout)
-            }
-            HStack {
-                Button(L10n.text("取消")) { dismiss() }.keyboardShortcut(.cancelAction)
-                Spacer()
-                Button(isSaving ? L10n.text("正在保存…") : (isUpdating ? L10n.text("更新证书") : L10n.text("分配节点"))) { save() }
-                    .disabled(isSaving || !store.isConnected)
-                    .keyboardShortcut(.defaultAction)
-            }
-        }
-        .padding(24)
-        .frame(width: 520, height: 360)
-        .fileImporter(isPresented: $showingImporter, allowedContentTypes: [.data], allowsMultipleSelection: false) { result in
-            importFile(result)
-        }
-    }
-
-    private func choose(_ purpose: String) {
-        mtlsCredentialID = ""
-        importPurpose = purpose
-        showingImporter = true
-    }
-
-    private func importFile(_ result: Result<[URL], Error>) {
-        do {
-            guard let url = try result.get().first else { return }
-            let hasAccess = url.startAccessingSecurityScopedResource()
-            defer { if hasAccess { url.stopAccessingSecurityScopedResource() } }
-            let data = try Data(contentsOf: url, options: .mappedIfSafe)
-            guard !data.isEmpty, data.count <= 1_048_576, String(data: data, encoding: .utf8) != nil else {
-                errorMessage = L10n.text("客户端证书和私钥必须是小于 1 MiB 的 UTF-8 PEM 文件。")
-                return
-            }
-            if importPurpose == "certificate" {
-                certificateData = data
-                certificateName = url.lastPathComponent
-            } else {
-                privateKeyData = data
-                privateKeyName = url.lastPathComponent
-            }
-            errorMessage = nil
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
-
-    private func save() {
-        if mtlsCredentialID.isEmpty && ((certificateData == nil) != (privateKeyData == nil) || (isUpdating && certificateData == nil)) {
-            errorMessage = L10n.text("请同时选择客户端证书和私钥。")
-            return
-        }
-        let certificate = certificateData.flatMap { String(data: $0, encoding: .utf8) }
-        let privateKey = privateKeyData.flatMap { String(data: $0, encoding: .utf8) }
-        isSaving = true
-        Task {
-            defer { isSaving = false }
-            do {
-                if isUpdating {
-                    try await store.updateAssignmentClientCertificate(
-                        user,
-                        for: node,
-                        clientCertificate: certificate ?? "",
-                        clientPrivateKey: privateKey ?? "",
-                        mtlsCredentialID: mtlsCredentialID.isEmpty ? nil : mtlsCredentialID
-                    )
-                    onComplete(nil)
-                } else {
-                    let credential = try await store.assign(
-                        user,
-                        to: node,
-                        clientCertificate: certificate,
-                        clientPrivateKey: privateKey,
-                        mtlsCredentialID: mtlsCredentialID.isEmpty ? nil : mtlsCredentialID
-                    )
-                    onComplete(credential)
-                }
-                dismiss()
-            } catch {
-                errorMessage = error.localizedDescription
-            }
-        }
-    }
-}
-
 private struct UserFormView: View {
     @Environment(\.dismiss) private var dismiss
     @Bindable var store: ManagementStore
@@ -890,11 +715,11 @@ private struct UserFormView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text(L10n.text("添加用户")).font(.title.bold())
-            if store.supportsAuthorizationGroups {
+
                 Text(L10n.text("新用户创建后不会自动获得节点权限。下一步可将用户加入授权组。"))
                     .font(.callout)
                     .foregroundStyle(.secondary)
-            }
+
             Form {
                 TextField(L10n.text("用户名称"), text: $name)
                     .accessibilityLabel(L10n.text("用户名称"))

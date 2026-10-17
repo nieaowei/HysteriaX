@@ -113,6 +113,25 @@ impl<T: serde::Serialize + serde::de::DeserializeOwned> Cache<T> {
         F: FnOnce() -> Fut,
         Fut: Future<Output = Result<T, E>>,
     {
+        self.get_until(key, ttl, None, bypass, compute).await
+    }
+
+    /// Absolute validity boundary, including time spent computing the value.
+    pub async fn get_until<E, F, Fut>(
+        &self,
+        key: String,
+        ttl: Duration,
+        deadline: Option<Instant>,
+        bypass: bool,
+        compute: F,
+    ) -> Result<Arc<T>, E>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<T, E>>,
+    {
+        if deadline.is_some_and(|at| at <= Instant::now()) {
+            return compute().await.map(Arc::new);
+        }
         let remote_key = self.redis.as_ref().map(|(r, kind)| r.key(kind, &key));
         if let Some((remote, _)) = &self.redis {
             let remote_key = remote_key.as_ref().unwrap();
@@ -178,20 +197,27 @@ impl<T: serde::Serialize + serde::de::DeserializeOwned> Cache<T> {
             .cell
             .get_or_try_init(|| async {
                 let value = compute().await?;
-                let mut lifetime = ttl;
+                let mut lifetime = deadline
+                    .map(|at| at.saturating_duration_since(Instant::now()))
+                    .unwrap_or(ttl)
+                    .min(ttl);
                 if let Some((remote, _)) = &self.redis {
-                    if (self.weight)(&value) <= self.max_value_bytes {
-                        remote.put(remote_key.as_ref().unwrap(), &value, ttl).await;
+                    if (self.weight)(&value) <= self.max_value_bytes && !lifetime.is_zero() {
+                        remote
+                            .put(remote_key.as_ref().unwrap(), &value, lifetime)
+                            .await;
                     }
                     lifetime = if remote.available() {
                         Duration::ZERO
                     } else {
-                        ttl.min(Duration::from_secs(2))
+                        lifetime.min(Duration::from_secs(2))
                     };
                 }
                 Ok(Stored {
                     value: Arc::new(value),
-                    expires: Instant::now() + lifetime,
+                    expires: deadline
+                        .map(|at| at.min(Instant::now() + lifetime))
+                        .unwrap_or_else(|| Instant::now() + lifetime),
                 })
             })
             .await

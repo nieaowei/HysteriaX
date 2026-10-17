@@ -2,13 +2,6 @@ import Foundation
 
 extension ManagementStore {
     func refreshAuthorizationGroups() async {
-        guard supportsAuthorizationGroups else {
-            authorizationGroups = []
-            authorizationGroupsError = nil
-            isLoadingAuthorizationGroups = false
-            authorizationGroupsRequestID = UUID()
-            return
-        }
         guard let client = try? requireConnectedAPI() else { return }
 
         let requestID = UUID()
@@ -48,8 +41,7 @@ extension ManagementStore {
         group: AuthorizationGroupSummary?,
         name: String,
         userIDs: [String],
-        nodeIDs: [String],
-        mtlsBindings: [AuthorizationMTLSBinding]
+        nodeIDs: [String]
     ) async throws -> AuthorizationChangePreview {
         let client = try requireConnectedAPI()
         let request = AuthorizationGroupPreviewRequest(
@@ -57,8 +49,7 @@ extension ManagementStore {
             expectedRevision: group?.revision,
             name: name,
             userIds: userIDs,
-            nodeIds: nodeIDs,
-            mtlsBindings: mtlsBindings
+            nodeIds: nodeIDs
         )
         if let group {
             return try await client.post(APIEndpoints.previewAuthorizationGroupChange(groupID: group.id), body: request)
@@ -70,8 +61,7 @@ extension ManagementStore {
         name: String,
         userIDs: [String],
         nodeIDs: [String],
-        previewToken: String,
-        mtlsBindings: [AuthorizationMTLSBinding]
+        previewToken: String
     ) async throws -> AuthorizationGroupMutationResponse {
         let client = try requireConnectedAPI()
         let result: AuthorizationGroupMutationResponse = try await client.post(
@@ -80,8 +70,7 @@ extension ManagementStore {
                 name: name,
                 userIds: userIDs,
                 nodeIds: nodeIDs,
-                previewToken: previewToken,
-                mtlsBindings: mtlsBindings
+                previewToken: previewToken
             )
         )
         await refresh()
@@ -93,8 +82,7 @@ extension ManagementStore {
         name: String,
         userIDs: [String],
         nodeIDs: [String],
-        previewToken: String,
-        mtlsBindings: [AuthorizationMTLSBinding]
+        previewToken: String
     ) async throws -> AuthorizationGroupMutationResponse {
         let client = try requireConnectedAPI()
         let result: AuthorizationGroupMutationResponse = try await client.put(
@@ -104,8 +92,7 @@ extension ManagementStore {
                 name: name,
                 userIds: userIDs,
                 nodeIds: nodeIDs,
-                previewToken: previewToken,
-                mtlsBindings: mtlsBindings
+                previewToken: previewToken
             )
         )
         await refresh()
@@ -133,15 +120,13 @@ extension ManagementStore {
 
     func previewUserAuthorizationGroups(
         _ user: UserSummary,
-        groupIDs: [String],
-        mtlsBindings: [AuthorizationMTLSBinding]
+        groupIDs: [String]
     ) async throws -> AuthorizationChangePreview {
         try await requireConnectedAPI().post(
             APIEndpoints.previewUserAuthorizationGroups(id: user.id),
             body: UserAuthorizationGroupsPreviewRequest(
                 expectedRevision: user.revision,
-                groupIds: groupIDs,
-                mtlsBindings: mtlsBindings
+                groupIds: groupIDs
             )
         )
     }
@@ -149,16 +134,14 @@ extension ManagementStore {
     func updateUserAuthorizationGroups(
         _ user: UserSummary,
         groupIDs: [String],
-        previewToken: String,
-        mtlsBindings: [AuthorizationMTLSBinding]
+        previewToken: String
     ) async throws -> UserAuthorizationGroupsMutationResponse {
         let result: UserAuthorizationGroupsMutationResponse = try await requireConnectedAPI().put(
             APIEndpoints.updateUserAuthorizationGroups(id: user.id),
             body: UserAuthorizationGroupsUpdateRequest(
                 expectedRevision: user.revision,
                 previewToken: previewToken,
-                groupIds: groupIDs,
-                mtlsBindings: mtlsBindings
+                groupIds: groupIDs
             )
         )
         await refresh()

@@ -17,7 +17,6 @@ use crate::{credentials as vault, db, error::ApiError, state::AppState};
 pub struct CreateCredential {
     pub name: String,
     pub kind: String,
-    pub owner_user_id: Option<String>,
     pub reminder_at: Option<DateTime<Utc>>,
     pub payload: Value,
 }
@@ -81,7 +80,7 @@ async fn page_values_on(
     assignment_users: &[String],
     assignment_nodes: &[String],
 ) -> Result<Vec<Value>, ApiError> {
-    let rows = sqlx::query("SELECT c.*,v.metadata FROM credentials c JOIN credential_versions v ON v.credential_id=c.id AND v.version=c.latest_version WHERE c.id=ANY($1) ORDER BY lower(c.name) COLLATE \"C\",c.id").bind(managed).fetch_all(&mut *connection).await?;
+    let rows = sqlx::query("SELECT c.*,v.metadata FROM credentials c LEFT JOIN mtls_authorities a ON a.credential_id=c.id AND c.kind='ca_identity' JOIN credential_versions v ON v.credential_id=c.id AND v.version=coalesce(a.published_version,c.latest_version) WHERE c.id=ANY($1) ORDER BY lower(c.name) COLLATE \"C\",c.id").bind(managed).fetch_all(&mut *connection).await?;
     let mut counts =
         std::collections::BTreeMap::<String, std::collections::BTreeSet<String>>::new();
     let references=sqlx::query("SELECT DISTINCT credential_id,node_id FROM credential_reference_edges WHERE credential_id=ANY($1) AND source IN ('desired','deployed') UNION SELECT ssh_credential_id,id FROM nodes WHERE ssh_credential_id=ANY($1)").bind(managed).fetch_all(&mut *connection).await?;
@@ -105,6 +104,13 @@ async fn page_values_on(
                 "dns_connection:{}",
                 connection.get::<String, _>("id")
             ));
+    }
+    let managed_nodes = sqlx::query("WITH contexts AS(SELECT ca_id,node_id FROM mtls_node_trust WHERE desired OR deployed UNION SELECT ca_id,node_id FROM mtls_live_activation_trust) SELECT ca_id AS credential_id,node_id FROM contexts WHERE ca_id=ANY($1) UNION SELECT i.credential_id,a.node_id FROM mtls_user_identities i JOIN node_assignments a ON a.user_id=i.user_id JOIN contexts c ON c.ca_id=i.ca_id AND c.node_id=a.node_id WHERE NOT i.archived AND i.credential_id=ANY($1) UNION SELECT p.credential_id,p.node_id FROM mtls_probe_versions p JOIN contexts c ON c.ca_id=p.ca_id AND c.node_id=p.node_id WHERE p.credential_id=ANY($1)").bind(managed).fetch_all(&mut *connection).await?;
+    for row in managed_nodes {
+        counts
+            .entry(row.get("credential_id"))
+            .or_default()
+            .insert(format!("node:{}", row.get::<String, _>("node_id")));
     }
     let mut entries: Vec<Value> = rows
         .iter()
@@ -146,6 +152,7 @@ pub(crate) struct CredentialsListQuery {
     q: Option<String>,
     sort: Option<String>,
     order: Option<String>,
+    include_internal: Option<bool>,
 }
 
 impl CredentialsListQuery {
@@ -182,7 +189,7 @@ pub(crate) async fn list(
     let pattern = super::literal_search_pattern(search);
     let kind = query.kind.as_deref().unwrap_or("");
     let category = query.category.as_deref().unwrap_or("all");
-    let filter = "($1='all' OR (owner_user_id IS NOT NULL)=($1='user')) AND ($2='' OR kind=$2) AND ($3='' OR lower(name) LIKE lower($3) ESCAPE '\\')";
+    let filter = "($1='all' OR (owner_user_id IS NOT NULL)=($1='user')) AND ($2='' OR kind=$2) AND ($3='' OR lower(name) LIKE lower($3) ESCAPE '\\') AND ($4 OR source<>'managed' OR NOT EXISTS(SELECT 1 FROM mtls_probe_versions p WHERE p.credential_id=credential_directory.entity_id))";
     let mut tx =
         crate::credentials::reference_index::begin_read(&state.pool, &state.secrets).await?;
     sqlx::query("SET LOCAL plan_cache_mode=force_custom_plan")
@@ -194,6 +201,7 @@ pub(crate) async fn list(
     .bind(category)
     .bind(kind)
     .bind(&pattern)
+    .bind(query.include_internal.unwrap_or(false))
     .fetch_one(&mut *tx)
     .await?;
     let page = requested_page.min(((total + page_size - 1) / page_size).max(1));
@@ -210,8 +218,8 @@ pub(crate) async fn list(
             "{leading} {direction},lower(name) COLLATE \"C\" {direction},name COLLATE \"C\" {direction},id COLLATE \"C\" {direction}"
         )
     };
-    let selected = sqlx::query(&format!("SELECT id,source,entity_id,node_id FROM credential_directory WHERE {filter} ORDER BY {ordering} LIMIT $4 OFFSET $5"))
-        .bind(category).bind(kind).bind(&pattern).bind(page_size).bind((page-1)*page_size)
+    let selected = sqlx::query(&format!("SELECT id,source,entity_id,node_id FROM credential_directory WHERE {filter} ORDER BY {ordering} LIMIT $5 OFFSET $6"))
+        .bind(category).bind(kind).bind(&pattern).bind(query.include_internal.unwrap_or(false)).bind(page_size).bind((page-1)*page_size)
         .fetch_all(&mut *tx).await?;
     let mut managed = Vec::new();
     let mut admins = Vec::new();
@@ -285,11 +293,22 @@ pub async fn get(
 ) -> Result<Json<Value>, ApiError> {
     let mut tx =
         crate::credentials::reference_index::begin_read(&state.pool, &state.secrets).await?;
-    let row = sqlx::query("SELECT c.*,v.metadata FROM credentials c JOIN credential_versions v ON v.credential_id=c.id AND v.version=c.latest_version WHERE c.id=$1").bind(&id).fetch_optional(&mut *tx).await?.ok_or_else(||ApiError::not_found("credential"))?;
+    let row = sqlx::query("SELECT c.*,v.metadata FROM credentials c LEFT JOIN mtls_authorities a ON a.credential_id=c.id AND c.kind='ca_identity' JOIN credential_versions v ON v.credential_id=c.id AND v.version=coalesce(a.published_version,c.latest_version) WHERE c.id=$1").bind(&id).fetch_optional(&mut *tx).await?.ok_or_else(||ApiError::not_found("credential"))?;
     let mut result = summary(&row);
     let versions = sqlx::query("SELECT version,metadata,created_at FROM credential_versions WHERE credential_id=$1 ORDER BY version DESC").bind(&id).fetch_all(&mut *tx).await?;
     result["versions"] = json!(versions.iter().map(|v|json!({"version":v.get::<i64,_>("version"),"metadata":v.get::<Value,_>("metadata"),"created_at":v.get::<DateTime<Utc>,_>("created_at")})).collect::<Vec<_>>());
     result["references"] = json!(read_references_on(&mut tx, &id).await?);
+    if let Some(ca) = sqlx::query("SELECT * FROM mtls_authorities WHERE credential_id=$1")
+        .bind(&id)
+        .fetch_optional(&mut *tx)
+        .await?
+    {
+        result["ca"] = json!({"source":ca.get::<String,_>("source"),"policy_revision":ca.get::<i64,_>("policy_revision"),"published_version":ca.get::<i64,_>("published_version"),"client_validity_days":ca.get::<i32,_>("client_validity_days"),"renew_before_hours":ca.get::<i32,_>("renew_before_hours"),"maintenance_error":ca.get::<Option<String>,_>("maintenance_error")});
+    }
+    if result.get("ca").is_some() {
+        let cleanup = sqlx::query("SELECT c.ca_version,c.next_action_at,c.completed_at,coalesce(jsonb_agg(jsonb_build_object('node_id',p.node_id,'name',n.name,'job_id',p.job_id,'completed',p.completed,'status',j.status,'stage',j.stage,'error_message',coalesce(p.error_message,j.error_message)) ORDER BY p.node_id) FILTER(WHERE p.node_id IS NOT NULL),'[]'::jsonb) AS nodes FROM mtls_trust_cleanup c LEFT JOIN mtls_cleanup_nodes p ON p.ca_id=c.ca_id AND p.ca_version=c.ca_version LEFT JOIN nodes n ON n.id=p.node_id LEFT JOIN jobs j ON j.id=p.job_id WHERE c.ca_id=$1 GROUP BY c.ca_id,c.ca_version ORDER BY c.ca_version DESC").bind(&id).fetch_all(&mut *tx).await?;
+        result["ca"]["cleanup"] = json!(cleanup.iter().map(|r|json!({"version":r.get::<i64,_>("ca_version"),"next_action_at":r.get::<DateTime<Utc>,_>("next_action_at"),"completed_at":r.get::<Option<DateTime<Utc>>,_>("completed_at"),"nodes":r.get::<Value,_>("nodes")})).collect::<Vec<_>>());
+    }
     let batches = sqlx::query(
         "SELECT id FROM credential_batches WHERE credential_id=$1 ORDER BY created_at DESC",
     )
@@ -308,28 +327,19 @@ pub async fn create(
     Json(input): Json<CreateCredential>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
     let name = name(&input.name)?;
-    let metadata = vault::validate_payload(&input.kind, &input.payload).map_err(invalid)?;
-    if input.owner_user_id.is_some() && input.kind != "tls_identity" {
+    if input.kind == "ca_identity" {
         return Err(ApiError::bad_request(
-            "only mTLS identities can be user-owned",
+            "use the CA identity creation endpoint",
         ));
     }
+    let metadata = vault::validate_payload(&input.kind, &input.payload).map_err(invalid)?;
     let mut tx = db::begin_write(&state.pool).await?;
-    if let Some(user) = &input.owner_user_id {
-        let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM users WHERE id=$1)")
-            .bind(user)
-            .fetch_one(&mut *tx)
-            .await?;
-        if !exists {
-            return Err(ApiError::not_found("user"));
-        }
-    }
     let id = vault::insert(
         &mut tx,
         &state.secrets,
         name,
         &input.kind,
-        input.owner_user_id.as_deref(),
+        None,
         &input.payload,
         &metadata,
         &json!({}),
@@ -363,6 +373,18 @@ pub async fn patch(
 ) -> Result<Json<Value>, ApiError> {
     let name = name(&input.name)?;
     let mut tx = db::begin_write(&state.pool).await?;
+    let managed: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM credential_versions WHERE credential_id=$1 AND metadata->>'managed'='true' UNION ALL SELECT 1 FROM credentials WHERE id=$1 AND owner_user_id IS NOT NULL)").bind(&id).fetch_one(&mut *tx).await?;
+    if managed {
+        return Err(ApiError::bad_request(
+            "system-issued identities cannot be edited",
+        ));
+    }
+    if input.archived {
+        let active_ca: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM mtls_node_trust WHERE ca_id=$1 AND (desired OR deployed) UNION ALL SELECT 1 FROM mtls_user_identities WHERE ca_id=$1 AND NOT archived UNION ALL SELECT 1 FROM mtls_rotations WHERE ca_id=$1 AND phase<>'complete' UNION ALL SELECT 1 FROM mtls_live_activation_trust WHERE ca_id=$1)").bind(&id).fetch_one(&mut *tx).await?;
+        if active_ca {
+            return Err(ApiError::conflict("CA identity is in use"));
+        }
+    }
     let rows = sqlx::query("UPDATE credentials SET name=$1,archived=$2,reminder_at=$3,revision=revision+1,updated_at=$4 WHERE id=$5 AND revision=$6").bind(name).bind(input.archived).bind(input.reminder_at).bind(Utc::now()).bind(&id).bind(input.expected_revision).execute(&mut *tx).await?;
     if rows.rows_affected() != 1 {
         return Err(ApiError::conflict(
@@ -397,6 +419,17 @@ pub async fn publish(
         return Err(ApiError::conflict("credential changed or is archived"));
     }
     let kind: String = row.get("kind");
+    if kind == "ca_identity" {
+        return Err(ApiError::bad_request(
+            "CA versions require managed rotation",
+        ));
+    }
+    let managed: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM credential_versions WHERE credential_id=$1 AND metadata->>'managed'='true' UNION ALL SELECT 1 FROM credentials WHERE id=$1 AND owner_user_id IS NOT NULL)").bind(&id).fetch_one(&mut *tx).await?;
+    if managed {
+        return Err(ApiError::bad_request(
+            "system-issued identities cannot be edited",
+        ));
+    }
     let metadata = vault::validate_payload(&kind, &input.payload).map_err(invalid)?;
     if kind == "dns" {
         let prior: Value = sqlx::query_scalar(
@@ -480,14 +513,6 @@ pub async fn publish(
             .await?;
         count += 1;
     }
-    let assignments = sqlx::query("SELECT a.node_id,a.user_id,u.revision FROM node_assignments a JOIN users u ON u.id=a.user_id WHERE a.mtls_credential_id=$1 ORDER BY a.user_id,a.node_id").bind(&id).fetch_all(&mut *tx).await?;
-    for a in assignments {
-        let node: String = a.get("node_id");
-        let user: String = a.get("user_id");
-        let job = enqueue_job_with_payload_in_tx(&mut tx,"credential-apply",Some(&node),None,json!({"batch_id":batch,"credential_id":id,"version":version,"mode":"mtls","user_id":user})).await?;
-        sqlx::query("INSERT INTO credential_batch_items(batch_id,node_id,user_id,expected_revision,job_id) VALUES($1,$2,$3,$4,$5)").bind(&batch).bind(node).bind(user).bind(a.get::<i64,_>("revision")).bind(job).execute(&mut *tx).await?;
-        count += 1;
-    }
     record(
         &mut tx,
         &actor,
@@ -557,7 +582,6 @@ async fn read_references_on(
         else { reference["name"]=json!(row.get::<String,_>("name")); }
         out.push(reference);
     }
-    for row in sqlx::query("SELECT user_id,node_id,mtls_credential_version FROM node_assignments WHERE mtls_credential_id=$1").bind(id).fetch_all(&mut *connection).await? { out.push(json!({"entity_type":"user","entity_id":row.get::<String,_>("user_id"),"node_id":row.get::<String,_>("node_id"),"source":"mtls","version":row.get::<i64,_>("mtls_credential_version")})); }
     for row in
         sqlx::query("SELECT DISTINCT b.id,b.version FROM credential_batches b JOIN credential_batch_items i ON i.batch_id=b.id JOIN jobs j ON j.id=i.job_id WHERE b.credential_id=$1 AND j.status IN ('queued','running')")
             .bind(id)
@@ -565,6 +589,39 @@ async fn read_references_on(
             .await?
     {
         out.push(json!({"entity_type":"batch","entity_id":row.get::<String,_>("id"),"source":"batch","version":row.get::<i64,_>("version")}));
+    }
+    for row in sqlx::query("SELECT i.id,i.user_id,i.ca_id,v.credential_version,v.ca_version FROM mtls_user_identities i LEFT JOIN mtls_user_versions v ON v.identity_id=i.id WHERE i.ca_id=$1 OR i.credential_id=$1 ORDER BY i.id,v.credential_version").bind(id).fetch_all(&mut *connection).await? {
+        out.push(json!({"entity_type":"user","entity_id":row.get::<String,_>("user_id"),"source":"managed_identity","identity_id":row.get::<String,_>("id"),"ca_id":row.get::<String,_>("ca_id"),"version":row.get::<Option<i64>,_>("credential_version"),"ca_version":row.get::<Option<i64>,_>("ca_version")}));
+    }
+    for row in sqlx::query("SELECT node_id,ca_version,desired,deployed FROM mtls_node_trust WHERE ca_id=$1 ORDER BY node_id,ca_version").bind(id).fetch_all(&mut *connection).await? {
+        out.push(json!({"entity_type":"node","entity_id":row.get::<String,_>("node_id"),"source":"managed_trust","version":row.get::<i64,_>("ca_version"),"desired":row.get::<bool,_>("desired"),"deployed":row.get::<bool,_>("deployed")}));
+    }
+    for row in sqlx::query("SELECT node_id,credential_version,ca_version FROM mtls_probe_versions WHERE ca_id=$1 OR credential_id=$1 ORDER BY node_id,credential_version").bind(id).fetch_all(&mut *connection).await? {
+        out.push(json!({"entity_type":"node","entity_id":row.get::<String,_>("node_id"),"source":"managed_probe","version":row.get::<i64,_>("credential_version"),"ca_version":row.get::<i64,_>("ca_version")}));
+    }
+    for row in sqlx::query(
+        "SELECT id,ca_version,phase FROM mtls_rotations WHERE ca_id=$1 AND phase<>'complete'",
+    )
+    .bind(id)
+    .fetch_all(&mut *connection)
+    .await?
+    {
+        out.push(json!({"entity_type":"rotation","entity_id":row.get::<String,_>("id"),"source":"managed_rotation","version":row.get::<i64,_>("ca_version"),"phase":row.get::<String,_>("phase")}));
+    }
+    for row in sqlx::query(
+        "SELECT ca_version FROM mtls_trust_cleanup WHERE ca_id=$1 AND completed_at IS NULL",
+    )
+    .bind(id)
+    .fetch_all(&mut *connection)
+    .await?
+    {
+        out.push(json!({"entity_type":"ca_cleanup","entity_id":id,"source":"managed_cleanup","version":row.get::<i64,_>("ca_version")}));
+    }
+    for row in sqlx::query("SELECT a.id,a.node_id,a.target_revision,a.phase,t.ca_version FROM mtls_activation_trust t JOIN mtls_activations a ON a.id=t.activation_id WHERE t.ca_id=$1").bind(id).fetch_all(&mut *connection).await? {
+        out.push(json!({"entity_type":"activation","entity_id":row.get::<String,_>("id"),"node_id":row.get::<String,_>("node_id"),"source":"managed_activation","version":row.get::<i64,_>("ca_version"),"config_revision":row.get::<i64,_>("target_revision"),"phase":row.get::<String,_>("phase")}));
+    }
+    for row in sqlx::query("SELECT id,node_id,probe_credential_version,phase FROM mtls_activations WHERE probe_credential_id=$1").bind(id).fetch_all(&mut *connection).await? {
+        out.push(json!({"entity_type":"activation","entity_id":row.get::<String,_>("id"),"node_id":row.get::<String,_>("node_id"),"source":"managed_activation_probe","version":row.get::<i64,_>("probe_credential_version"),"phase":row.get::<String,_>("phase")}));
     }
     Ok(out)
 }
@@ -587,7 +644,23 @@ pub async fn delete(
     }
     // Terminal batch metadata can be removed once no business/history or active
     // task references remain; the jobs and audit log still retain their IDs.
+    sqlx::query("DELETE FROM mtls_rotations WHERE ca_id=$1 AND phase='complete'")
+        .bind(&id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM mtls_trust_cleanup WHERE ca_id=$1 AND completed_at IS NOT NULL")
+        .bind(&id)
+        .execute(&mut *tx)
+        .await?;
     sqlx::query("DELETE FROM credential_batches WHERE credential_id=$1")
+        .bind(&id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM mtls_ca_generations WHERE ca_id=$1")
+        .bind(&id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM mtls_authorities WHERE credential_id=$1")
         .bind(&id)
         .execute(&mut *tx)
         .await?;
@@ -621,6 +694,14 @@ async fn batch_values_on(
         .await?;
     let items=sqlx::query("SELECT i.batch_id,i.node_id,i.user_id,i.job_id,j.status,j.stage,j.error_message,n.name FROM credential_batch_items i JOIN jobs j ON j.id=i.job_id LEFT JOIN nodes n ON n.id=i.node_id WHERE i.batch_id=ANY($1) ORDER BY i.node_id,i.user_id").bind(ids).fetch_all(&mut *connection).await?;
     let dns=sqlx::query("SELECT i.batch_id,i.connection_id,i.job_id,c.name,j.status,j.stage,j.error_message FROM dns_credential_batch_items i JOIN dns_connections c ON c.id=i.connection_id JOIN jobs j ON j.id=i.job_id WHERE i.batch_id=ANY($1) ORDER BY c.name").bind(ids).fetch_all(&mut *connection).await?;
+    let rotations=sqlx::query("SELECT r.id,r.batch_id,r.ca_version,r.phase,r.outcome,r.published_at,r.error_message,r.next_action_at,coalesce(jsonb_agg(jsonb_build_object('node_id',p.node_id,'name',n.name,'trust_prepared',p.trust_prepared,'probe_switched',p.probe_switched,'job_id',p.job_id,'error_message',coalesce(p.error_message,j.error_message),'status',j.status,'stage',j.stage) ORDER BY p.node_id) FILTER(WHERE p.node_id IS NOT NULL),'[]'::jsonb) AS nodes FROM mtls_rotations r LEFT JOIN mtls_rotation_nodes p ON p.rotation_id=r.id LEFT JOIN nodes n ON n.id=p.node_id LEFT JOIN jobs j ON j.id=p.job_id WHERE r.batch_id=ANY($1) GROUP BY r.id").bind(ids).fetch_all(&mut *connection).await?;
+    let mut rotation_map = std::collections::BTreeMap::<String, Value>::new();
+    for row in rotations {
+        let rotation_status =
+            crate::credentials::rotations::status_on(connection, &row.get::<String, _>("id"))
+                .await?;
+        rotation_map.insert(row.get("batch_id"),json!({"id":row.get::<String,_>("id"),"version":row.get::<i64,_>("ca_version"),"phase":row.get::<String,_>("phase"),"error_message":row.get::<Option<String>,_>("error_message"),"next_action_at":row.get::<DateTime<Utc>,_>("next_action_at"),"nodes":row.get::<Value,_>("nodes"),"status":rotation_status,"outcome":row.get::<Option<String>,_>("outcome"),"published_at":row.get::<Option<DateTime<Utc>>,_>("published_at")}));
+    }
     let mut item_map = std::collections::BTreeMap::<String, Vec<Value>>::new();
     let mut dns_map = std::collections::BTreeMap::<String, Vec<Value>>::new();
     for row in items {
@@ -636,7 +717,11 @@ async fn batch_values_on(
         let id: String = row.get("id");
         let items = item_map.remove(&id).unwrap_or_default();
         let dns = dns_map.remove(&id).unwrap_or_default();
-        values.insert(id.clone(),json!({"id":id,"credential_id":row.get::<String,_>("credential_id"),"version":row.get::<i64,_>("version"),"created_at":row.get::<DateTime<Utc>,_>("created_at"),"items":items,"dns_items":dns}));
+        let mut value = json!({"id":id,"credential_id":row.get::<String,_>("credential_id"),"version":row.get::<i64,_>("version"),"created_at":row.get::<DateTime<Utc>,_>("created_at"),"items":items,"dns_items":dns});
+        if let Some(rotation) = rotation_map.remove(&id) {
+            value["ca_rotation"] = rotation;
+        }
+        values.insert(id, value);
     }
     ids.iter()
         .map(|id| {
@@ -670,6 +755,30 @@ pub async fn retry(
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
     let mut tx = db::begin_write(&state.pool).await?;
     let batch=sqlx::query("SELECT b.*,c.latest_version,c.archived FROM credential_batches b JOIN credentials c ON c.id=b.credential_id WHERE b.id=$1").bind(&id).fetch_optional(&mut *tx).await?.ok_or_else(||ApiError::not_found("credential batch"))?;
+    if let Some(rotation) =
+        sqlx::query("SELECT id,phase,outcome FROM mtls_rotations WHERE batch_id=$1")
+            .bind(&id)
+            .fetch_optional(&mut *tx)
+            .await?
+    {
+        if batch.get::<bool, _>("archived") {
+            return Err(ApiError::conflict("CA identity is archived"));
+        }
+        if rotation.get::<Option<String>, _>("outcome").is_some() {
+            return Err(ApiError::conflict(
+                "this CA target was superseded; open the current batch",
+            ));
+        }
+        let rotation_id: String = rotation.get("id");
+        sqlx::query("UPDATE mtls_rotations SET retry_requested=TRUE,next_action_at=$2,error_message=NULL WHERE id=$1 AND phase<>'complete'").bind(&rotation_id).bind(Utc::now()).execute(&mut *tx).await?;
+        let count=sqlx::query("UPDATE mtls_rotation_nodes p SET job_id=NULL,error_message=NULL FROM jobs j WHERE p.rotation_id=$1 AND p.job_id=j.id AND j.status IN ('failed','rolled_back','cancelled')").bind(&rotation_id).execute(&mut *tx).await?.rows_affected();
+        record(&mut tx,&actor,"ca.rotation_retried",&batch.get::<String,_>("credential_id"),json!({"rotation_id":rotation_id,"version":batch.get::<i64,_>("version"),"affected_count":count})).await?;
+        tx.commit().await?;
+        return Ok((
+            StatusCode::ACCEPTED,
+            Json(json!({"batch_id":id,"affected_count":count})),
+        ));
+    }
     if batch.get::<bool, _>("archived")
         || batch.get::<i64, _>("version") != batch.get::<i64, _>("latest_version")
     {
@@ -684,9 +793,12 @@ pub async fn retry(
         let user: String = item.get("user_id");
         let credential: String = batch.get("credential_id");
         let current=sqlx::query("SELECT desired_revision,ssh_credential_id,desired_config_enc FROM nodes WHERE id=$1 AND state NOT IN ('deleting','delete_failed')").bind(&node).fetch_optional(&mut *tx).await?.ok_or_else(||ApiError::conflict("referenced node was deleted"))?;
-        let mode = if !user.is_empty() {
-            "mtls"
-        } else if current
+        if !user.is_empty() {
+            return Err(ApiError::conflict(
+                "legacy per-node certificate batches cannot be retried",
+            ));
+        }
+        let mode = if current
             .get::<Option<String>, _>("ssh_credential_id")
             .as_deref()
             == Some(&credential)
@@ -695,14 +807,7 @@ pub async fn retry(
         } else {
             "config"
         };
-        let revision = if mode == "mtls" {
-            sqlx::query_scalar::<_, i64>("SELECT revision FROM users WHERE id=$1")
-                .bind(&user)
-                .fetch_one(&mut *tx)
-                .await?
-        } else {
-            current.get("desired_revision")
-        };
+        let revision: i64 = current.get("desired_revision");
         let payload = json!({"batch_id":id,"credential_id":credential,"version":batch.get::<i64,_>("version"),"mode":mode,"user_id":user});
         let job =
             enqueue_job_with_payload_in_tx(&mut tx, "credential-apply", Some(&node), None, payload)
@@ -736,7 +841,7 @@ pub async fn retry(
     ))
 }
 
-async fn record(
+pub(super) async fn record(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     actor: &AdminActor,
     action: &str,

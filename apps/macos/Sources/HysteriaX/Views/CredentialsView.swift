@@ -4,11 +4,16 @@ struct CredentialsView: View {
     @Bindable var store: ManagementStore
     var onJump: (String, String) -> Void
     @State private var selection: String?
+    @State private var pendingCreatedCA: String?
     @State private var search = ""
     @State private var type = ""
     @State private var category = CredentialCategory.operations
+    @State private var showInternalProbes = false
     @State private var detail: CredentialDetail?
     @State private var creating = false
+    @State private var creatingCA = false
+    @State private var publishingCA: CredentialDetail?
+    @State private var editingCAPolicy: CredentialDetail?
     @State private var replacing: CredentialDetail?
     @State private var editing: CredentialDetail?
     @State private var error: String?
@@ -32,7 +37,7 @@ struct CredentialsView: View {
         }
     }
     private var sortDirection: String { sortOrder.first?.order == .reverse ? "desc" : "asc" }
-    private var pageKey: String { store.listPageKey([String(page), String(pageSize), category.apiValue, type, query, sortField, sortDirection]) }
+    private var pageKey: String { store.listPageKey([String(page), String(pageSize), category.apiValue, String(showInternalProbes), type, query, sortField, sortDirection]) }
     private var pageRequestKey: String { "\(pageKey)|\(store.isConnected)|\(store.dataRefreshToken)|\(retryPageToken)" }
     private var currentPageResponse: CredentialsPage? { store.cachedListPage(pageKey, as: CredentialsPage.self) ?? (loadedPageKey == pageKey ? pageResponse : nil) }
     private var totalEntries: Int { store.isConnected ? (currentPageResponse?.total ?? 0) : snapshotEntries.count }
@@ -45,7 +50,7 @@ struct CredentialsView: View {
     }
     private var snapshotEntries: [CredentialSummary] {
         categoryEntries.filter {
-            (type.isEmpty || $0.kind == type) && (query.isEmpty || $0.name.localizedCaseInsensitiveContains(query))
+            (showInternalProbes || $0.metadata["internal_probe"]?.boolValue != true) && (type.isEmpty || $0.kind == type) && (query.isEmpty || $0.name.localizedCaseInsensitiveContains(query))
         }.sorted(using: sortOrder)
     }
     private var entries: [CredentialSummary] {
@@ -58,14 +63,16 @@ struct CredentialsView: View {
         credentialContent
         .searchable(text: $search, placement: .toolbar, prompt: L10n.text("搜索凭据"))
         .onChange(of: category) { _, _ in
-            type = ""
+            if pendingCreatedCA == nil { type = "" }
             resetPage()
         }
         .onChange(of: search) { _, _ in resetPage() }
+        .onChange(of: showInternalProbes) { _, _ in resetPage() }
         .onChange(of: type) { _, _ in resetPage() }
         .onChange(of: sortOrder) { _, _ in resetPage() }
         .onChange(of: pageSize) { _, _ in resetPage() }
         .onChange(of: store.serviceAddress) { _, _ in
+            pendingCreatedCA = nil
             type = ""
             resetPage()
             pageResponse = nil
@@ -85,11 +92,19 @@ struct CredentialsView: View {
             ToolbarItemGroup {
                 Picker(L10n.text("类型"), selection: $type) {
                     Text(L10n.text("全部类型")).tag("")
-                    ForEach(["ssh_private_key", "ssh_password", "tls_identity", "ca_certificate", "ech_key", "dns", "api_token", "admin_token", "subscription_token", "user_credential"], id: \.self) {
+                    ForEach(category.kinds, id: \.self) {
                         Text(CredentialDisplay.kind($0)).tag($0)
                     }
                 }
                 .accessibilityIdentifier("credentials.typeFilter")
+                Menu {
+                    Toggle(L10n.text("显示内部探测凭据"), isOn: $showInternalProbes)
+                        .accessibilityIdentifier("credentials.showInternalProbes")
+                } label: { Label(L10n.text("筛选"), systemImage: "line.3.horizontal.decrease.circle") }
+                    .labelStyle(.iconOnly).accessibilityIdentifier("credentials.filters")
+                Button { creatingCA = true } label: { Label(L10n.text("创建 CA 身份"), systemImage: "plus.shield") }
+                    .labelStyle(.iconOnly).help(L10n.text("创建 CA 身份"))
+                    .disabled(!store.isConnected).accessibilityIdentifier("ca.create")
                 Button { creating = true } label: { Label(L10n.text("创建凭据"), systemImage: "plus") }
                     .disabled(!store.isConnected).keyboardShortcut("n", modifiers: .command)
                     .accessibilityIdentifier("credential.create")
@@ -105,6 +120,14 @@ struct CredentialsView: View {
                 resetPage()
             })
         }
+        .sheet(isPresented: $creatingCA) {
+            CAIdentityEditorView(store: store) { id in
+                pendingCreatedCA = id
+                category = .operations; type = "ca_identity"; search = ""; resetPage()
+            }
+        }
+        .sheet(item: $publishingCA) { CAIdentityEditorView(store: store, detail: $0, operation: .publish) }
+        .sheet(item: $editingCAPolicy) { CAIdentityEditorView(store: store, detail: $0, operation: .policy) }
         .sheet(item: $replacing) { CredentialEditorView(store: store, replacing: $0) }
         .sheet(item: $editing) { CredentialMetadataEditor(store: store, detail: $0) }
         .task(id: detailRequestKey) { await load() }
@@ -200,11 +223,21 @@ struct CredentialsView: View {
         defer { if requestKey == pageRequestKey { isLoadingPage = false } }
         do {
             if !query.isEmpty { try await Task.sleep(for: .milliseconds(250)) }
-            let response = try await store.credentialsPage(page: page, pageSize: pageSize, category: category.apiValue, kind: type, query: query, sort: sortField, order: sortDirection, cacheKey: pageKey, revalidate: loadedPageKey != pageKey)
+            let response = try await store.credentialsPage(page: page, pageSize: pageSize, category: category.apiValue, kind: type, query: query, sort: sortField, order: sortDirection, cacheKey: pageKey, revalidate: loadedPageKey != pageKey, includeInternal: showInternalProbes)
             guard !Task.isCancelled, requestKey == pageRequestKey else { return }
             page = response.page
             pageResponse = response
             loadedPageKey = pageKey
+            if let id = pendingCreatedCA {
+                if response.items.contains(where: { $0.id == id }) {
+                    selection = id
+                    pendingCreatedCA = nil
+                } else if response.page * response.pageSize < response.total {
+                    page = response.page + 1
+                } else {
+                    pendingCreatedCA = nil
+                }
+            }
         } catch {
             guard !Task.isCancelled, !isRequestCancellation(error), requestKey == pageRequestKey else { return }
             pageError = error.localizedDescription
@@ -231,7 +264,7 @@ struct CredentialsView: View {
                         detailMetric(L10n.text("引用明细条数"), value: detail.map { String($0.references.count) } ?? "—")
                             .help(L10n.text("包含当前引用、历史配置和待执行更新批次；同一对象的不同引用位置分别计数。"))
                     }
-                    detailMetric(L10n.text("到期时间"), value: entry.expiresAt.map { DateDisplayText.local($0) } ?? L10n.text("未知"))
+                    detailMetric(entry.kind == "ca_identity" ? L10n.text("当前发布 CA 到期") : L10n.text("到期时间"), value: entry.expiresAt.map { DateDisplayText.local($0) } ?? L10n.text("未知"))
                     if let userID = entry.ownerUserId {
                         detailMetric(L10n.text("所属用户"), value: store.users.first { $0.id == userID }?.name ?? userID)
                     }
@@ -289,9 +322,16 @@ struct CredentialsView: View {
     @ViewBuilder private var detailActions: some View {
         if let detail, detail.id == selected?.id {
             HStack(spacing: 8) {
-                Button(L10n.text("发布新版本")) { replacing = detail }
-                    .disabled(detail.archived)
+                Button(L10n.text("发布新版本")) {
+                    if detail.kind == "ca_identity" { publishingCA = detail } else { replacing = detail }
+                }
+                    .disabled(detail.archived || detail.metadata["managed"]?.boolValue == true || detail.ownerUserId != nil)
+                if detail.ca != nil {
+                    Button(L10n.text("客户端证书策略")) { editingCAPolicy = detail }
+                        .disabled(detail.archived).accessibilityIdentifier("ca.policy")
+                }
                 Button(L10n.text("编辑信息")) { editing = detail }
+                    .disabled(detail.metadata["managed"]?.boolValue == true || detail.ownerUserId != nil)
                 Button(L10n.text("删除凭据"), role: .destructive) { deleting = true }
                     .foregroundStyle(.red)
                     .disabled(!detail.references.isEmpty)
@@ -360,6 +400,15 @@ private enum CredentialCategory: Hashable {
 
     var apiValue: String { self == .user ? "user" : "operations" }
     var title: String { self == .user ? L10n.text("用户凭据") : L10n.text("运营凭据") }
+
+    var kinds: [String] {
+        switch self {
+        case .operations:
+            ["ssh_private_key", "ssh_password", "tls_identity", "ca_identity", "ca_certificate", "ech_key", "dns", "api_token", "admin_token"]
+        case .user:
+            ["tls_identity", "subscription_token", "user_credential"]
+        }
+    }
 
     func contains(_ entry: CredentialSummary) -> Bool {
         (entry.ownerUserId != nil) == (self == .user)

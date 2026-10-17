@@ -5,6 +5,7 @@ import base64
 import argparse
 import hashlib
 import json
+import yaml
 import os
 import pathlib
 import platform
@@ -18,6 +19,7 @@ import urllib.error
 import urllib.request
 
 from postgres_test import PostgresTestSchema
+from credential_test_fixtures import grant_group
 
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -225,7 +227,7 @@ def main():
                             container,
                             "sh",
                             "-c",
-                            "mkdir -p /run/sshd && chown -R root:root /root/.ssh && chmod 0700 /root/.ssh "
+                            "mkdir -p /run/sshd && chown root:root /run/sshd && chmod 0755 /run/sshd && chown -R root:root /root/.ssh && chmod 0700 /root/.ssh "
                             "&& chmod 0600 /root/.ssh/authorized_keys && ssh-keygen -A "
                             "&& sshd -t && systemctl enable --now ssh.service",
                         ]
@@ -292,7 +294,7 @@ def main():
                         time.sleep(1)
                     raise TimeoutError(f"job {job_id} did not finish")
 
-                def transfer_via_node(node, credential, index, client_binary, target_port):
+                def transfer_via_node(node, credential, index, client_binary, target_port, material=None, expect_rejection=False):
                     socks_port = free_port()
                     client_config = temp / f"matrix-client-{index}.yaml"
                     client_config.write_text(
@@ -301,9 +303,11 @@ def main():
                         "tls:\n"
                         "  sni: matrix.example.test\n"
                         "  insecure: true\n"
-                        "socks5:\n"
-                        f"  listen: 127.0.0.1:{socks_port}\n"
+                        + (f"  clientCertificate: {material[0]}\n  clientKey: {material[1]}\n" if material else "")
+                        + "socks5:\n"
+                        + f"  listen: 127.0.0.1:{socks_port}\n"
                     )
+                    client_config.chmod(0o600)
                     log_file = open(temp / f"matrix-client-{index}.log", "wb")
                     client = subprocess.Popen(
                         [str(client_binary), "--disable-update-check", "client", "-c", str(client_config)],
@@ -314,6 +318,7 @@ def main():
                         ready = False
                         for _ in range(30):
                             if client.poll() is not None:
+                                if expect_rejection and "certificate" in pathlib.Path(log_file.name).read_text(errors="replace").lower(): return 0
                                 raise RuntimeError(f"Hysteria client for {node['name']} exited early")
                             try:
                                 with socket.create_connection(("127.0.0.1", socks_port), timeout=1):
@@ -323,16 +328,21 @@ def main():
                             except OSError:
                                 time.sleep(0.5)
                         if not ready:
+                            if expect_rejection and "certificate" in pathlib.Path(log_file.name).read_text(errors="replace").lower():return 0
                             raise RuntimeError(f"Hysteria client for {node['name']} did not open SOCKS5")
                         output = temp / f"matrix-proxy-{index}.bin"
-                        run(
+                        transferred = run(
                             [
                                 "curl", "--noproxy", "", "--fail", "--silent", "--show-error",
                                 "--max-time", "25", "--socks5-hostname", f"127.0.0.1:{socks_port}",
                                 f"http://host.docker.internal:{target_port}/payload.bin", "-o", str(output),
                             ],
-                            timeout=30,
+                            timeout=30, check=not expect_rejection,
                         )
+                        if expect_rejection:
+                            if transferred.returncode==0 or "certificate" not in pathlib.Path(log_file.name).read_text(errors="replace").lower():
+                                raise RuntimeError("old or outside-issuer certificate was not rejected by TLS")
+                            return 0
                         if output.stat().st_size == 0:
                             raise RuntimeError(f"Hysteria TCP transfer through {node['name']} was empty")
                         return output.stat().st_size
@@ -577,6 +587,21 @@ def main():
                             seen_containers.add(node["container"])
                     if len(distinct_nodes) >= 2:
                         node_one, node_two = distinct_nodes[:2]
+                        authority = expect("/api/v1/credentials/ca-identities","POST",{"name":"Shared matrix CA","source":"generated","idempotency_key":"matrix-shared-ca"},(201,))
+                        ca_id = authority["id"]
+                        def deploy_settings(node,settings):
+                            current = expect(f"/api/v1/nodes/{node['node_id']}")
+                            options = current["config"]
+                            if "clientCA" in options.get("tls",{}):raise RuntimeError("public config contains generated clientCA")
+                            options["mtls"] = settings
+                            update = expect(f"/api/v1/nodes/{node['node_id']}","PATCH",{"expected_revision":current["revision"],"config":options})
+                            node["revision"] = update["revision"]
+                            job = next(j for j in expect("/api/v1/jobs") if j.get("node_id")==node["node_id"] and j.get("target_revision")==node["revision"] and j["kind"]=="sync")
+                            result = wait_job(job["id"])
+                            if result["job"]["status"]!="succeeded":raise RuntimeError("managed matrix deployment failed: "+str(result["job"].get("error_message")))
+                        for node in (node_one,node_two):
+                            deploy_settings(node,{"mode":"managed","ca_credential_id":ca_id,"ca_credential_version":1})
+                        print("Two shared-CA managed nodes deployed with independent probes and no users",flush=True)
                         user_one = expect(
                             "/api/v1/users", "POST", {"name": "Matrix node one only"}, (201,)
                         )["id"]
@@ -588,12 +613,11 @@ def main():
                         )["id"]
 
                         def assign_matrix_user(user_id, node, revision):
-                            return expect(
-                                f"/api/v1/users/{user_id}/assignments",
-                                "POST",
-                                {"expected_revision": revision, "node_id": node["node_id"]},
-                                (201,),
-                            )["hy2_credential"]
+                            current = expect(f"/api/v1/users/{user_id}")
+                            if current["revision"] != revision:
+                                raise RuntimeError("matrix authorization business revision changed")
+                            receipt = grant_group(expect, user_id, [node["node_id"]])
+                            return next(item["hy2_credential"] for item in receipt["created_credentials"] if item["node_id"] == node["node_id"])
 
                         credential_one = assign_matrix_user(user_one, node_one, 1)
                         credential_two = assign_matrix_user(user_two, node_two, 1)
@@ -639,6 +663,18 @@ def main():
                         )
                         if status != 200 or subscription_yaml.count(b"type: hysteria2") != 2:
                             raise RuntimeError("shared-user subscription did not contain both deployed nodes")
+                        proxies = yaml.safe_load(subscription_yaml)["proxies"]
+                        shared_material = (proxies[0]["certificate"],proxies[0]["private-key"])
+                        if any((p["certificate"],p["private-key"])!=shared_material for p in proxies):raise RuntimeError("same user/CA did not share identical PEM across nodes")
+                        def save_material(material,label):
+                            cert_path,key_path=temp/(label+".pem"),temp/(label+"-key.pem")
+                            cert_path.write_text(material[0]);key_path.write_text(material[1]);cert_path.chmod(0o600);key_path.chmod(0o600)
+                            return cert_path,key_path
+                        shared_files = save_material(shared_material,"shared-generation-1")
+                        user_one_sub = expect(f"/api/v1/users/{user_one}/subscription","POST",{"expected_revision":expect(f"/api/v1/users/{user_one}")["revision"]})["token"]
+                        status,one_yaml = request(base,f"/sub/{user_one_sub}/clash.yaml",method="GET")
+                        one_proxy = yaml.safe_load(one_yaml)["proxies"][0]
+                        if one_proxy["certificate"]==shared_material[0] or one_proxy["private-key"]==shared_material[1]:raise RuntimeError("different matrix users share client material")
                         subscription_path = temp / "matrix-shared-subscription.yaml"
                         subscription_path.write_bytes(subscription_yaml)
                         run(
@@ -680,8 +716,8 @@ def main():
 
                         client_binary = temp / "matrix-hysteria-client"
                         download_hysteria_client(client_binary)
-                        first_bytes = transfer_via_node(node_one, shared_one, 1, client_binary, target_port)
-                        second_bytes = transfer_via_node(node_two, shared_two, 2, client_binary, target_port)
+                        first_bytes = transfer_via_node(node_one, shared_one, 1, client_binary, target_port, shared_files)
+                        second_bytes = transfer_via_node(node_two, shared_two, 2, client_binary, target_port, shared_files)
                         usage = None
                         expected_node_ids = {node_one["node_id"], node_two["node_id"]}
                         for _ in range(35):
@@ -729,7 +765,102 @@ def main():
                             flush=True,
                         )
 
+                        # Restore account access before exercising issuer maintenance.
+                        current_user=expect(f"/api/v1/users/{shared_user}")
+                        expect(f"/api/v1/users/{shared_user}","PATCH",{"expected_revision":current_user["revision"],"quota_bytes":None})
+                        revisions={u:expect(f"/api/v1/users/{u}")["revision"] for u in (user_one,user_two,shared_user)}
+                        def shared_proxies():
+                            status,body=request(base,f"/sub/{subscription_token}/clash.yaml",method="GET")
+                            if status!=200:raise RuntimeError("matrix managed subscription unavailable")
+                            return yaml.safe_load(body)["proxies"]
+                        def wait_rotation(receipt):
+                            previous=None; deadline=time.monotonic()+360
+                            while time.monotonic()<deadline:
+                                batch=expect(f"/api/v1/credential-batches/{receipt['batch_id']}")
+                                rotation=batch["ca_rotation"]
+                                if rotation["phase"]!=previous:
+                                    print(f"Matrix CA v{receipt['version']}: {rotation['phase']}",flush=True);previous=rotation["phase"]
+                                if rotation["phase"]=="complete":return rotation
+                                if any(n.get("status") in ("failed","rolled_back","cancelled") for n in rotation["nodes"]):
+                                    raise RuntimeError("matrix CA node task failed: "+json.dumps(rotation))
+                                time.sleep(1)
+                            raise RuntimeError("matrix CA rotation timed out: "+json.dumps(rotation))
+                        run(["docker","exec",node_two["container"],"systemctl","stop","ssh.service"])
+                        try:
+                            receipt=expect(f"/api/v1/credentials/{ca_id}/ca-versions","POST",{"expected_revision":1,"idempotency_key":"matrix-ca-two"},(202,))
+                            deadline=time.monotonic()+240
+                            while time.monotonic()<deadline:
+                                rotation=expect(f"/api/v1/credential-batches/{receipt['batch_id']}")["ca_rotation"]
+                                first=next(n for n in rotation["nodes"] if n["node_id"]==node_one["node_id"])
+                                second=next(n for n in rotation["nodes"] if n["node_id"]==node_two["node_id"])
+                                if first["trust_prepared"] and second.get("status")=="failed":break
+                                time.sleep(1)
+                            else:raise RuntimeError("offline-node trust barrier did not become observable")
+                            first_job=first["job_id"]
+                            if expect(f"/api/v1/credentials/{ca_id}")["ca"]["published_version"]!=1:raise RuntimeError("offline node was ignored by CA publication")
+                            if any((p["certificate"],p["private-key"])!=shared_material for p in shared_proxies()):raise RuntimeError("unprepared generation escaped into subscriptions")
+                            transfer_via_node(node_one,shared_one,"partial-trust",client_binary,target_port,shared_files)
+                            print("Offline node blocked shared publication; prepared peer retained old-client traffic",flush=True)
+                        finally:run(["docker","exec",node_two["container"],"systemctl","start","ssh.service"])
+                        expect(f"/api/v1/credential-batches/{receipt['batch_id']}/retry","POST",{})
+                        rotation=wait_rotation(receipt)
+                        if next(n for n in rotation["nodes"] if n["node_id"]==node_one["node_id"])["job_id"]!=first_job:raise RuntimeError("retry redeployed an already prepared peer")
+                        receipt=expect(f"/api/v1/credentials/{ca_id}/ca-versions","POST",{"expected_revision":2,"idempotency_key":"matrix-ca-three"},(202,))
+                        wait_rotation(receipt)
+                        latest=shared_proxies(); current_material=(latest[0]["certificate"],latest[0]["private-key"])
+                        if any((p["certificate"],p["private-key"])!=current_material for p in latest):raise RuntimeError("shared publication diverged across nodes")
+                        current_files=save_material(current_material,"shared-generation-3")
+                        for index,(node,password) in enumerate(((node_one,shared_one),(node_two,shared_two))):
+                            transfer_via_node(node,password,f"generation-3-{index}",client_binary,target_port,current_files)
+                            transfer_via_node(node,password,f"history-1-{index}",client_binary,target_port,shared_files)
+                        if any(expect(f"/api/v1/users/{u}")["revision"]!=revision for u,revision in revisions.items()):raise RuntimeError("CA maintenance changed business user revision")
+                        # Explicit database time fault: exercise real cleanup deployment,
+                        # while generation 2's still-valid history must remain trusted.
+                        with database.connect() as connection:
+                            connection.execute("UPDATE mtls_user_versions SET not_before=now()-interval '2 days',expires_at=now()-interval '6 minutes' WHERE ca_id=%s AND ca_version=1",(ca_id,))
+                            connection.execute("UPDATE mtls_probe_versions SET expires_at=now()-interval '6 minutes' WHERE ca_id=%s AND ca_version=1",(ca_id,))
+                            connection.execute("UPDATE mtls_trust_cleanup SET next_action_at=now() WHERE ca_id=%s AND ca_version=1",(ca_id,))
+                        deadline=time.monotonic()+360
+                        while time.monotonic()<deadline:
+                            cleanup=next(c for c in expect(f"/api/v1/credentials/{ca_id}")["ca"]["cleanup"] if c["version"]==1)
+                            if cleanup["completed_at"] is not None:break
+                            if any(n.get("status")=="failed" for n in cleanup["nodes"]):raise RuntimeError("matrix old trust cleanup failed: "+json.dumps(cleanup))
+                            time.sleep(1)
+                        else:raise RuntimeError("matrix old trust cleanup timed out")
+                        with database.connect() as connection:
+                            for node in (node_one,node_two):
+                                versions=[r[0] for r in connection.execute("SELECT ca_version FROM mtls_node_trust WHERE node_id=%s AND ca_id=%s AND deployed ORDER BY ca_version",(node["node_id"],ca_id))]
+                                if versions!=[2,3]:raise RuntimeError("cleanup overwrote newer trust")
+                        transfer_via_node(node_one,shared_one,"cleaned-current",client_binary,target_port,current_files)
+                        transfer_via_node(node_one,shared_one,"cleaned-old-rejected",client_binary,target_port,shared_files,True)
+                        # Select an intermediate CA as a different identity. Its root
+                        # proves import validity but must not become a node trust anchor.
+                        root_key,root_cert=temp/"parent-key.pem",temp/"parent.pem"
+                        int_key,int_csr,int_cert=temp/"issuer-key.pem",temp/"issuer.csr",temp/"issuer.pem"
+                        run(["openssl","req","-x509","-newkey","ec","-pkeyopt","ec_paramgen_curve:P-256","-nodes","-keyout",str(root_key),"-out",str(root_cert),"-days","3650","-subj","/CN=Matrix parent CA","-addext","basicConstraints=critical,CA:TRUE,pathlen:1","-addext","keyUsage=critical,keyCertSign,cRLSign"])
+                        run(["openssl","req","-newkey","ec","-pkeyopt","ec_paramgen_curve:P-256","-nodes","-keyout",str(int_key),"-out",str(int_csr),"-subj","/CN=Matrix selected issuer"])
+                        extensions=temp/"issuer.ext";extensions.write_text("basicConstraints=critical,CA:TRUE,pathlen:0\nkeyUsage=critical,keyCertSign,cRLSign\n")
+                        run(["openssl","x509","-req","-in",str(int_csr),"-CA",str(root_cert),"-CAkey",str(root_key),"-CAcreateserial","-out",str(int_cert),"-days","365","-extfile",str(extensions)])
+                        other=expect("/api/v1/credentials/ca-identities","POST",{"name":"Selected intermediate matrix CA","source":"imported","certificate":int_cert.read_text()+root_cert.read_text(),"private_key":int_key.read_text(),"idempotency_key":"matrix-intermediate"},(201,))
+                        deploy_settings(node_one,{"mode":"managed","ca_credential_id":other["id"],"ca_credential_version":1})
+                        switched=shared_proxies(); switched_proxy=next(p for p in switched if p["port"]==node_one["hy2_port"])
+                        switched_material=(switched_proxy["certificate"],switched_proxy["private-key"])
+                        if switched_material==current_material:raise RuntimeError("different CA identities share client material")
+                        switched_files=save_material(switched_material,"selected-intermediate")
+                        transfer_via_node(node_one,shared_one,"intermediate-current",client_binary,target_port,switched_files)
+                        transfer_via_node(node_one,shared_one,"old-domain-rejected",client_binary,target_port,current_files,True)
+                        remote_config=yaml.safe_load(run(["docker","exec",node_one["container"],"cat","/etc/hysteriax/config.yaml"]).stdout)
+                        anchors=run(["docker","exec",node_one["container"],"cat",remote_config["tls"]["clientCA"]]).stdout
+                        if anchors.strip()!=int_cert.read_text().strip() or root_cert.read_text().strip() in anchors:raise RuntimeError("ancestor root was added to selected issuer trust")
+                        outsider_key,outsider_csr,outsider_cert=temp/"outsider-key.pem",temp/"outsider.csr",temp/"outsider.pem"
+                        run(["openssl","req","-newkey","ec","-pkeyopt","ec_paramgen_curve:P-256","-nodes","-keyout",str(outsider_key),"-out",str(outsider_csr),"-subj","/CN=Root-signed outside issuer"])
+                        extensions.write_text("basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature\nextendedKeyUsage=clientAuth\n")
+                        run(["openssl","x509","-req","-in",str(outsider_csr),"-CA",str(root_cert),"-CAkey",str(root_key),"-CAcreateserial","-out",str(outsider_cert),"-days","7","-extfile",str(extensions)])
+                        transfer_via_node(node_one,shared_one,"ancestor-outside-rejected",client_binary,target_port,(outsider_cert,outsider_key),True)
+                        print("Shared CA, offline barrier/retry, consecutive publication, real cleanup with metadata time fault, separate CA and selected-intermediate trust boundary passed",flush=True)
+
                     for node in matrix_nodes:
+                        node["revision"] = expect(f"/api/v1/nodes/{node['node_id']}")["revision"]
                         deletion = expect(
                             f"/api/v1/nodes/{node['node_id']}?expected_revision={node['revision']}",
                             "DELETE",

@@ -14,6 +14,7 @@ import urllib.error
 import urllib.request
 
 from postgres_test import PostgresTestSchema
+from credential_test_fixtures import request_group
 from subscription_formats_test import run as verify_formats
 
 
@@ -84,22 +85,10 @@ def main():
             if not ready:
                 raise RuntimeError("temporary HysteriaX service did not become ready")
 
-            client_certificate = temp / "client-certificate.pem"
-            client_private_key = temp / "client-private-key.pem"
-            subprocess.run(
-                [
-                    "openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
-                    "-keyout", str(client_private_key), "-out", str(client_certificate),
-                    "-days", "2", "-subj", "/CN=Mihomo mTLS fixture",
-                    "-addext", "extendedKeyUsage=clientAuth",
-                ],
-                check=True,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-
             fixture_identity = json.loads(request(base, "/api/v1/credentials", admin, "POST", {"name":"Parser TLS","kind":"tls_identity","payload":{"certificate":(ROOT / "tests/fixtures/credentials-test.crt").read_text(),"private_key":(ROOT / "tests/fixtures/credentials-test.key").read_text()}})[1])["id"]
-            fixture_ca = json.loads(request(base, "/api/v1/credentials", admin, "POST", {"name":"Parser CA","kind":"ca_certificate","payload":{"content":(ROOT / "tests/fixtures/credentials-test.crt").read_text()}})[1])["id"]
+            status,body=request(base,"/api/v1/credentials/ca-identities",admin,"POST",{"name":"Parser managed CA","source":"generated","idempotency_key":"parser-ca"})
+            if status!=201:raise RuntimeError("managed CA fixture creation failed")
+            fixture_ca=json.loads(body)["id"]
             status, body = request(
                 base,
                 "/api/v1/nodes",
@@ -117,10 +106,10 @@ def main():
                     "listen_addr": ":443,445-446",
                     "tls_sni": "example.com",
                     "config": {
+                        "mtls":{"mode":"managed","ca_credential_id":fixture_ca,"ca_credential_version":1},
                         "tls": {
                             "cert": f"credential://{fixture_identity}/1/certificate",
                             "key": f"credential://{fixture_identity}/1/private_key",
-                            "clientCA": f"credential://{fixture_ca}/1/content",
                         },
                         "obfs": {
                             "type": "gecko",
@@ -218,29 +207,9 @@ def main():
             if status != 201:
                 raise RuntimeError("could not create user fixture")
             user_id = json.loads(body)["id"]
-            status, _ = request(
-                base,
-                f"/api/v1/users/{user_id}/assignments",
-                admin,
-                "POST",
-                {
-                    "expected_revision": 1,
-                    "node_id": node_id,
-                    "client_certificate": client_certificate.read_text(),
-                    "client_private_key": client_private_key.read_text(),
-                },
-            )
-            if status != 201:
-                raise RuntimeError("could not assign the parser fixture user")
-            status, _ = request(
-                base,
-                f"/api/v1/users/{user_id}/assignments",
-                admin,
-                "POST",
-                {"expected_revision": 2, "node_id": realm_node_id},
-            )
-            if status != 201:
-                raise RuntimeError("could not assign the Realm parser fixture node")
+            for authorized_node in (node_id,realm_node_id):
+                status,_=request_group(raw_request,base,admin,[user_id],[authorized_node])
+                if status!=201:raise RuntimeError("group authorization of parser fixture failed")
             status, body = request(
                 base,
                 f"/api/v1/users/{user_id}/subscription",
@@ -299,6 +268,7 @@ def main():
                     "WHERE id IN (%s, %s)",
                     (node_id, realm_node_id),
                 )
+                connection.execute("UPDATE mtls_node_trust SET deployed=TRUE WHERE node_id=%s AND ca_id=%s AND ca_version=1",(node_id,fixture_ca))
 
             status, config = request(
                 base, f"/sub/{subscription}/clash.yaml", admin, method="GET"

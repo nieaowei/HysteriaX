@@ -48,11 +48,10 @@ def main():
             assert code == status, f"{method} {path}: expected {status}, got {code}: {body[:250]!r}"
             return json.loads(body) if body else None
 
-        def group(name, users, nodes, bindings=None):
-            draft = {"action": "create", "name": name, "user_ids": users, "node_ids": nodes,
-                     "mtls_bindings": bindings or []}
+        def group(name, users, nodes):
+            draft = {"action": "create", "name": name, "user_ids": users, "node_ids": nodes}
             preview = expect("/api/v1/authorization-groups/preview", "POST", draft)
-            assert not preview["missing_mtls"]
+            assert "missing_mtls" not in preview
             draft.pop("action")
             draft["preview_token"] = preview["preview_token"]
             return expect("/api/v1/authorization-groups", "POST", draft, 201)
@@ -146,37 +145,33 @@ def main():
             private_key = (ROOT / "tests/fixtures/credentials-test.key").read_text()
             identity = expect("/api/v1/credentials", "POST", {"name": "Server identity", "kind": "tls_identity",
                 "payload": {"certificate": certificate, "private_key": private_key}}, 201)
-            ca = expect("/api/v1/credentials", "POST", {"name": "Client CA", "kind": "ca_certificate",
-                "payload": {"content": certificate}}, 201)
+            ca = expect("/api/v1/credentials/ca-identities", "POST", {"name": "Shared client CA", "source":"generated", "idempotency_key":"group-live-ca"}, 201)
             prefix = f"credential://{identity['id']}/{identity['version']}/"
             mtls_node = expect("/api/v1/nodes", "POST", {"name": "mTLS group node", "ssh_host": "127.0.0.1",
                 "ssh_port": 22, "ssh_username": "root", "ssh_auth_type": "password", "ssh_secret": "fixture",
                 "public_host": "mtls.example.test", "public_port": 443, "listen_addr": ":443", "config": {"tls": {
-                    "cert": prefix + "certificate", "key": prefix + "private_key",
-                    "clientCA": f"credential://{ca['id']}/{ca['version']}/content"}}}, 201, fixtures=True)["node"]
+                    "cert": prefix + "certificate", "key": prefix + "private_key"}, "mtls":{"mode":"managed","ca_credential_id":ca["id"],"ca_credential_version":1}}}, 201, fixtures=True)["node"]
             assert mtls_node["mtls_required"] is True
             draft = {"action": "create", "name": "mTLS users", "user_ids": users, "node_ids": [mtls_node["id"]]}
             preview = expect("/api/v1/authorization-groups/preview", "POST", draft)
-            assert len(preview["missing_mtls"]) == 2
-            commit = dict(draft, preview_token=preview["preview_token"])
-            commit.pop("action")
-            expect("/api/v1/authorization-groups", "POST", commit, 422)
-            assert expect("/api/v1/users/" + users[1])["assignments"] == []
-            bindings = []
-            for user_id in users:
-                personal = expect("/api/v1/credentials", "POST", {"name": "Personal identity", "kind": "tls_identity",
-                    "owner_user_id": user_id, "payload": {"certificate": certificate, "private_key": private_key}}, 201)
-                bindings.append({"user_id": user_id, "node_id": mtls_node["id"], "credential_id": personal["id"],
-                                 "credential_version": personal["version"]})
-            wrong = [dict(bindings[0], user_id=users[1]), bindings[0]]
-            invalid = dict(draft, mtls_bindings=wrong)
+            assert preview["automatic_issue_count"] == 2 and preview["pending_issue_count"] == 0
+            invalid = dict(draft, mtls_bindings=[])
             code, _ = raw_request(base, "/api/v1/authorization-groups/preview", admin, "POST", invalid)
             assert 400 <= code < 500
-            result = group("mTLS complete", users, [mtls_node["id"]], bindings)
-            assert result["additions_count"] == 2
+            result = group("mTLS complete", users, [mtls_node["id"]])
+            assert result["additions_count"] == 2 and len(result["managed_identities"]) == 2
+            assert all(item["ca_versions"] == [1] and item["affected_node_ids"] == [mtls_node["id"]] for item in result["managed_identities"])
+            actor_id=expect("/api/v1/version")["current_admin_token_id"]
             with db.connect() as connection:
-                actual = connection.execute("SELECT user_id,mtls_credential_id FROM node_assignments WHERE node_id=%s ORDER BY user_id", (mtls_node["id"],)).fetchall()
-            assert dict(actual) == {item["user_id"]: item["credential_id"] for item in bindings}
+                audit=connection.execute("SELECT actor,detail_json FROM audit_records WHERE action='authorization_group.created' AND entity_id=%s",(result["group"]["id"],)).fetchone()
+            assert audit[0] == actor_id and audit[1]["managed_identities"]
+
+            with db.connect() as connection:
+                actual = connection.execute("SELECT user_id,ca_id FROM mtls_user_identities ORDER BY user_id").fetchall()
+            assert dict(actual) == {user_id:ca["id"] for user_id in users}
+            for user_id in users:
+                info=expect("/api/v1/users/"+user_id)
+                assert info["managed_certificates"][0]["ca_credential_id"] == ca["id"]
             # Deleting entities cascades memberships and updates group revisions.
             mtls_group = result["group"]
             bob = expect("/api/v1/users/" + users[1])

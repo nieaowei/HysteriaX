@@ -8,6 +8,7 @@ struct CredentialManagedDetailView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
+            CAIdentityStatusView(detail: detail, onJump: onJump)
             OverviewColumnsLayout(wideColumns: 2, wideMinimum: 576, narrowColumns: 1) {
                 references
                 updates
@@ -60,10 +61,14 @@ struct CredentialManagedDetailView: View {
                         VStack(alignment: .leading, spacing: 4) {
                             if reference.entityType == "batch" {
                                 Text(L10n.text("更新批次"))
-                            } else {
+                            } else if let nodeID = reference.nodeID, reference.entityType == "activation" {
+                                Button(reference.name ?? nodeID) { onJump("node", nodeID) }.buttonStyle(.link)
+                            } else if ["node", "user", "dns_connection", "job", "credential"].contains(reference.entityType) {
                                 Button(reference.name ?? reference.entityID) {
                                     onJump(reference.entityType, reference.entityID)
                                 }.buttonStyle(.link)
+                            } else {
+                                Text(reference.name ?? reference.entityID).textSelection(.enabled)
                             }
                             Text(CredentialDisplay.source(reference.source))
                                 .font(.caption).foregroundStyle(.secondary)
@@ -94,6 +99,9 @@ struct CredentialManagedDetailView: View {
                             Spacer()
                             Text(DateDisplayText.local(batch.createdAt))
                                 .font(.caption).foregroundStyle(.secondary)
+                        }
+                        if let rotation = batch.caRotation {
+                            CARotationBatchView(batch: batch, rotation: rotation, isConnected: isConnected, archived: detail.archived, onJump: onJump, onRetry: onRetry)
                         }
                         ForEach(Array(batch.items.enumerated()), id: \.offset) { _, item in
                             VStack(alignment: .leading, spacing: 4) {

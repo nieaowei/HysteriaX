@@ -13,9 +13,9 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
-import uuid
 
 from postgres_test import PostgresTestSchema
+from credential_test_fixtures import request_group
 
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -116,13 +116,7 @@ def main():
             if status != 201:
                 raise RuntimeError(f"user fixture creation failed: HTTP {status}")
             user_id = json.loads(body)["id"]
-            status, _ = request(
-                base,
-                f"/api/v1/users/{user_id}/assignments",
-                admin,
-                "POST",
-                {"expected_revision": 1, "node_id": node_id},
-            )
+            status, _ = request_group(raw_request,base,admin,[user_id],[node_id])
             if status != 201:
                 raise RuntimeError(f"user assignment failed: HTTP {status}")
 

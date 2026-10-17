@@ -12,14 +12,16 @@ use crate::{db, security::SecretBox};
 
 pub async fn migrate(pool: &PgPool, secrets: &SecretBox) -> Result<()> {
     let mut tx = db::begin_write(pool).await?;
+    super::legacy_reset::reset(&mut tx, secrets).await?;
     let done: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM credential_migrations WHERE name='credentials_v2')",
     )
     .fetch_one(&mut *tx)
     .await?;
     if done {
+        migrate_tls_pairs_on(&mut tx, secrets).await?;
         tx.commit().await?;
-        return migrate_tls_pairs(pool, secrets).await;
+        return Ok(());
     }
 
     let resources = sqlx::query("SELECT * FROM config_resources WHERE resource_kind IN ('certificate','private_key','ech_key')").fetch_all(&mut *tx).await?;
@@ -80,10 +82,8 @@ pub async fn migrate(pool: &PgPool, secrets: &SecretBox) -> Result<()> {
         if let Some(passphrase) = passphrase {
             payload["passphrase"] = json!(passphrase);
         }
-        // Migration preserves existing authentication material, including invalid
-        // credentials a user may already be repairing. New imports are validated.
         let metadata = super::validate_payload(kind, &payload)
-            .unwrap_or_else(|_| json!({"needs_validation":true}));
+            .context("retained SSH credential is invalid")?;
         let id = insert(
             &mut tx,
             secrets,
@@ -162,31 +162,6 @@ pub async fn migrate(pool: &PgPool, secrets: &SecretBox) -> Result<()> {
         .await?;
     for row in assignments {
         secrets.decrypt(&row.get::<String, _>("credential_enc"))?;
-        match (
-            row.get::<Option<String>, _>("client_certificate_enc"),
-            row.get::<Option<String>, _>("client_private_key_enc"),
-        ) {
-            (Some(cert), Some(key)) => {
-                let user: String = row.get("user_id");
-                let node: String = row.get("node_id");
-                let payload = json!({"certificate":secrets.decrypt(&cert)?,"private_key":secrets.decrypt(&key)?});
-                let metadata = super::validate_payload("tls_identity", &payload)?;
-                let id = insert(
-                    &mut tx,
-                    secrets,
-                    &format!("{user} · {node} · mTLS"),
-                    "tls_identity",
-                    Some(&user),
-                    &payload,
-                    &metadata,
-                    &json!({}),
-                )
-                .await?;
-                sqlx::query("UPDATE node_assignments SET mtls_credential_id=$1,mtls_credential_version=1 WHERE user_id=$2 AND node_id=$3").bind(id).bind(user).bind(node).execute(&mut *tx).await?;
-            }
-            (None, None) => (),
-            _ => anyhow::bail!("legacy mTLS credential pair is incomplete"),
-        }
     }
     for cipher in sqlx::query_scalar::<_, String>("SELECT token_enc FROM subscription_credentials")
         .fetch_all(&mut *tx)
@@ -201,8 +176,9 @@ pub async fn migrate(pool: &PgPool, secrets: &SecretBox) -> Result<()> {
         .bind(Utc::now())
         .execute(&mut *tx)
         .await?;
+    migrate_tls_pairs_on(&mut tx, secrets).await?;
     tx.commit().await?;
-    migrate_tls_pairs(pool, secrets).await
+    Ok(())
 }
 
 async fn convert_snapshot(
@@ -298,19 +274,28 @@ async fn convert_config(
 }
 
 /// Consolidate legacy TLS material without deploying or changing business revisions.
+#[cfg(test)]
 pub async fn migrate_tls_pairs(pool: &PgPool, secrets: &SecretBox) -> Result<()> {
     let mut tx = db::begin_write(pool).await?;
+    migrate_tls_pairs_on(&mut tx, secrets).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+async fn migrate_tls_pairs_on(
+    tx: &mut Transaction<'_, Postgres>,
+    secrets: &SecretBox,
+) -> Result<()> {
     let done: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM credential_migrations WHERE name='tls_pairs_v1')",
     )
-    .fetch_one(&mut *tx)
+    .fetch_one(&mut **tx)
     .await?;
     if done {
-        tx.commit().await?;
         return Ok(());
     }
     let active: i64 = sqlx::query_scalar("SELECT count(*) FROM jobs WHERE kind='credential-apply' AND status IN ('queued','running')")
-        .fetch_one(&mut *tx).await?;
+        .fetch_one(&mut **tx).await?;
     anyhow::ensure!(
         active == 0,
         "finish credential application jobs before TLS-pair migration"
@@ -318,7 +303,7 @@ pub async fn migrate_tls_pairs(pool: &PgPool, secrets: &SecretBox) -> Result<()>
     let mut converted = BTreeMap::<String, String>::new();
     let mut current = std::collections::BTreeSet::new();
     for row in sqlx::query("SELECT id,name,desired_config_enc,deployed_config_enc FROM nodes")
-        .fetch_all(&mut *tx)
+        .fetch_all(&mut **tx)
         .await?
     {
         let node: String = row.get("id");
@@ -326,7 +311,7 @@ pub async fn migrate_tls_pairs(pool: &PgPool, secrets: &SecretBox) -> Result<()>
         for field in ["desired_config_enc", "deployed_config_enc"] {
             if let Some(cipher) = row.get::<Option<String>, _>(field) {
                 let mut config: Value = serde_json::from_str(&secrets.decrypt(&cipher)?)?;
-                consolidate_config(&mut tx, secrets, &name, &mut config, &mut converted).await?;
+                consolidate_config(tx, secrets, &name, &mut config, &mut converted).await?;
                 if field == "desired_config_enc" {
                     current.extend(super::references(&config)?.into_iter().map(|(_, r)| r.id));
                 }
@@ -334,13 +319,13 @@ pub async fn migrate_tls_pairs(pool: &PgPool, secrets: &SecretBox) -> Result<()>
                 sqlx::query(&query)
                     .bind(secrets.encrypt(&config.to_string())?)
                     .bind(&node)
-                    .execute(&mut *tx)
+                    .execute(&mut **tx)
                     .await?;
             }
         }
         for version in sqlx::query("SELECT id,config_enc FROM config_versions WHERE node_id=$1")
             .bind(&node)
-            .fetch_all(&mut *tx)
+            .fetch_all(&mut **tx)
             .await?
         {
             let mut value: Value =
@@ -350,13 +335,13 @@ pub async fn migrate_tls_pairs(pool: &PgPool, secrets: &SecretBox) -> Result<()>
             } else {
                 &mut value
             };
-            consolidate_config(&mut tx, secrets, &name, config, &mut converted).await?;
+            consolidate_config(tx, secrets, &name, config, &mut converted).await?;
             let plain = value.to_string();
             sqlx::query("UPDATE config_versions SET config_enc=$1,content_sha256=$2 WHERE id=$3")
                 .bind(secrets.encrypt(&plain)?)
                 .bind(hex::encode(Sha256::digest(plain.as_bytes())))
                 .bind(version.get::<String, _>("id"))
-                .execute(&mut *tx)
+                .execute(&mut **tx)
                 .await?;
         }
     }
@@ -364,30 +349,29 @@ pub async fn migrate_tls_pairs(pool: &PgPool, secrets: &SecretBox) -> Result<()>
         sqlx::query("UPDATE credentials SET archived=$1 WHERE id=$2")
             .bind(!current.contains(id))
             .bind(id)
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await?;
     }
     // The original database backup is the rollback boundary for removed types.
     // Keep unused CA certificates; obsolete standalone private keys are removed.
-    for row in sqlx::query("SELECT c.id,v.payload_enc FROM credentials c JOIN credential_versions v ON v.credential_id=c.id AND v.version=c.latest_version WHERE c.kind='certificate'").fetch_all(&mut *tx).await? {
+    for row in sqlx::query("SELECT c.id,v.payload_enc FROM credentials c JOIN credential_versions v ON v.credential_id=c.id AND v.version=c.latest_version WHERE c.kind='certificate'").fetch_all(&mut **tx).await? {
         let payload: Value = serde_json::from_str(&secrets.decrypt(&row.get::<String,_>("payload_enc"))?)?;
         if super::validate_payload("ca_certificate", &payload).is_ok() {
-            sqlx::query("UPDATE credentials SET kind='ca_certificate' WHERE id=$1").bind(row.get::<String,_>("id")).execute(&mut *tx).await?;
+            sqlx::query("UPDATE credentials SET kind='ca_certificate' WHERE id=$1").bind(row.get::<String,_>("id")).execute(&mut **tx).await?;
         }
     }
-    sqlx::query("DELETE FROM credential_batches WHERE credential_id IN (SELECT id FROM credentials WHERE kind IN ('certificate','private_key'))").execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM credential_batches WHERE credential_id IN (SELECT id FROM credentials WHERE kind IN ('certificate','private_key'))").execute(&mut **tx).await?;
     sqlx::query("DELETE FROM credentials WHERE kind IN ('certificate','private_key')")
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?;
     sqlx::query("ALTER TABLE credentials DROP CONSTRAINT credentials_kind_check")
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?;
-    sqlx::query("ALTER TABLE credentials ADD CONSTRAINT credentials_kind_check CHECK (kind IN ('ssh_private_key','ssh_password','tls_identity','ca_certificate','ech_key','dns','api_token'))").execute(&mut *tx).await?;
+    sqlx::query("ALTER TABLE credentials ADD CONSTRAINT credentials_kind_check CHECK (kind IN ('ssh_private_key','ssh_password','tls_identity','ca_certificate','ca_identity','ech_key','dns','api_token'))").execute(&mut **tx).await?;
     sqlx::query("INSERT INTO credential_migrations(name,completed_at) VALUES('tls_pairs_v1',$1)")
         .bind(Utc::now())
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?;
-    tx.commit().await?;
     Ok(())
 }
 

@@ -3,6 +3,7 @@ mod client_summary;
 pub(crate) mod credentials;
 pub(crate) mod dns;
 pub(crate) mod job_retries;
+pub(crate) mod managed_mtls;
 pub(crate) mod nodes;
 pub(crate) mod resources;
 pub(crate) mod ssh_fingerprint;
@@ -34,8 +35,31 @@ pub(crate) struct AdminActor {
     pub id: String,
 }
 
+tokio::task_local! {static AUDIT_ACTOR_ID:String;}
+pub(crate) fn audit_actor() -> String {
+    AUDIT_ACTOR_ID
+        .try_with(Clone::clone)
+        .unwrap_or_else(|_| "admin".into())
+}
+
 pub fn router(state: AppState) -> Router {
     let admin = Router::new()
+        .route(
+            "/api/v1/users/{id}/managed-certificates/reissue",
+            post(managed_mtls::reissue_user),
+        )
+        .route(
+            "/api/v1/credentials/ca-identities",
+            post(managed_mtls::create),
+        )
+        .route(
+            "/api/v1/credentials/{id}/ca-versions",
+            post(managed_mtls::publish),
+        )
+        .route(
+            "/api/v1/credentials/{id}/ca-policy",
+            axum::routing::patch(managed_mtls::update_policy),
+        )
         .route(
             "/api/v1/jobs/{id}/confirm-fingerprint",
             post(ssh_fingerprint::confirm),
@@ -136,11 +160,6 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/api/v1/users/{id}/authorization-groups",
             axum::routing::put(authorization_groups::update_memberships),
-        )
-        .route("/api/v1/users/{id}/assignments", post(users::assign))
-        .route(
-            "/api/v1/users/{id}/assignments/{node_id}",
-            delete(users::unassign).put(users::update_assignment_client_certificate),
         )
         .route(
             "/api/v1/users/{id}/credentials/rotate",
@@ -274,8 +293,10 @@ async fn require_admin(
             .bind(now()).bind(&id).bind(now()-chrono::Duration::seconds(60)).execute(&state.pool).await {
         return ApiError::from(error).into_response();
     }
-    request.extensions_mut().insert(AdminActor { id });
-    next.run(request).await
+    request
+        .extensions_mut()
+        .insert(AdminActor { id: id.clone() });
+    AUDIT_ACTOR_ID.scope(id, next.run(request)).await
 }
 
 async fn cache_stats(State(state): State<AppState>) -> Json<Value> {
@@ -293,7 +314,7 @@ async fn api_version(
     let directory_generation = crate::cache::configuration_generation(&state.pool).await?;
     Ok(Json(json!({
         "api_version": "1.0.0",
-        "features": ["job_fingerprint_confirmation", "ssh_test_confirmation", "ssh_dns_sync", "client_summary", "node_packages", "overview_monitoring", "job_retry_links", "credentials", "node_record_removal", "dns_management", "authorization_groups"],
+        "features": ["job_fingerprint_confirmation", "ssh_test_confirmation", "ssh_dns_sync", "client_summary", "node_packages", "overview_monitoring", "job_retry_links", "credentials", "node_record_removal", "dns_management", "authorization_groups", "managed_mtls"],
         "directory_generation":directory_generation,
         "current_admin_token_id": actor.id,
         "service_version": env!("CARGO_PKG_VERSION"),

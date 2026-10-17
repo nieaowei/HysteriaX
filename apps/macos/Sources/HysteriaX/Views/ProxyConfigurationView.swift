@@ -34,7 +34,7 @@ struct ProxyConfigurationView: View {
     @State private var acmeLegacyTLSPort = ""
     @State private var certificatePath = ""
     @State private var privateKeyPath = ""
-    @State private var tlsClientCAPath = ""
+    @State private var managedMTLS = ManagedMTLSDraft()
     @State private var tlsSNIGuard = "strict"
     @State private var echKeyPath = ""
     @State private var bandwidthUp = ""
@@ -199,19 +199,18 @@ struct ProxyConfigurationView: View {
                             }
                         } else if tlsMode == "tls" {
                             credentialReferencePicker(L10n.text("TLS 证书对"), target: .identity, selection: tlsIdentitySelection)
-                            credentialReferencePicker(L10n.text("mTLS 客户端 CA"), target: .clientCA, selection: $tlsClientCAPath, optional: true)
                             Picker(L10n.text("SNI 检查"), selection: $tlsSNIGuard) {
                                 Text(L10n.text("严格")).tag("strict")
                                 Text("DNS SAN").tag("dns-san")
                                 Text(L10n.text("关闭")).tag("disable")
                             }
-                            Text(L10n.text("填写客户端 CA 后，分配用户时必须提供匹配的客户端证书和私钥。至少分配一位用户后再部署；健康检查会用该证书完成真实 Hysteria 连接，并在订阅中提供证书内容。"))
-                                .font(.callout).foregroundStyle(.secondary)
                         }
                         credentialReferencePicker(L10n.text("ECH 凭据"), target: .ech, selection: $echKeyPath, optional: true)
-                        Text(L10n.text("TLS 证书对、CA 和 ECH 密钥可在此创建，或选择凭据中心已有凭据。ECH 需要 TLS 或 ACME 证书；导入 Hysteria 生成的 ech.pem 后，订阅会包含客户端 ECH 配置。"))
+                        Text(L10n.text("TLS 证书对和 ECH 密钥可在此创建，或选择凭据中心已有凭据。ECH 需要 TLS 或 ACME 证书；导入 Hysteria 生成的 ech.pem 后，订阅会包含客户端 ECH 配置。"))
                             .font(.callout).foregroundStyle(.secondary)
                     }
+                    NodeMTLSStatusView(detail: detail)
+                    ManagedMTLSFields(store: store, draft: $managedMTLS, manualTLS: tlsMode == "tls")
                     Section(L10n.text("配置资源")) {
                         Picker(L10n.text("资源类型"), selection: $resourceKind) {
                             Text(L10n.text("ACL 规则")).tag("acl")
@@ -454,13 +453,12 @@ struct ProxyConfigurationView: View {
         .frame(minWidth: 820, idealWidth: 1080, minHeight: 760)
         .task(id: nodeID) { await load(); await store.prepareDirectory(.credentials) }
         .sheet(item: $creatingCredential) { target in
-            CredentialEditorView(store: store, initialKind: target.kind, allowedKinds: [target.kind], allowsUserOwnership: false) { receipt in
+            CredentialEditorView(store: store, initialKind: target.kind, allowedKinds: [target.kind]) { receipt in
                 let prefix = "credential://\(receipt.id)/\(receipt.version ?? 1)/"
                 switch target {
                 case .identity:
                     certificatePath = prefix + "certificate"
                     privateKeyPath = prefix + "private_key"
-                case .clientCA: tlsClientCAPath = prefix + "content"
                 case .ech: echKeyPath = prefix + "content"
                 }
             }
@@ -478,6 +476,8 @@ struct ProxyConfigurationView: View {
             Divider()
             ScrollView([.horizontal, .vertical]) {
                 Text(yaml)
+                    .accessibilityIdentifier("node.config.yamlPreview")
+                    .accessibilityValue(yaml)
                     .font(.system(.caption, design: .monospaced))
                     .textSelection(.enabled)
                     .fixedSize(horizontal: true, vertical: true)
@@ -503,6 +503,12 @@ struct ProxyConfigurationView: View {
         config = resolveResourcePaths(in: .object(config)).objectValue ?? config
 
         var serverConfig = config
+        // Management policy is saved through the API, never emitted to hy2.
+        serverConfig.removeValue(forKey: "mtls")
+        if managedMTLS.mode == "managed", var tls = serverConfig["tls"]?.objectValue {
+            tls["clientCA"] = .string("<managed-client-ca>")
+            serverConfig["tls"] = .object(tls)
+        }
         serverConfig["listen"] = .string(listen)
         serverConfig["auth"] = .object([
             "type": .string("http"),
@@ -572,7 +578,7 @@ struct ProxyConfigurationView: View {
             tls["cert"] = .string(certificatePath)
             tls["key"] = .string(privateKeyPath)
             tls["sniGuard"] = .string(tlsSNIGuard)
-            setDraftString(tlsClientCAPath, for: "clientCA", in: &tls)
+            tls.removeValue(forKey: "clientCA")
             config["tls"] = .object(tls)
             config.removeValue(forKey: "acme")
         } else {
@@ -725,6 +731,7 @@ struct ProxyConfigurationView: View {
             else { masquerade.removeValue(forKey: "forceHTTPS") }
             config["masquerade"] = .object(masquerade)
         }
+        config["mtls"] = managedMTLS.configuration
         return config
     }
 
@@ -834,7 +841,7 @@ struct ProxyConfigurationView: View {
         acmeLegacyTLSPort = ""
         certificatePath = ""
         privateKeyPath = ""
-        tlsClientCAPath = ""
+        managedMTLS = ManagedMTLSDraft()
         tlsSNIGuard = "strict"
         echKeyPath = ""
         bandwidthUp = ""
@@ -909,6 +916,7 @@ struct ProxyConfigurationView: View {
             trafficStatsPort = String(loaded.trafficStatsPort ?? 9780)
             proxyProbeURL = loaded.proxyProbeUrl ?? ""
             let config = loaded.config
+            managedMTLS = ManagedMTLSDraft(configuration: config)
             echKeyPath = config["ech"]?.objectValue?["keyPath"]?.stringValue ?? ""
             if let acme = config["acme"]?.objectValue {
                 tlsMode = "acme"
@@ -937,7 +945,6 @@ struct ProxyConfigurationView: View {
                 tlsMode = "tls"
                 certificatePath = tls["cert"]?.stringValue ?? ""
                 privateKeyPath = tls["key"]?.stringValue ?? ""
-                tlsClientCAPath = tls["clientCA"]?.stringValue ?? ""
                 tlsSNIGuard = tls["sniGuard"]?.stringValue ?? "strict"
             }
             if let bandwidth = config["bandwidth"]?.objectValue {
@@ -1389,6 +1396,10 @@ struct ProxyConfigurationView: View {
     }
 
     private func save() {
+        if let error = managedMTLS.validationError { errorMessage = error; return }
+        if managedMTLS.mode == "managed" && tlsMode != "tls" {
+            errorMessage = L10n.text("托管 mTLS 仅支持凭据中心的手动 TLS 证书。"); return
+        }
         guard let detail, validateDraft(),
               let trafficStatsPort = Int(self.trafficStatsPort),
               let publicPort = Int(publicPortDraft.portText(listenAddress: listenAddress)) else { return }
@@ -1667,12 +1678,11 @@ private enum NodeConfigurationYAML {
 }
 
 private enum ConfigurationCredentialTarget: String, Identifiable {
-    case identity, clientCA, ech
+    case identity, ech
     var id: String { rawValue }
     var kind: String {
         switch self {
         case .identity: "tls_identity"
-        case .clientCA: "ca_certificate"
         case .ech: "ech_key"
         }
     }

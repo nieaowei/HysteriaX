@@ -7,6 +7,14 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		C4829BECEC587DD940B8388B /* Models/ManagedMTLSDraft.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4EBBB5776954E60EFE01E62E /* Models/ManagedMTLSDraft.swift */; };
+		B82491C664254D0C4C791CDD /* Views/CAIdentityEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E3ACF8B090BFAB20AEF5E02 /* Views/CAIdentityEditorView.swift */; };
+		5304768297D21D1864A6316E /* Views/CAIdentityStatusView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C5FE7ED9BD01433C63BF2082 /* Views/CAIdentityStatusView.swift */; };
+		7CBE9BD7135E38F17542E73F /* Views/CATrustCleanupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1DA5DB1B6D4507B38B6B3485 /* Views/CATrustCleanupView.swift */; };
+		33E57D52252178ED759B171B /* Views/ManagedIdentityIssuanceSummary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A222F5968C5F61EDF73C599 /* Views/ManagedIdentityIssuanceSummary.swift */; };
+		CAA100F8E281660B4B9D419E /* Views/ManagedMTLSFields.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDA59B1027A9082F06C3FE90 /* Views/ManagedMTLSFields.swift */; };
+		30A94AD13DFE4FBDF6DF9B6F /* Views/NodeMTLSStatusView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0491BC5C4E5569AE802721DC /* Views/NodeMTLSStatusView.swift */; };
+		096E2CD53CC7646029291DE6 /* Views/UserManagedCertificatesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 80FA1BD6FABEEBD2840EB23B /* Views/UserManagedCertificatesView.swift */; };
 		F11E0000000000000000000E /* Models/TrafficUnits.swift in Sources */ = {isa = PBXBuildFile; fileRef = F11F0000000000000000000E /* Models/TrafficUnits.swift */; };
 		C8ACB50E7F1842A39507AB10 /* Views/NodeCreatedView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C8ACB50E7F1842A39507AB11 /* Views/NodeCreatedView.swift */; };
 		F11E00000000000000000001 /* Models/AuthorizationPageState.swift in Sources */ = {isa = PBXBuildFile; fileRef = F11F00000000000000000001 /* Models/AuthorizationPageState.swift */; };
@@ -49,7 +57,6 @@
 		00000000000000000000200C /* Views/ProxyConfigurationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000100C /* Views/ProxyConfigurationView.swift */; };
 		00000000000000000000200D /* Models/OpenAPIRequests.generated.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000100D /* Models/OpenAPIRequests.generated.swift */; };
 		00000000000000000000200E /* Models/OpenAPIResponses.generated.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000100E /* Models/OpenAPIResponses.generated.swift */; };
-		00000000000000000000200F /* Views/UserNodeAssignmentsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000100F /* Views/UserNodeAssignmentsView.swift */; };
 		000000000000000000002100 /* Models/NodePackageDraft.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001100 /* Models/NodePackageDraft.swift */; };
 		000000000000000000002101 /* Views/NodePackageFields.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001101 /* Views/NodePackageFields.swift */; };
 		000000000000000000002102 /* Services/NodeAlertNotifications.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001102 /* Services/NodeAlertNotifications.swift */; };
@@ -87,6 +94,14 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		4EBBB5776954E60EFE01E62E /* Models/ManagedMTLSDraft.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models/ManagedMTLSDraft.swift; sourceTree = "<group>"; };
+		0E3ACF8B090BFAB20AEF5E02 /* Views/CAIdentityEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/CAIdentityEditorView.swift; sourceTree = "<group>"; };
+		C5FE7ED9BD01433C63BF2082 /* Views/CAIdentityStatusView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/CAIdentityStatusView.swift; sourceTree = "<group>"; };
+		1DA5DB1B6D4507B38B6B3485 /* Views/CATrustCleanupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/CATrustCleanupView.swift; sourceTree = "<group>"; };
+		6A222F5968C5F61EDF73C599 /* Views/ManagedIdentityIssuanceSummary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/ManagedIdentityIssuanceSummary.swift; sourceTree = "<group>"; };
+		DDA59B1027A9082F06C3FE90 /* Views/ManagedMTLSFields.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/ManagedMTLSFields.swift; sourceTree = "<group>"; };
+		0491BC5C4E5569AE802721DC /* Views/NodeMTLSStatusView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/NodeMTLSStatusView.swift; sourceTree = "<group>"; };
+		80FA1BD6FABEEBD2840EB23B /* Views/UserManagedCertificatesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/UserManagedCertificatesView.swift; sourceTree = "<group>"; };
 		F11F0000000000000000000E /* Models/TrafficUnits.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models/TrafficUnits.swift; sourceTree = "<group>"; };
 		C8ACB50E7F1842A39507AB11 /* Views/NodeCreatedView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/NodeCreatedView.swift; sourceTree = "<group>"; };
 		F11F00000000000000000001 /* Models/AuthorizationPageState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models/AuthorizationPageState.swift; sourceTree = "<group>"; };
@@ -131,7 +146,6 @@
 		00000000000000000000100D /* Models/OpenAPIRequests.generated.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models/OpenAPIRequests.generated.swift; sourceTree = "<group>"; };
 		00000000000000000000100E /* Models/OpenAPIResponses.generated.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models/OpenAPIResponses.generated.swift; sourceTree = "<group>"; };
 		000000000000000000003004 /* HysteriaX.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = HysteriaX.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		00000000000000000000100F /* Views/UserNodeAssignmentsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/UserNodeAssignmentsView.swift; sourceTree = "<group>"; };
 		000000000000000000001100 /* Models/NodePackageDraft.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models/NodePackageDraft.swift; sourceTree = "<group>"; };
 		000000000000000000001101 /* Views/NodePackageFields.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/NodePackageFields.swift; sourceTree = "<group>"; };
 		000000000000000000001102 /* Services/NodeAlertNotifications.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Services/NodeAlertNotifications.swift; sourceTree = "<group>"; };
@@ -186,6 +200,14 @@
 		000000000000000000003001 /* Sources/HysteriaX */ = {
 			isa = PBXGroup;
 			children = (
+				4EBBB5776954E60EFE01E62E /* Models/ManagedMTLSDraft.swift */,
+				0E3ACF8B090BFAB20AEF5E02 /* Views/CAIdentityEditorView.swift */,
+				C5FE7ED9BD01433C63BF2082 /* Views/CAIdentityStatusView.swift */,
+				1DA5DB1B6D4507B38B6B3485 /* Views/CATrustCleanupView.swift */,
+				6A222F5968C5F61EDF73C599 /* Views/ManagedIdentityIssuanceSummary.swift */,
+				DDA59B1027A9082F06C3FE90 /* Views/ManagedMTLSFields.swift */,
+				0491BC5C4E5569AE802721DC /* Views/NodeMTLSStatusView.swift */,
+				80FA1BD6FABEEBD2840EB23B /* Views/UserManagedCertificatesView.swift */,
 				F11F0000000000000000000E /* Models/TrafficUnits.swift */,
 				F11F00000000000000000001 /* Models/AuthorizationPageState.swift */,
 				F11F00000000000000000002 /* Stores/AuthorizationGroupStore.swift */,
@@ -257,7 +279,6 @@
 				00000000000000000000100A /* Views/SettingsView.swift */,
 				00000000000000000000100B /* Views/UsersView.swift */,
 				000000000000000000001508 /* Views/QuotaProgressView.swift */,
-				00000000000000000000100F /* Views/UserNodeAssignmentsView.swift */,
 				00000000000000000000100C /* Views/ProxyConfigurationView.swift */,
 				000000000000000000001601 /* Views/ACMEDNSFields.swift */,
 				000000000000000000001600 /* Models/ACMEDNSDraft.swift */,
@@ -352,6 +373,14 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				C4829BECEC587DD940B8388B /* Models/ManagedMTLSDraft.swift in Sources */,
+				B82491C664254D0C4C791CDD /* Views/CAIdentityEditorView.swift in Sources */,
+				5304768297D21D1864A6316E /* Views/CAIdentityStatusView.swift in Sources */,
+				7CBE9BD7135E38F17542E73F /* Views/CATrustCleanupView.swift in Sources */,
+				33E57D52252178ED759B171B /* Views/ManagedIdentityIssuanceSummary.swift in Sources */,
+				CAA100F8E281660B4B9D419E /* Views/ManagedMTLSFields.swift in Sources */,
+				30A94AD13DFE4FBDF6DF9B6F /* Views/NodeMTLSStatusView.swift in Sources */,
+				096E2CD53CC7646029291DE6 /* Views/UserManagedCertificatesView.swift in Sources */,
 				F11E0000000000000000000E /* Models/TrafficUnits.swift in Sources */,
 				F11E00000000000000000001 /* Models/AuthorizationPageState.swift in Sources */,
 				F11E00000000000000000002 /* Stores/AuthorizationGroupStore.swift in Sources */,
@@ -422,7 +451,6 @@
 				00000000000000000000200A /* Views/SettingsView.swift in Sources */,
 				00000000000000000000200B /* Views/UsersView.swift in Sources */,
 				000000000000000000002508 /* Views/QuotaProgressView.swift in Sources */,
-				00000000000000000000200F /* Views/UserNodeAssignmentsView.swift in Sources */,
 				00000000000000000000200C /* Views/ProxyConfigurationView.swift in Sources */,
 				000000000000000000002601 /* Views/ACMEDNSFields.swift in Sources */,
 				000000000000000000002600 /* Models/ACMEDNSDraft.swift in Sources */,

@@ -6,8 +6,15 @@ enum NodeTaskFeedback {
         ["queued", "running", "waiting_confirmation"].contains(job.status)
     }
 
-    static func allowsAction(_ action: String, state: String) -> Bool {
-        state != "deleting" && (state != "delete_failed" || action == "ssh-test")
+    static func allowsAction(_ action: String, state: String, mtlsState: String? = nil, recoveryConfigured: Bool = false) -> Bool {
+        guard state != "deleting", state != "delete_failed" || action == "ssh-test" else { return false }
+        if action == "ssh-test" { return true }
+        if action == "rollback", let mtlsState, mtlsState != "ready" { return false }
+        return !["deploy", "sync", "rollback"].contains(action) || mtlsState != "needs_configuration" || recoveryConfigured
+    }
+
+    static func allowsAction(_ action: String, node: NodeSummary) -> Bool {
+        allowsAction(action, state: node.state, mtlsState: node.mtlsState, recoveryConfigured: node.mtlsRecoveryConfigured == true)
     }
 
     static func blocksOperation(_ job: JobSummary) -> Bool {

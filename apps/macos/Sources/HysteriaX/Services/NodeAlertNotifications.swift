@@ -88,9 +88,12 @@ final class NodeAlertNotifications: NSObject, UNUserNotificationCenterDelegate {
             let identifier = "\(entry.id):\(entry.latestVersion):\(entry.expiresAt ?? ""):\(threshold)"
             guard !seen.contains(identifier) else { continue }
             do {
-                try await transport.send(id: "credential-\(identifier)",
-                    title: L10n.text("{0}：{1}", entry.name, days < 0 ? L10n.text("已到期") : L10n.text("即将到期")),
-                    body: L10n.text("{0} · {1}。请准备新凭据并发布新版本。", String(describing: (entry.typeTitle)), String(describing: (DateDisplayParser.shared.parse(entry.expiresAt).map { L10n.date($0) } ?? L10n.text("未知")))))
+                let rotation = entry.metadata["rotation_blocked"]?.boolValue == true
+                let maintenance = entry.metadata["maintenance_failed"]?.boolValue == true
+                let expiry = DateDisplayParser.shared.parse(entry.expiresAt).map { L10n.date($0) } ?? L10n.text("未知")
+                let title = rotation ? L10n.text("CA 更新受阻") : maintenance ? L10n.text("托管证书维护异常") : days < 0 ? L10n.text("已到期") : L10n.text("即将到期")
+                let body = rotation ? L10n.text(days < 0 ? "旧材料已于 {0} 到期。请恢复阻塞节点并重试更新批次。" : "旧材料将于 {0} 到期。请恢复阻塞节点并重试更新批次。", expiry) : maintenance ? L10n.text("托管证书维护失败，当前材料到期：{0}。请检查 CA 和相关任务。", expiry) : L10n.text("{0} · {1}。请准备新凭据并发布新版本。", entry.kind == "ca_identity" ? L10n.text("CA 身份") : entry.typeTitle, expiry)
+                try await transport.send(id: "credential-\(identifier)", title: L10n.text("{0}：{1}", entry.name, title), body: body)
                 seen.insert(identifier)
                 defaults.set(Array(seen), forKey: key)
             } catch { /* Retry on the next refresh without marking delivery. */ }

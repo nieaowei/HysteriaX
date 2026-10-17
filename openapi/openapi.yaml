@@ -14,6 +14,85 @@ servers:
 security:
   - BearerAuth: []
 paths:
+  /credentials/ca-identities:
+    post:
+      operationId: createCAIdentity
+      summary: Generate a P-256 CA or import a validated CA chain and matching private key
+      description: Signing and chain validation run outside the global write transaction. Repeating the same actor/idempotency key returns the original receipt; changed requests conflict. CA private keys are never returned.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CAIdentityCreate' }
+      responses:
+        '201':
+          description: Immutable CA version and initial published generation
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CAIdentityReceipt' }
+        '400': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+  /credentials/{id}/ca-policy:
+    patch:
+      operationId: updateCAPolicy
+      summary: Update client certificate policy using its independent revision
+      description: Applies to future issuance and renewal; does not change CA key versions or deploy nodes.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CAPolicyUpdate' }
+      responses:
+        '200':
+          description: Updated policy and revision
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CAPolicyReceipt' }
+        '400': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+  /credentials/{id}/ca-versions:
+    post:
+      operationId: publishCAIdentityVersion
+      summary: Publish a new CA version through the managed rotation coordinator
+      description: Generated CAs accept no imported material. Imported CAs require a replacement chain and matching key. Referenced CAs retain their old published generation until all participating nodes prepare new trust. Unused CAs publish immediately.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CAIdentityPublish' }
+      responses:
+        '202':
+          description: Version, batch and optional rotation receipt
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CAIdentityReceipt' }
+        '400': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+  /users/{id}/managed-certificates/reissue:
+    post:
+      operationId: reissueManagedUserCertificates
+      summary: Reissue the user's shared identity for one CA or all CAs
+      description: Expected revisions are keyed by CA credential ID. Reports every affected authorized node. Paused users retain pending identities. Ordinary reissuance does not disconnect sessions or revoke old certificates.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ManagedUserReissue' }
+      responses:
+        '200':
+          description: Shared identity versions and affected node IDs
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ManagedUserReissueReceipt' }
+        '400': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
   /client/summary:
     get:
       operationId: getClientSummary
@@ -45,6 +124,7 @@ paths:
         - { name: page_size, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
         - { name: category, in: query, schema: { type: string, enum: [all, operations, user], default: all } }
         - { name: kind, in: query, schema: { type: string } }
+        - { name: include_internal, in: query, description: Include internal node probe identities; hidden by default before pagination., schema: { type: boolean, default: false } }
         - { name: q, in: query, description: Case-insensitive literal substring of the credential name., schema: { type: string } }
         - { name: sort, in: query, schema: { type: string, enum: [name, kind, status, created_at], default: name } }
         - { name: order, in: query, schema: { type: string, enum: [asc, desc], default: asc } }
@@ -603,65 +683,6 @@ paths:
           schema: { type: integer, minimum: 1 }
       responses:
         '204': { description: Deleted }
-  /users/{id}/assignments:
-    parameters:
-      - $ref: '#/components/parameters/Id'
-    post:
-      operationId: assignUserToNode
-      summary: Assign user to node
-      description: Deprecated. New servers reject direct assignment writes; manage access through authorization groups.
-      deprecated: true
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: '#/components/schemas/AssignmentRequest' }
-      responses:
-        '201':
-          description: Assignment and one-time Hysteria credential
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/AssignmentReceipt' }
-        '409': { $ref: '#/components/responses/Error' }
-  /users/{id}/assignments/{node_id}:
-    parameters:
-      - $ref: '#/components/parameters/Id'
-      - name: node_id
-        in: path
-        required: true
-        schema: { type: string, format: uuid }
-    delete:
-      operationId: unassignUserFromNode
-      summary: Unassign user from node
-      description: Deprecated. New servers reject direct assignment writes; manage access through authorization groups.
-      deprecated: true
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: '#/components/schemas/Revision' }
-      responses:
-        '200':
-          description: Unassigned and kick queued
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/AssignmentMutationResponse' }
-    put:
-      operationId: updateAssignmentClientCertificate
-      summary: Update a user's per-node mTLS certificate
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: '#/components/schemas/AssignmentCertificateUpdate' }
-      responses:
-        '200':
-          description: Updated client certificate and queued client kick
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/AssignmentMutationResponse' }
-        '404': { $ref: '#/components/responses/Error' }
-        '409': { $ref: '#/components/responses/Error' }
   /users/{id}/authorization-groups/preview:
     parameters:
       - $ref: '#/components/parameters/Id'
@@ -1693,15 +1714,6 @@ components:
       properties:
         user_id: { type: string, format: uuid }
         node_id: { type: string, format: uuid }
-    AuthorizationMTLSBinding:
-      type: object
-      required: [user_id, node_id, credential_id, credential_version]
-      properties:
-        user_id: { type: string, format: uuid }
-        node_id: { type: string, format: uuid }
-        credential_id: { type: string, format: uuid }
-        credential_version: { type: integer, minimum: 1 }
-      additionalProperties: false
     AuthorizationGroupPreview:
       type: object
       required: [action]
@@ -1715,9 +1727,6 @@ components:
         node_ids:
           type: array
           items: { type: string, format: uuid }
-        mtls_bindings:
-          type: array
-          items: { $ref: '#/components/schemas/AuthorizationMTLSBinding' }
       additionalProperties: false
     AuthorizationGroupCreate:
       type: object
@@ -1731,9 +1740,6 @@ components:
           type: array
           items: { type: string, format: uuid }
         preview_token: { type: string }
-        mtls_bindings:
-          type: array
-          items: { $ref: '#/components/schemas/AuthorizationMTLSBinding' }
       additionalProperties: false
     AuthorizationGroupUpdate:
       type: object
@@ -1748,9 +1754,6 @@ components:
           type: array
           items: { type: string, format: uuid }
         preview_token: { type: string }
-        mtls_bindings:
-          type: array
-          items: { $ref: '#/components/schemas/AuthorizationMTLSBinding' }
       additionalProperties: false
     AuthorizationGroupDelete:
       type: object
@@ -1767,9 +1770,6 @@ components:
         group_ids:
           type: array
           items: { type: string }
-        mtls_bindings:
-          type: array
-          items: { $ref: '#/components/schemas/AuthorizationMTLSBinding' }
       additionalProperties: false
     UserAuthorizationGroupsUpdate:
       type: object
@@ -1780,42 +1780,7 @@ components:
         group_ids:
           type: array
           items: { type: string }
-        mtls_bindings:
-          type: array
-          items: { $ref: '#/components/schemas/AuthorizationMTLSBinding' }
       additionalProperties: false
-    AssignmentRequest:
-      type: object
-      required:
-      - expected_revision
-      - node_id
-      properties:
-        expected_revision:
-          type: integer
-          minimum: 1
-        node_id:
-          type: string
-          format: uuid
-        mtls_credential_id:
-          type: string
-        mtls_credential_version:
-          type: integer
-          minimum: 1
-      additionalProperties: false
-    AssignmentCertificateUpdate:
-      allOf:
-      - $ref: '#/components/schemas/Revision'
-      - type: object
-        required:
-        - mtls_credential_id
-        - mtls_credential_version
-        properties:
-          mtls_credential_id:
-            type: string
-          mtls_credential_version:
-            type: integer
-            minimum: 1
-        additionalProperties: false
     NodePackage:
       type: object
       description: Complete package replacement on PATCH; omission preserves the package. Null expiry/quota removes that limit. Usage is changed only through the usage endpoint.
@@ -1928,6 +1893,9 @@ components:
           default: false
         config:
           type: object
+          description: Hysteria options and mtls policy. tls.clientCA is generated by the server and all writes reject it. Managed mode requires manual TLS and an exact currently published CA version.
+          properties:
+            mtls: { $ref: '#/components/schemas/NodeMTLSSettings' }
           additionalProperties: true
           default: {}
         ssh_credential_id:
@@ -1980,6 +1948,9 @@ components:
             type: boolean
           config:
             type: object
+            description: Same managed mTLS rules as node creation. Submitting a historical or preparing CA version conflicts; only controlled rollback may use history.
+            properties:
+              mtls: { $ref: '#/components/schemas/NodeMTLSSettings' }
             additionalProperties: true
           ssh_credential_id:
             type: string
@@ -2056,10 +2027,35 @@ components:
         node_count: { type: integer, minimum: 0 }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
+    AuthorizationManagedIdentity:
+      type: object
+      required: [user_id, ca_credential_id, ca_versions, issue_now, pending]
+      properties:
+        policy_revision: { type: integer }
+        user_id: { type: string }
+        ca_credential_id: { type: string }
+        ca_versions: { type: array, items: { type: integer } }
+        issue_now: { type: boolean }
+        pending: { type: boolean }
+    AuthorizationIdentityResult:
+      type: object
+      required: [user_id, ca_credential_id, identity_id, issued, pending]
+      properties:
+        policy_revision: { type: integer }
+        ca_versions: { type: array, items: { type: integer } }
+        affected_node_ids: { type: array, items: { type: string } }
+        user_id: { type: string }
+        ca_credential_id: { type: string }
+        identity_id: { type: [string, 'null'] }
+        issued: { type: boolean }
+        pending: { type: boolean }
     AuthorizationChangePreview:
       type: object
-      required: [action, preview_token, additions_count, removals_count, additions, removals, missing_mtls]
+      required: [action, preview_token, additions_count, removals_count, additions, removals, automatic_issue_count, pending_issue_count, managed_identities]
       properties:
+        automatic_issue_count: { type: integer, minimum: 0, description: Immediate shared identities to issue, deduplicated by user and CA identity. }
+        pending_issue_count: { type: integer, minimum: 0, description: Identities deferred until account access is restored. }
+        managed_identities: { type: array, items: { $ref: '#/components/schemas/AuthorizationManagedIdentity' } }
         action: { type: string, enum: [create, update, delete, update_memberships] }
         preview_token: { type: string }
         additions_count: { type: integer, minimum: 0 }
@@ -2068,9 +2064,6 @@ components:
           type: array
           items: { $ref: '#/components/schemas/AuthorizationPair' }
         removals:
-          type: array
-          items: { $ref: '#/components/schemas/AuthorizationPair' }
-        missing_mtls:
           type: array
           items: { $ref: '#/components/schemas/AuthorizationPair' }
     AuthorizationCreatedCredential:
@@ -2084,6 +2077,7 @@ components:
       type: object
       required: [group, additions_count, removals_count, created_credentials, revocation_job_ids]
       properties:
+        managed_identities: { type: array, items: { $ref: '#/components/schemas/AuthorizationIdentityResult' } }
         group:
           $ref: '#/components/schemas/AuthorizationGroupSummary'
           type: [object, 'null']
@@ -2103,10 +2097,40 @@ components:
         total: { type: integer, minimum: 0 }
         page: { type: integer, minimum: 1 }
         page_size: { type: integer, minimum: 1, maximum: 200 }
+    NodeMTLSSettings:
+      type: object
+      additionalProperties: false
+      required: [mode]
+      description: Defaults to off when omitted. Managed mode requires both CA fields; off rejects both. Only manual TLS supports managed mTLS.
+      properties:
+        mode: { type: string, enum: ["off", managed] }
+        ca_credential_id: { type: string, format: uuid }
+        ca_credential_version: { type: integer, minimum: 1 }
+    NodeMTLSTrust:
+      type: object
+      required: [ca_credential_id, ca_credential_version, desired, deployed]
+      properties:
+        ca_credential_id: { type: string }
+        ca_credential_version: { type: integer }
+        desired: { type: boolean }
+        deployed: { type: boolean }
+    NodeMTLSStatus:
+      type: object
+      required: [target, trust]
+      properties:
+        target: { $ref: '#/components/schemas/NodeMTLSSettings' }
+        deployed:
+          $ref: '#/components/schemas/NodeMTLSSettings'
+          type: [object, 'null']
+        trust: { type: array, items: { $ref: '#/components/schemas/NodeMTLSTrust' } }
     NodeSummary:
       type: object
       required: [id, name, revision, state]
       properties:
+        mtls_state: { type: string, enum: [ready, needs_configuration, activating, recovery_required] }
+        mtls_recovery_configured: { type: boolean, description: Explicit recovery policy has been saved; recovery deployment may be requested. }
+        mtls_error: { type: [string, 'null'] }
+        mtls_generation: { type: integer }
         published_connection:
           $ref: '#/components/schemas/PublishedConnection'
           type:
@@ -2170,6 +2194,11 @@ components:
       type: object
       required: [id, name, revision, config, yaml_preview, ssh, public, state, created_at, updated_at]
       properties:
+        mtls_state: { type: string, enum: [ready, needs_configuration, activating, recovery_required] }
+        mtls_recovery_configured: { type: boolean, description: Explicit recovery policy has been saved; recovery deployment may be requested. }
+        mtls_error: { type: [string, 'null'] }
+        mtls_generation: { type: integer }
+        mtls: { $ref: '#/components/schemas/NodeMTLSStatus' }
         published_connection:
           $ref: '#/components/schemas/PublishedConnection'
           type:
@@ -2206,20 +2235,13 @@ components:
       - node_id
       - created_at
       properties:
+        managed_identity_ids: { type: array, items: { type: string } }
         node_id:
           type: string
           format: uuid
         created_at:
           type: string
           format: date-time
-        mtls_credential_id:
-          type:
-          - string
-          - 'null'
-        mtls_credential_version:
-          type:
-          - integer
-          - 'null'
         source_groups:
           type: array
           items: { $ref: '#/components/schemas/AuthorizationGroupSource' }
@@ -2235,6 +2257,9 @@ components:
       type: object
       required: [id, name, enabled, expires_at, quota_bytes, usage_bytes, revision, quota_reset_at, assignments, created_at, updated_at]
       properties:
+        managed_certificates:
+          type: array
+          items: { $ref: '#/components/schemas/ManagedUserIdentity' }
         id: { type: string, format: uuid }
         name: { type: string }
         enabled: { type: boolean }
@@ -2255,6 +2280,7 @@ components:
       type: object
       required: [user_id, revision, group_ids, assignments, created_credentials, revocation_job_ids]
       properties:
+        managed_identities: { type: array, items: { $ref: '#/components/schemas/AuthorizationIdentityResult' } }
         user_id: { type: string, format: uuid }
         revision: { type: integer }
         group_ids:
@@ -2380,22 +2406,6 @@ components:
         content_sha256: { type: string }
         size_bytes: { type: integer, format: int64 }
         reference: { type: string }
-    AssignmentReceipt:
-      type: object
-      required: [user_id, node_id, revision, hy2_credential, note]
-      properties:
-        user_id: { type: string, format: uuid }
-        node_id: { type: string, format: uuid }
-        revision: { type: integer }
-        hy2_credential: { type: string, description: One-time Hysteria credential returned after assignment. }
-        note: { type: string }
-    AssignmentMutationResponse:
-      type: object
-      required: [user_id, node_id, revision]
-      properties:
-        user_id: { type: string, format: uuid }
-        node_id: { type: string, format: uuid }
-        revision: { type: integer }
     SubscriptionReceipt:
       type: object
       required: [user_id, revision, token, url, note]
@@ -2902,6 +2912,150 @@ components:
           items:
             "$ref": "#/components/schemas/OverviewBucket"
 
+    ManagedUserIdentity:
+      type: object
+      required: [identity_id, ca_credential_id, ca_name, revision, authorization_revision, archived, published_ca_version, ca_expires_at, policy_revision, versions, node_ids]
+      properties:
+        identity_id: { type: string }
+        ca_credential_id: { type: string }
+        ca_name: { type: string }
+        revision: { type: integer }
+        authorization_revision: { type: integer }
+        credential_id: { type: [string, 'null'] }
+        archived: { type: boolean }
+        maintenance_error: { type: [string, 'null'] }
+        next_action_at: { type: [string, 'null'], format: date-time }
+        published_ca_version: { type: integer }
+        ca_expires_at: { type: string, format: date-time }
+        policy_revision: { type: integer }
+        versions:
+          type: array
+          items: { $ref: '#/components/schemas/ManagedIdentityVersion' }
+        node_ids: { type: array, items: { type: string } }
+    ManagedIdentityVersion:
+      type: object
+      required: [version, ca_version, not_before, expires_at, released, discarded]
+      properties:
+        version: { type: integer }
+        ca_version: { type: integer }
+        not_before: { type: string, format: date-time }
+        expires_at: { type: string, format: date-time }
+        released: { type: boolean }
+        discarded: { type: boolean }
+    ManagedCAPolicy:
+      type: object
+      additionalProperties: false
+      required: [client_validity_days, renew_before_hours]
+      properties:
+        client_validity_days: { type: integer, minimum: 1, maximum: 365 }
+        renew_before_hours: { type: integer, minimum: 1, description: Must be less than client_validity_days multiplied by 24. }
+    CAIdentityCreate:
+      type: object
+      additionalProperties: false
+      required: [name, source, idempotency_key]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 180 }
+        source: { type: string, enum: [generated, imported] }
+        certificate: { type: string, writeOnly: true, description: Issuing CA first, followed by a complete validated chain to a self-signed root. Required for imported CAs. }
+        private_key: { type: string, writeOnly: true }
+        policy: { $ref: '#/components/schemas/ManagedCAPolicy' }
+        idempotency_key: { type: string, minLength: 1, maxLength: 180 }
+    CAPolicyUpdate:
+      type: object
+      additionalProperties: false
+      required: [expected_revision, policy, idempotency_key]
+      properties:
+        expected_revision: { type: integer, minimum: 1, description: Independent CA policy revision. }
+        policy: { $ref: '#/components/schemas/ManagedCAPolicy' }
+        idempotency_key: { type: string, minLength: 1, maxLength: 180 }
+    CAIdentityPublish:
+      type: object
+      additionalProperties: false
+      required: [expected_revision, idempotency_key]
+      properties:
+        expected_revision: { type: integer, minimum: 1 }
+        certificate: { type: string, writeOnly: true }
+        private_key: { type: string, writeOnly: true }
+        replace_rotation_id:
+          type: string
+          description: Explicitly supersede this unfinished rotation. Unpublished targets may be replaced; a published target may be replaced only after its CA expires.
+        idempotency_key: { type: string, minLength: 1, maxLength: 180 }
+    CAIdentityReceipt:
+      type: object
+      required: [id, revision, version]
+      properties:
+        id: { type: string }
+        revision: { type: integer }
+        version: { type: integer }
+        policy_revision: { type: integer }
+        batch_id: { type: string }
+        rotation_id: { type: [string, 'null'] }
+        published: { type: boolean }
+    CAPolicyReceipt:
+      type: object
+      required: [id, policy_revision, policy]
+      properties:
+        id: { type: string }
+        policy_revision: { type: integer }
+        policy: { $ref: '#/components/schemas/ManagedCAPolicy' }
+    CAIdentityState:
+      type: object
+      required: [source, policy_revision, published_version, client_validity_days, renew_before_hours]
+      properties:
+        source: { type: string, enum: [generated, imported] }
+        policy_revision: { type: integer }
+        published_version: { type: integer }
+        client_validity_days: { type: integer }
+        renew_before_hours: { type: integer }
+        cleanup: { type: array, items: { $ref: '#/components/schemas/CATrustCleanup' } }
+        maintenance_error: { type: [string, 'null'] }
+    CATrustCleanup:
+      type: object
+      required: [version, next_action_at, nodes]
+      properties:
+        version: { type: integer }
+        next_action_at: { type: string, format: date-time }
+        completed_at: { type: [string, 'null'], format: date-time }
+        nodes: { type: array, items: { $ref: '#/components/schemas/CATrustCleanupNode' } }
+    CATrustCleanupNode:
+      type: object
+      required: [node_id, completed]
+      properties:
+        node_id: { type: string }
+        name: { type: [string, 'null'] }
+        completed: { type: boolean }
+        job_id: { type: [string, 'null'] }
+        status: { type: [string, 'null'] }
+        stage: { type: [string, 'null'] }
+        error_message: { type: [string, 'null'] }
+    ManagedUserReissue:
+      type: object
+      additionalProperties: false
+      required: [expected_revisions, idempotency_key]
+      properties:
+        ca_credential_id: { type: [string, 'null'] }
+        expected_revisions:
+          type: object
+          additionalProperties: { type: integer, minimum: 1 }
+        idempotency_key: { type: string, minLength: 1, maxLength: 180 }
+    ManagedUserReissueReceipt:
+      type: object
+      required: [user_id, identities, refresh_subscription]
+      properties:
+        user_id: { type: string }
+        identities:
+          type: array
+          items: { $ref: '#/components/schemas/ManagedIdentityReceipt' }
+        refresh_subscription: { type: boolean }
+    ManagedIdentityReceipt:
+      type: object
+      required: [ca_credential_id, identity_id, issued, affected_node_ids]
+      properties:
+        ca_credential_id: { type: string }
+        identity_id: { type: string }
+        credential_version: { type: [integer, 'null'] }
+        issued: { type: boolean }
+        affected_node_ids: { type: array, items: { type: string } }
     CredentialCreate:
       type: object
       required:
@@ -2921,8 +3075,6 @@ components:
           - ech_key
           - dns
           - api_token
-        owner_user_id:
-          type: string
         reminder_at:
           type:
           - string
@@ -3036,6 +3188,7 @@ components:
         - references
         - batches
         properties:
+          ca: { $ref: '#/components/schemas/CAIdentityState' }
           versions:
             type: array
             items:
@@ -3070,6 +3223,12 @@ components:
       - entity_id
       - source
       properties:
+        identity_id: { type: string }
+        ca_id: { type: string }
+        ca_version: { type: [integer, 'null'] }
+        desired: { type: boolean }
+        deployed: { type: boolean }
+        phase: { type: string }
         entity_type:
           type: string
         entity_id:
@@ -3112,6 +3271,46 @@ components:
           type: string
         affected_count:
           type: integer
+    CARotationState:
+      type: object
+      required: [id, version, phase, next_action_at, nodes, status]
+      properties:
+        id: { type: string }
+        version: { type: integer }
+        phase: { type: string, enum: [trust, identities, publish, probes, complete, failed] }
+        error_message: { type: [string, 'null'] }
+        next_action_at: { type: string, format: date-time }
+        outcome: { type: [string, 'null'] }
+        published_at: { type: [string, 'null'], format: date-time }
+        status: { $ref: '#/components/schemas/CARotationStatus' }
+        nodes:
+          type: array
+          items: { $ref: '#/components/schemas/CARotationNode' }
+    CARotationStatus:
+      type: object
+      required: [previous_version, old_ca_expires_at, deadline, days_remaining, blocked_node_ids, eligible_user_count, prepared_user_count]
+      properties:
+        previous_version: { type: integer }
+        old_ca_expires_at: { type: string, format: date-time }
+        client_certificate_expires_at: { type: [string, 'null'], format: date-time }
+        probe_certificate_expires_at: { type: [string, 'null'], format: date-time }
+        deadline: { type: string, format: date-time }
+        days_remaining: { type: integer }
+        blocked_node_ids: { type: array, items: { type: string } }
+        eligible_user_count: { type: integer }
+        prepared_user_count: { type: integer }
+    CARotationNode:
+      type: object
+      required: [node_id, trust_prepared, probe_switched]
+      properties:
+        node_id: { type: string }
+        name: { type: [string, 'null'] }
+        trust_prepared: { type: boolean }
+        probe_switched: { type: boolean }
+        job_id: { type: [string, 'null'] }
+        status: { type: [string, 'null'] }
+        stage: { type: [string, 'null'] }
+        error_message: { type: [string, 'null'] }
     CredentialBatch:
       type: object
       required:
@@ -3121,6 +3320,7 @@ components:
       - created_at
       - items
       properties:
+        ca_rotation: { $ref: '#/components/schemas/CARotationState' }
         dns_items:
           type: array
           items:

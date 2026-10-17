@@ -2,7 +2,7 @@
 """Deploy one disposable Debian node and verify real Hysteria mTLS plus ECH traffic."""
 
 import base64
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 import gzip
 import hashlib
 import json
@@ -12,12 +12,14 @@ import secrets
 import signal
 import socket
 import subprocess
-import sys
 import tempfile
 import time
 import urllib.error
 import urllib.request
 import uuid
+import yaml
+
+from credential_test_fixtures import grant_group
 
 from postgres_test import PostgresTestSchema
 
@@ -315,13 +317,11 @@ def main():
                 server_key = temp / "server-key.pem"
                 server_cert = temp / "server-cert.pem"
                 client_key = temp / "client-key.pem"
-                client_csr = temp / "client.csr"
                 client_cert = temp / "client-cert.pem"
-                client_ext = temp / "client.ext"
                 subprocess.run(
                     [
                         "openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
-                        "-keyout", str(ca_key), "-out", str(ca_cert), "-days", "2",
+                        "-keyout", str(ca_key), "-out", str(ca_cert), "-days", "365",
                         "-subj", "/CN=HysteriaX mTLS test CA",
                         "-addext", "basicConstraints=critical,CA:TRUE",
                         "-addext", "keyUsage=critical,keyCertSign,cRLSign",
@@ -334,26 +334,6 @@ def main():
                         "-keyout", str(server_key), "-out", str(server_cert), "-days", "2",
                         "-subj", "/CN=127.0.0.1",
                         "-addext", "subjectAltName=IP:127.0.0.1",
-                    ],
-                    check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                )
-                subprocess.run(
-                    [
-                        "openssl", "req", "-newkey", "rsa:2048", "-nodes",
-                        "-keyout", str(client_key), "-out", str(client_csr), "-subj", "/CN=mtls-user",
-                    ],
-                    check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                )
-                client_ext.write_text(
-                    "basicConstraints=critical,CA:FALSE\n"
-                    "keyUsage=critical,digitalSignature,keyEncipherment\n"
-                    "extendedKeyUsage=clientAuth\n"
-                )
-                subprocess.run(
-                    [
-                        "openssl", "x509", "-req", "-in", str(client_csr),
-                        "-CA", str(ca_cert), "-CAkey", str(ca_key), "-CAcreateserial",
-                        "-out", str(client_cert), "-days", "2", "-extfile", str(client_ext),
                     ],
                     check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                 )
@@ -694,13 +674,19 @@ def main():
 
                 server_cert_ref = upload_resource("server-cert.pem", "certificate", server_cert.read_bytes())
                 server_key_ref = upload_resource("server-key.pem", "private_key", server_key.read_bytes())
-                ca_ref = upload_resource("client-ca.pem", "certificate", ca_cert.read_bytes())
+                authority = expect("/api/v1/credentials/ca-identities", "POST", {
+                    "name": "Imported managed live CA", "source": "imported",
+                    "certificate": ca_cert.read_text(), "private_key": ca_key.read_text(),
+                    "idempotency_key": "live-ca-" + suffix,
+                }, (201,))
+                ca_id = authority["id"]
+                secrets_to_scrub.append(ca_key.read_text())
                 ech_ref = upload_resource("ech.pem", "ech_key", ech_key.read_bytes())
                 server_options = {
+                    "mtls": {"mode":"managed", "ca_credential_id":ca_id, "ca_credential_version":1},
                     "tls": {
                         "cert": server_cert_ref,
                         "key": server_key_ref,
-                        "clientCA": ca_ref,
                         "sniGuard": "disable",
                     },
                     "ech": {"keyPath": ech_ref},
@@ -713,20 +699,6 @@ def main():
                         },
                     },
                 }
-                user = expect("/api/v1/users", "POST", {"name": "mTLS acceptance user"}, (201,))
-                user_id = user["id"]
-                assignment = expect(
-                    f"/api/v1/users/{user_id}/assignments", "POST",
-                    {
-                        "expected_revision": 1,
-                        "node_id": node_id,
-                        "client_certificate": client_cert.read_text(),
-                        "client_private_key": client_key.read_text(),
-                    },
-                    (201,),
-                )
-                credential = assignment["hy2_credential"]
-                secrets_to_scrub.append(credential)
                 # Queue the deployment while SSH is interrupted. The job must retry and resume.
                 run(["docker", "exec", container, "systemctl", "stop", "ssh.service"])
                 node_update = expect(
@@ -767,6 +739,16 @@ def main():
                 if active_probes != 0:
                     raise RuntimeError("temporary deployment probe credentials were not removed after health checks")
 
+                # Deployment has no users: its own independently issued probe proved mTLS.
+                with database.connect() as connection:
+                    if connection.execute("SELECT count(*) FROM users").fetchone()[0] != 0:
+                        raise RuntimeError("zero-user managed deployment was not exercised")
+                user = expect("/api/v1/users", "POST", {"name": "mTLS acceptance user"}, (201,))
+                user_id = user["id"]
+                grant = grant_group(expect, user_id, [node_id])
+                credential = next(item["hy2_credential"] for item in grant["created_credentials"] if item["node_id"] == node_id)
+                secrets_to_scrub.append(credential)
+
                 subscription = expect(
                     f"/api/v1/users/{user_id}/subscription", "POST", {"expected_revision": 2}
                 )
@@ -783,6 +765,18 @@ def main():
                     or ech_config.encode() not in subscription_yaml
                 ):
                     raise RuntimeError("mTLS/ECH subscription omitted the client certificate pair or ECH config")
+                def subscription_material(body, cert_path, key_path):
+                    proxies = yaml.safe_load(body)["proxies"]
+                    if len(proxies) != 1:
+                        raise RuntimeError("expected exactly one authorized managed node")
+                    leaf, key = proxies[0]["certificate"], proxies[0]["private-key"]
+                    if "BEGIN CERTIFICATE" not in leaf or "PRIVATE KEY" not in key:
+                        raise RuntimeError("subscription did not contain usable managed PEM")
+                    cert_path.write_text(leaf); key_path.write_text(key)
+                    cert_path.chmod(0o600); key_path.chmod(0o600)
+                    secrets_to_scrub.append(key)
+                    return leaf, key
+                first_material = subscription_material(subscription_yaml, client_cert, client_key)
                 subscription_path = temp / "mTLS-subscription.yaml"
                 subscription_path.write_bytes(subscription_yaml)
                 run([str(ROOT / "scripts/verify-mihomo-config.sh"), str(subscription_path)], timeout=180)
@@ -868,6 +862,10 @@ def main():
                     'proxy_entry["hop-interval"]=5 if proxy_entry["ports"]; '
                     'group=config.fetch("proxy-groups").find { |entry| entry["type"] == "select" }; '
                     'group["proxies"]=[proxy, "DIRECT"]; '
+                    'config["log-level"]="debug"; '
+                    'config["rules"]=["MATCH,"+group.fetch("name")]; '
+                    'config["rule-providers"]={}; config["dns"]={"enable"=>false}; '
+                    'config["profile"]={"store-selected"=>false}; '
                     'File.write(path, YAML.dump(config))'
                 )
                 run(["ruby", "-e", rewrite_group, str(subscription_path), str(mihomo_port)])
@@ -1056,7 +1054,7 @@ def main():
                 if not socks_ready:
                     raise RuntimeError("Hysteria client SOCKS5 did not start during the SSH outage")
                 outage_payload = temp / "ssh-outage-payload.bin"
-                outage_transfer = run(
+                run(
                     [
                         "curl", "--noproxy", "", "--fail", "--silent", "--show-error",
                         "--limit-rate", "256k", "--max-time", "25",
@@ -1427,17 +1425,8 @@ def main():
                     "/api/v1/users", "POST", {"name": "Active over-quota revocation probe"}, (201,)
                 )
                 quota_user_id = quota_user["id"]
-                quota_credential = expect(
-                    f"/api/v1/users/{quota_user_id}/assignments",
-                    "POST",
-                    {
-                        "expected_revision": 1,
-                        "node_id": node_id,
-                        "client_certificate": client_cert.read_text(),
-                        "client_private_key": client_key.read_text(),
-                    },
-                    (201,),
-                )["hy2_credential"]
+                grant = grant_group(expect, quota_user_id, [node_id])
+                quota_credential = next(item["hy2_credential"] for item in grant["created_credentials"] if item["node_id"] == node_id)
                 secrets_to_scrub.append(quota_credential)
                 quota_subscription = expect(
                     f"/api/v1/users/{quota_user_id}/subscription",
@@ -1446,6 +1435,12 @@ def main():
                 )
                 quota_subscription_token = quota_subscription["token"]
                 secrets_to_scrub.append(quota_subscription_token)
+                status, quota_yaml = request(base, f"/sub/{quota_subscription_token}/clash.yaml")
+                if status != 200: raise RuntimeError("quota user subscription unavailable")
+                quota_cert, quota_key = temp / "quota-client.pem", temp / "quota-client-key.pem"
+                quota_material = subscription_material(quota_yaml, quota_cert, quota_key)
+                if quota_material[0] == first_material[0] or quota_material[1] == first_material[1]:
+                    raise RuntimeError("different users received the same managed certificate or key")
                 quota_client_config = temp / "over-quota-client-one.yaml"
                 quota_peer_config = temp / "over-quota-client-two.yaml"
                 main_quota_config = client_config.read_text().replace(
@@ -1456,6 +1451,8 @@ def main():
                 )
                 if main_quota_config == client_config.read_text() or peer_quota_config == peer_client_config.read_text():
                     raise RuntimeError("could not prepare client configs for the over-quota user")
+                main_quota_config = main_quota_config.replace(str(client_cert),str(quota_cert)).replace(str(client_key),str(quota_key))
+                peer_quota_config = peer_quota_config.replace(str(client_cert),str(quota_cert)).replace(str(client_key),str(quota_key))
                 quota_client_config.write_text(main_quota_config)
                 quota_peer_config.write_text(peer_quota_config)
                 client_log_file = open(temp / "over-quota-client-one.log", "wb")
@@ -1732,6 +1729,105 @@ def main():
                 peer_client = None
                 peer_client_log_file = None
 
+                # Exercise managed maintenance and consecutive CA generations through
+                # real workers/SSH and fixed Hysteria traffic, independently of SQL fixtures.
+                fresh = expect("/api/v1/users", "POST", {"name":"Managed CA rotation traffic"}, (201,))
+                fresh_id = fresh["id"]
+                fresh_grant = grant_group(expect, fresh_id, [node_id])
+                fresh_auth = next(item["hy2_credential"] for item in fresh_grant["created_credentials"] if item["node_id"] == node_id)
+                secrets_to_scrub.append(fresh_auth)
+                fresh_sub = expect(f"/api/v1/users/{fresh_id}/subscription", "POST", {"expected_revision":2})["token"]
+                secrets_to_scrub.append(fresh_sub)
+                def fresh_material(label):
+                    status, body = request(base, f"/sub/{fresh_sub}/clash.yaml")
+                    if status != 200: raise RuntimeError("managed rotation subscription unavailable")
+                    cert, key = temp / (label+".pem"), temp / (label+"-key.pem")
+                    material = subscription_material(body, cert, key)
+                    return cert, key, material
+                def transfer_managed(cert, key, label):
+                    nonlocal client, client_log_file
+                    config = client_config.read_text().replace(f"auth: {credential}\n",f"auth: {fresh_auth}\n")
+                    config = config.replace(str(client_cert),str(cert)).replace(str(client_key),str(key))
+                    path = temp / (label+".yaml"); path.write_text(config); path.chmod(0o600)
+                    client_log_file = open(temp / (label+".log"),"wb")
+                    client = subprocess.Popen([str(client_binary),"--disable-update-check","client","-c",str(path)],stdout=client_log_file,stderr=subprocess.STDOUT)
+                    output = temp / (label+".bin")
+                    try:
+                        deadline = time.monotonic()+30
+                        while time.monotonic()<deadline:
+                            result = run(["curl","--noproxy","","--fail","--silent","--show-error","--max-time","8","--socks5-hostname",f"127.0.0.1:{socks_port}","http://127.0.0.1:18081/payload.bin","-o",str(output)],check=False,timeout=12)
+                            if result.returncode==0:
+                                if output.read_bytes()!=payload_path.read_bytes(): raise RuntimeError("managed rotation payload mismatch")
+                                return
+                            if client.poll() is not None: raise RuntimeError("managed rotation client exited")
+                            time.sleep(.5)
+                        raise RuntimeError("managed rotation traffic failed")
+                    finally:
+                        if client.poll() is None: client.terminate(); client.wait(timeout=5)
+                        client_log_file.close(); client=None; client_log_file=None
+                old_cert, old_key, old_material = fresh_material("before-renewal")
+                fresh_detail = expect(f"/api/v1/users/{fresh_id}")
+                fresh_revision = fresh_detail["revision"]
+                identity = next(i for i in fresh_detail["managed_certificates"] if i["ca_credential_id"]==ca_id)
+                expect(f"/api/v1/users/{fresh_id}/managed-certificates/reissue","POST",{"ca_credential_id":ca_id,"expected_revisions":{ca_id:identity["revision"]},"idempotency_key":"live-reissue-"+suffix})
+                renewed_cert, renewed_key, renewed = fresh_material("after-renewal")
+                if old_material==renewed or old_material[1]==renewed[1]: raise RuntimeError("managed reissue reused the old private key")
+                if expect(f"/api/v1/users/{fresh_id}")["revision"]!=fresh_revision: raise RuntimeError("ordinary reissue changed business user revision")
+                if any(j["kind"]=="kick" and (j.get("payload") or {}).get("user_id")==fresh_id for j in expect("/api/v1/jobs")):
+                    raise RuntimeError("ordinary reissue queued a disconnect")
+                transfer_managed(old_cert,old_key,"renewal-old-still-valid")
+                transfer_managed(renewed_cert,renewed_key,"renewal-current")
+                for generation in (2,3):
+                    next_cert, next_key = temp / f"ca-{generation}.pem", temp / f"ca-{generation}-key.pem"
+                    run(["openssl","req","-x509","-newkey","ec","-pkeyopt","ec_paramgen_curve:P-256","-nodes","-keyout",str(next_key),"-out",str(next_cert),"-days","365","-subj",f"/CN=Live managed issuer {generation}","-addext","basicConstraints=critical,CA:TRUE","-addext","keyUsage=critical,keyCertSign,cRLSign"])
+                    secrets_to_scrub.append(next_key.read_text())
+                    receipt = expect(f"/api/v1/credentials/{ca_id}/ca-versions","POST",{"expected_revision":generation-1,"certificate":next_cert.read_text(),"private_key":next_key.read_text(),"idempotency_key":f"live-ca-{suffix}-{generation}"},(202,))
+                    deadline = time.monotonic()+300
+                    previous_phase = None
+                    while time.monotonic()<deadline:
+                        batch = expect(f"/api/v1/credential-batches/{receipt['batch_id']}")
+                        phase = batch["ca_rotation"]["phase"]
+                        if phase != previous_phase:
+                            print(f"CA generation {generation}: {phase}",flush=True)
+                            previous_phase = phase
+                        if phase=="complete": break
+                        if any(n.get("error_message") for n in batch["ca_rotation"]["nodes"]):
+                            raise RuntimeError("live CA trust preparation failed: "+json.dumps(batch["ca_rotation"]))
+                        time.sleep(1)
+                    else:
+                        diagnostic = dict(batch["ca_rotation"])
+                        with database.connect() as connection:
+                            diagnostic["actual_nodes"] = connection.execute("SELECT n.mtls_state,n.state,n.desired_revision,n.deployed_revision,a.phase,p.ca_version,n.deployed_content_sha256=a.target_digest FROM nodes n LEFT JOIN mtls_activations a ON a.id=n.mtls_activation_id LEFT JOIN mtls_probe_versions p ON p.node_id=n.id AND p.credential_id=a.probe_credential_id AND p.credential_version=a.probe_credential_version WHERE n.id=%s",(node_id,)).fetchall()
+                        raise RuntimeError(f"live CA generation {generation} did not complete: "+json.dumps(diagnostic,default=str))
+                    current_cert,current_key,current = fresh_material(f"ca-generation-{generation}")
+                    if current==renewed: raise RuntimeError("CA publication did not publish new user material")
+                    transfer_managed(current_cert,current_key,f"ca-generation-{generation}-traffic")
+                with database.connect() as connection:
+                    versions = [r[0] for r in connection.execute("SELECT ca_version FROM mtls_node_trust WHERE node_id=%s AND deployed ORDER BY ca_version",(node_id,))]
+                    if versions != [1,2,3]: raise RuntimeError("consecutive publication removed still-required old trust")
+                    if connection.execute("SELECT count(*) FROM mtls_trust_cleanup WHERE ca_id=%s AND completed_at IS NULL",(ca_id,)).fetchone()[0]!=2:
+                        raise RuntimeError("consecutive publications did not retain independent delayed cleanups")
+                    if connection.execute("SELECT 1 FROM mtls_user_versions WHERE ca_id=%s AND ca_version>=2 GROUP BY identity_id,ca_version HAVING count(*)<>1",(ca_id,)).fetchone():
+                        raise RuntimeError("CA rotation issued duplicate shared user versions")
+                    if connection.execute("SELECT 1 FROM jobs WHERE kind='kick' AND payload_json->>'user_id'=%s",(fresh_id,)).fetchone():
+                        raise RuntimeError("managed maintenance queued a user disconnect")
+                transfer_managed(old_cert,old_key,"old-generation-after-two-publications")
+                # Explicit off/on round-trip changes subscriptions only after a successful deployment.
+                for mode in ("off","managed"):
+                    latest = expect(f"/api/v1/nodes/{node_id}")
+                    options = latest["config"]
+                    if "clientCA" in options.get("tls",{}): raise RuntimeError("public config exposed generated clientCA")
+                    options["mtls"] = {"mode":"off"} if mode=="off" else {"mode":"managed","ca_credential_id":ca_id,"ca_credential_version":3}
+                    update = expect(f"/api/v1/nodes/{node_id}","PATCH",{"expected_revision":latest["revision"],"config":options})
+                    node_revision = update["revision"]
+                    job = next(j for j in expect("/api/v1/jobs") if j.get("node_id")==node_id and j.get("target_revision")==node_revision and j["kind"]=="sync")
+                    if wait_job(job["id"])["job"]["status"]!="succeeded": raise RuntimeError("managed off/on deployment failed")
+                    status, body = request(base,f"/sub/{fresh_sub}/clash.yaml")
+                    proxy = yaml.safe_load(body)["proxies"][0]
+                    if mode=="off" and any(k in proxy for k in ("certificate","private-key")): raise RuntimeError("off mode retained client material")
+                    if mode=="managed" and proxy.get("certificate")!=current[0]: raise RuntimeError("same-CA restoration did not reuse healthy shared material")
+                print("Managed CA maintenance passed: zero-user deployment, per-user subscription PEM, ordinary reissue without kicks, two consecutive publications, delayed trust retention and explicit off/on.",flush=True)
+
                 deletion = expect(
                     f"/api/v1/nodes/{node_id}?expected_revision={node_revision}",
                     "DELETE",
@@ -1766,6 +1862,14 @@ def main():
                 if secret:
                     message = message.replace(secret, "[redacted]")
             print("MTLS_LIVE_FAILURE:", message)
+            log_path = temp / "mihomo.log"
+            if log_path.exists():
+                lines = log_path.read_text(errors="replace").splitlines()
+                relevant = "\n".join(line for line in lines if any(term in line.lower() for term in ("level=warn","level=error","127.0.0.1","loopback")))[-10000:]
+                for secret in secrets_to_scrub:
+                    if secret: relevant = relevant.replace(secret,"[redacted]")
+                print("mihomo_request_diagnostics:",relevant)
+
             for process in traffic_generator_processes:
                 stop_process_group(process)
             if client and client.poll() is None:

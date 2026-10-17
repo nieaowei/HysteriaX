@@ -26,8 +26,10 @@ pub async fn retry(
         .ok_or_else(|| ApiError::not_found("job"))?;
     let status: String = original.get("status");
     let parent: Option<String> = original.get("retry_of_job_id");
+    let managed = original.get::<Value, _>("payload_json")["mtls_operation"] == true;
     if status != "failed"
-        && !(matches!(status.as_str(), "cancelled" | "rolled_back") && parent.is_some())
+        && !(matches!(status.as_str(), "cancelled" | "rolled_back")
+            && (parent.is_some() || managed))
     {
         return Err(ApiError::conflict(
             "only failed jobs or unsuccessful retry attempts can be retried",
@@ -50,6 +52,17 @@ pub async fn retry(
         }
         return Err(ApiError::conflict(
             "this job already has a completed retry; open the latest attempt",
+        ));
+    }
+    if managed {
+        let child =
+            crate::credentials::rotations::retry_node_job(&mut tx, &id, input.expected_revision)
+                .await
+                .map_err(|e| ApiError::conflict(e.to_string()))?;
+        tx.commit().await?;
+        return Ok((
+            StatusCode::ACCEPTED,
+            Json(json!({"job_id":child,"status":"queued"})),
         ));
     }
     let kind: String = original.get("kind");

@@ -320,6 +320,14 @@ async fn succeed(pool: &PgPool, job: &JobInput, output: JobOutput) -> Result<(),
         if let (Some(revision), Some(config)) =
             (output.deployed_revision, output.deployed_config.as_deref())
         {
+            if output.result["activation_id"].is_string() {
+                crate::credentials::activation::commit(
+                    &mut tx,
+                    &job.id,
+                    output.deployed_sha256.as_deref().unwrap_or(""),
+                )
+                .await?;
+            }
             sqlx::query("UPDATE nodes SET state = CASE WHEN state IN ('deleting', 'delete_failed') THEN state ELSE $1 END, deployed_revision = $2, deployed_config_enc = $3, deployed_content_sha256 = $4, last_seen_at = $5, updated_at = $6 WHERE id = $7")
                 .bind(state).bind(revision).bind(config).bind(output.deployed_sha256.as_deref()).bind(timestamp).bind(timestamp).bind(node_id).execute(&mut *tx).await?;
             if let Some(connection) = &output.published_connection {
@@ -331,6 +339,9 @@ async fn succeed(pool: &PgPool, job: &JobInput, output: JobOutput) -> Result<(),
             }
             sqlx::query("UPDATE config_versions SET deployed_success = TRUE WHERE node_id = $1 AND revision = $2")
                 .bind(node_id).bind(revision).execute(&mut *tx).await?;
+            crate::credentials::rotations::operation_completed(&mut tx, job)
+                .await
+                .map_err(|e| sqlx::Error::Protocol(e.to_string()))?;
         } else {
             sqlx::query("UPDATE nodes SET state = CASE WHEN state IN ('deleting', 'delete_failed') THEN state ELSE $1 END, updated_at = $2 WHERE id = $3")
                 .bind(state)

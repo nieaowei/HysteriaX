@@ -19,6 +19,7 @@ pub struct RealmConnection {
 }
 
 const SERVER_FIELDS: &[&str] = &[
+    "mtls",
     "realm",
     "obfs",
     "tls",
@@ -57,6 +58,7 @@ pub fn validate_server_options(value: &Value) -> Result<()> {
             bail!("unsupported Hysteria 2 v2.12.3 server field: {key}");
         }
     }
+    crate::credentials::node_mtls::Settings::from_config(value)?;
     if object.contains_key("tls") && object.contains_key("acme") {
         bail!("tls and acme are mutually exclusive");
     }
@@ -1151,6 +1153,7 @@ pub fn render_server_yaml_with_traffic_stats_port(
     validate_server_options(options)?;
     let realm = realm_connection(options)?;
     let mut root: Map<String, Value> = options.as_object().cloned().unwrap_or_default();
+    root.remove("mtls");
     let remove_empty_realm =
         if let Some(realm) = root.get_mut("realm").and_then(Value::as_object_mut) {
             realm.remove("connection");

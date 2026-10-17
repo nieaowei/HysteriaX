@@ -11,6 +11,37 @@ use std::{
 use tokio::{process::Command, task::JoinSet};
 use uuid::Uuid;
 
+fn probe_directory_prefix() -> String {
+    let raw = std::env::var("DATABASE_URL").unwrap_or_default();
+    let identity = url::Url::parse(&raw)
+        .map(|mut url| {
+            let _ = url.set_password(None);
+            url.to_string()
+        })
+        .unwrap_or(raw);
+    format!("hysteriax-monitor-{}-", &token_digest(&identity)[..16])
+}
+
+pub fn cleanup_probe_directories() -> Result<()> {
+    cleanup_probe_directories_in(&std::env::temp_dir(), &probe_directory_prefix())
+}
+
+fn cleanup_probe_directories_in(root: &std::path::Path, prefix: &str) -> Result<()> {
+    for item in std::fs::read_dir(root)? {
+        let item = item?;
+        let name = item.file_name();
+        let name = name.to_string_lossy();
+        if name
+            .strip_prefix(prefix)
+            .is_some_and(|suffix| Uuid::parse_str(suffix).is_ok())
+            && item.file_type()?.is_dir()
+        {
+            std::fs::remove_dir_all(item.path())?;
+        }
+    }
+    Ok(())
+}
+
 struct WorkDir(PathBuf);
 impl Drop for WorkDir {
     fn drop(&mut self) {
@@ -87,7 +118,7 @@ async fn cleanup(state: &AppState) -> Result<()> {
     Ok(())
 }
 async fn collect(state: &AppState) -> Result<()> {
-    let ids:Vec<String>=sqlx::query_scalar("SELECT id FROM nodes WHERE deployed_revision IS NOT NULL AND state NOT IN ('deleting','delete_failed') ORDER BY id").fetch_all(&state.pool).await?;
+    let ids:Vec<String>=sqlx::query_scalar("SELECT id FROM nodes WHERE deployed_revision IS NOT NULL AND state NOT IN ('deleting','delete_failed') AND mtls_state='ready' ORDER BY id").fetch_all(&state.pool).await?;
     let mut tasks = JoinSet::new();
     for id in ids {
         while tasks.len() >= 4 {
@@ -113,7 +144,7 @@ async fn sample(state: &AppState, id: &str) -> Result<()> {
     if acquired.is_none() {
         return Ok(());
     }
-    let row=sqlx::query("SELECT n.*,v.config_enc FROM nodes n JOIN config_versions v ON v.node_id=n.id AND v.revision=n.deployed_revision WHERE n.id=$1 AND n.state NOT IN ('deleting','delete_failed')").bind(id).fetch_optional(&state.pool).await?;
+    let row=sqlx::query("SELECT n.*,v.config_enc FROM nodes n JOIN config_versions v ON v.node_id=n.id AND v.revision=n.deployed_revision WHERE n.id=$1 AND n.state NOT IN ('deleting','delete_failed') AND n.mtls_state='ready'").bind(id).fetch_optional(&state.pool).await?;
     if let Some(row) = row {
         let revision: i64 = row.get("deployed_revision");
         let started = Utc::now();
@@ -202,7 +233,11 @@ async fn probe_using(
         crate::api::resources::resolve_config_resources(&state.pool, &state.secrets, id, &options)
             .await
             .map_err(|_| anyhow::anyhow!("probe resources unavailable"))?;
-    let dir = WorkDir(std::env::temp_dir().join(format!("hysteriax-monitor-{}", Uuid::new_v4())));
+    let dir = WorkDir(std::env::temp_dir().join(format!(
+        "{}{}",
+        probe_directory_prefix(),
+        Uuid::new_v4()
+    )));
     std::fs::create_dir(&dir.0)?;
     #[cfg(unix)]
     {
@@ -222,27 +257,32 @@ async fn probe_using(
     if let Some(ech) = deployment::client_ech_config(&options, &resources)? {
         tls["ech"] = json!(ech);
     }
-    if options
-        .pointer("/tls/clientCA")
-        .and_then(Value::as_str)
-        .is_some_and(|v| !v.is_empty())
-    {
-        let cert=sqlx::query("SELECT user_id,mtls_credential_id,mtls_credential_version FROM node_assignments WHERE node_id=$1 AND mtls_credential_id IS NOT NULL ORDER BY created_at LIMIT 1").bind(id).fetch_optional(&state.pool).await?;
-        let Some(cert) = cert else {
+    let policy = crate::credentials::node_mtls::Settings::from_config(&options)?;
+    if let Some((ca, _)) = policy.authority() {
+        let Some((certificate, private_key)) = crate::credentials::node_mtls::probe_material(
+            &state.pool,
+            &state.secrets,
+            id,
+            ca,
+            None,
+        )
+        .await?
+        else {
             return Ok(ProbeResult {
                 status: "unconfigured".into(),
-                reason: Some("mTLS 缺少客户端证书".into()),
+                reason: Some("托管 mTLS 探测证书不可用".into()),
                 ..Default::default()
             });
         };
         let cp = dir.0.join("client.crt");
         let kp = dir.0.join("client.key");
-        let (certificate, private_key) =
-            crate::credentials::assignment_identity(&state.pool, &state.secrets, &cert)
-                .await?
-                .context("mTLS identity missing")?;
         std::fs::write(&cp, certificate)?;
         std::fs::write(&kp, private_key)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&kp, std::fs::Permissions::from_mode(0o600))?;
+        }
         tls["clientCertificate"] = json!(cp);
         tls["clientKey"] = json!(kp);
     }
@@ -443,7 +483,7 @@ mod tests {
         let encrypted = state
             .secrets
             .encrypt(
-                &json!({"server_config":{"tls":{"clientCA":"/test/ca.pem"}},"listen_addr":":443"})
+                &json!({"server_config":{"tls":{"cert":"/test/server.crt","key":"/test/server.key"},"mtls":{"mode":"managed","ca_credential_id":Uuid::new_v4().to_string(),"ca_credential_version":1}},"listen_addr":":443"})
                     .to_string(),
             )
             .unwrap();
@@ -511,5 +551,27 @@ mod tests {
             std::fs::write(dir.0.join("client.key"), "test-only").unwrap();
         }
         assert!(!path.exists());
+    }
+}
+
+#[cfg(test)]
+mod temporary_material_tests {
+    use super::*;
+    #[test]
+    fn restart_cleanup_only_removes_owned_namespace_directories() {
+        let root =
+            WorkDir(std::env::temp_dir().join(format!("hx-probe-cleanup-test-{}", Uuid::new_v4())));
+        std::fs::create_dir(&root.0).unwrap();
+        let owned = root.0.join(format!("owned-{}", Uuid::new_v4()));
+        let unrelated = root.0.join(format!("other-{}", Uuid::new_v4()));
+        let malformed = root.0.join("owned-not-a-uuid");
+        for path in [&owned, &unrelated, &malformed] {
+            std::fs::create_dir(path).unwrap();
+            std::fs::write(path.join("client.key"), "fixture").unwrap();
+        }
+        cleanup_probe_directories_in(&root.0, "owned-").unwrap();
+        assert!(!owned.exists());
+        assert!(unrelated.exists());
+        assert!(malformed.exists());
     }
 }

@@ -233,23 +233,128 @@ struct DNSAllocation: Encodable, Sendable {
     }
 }
 
+struct CAIdentityCreateRequest: Encodable, Sendable {
+    let name: String
+    let source: String
+    let certificate: String?
+    let privateKey: String?
+    let policy: ManagedCAPolicy?
+    let idempotencyKey: String
+
+    init(
+        name: String,
+        source: String,
+        certificate: String? = nil,
+        privateKey: String? = nil,
+        policy: ManagedCAPolicy? = nil,
+        idempotencyKey: String
+    ) {
+        self.name = name
+        self.source = source
+        self.certificate = certificate
+        self.privateKey = privateKey
+        self.policy = policy
+        self.idempotencyKey = idempotencyKey
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case name
+        case source
+        case certificate
+        case privateKey = "private_key"
+        case policy
+        case idempotencyKey = "idempotency_key"
+    }
+}
+
+struct CAPolicyUpdateRequest: Encodable, Sendable {
+    let expectedRevision: Int
+    let policy: ManagedCAPolicy
+    let idempotencyKey: String
+
+    init(
+        expectedRevision: Int,
+        policy: ManagedCAPolicy,
+        idempotencyKey: String
+    ) {
+        self.expectedRevision = expectedRevision
+        self.policy = policy
+        self.idempotencyKey = idempotencyKey
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case expectedRevision = "expected_revision"
+        case policy
+        case idempotencyKey = "idempotency_key"
+    }
+}
+
+struct CAIdentityPublishRequest: Encodable, Sendable {
+    let expectedRevision: Int
+    let certificate: String?
+    let privateKey: String?
+    let replaceRotationId: String?
+    let idempotencyKey: String
+
+    init(
+        expectedRevision: Int,
+        certificate: String? = nil,
+        privateKey: String? = nil,
+        replaceRotationId: String? = nil,
+        idempotencyKey: String
+    ) {
+        self.expectedRevision = expectedRevision
+        self.certificate = certificate
+        self.privateKey = privateKey
+        self.replaceRotationId = replaceRotationId
+        self.idempotencyKey = idempotencyKey
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case expectedRevision = "expected_revision"
+        case certificate
+        case privateKey = "private_key"
+        case replaceRotationId = "replace_rotation_id"
+        case idempotencyKey = "idempotency_key"
+    }
+}
+
+struct ManagedUserReissueRequest: Encodable, Sendable {
+    let caCredentialId: String?
+    let expectedRevisions: [String: JSONValue]
+    let idempotencyKey: String
+
+    init(
+        caCredentialId: String? = nil,
+        expectedRevisions: [String: JSONValue],
+        idempotencyKey: String
+    ) {
+        self.caCredentialId = caCredentialId
+        self.expectedRevisions = expectedRevisions
+        self.idempotencyKey = idempotencyKey
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case caCredentialId = "ca_credential_id"
+        case expectedRevisions = "expected_revisions"
+        case idempotencyKey = "idempotency_key"
+    }
+}
+
 struct CredentialCreateRequest: Encodable, Sendable {
     let name: String
     let kind: String
-    let ownerUserId: String?
     let reminderAt: String?
     let payload: [String: JSONValue]
 
     init(
         name: String,
         kind: String,
-        ownerUserId: String? = nil,
         reminderAt: String? = nil,
         payload: [String: JSONValue]
     ) {
         self.name = name
         self.kind = kind
-        self.ownerUserId = ownerUserId
         self.reminderAt = reminderAt
         self.payload = payload
     }
@@ -257,7 +362,6 @@ struct CredentialCreateRequest: Encodable, Sendable {
     enum CodingKeys: String, CodingKey {
         case name
         case kind
-        case ownerUserId = "owner_user_id"
         case reminderAt = "reminder_at"
         case payload
     }
@@ -573,22 +677,19 @@ struct AuthorizationGroupPreviewRequest: Encodable, Sendable {
     let name: String?
     let userIds: [String]?
     let nodeIds: [String]?
-    let mtlsBindings: [AuthorizationMTLSBinding]?
 
     init(
         action: String,
         expectedRevision: Int? = nil,
         name: String? = nil,
         userIds: [String]? = nil,
-        nodeIds: [String]? = nil,
-        mtlsBindings: [AuthorizationMTLSBinding]? = nil
+        nodeIds: [String]? = nil
     ) {
         self.action = action
         self.expectedRevision = expectedRevision
         self.name = name
         self.userIds = userIds
         self.nodeIds = nodeIds
-        self.mtlsBindings = mtlsBindings
     }
 
     enum CodingKeys: String, CodingKey {
@@ -597,7 +698,6 @@ struct AuthorizationGroupPreviewRequest: Encodable, Sendable {
         case name
         case userIds = "user_ids"
         case nodeIds = "node_ids"
-        case mtlsBindings = "mtls_bindings"
     }
 }
 
@@ -606,20 +706,17 @@ struct AuthorizationGroupCreateRequest: Encodable, Sendable {
     let userIds: [String]
     let nodeIds: [String]
     let previewToken: String
-    let mtlsBindings: [AuthorizationMTLSBinding]?
 
     init(
         name: String,
         userIds: [String],
         nodeIds: [String],
-        previewToken: String,
-        mtlsBindings: [AuthorizationMTLSBinding]? = nil
+        previewToken: String
     ) {
         self.name = name
         self.userIds = userIds
         self.nodeIds = nodeIds
         self.previewToken = previewToken
-        self.mtlsBindings = mtlsBindings
     }
 
     enum CodingKeys: String, CodingKey {
@@ -627,7 +724,6 @@ struct AuthorizationGroupCreateRequest: Encodable, Sendable {
         case userIds = "user_ids"
         case nodeIds = "node_ids"
         case previewToken = "preview_token"
-        case mtlsBindings = "mtls_bindings"
     }
 }
 
@@ -637,22 +733,19 @@ struct AuthorizationGroupUpdateRequest: Encodable, Sendable {
     let userIds: [String]
     let nodeIds: [String]
     let previewToken: String
-    let mtlsBindings: [AuthorizationMTLSBinding]?
 
     init(
         expectedRevision: Int,
         name: String,
         userIds: [String],
         nodeIds: [String],
-        previewToken: String,
-        mtlsBindings: [AuthorizationMTLSBinding]? = nil
+        previewToken: String
     ) {
         self.expectedRevision = expectedRevision
         self.name = name
         self.userIds = userIds
         self.nodeIds = nodeIds
         self.previewToken = previewToken
-        self.mtlsBindings = mtlsBindings
     }
 
     enum CodingKeys: String, CodingKey {
@@ -661,7 +754,6 @@ struct AuthorizationGroupUpdateRequest: Encodable, Sendable {
         case userIds = "user_ids"
         case nodeIds = "node_ids"
         case previewToken = "preview_token"
-        case mtlsBindings = "mtls_bindings"
     }
 }
 
@@ -686,22 +778,18 @@ struct AuthorizationGroupDeleteRequest: Encodable, Sendable {
 struct UserAuthorizationGroupsPreviewRequest: Encodable, Sendable {
     let expectedRevision: Int
     let groupIds: [String]
-    let mtlsBindings: [AuthorizationMTLSBinding]?
 
     init(
         expectedRevision: Int,
-        groupIds: [String],
-        mtlsBindings: [AuthorizationMTLSBinding]? = nil
+        groupIds: [String]
     ) {
         self.expectedRevision = expectedRevision
         self.groupIds = groupIds
-        self.mtlsBindings = mtlsBindings
     }
 
     enum CodingKeys: String, CodingKey {
         case expectedRevision = "expected_revision"
         case groupIds = "group_ids"
-        case mtlsBindings = "mtls_bindings"
     }
 }
 
@@ -709,25 +797,21 @@ struct UserAuthorizationGroupsUpdateRequest: Encodable, Sendable {
     let expectedRevision: Int
     let previewToken: String
     let groupIds: [String]
-    let mtlsBindings: [AuthorizationMTLSBinding]?
 
     init(
         expectedRevision: Int,
         previewToken: String,
-        groupIds: [String],
-        mtlsBindings: [AuthorizationMTLSBinding]? = nil
+        groupIds: [String]
     ) {
         self.expectedRevision = expectedRevision
         self.previewToken = previewToken
         self.groupIds = groupIds
-        self.mtlsBindings = mtlsBindings
     }
 
     enum CodingKeys: String, CodingKey {
         case expectedRevision = "expected_revision"
         case previewToken = "preview_token"
         case groupIds = "group_ids"
-        case mtlsBindings = "mtls_bindings"
     }
 }
 
@@ -760,54 +844,6 @@ struct RevisionRequest: Encodable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case expectedRevision = "expected_revision"
-    }
-}
-
-struct AssignmentRequest: Encodable, Sendable {
-    let expectedRevision: Int
-    let nodeID: String
-    let mtlsCredentialId: String?
-    let mtlsCredentialVersion: Int?
-
-    init(
-        expectedRevision: Int,
-        nodeID: String,
-        mtlsCredentialId: String? = nil,
-        mtlsCredentialVersion: Int? = nil
-    ) {
-        self.expectedRevision = expectedRevision
-        self.nodeID = nodeID
-        self.mtlsCredentialId = mtlsCredentialId
-        self.mtlsCredentialVersion = mtlsCredentialVersion
-    }
-
-    enum CodingKeys: String, CodingKey {
-        case expectedRevision = "expected_revision"
-        case nodeID = "node_id"
-        case mtlsCredentialId = "mtls_credential_id"
-        case mtlsCredentialVersion = "mtls_credential_version"
-    }
-}
-
-struct AssignmentCertificateUpdateRequest: Encodable, Sendable {
-    let expectedRevision: Int
-    let mtlsCredentialId: String
-    let mtlsCredentialVersion: Int
-
-    init(
-        expectedRevision: Int,
-        mtlsCredentialId: String,
-        mtlsCredentialVersion: Int
-    ) {
-        self.expectedRevision = expectedRevision
-        self.mtlsCredentialId = mtlsCredentialId
-        self.mtlsCredentialVersion = mtlsCredentialVersion
-    }
-
-    enum CodingKeys: String, CodingKey {
-        case expectedRevision = "expected_revision"
-        case mtlsCredentialId = "mtls_credential_id"
-        case mtlsCredentialVersion = "mtls_credential_version"
     }
 }
 
@@ -857,10 +893,20 @@ struct APIOperation<Request: Sendable, Response: Sendable>: Sendable {
 }
 
 enum APIEndpoints {
+    static let createCAIdentity: APIOperation<CAIdentityCreateRequest, CAIdentityReceipt> = APIOperation<CAIdentityCreateRequest, CAIdentityReceipt>(method: "POST", path: "api/v1/credentials/ca-identities", queryParameters: [:])
+    static func updateCAPolicy(id: String) -> APIOperation<CAPolicyUpdateRequest, CAPolicyReceipt> {
+        APIOperation(method: "PATCH", path: "api/v1/credentials/\(id)/ca-policy", queryParameters: [:])
+    }
+    static func publishCAIdentityVersion(id: String) -> APIOperation<CAIdentityPublishRequest, CAIdentityReceipt> {
+        APIOperation(method: "POST", path: "api/v1/credentials/\(id)/ca-versions", queryParameters: [:])
+    }
+    static func reissueManagedUserCertificates(id: String) -> APIOperation<ManagedUserReissueRequest, ManagedUserReissueReceipt> {
+        APIOperation(method: "POST", path: "api/v1/users/\(id)/managed-certificates/reissue", queryParameters: [:])
+    }
     static let getClientSummary: APIOperation<NoRequest, ClientSummary> = APIOperation<NoRequest, ClientSummary>(method: "GET", path: "api/v1/client/summary", queryParameters: [:])
     static let getCacheStatistics: APIOperation<NoRequest, [String: JSONValue]> = APIOperation<NoRequest, [String: JSONValue]>(method: "GET", path: "api/v1/cache", queryParameters: [:])
-    static func listCredentials(page: Int? = nil, pageSize: Int? = nil, category: String? = nil, kind: String? = nil, q: String? = nil, sort: String? = nil, order: String? = nil) -> APIOperation<NoRequest, CredentialsPage> {
-        APIOperation(method: "GET", path: "api/v1/credentials", queryParameters: ["page": page.map { String($0) }, "page_size": pageSize.map { String($0) }, "category": category.map { String($0) }, "kind": kind.map { String($0) }, "q": q.map { String($0) }, "sort": sort.map { String($0) }, "order": order.map { String($0) }].compactMapValues { $0 })
+    static func listCredentials(page: Int? = nil, pageSize: Int? = nil, category: String? = nil, kind: String? = nil, includeInternal: Bool? = nil, q: String? = nil, sort: String? = nil, order: String? = nil) -> APIOperation<NoRequest, CredentialsPage> {
+        APIOperation(method: "GET", path: "api/v1/credentials", queryParameters: ["page": page.map { String($0) }, "page_size": pageSize.map { String($0) }, "category": category.map { String($0) }, "kind": kind.map { String($0) }, "include_internal": includeInternal.map { String($0) }, "q": q.map { String($0) }, "sort": sort.map { String($0) }, "order": order.map { String($0) }].compactMapValues { $0 })
     }
     static let createCredential: APIOperation<CredentialCreateRequest, CredentialReceipt> = APIOperation<CredentialCreateRequest, CredentialReceipt>(method: "POST", path: "api/v1/credentials", queryParameters: [:])
     static func getCredential(id: String) -> APIOperation<NoRequest, CredentialDetail> {
@@ -943,15 +989,6 @@ enum APIEndpoints {
     }
     static func deleteUser(id: String, expectedRevision: Int) -> APIOperation<NoRequest, NoResponse> {
         APIOperation(method: "DELETE", path: "api/v1/users/\(id)", queryParameters: ["expected_revision": String(expectedRevision)])
-    }
-    static func assignUserToNode(id: String) -> APIOperation<AssignmentRequest, AssignmentReceipt> {
-        APIOperation(method: "POST", path: "api/v1/users/\(id)/assignments", queryParameters: [:])
-    }
-    static func unassignUserFromNode(id: String, nodeID: String) -> APIOperation<RevisionRequest, AssignmentMutationResponse> {
-        APIOperation(method: "DELETE", path: "api/v1/users/\(id)/assignments/\(nodeID)", queryParameters: [:])
-    }
-    static func updateAssignmentClientCertificate(id: String, nodeID: String) -> APIOperation<AssignmentCertificateUpdateRequest, AssignmentMutationResponse> {
-        APIOperation(method: "PUT", path: "api/v1/users/\(id)/assignments/\(nodeID)", queryParameters: [:])
     }
     static func previewUserAuthorizationGroups(id: String) -> APIOperation<UserAuthorizationGroupsPreviewRequest, AuthorizationChangePreview> {
         APIOperation(method: "POST", path: "api/v1/users/\(id)/authorization-groups/preview", queryParameters: [:])

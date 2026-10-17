@@ -43,25 +43,6 @@ pub struct RevisionRequest {
     expected_revision: i64,
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-#[allow(dead_code)]
-// Retain the legacy body shape to return a clear migration error.
-pub struct AssignRequest {
-    expected_revision: i64,
-    node_id: String,
-    mtls_credential_id: Option<String>,
-    mtls_credential_version: Option<i64>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct AssignmentCertificateUpdate {
-    expected_revision: i64,
-    mtls_credential_id: String,
-    mtls_credential_version: i64,
-}
-
 #[derive(Default, Deserialize)]
 pub(crate) struct UsersListQuery {
     page: Option<i64>,
@@ -144,7 +125,12 @@ pub async fn get(
         .fetch_optional(&state.pool)
         .await?
         .ok_or_else(|| ApiError::not_found("user"))?;
-    Ok(Json(user_json(&state, &row).await?))
+    let mut result = user_json(&state, &row).await?;
+    let identities = super::managed_mtls::user_identities(&state, &id).await?;
+    if !identities.is_empty() {
+        result["managed_certificates"] = json!(identities);
+    }
+    Ok(Json(result))
 }
 
 pub async fn create(
@@ -300,6 +286,7 @@ pub async fn delete(
         .await?;
     }
     sqlx::query("UPDATE credentials SET archived=TRUE,revision=revision+1,updated_at=$1 WHERE owner_user_id=$2 AND archived=FALSE").bind(now()).bind(&id).execute(&mut *tx).await?;
+    sqlx::query("UPDATE mtls_user_identities SET archived=TRUE,next_action_at=NULL,revision=revision+1,authorization_revision=authorization_revision+1,updated_at=$2 WHERE user_id=$1").bind(&id).bind(now()).execute(&mut *tx).await?;
     sqlx::query("DELETE FROM users WHERE id = $1")
         .bind(&id)
         .execute(&mut *tx)
@@ -308,97 +295,6 @@ pub async fn delete(
         .bind(Uuid::new_v4().to_string()).bind(&id).bind(json!({"revision": expected})).bind(now()).execute(&mut *tx).await?;
     tx.commit().await?;
     Ok(StatusCode::NO_CONTENT)
-}
-
-pub async fn assign(
-    State(_state): State<AppState>,
-    Path(_user_id): Path<String>,
-    Json(_input): Json<AssignRequest>,
-) -> Result<(StatusCode, Json<Value>), ApiError> {
-    Err(legacy_assignment_error())
-}
-
-pub async fn update_assignment_client_certificate(
-    State(state): State<AppState>,
-    Path((user_id, node_id)): Path<(String, String)>,
-    Json(input): Json<AssignmentCertificateUpdate>,
-) -> Result<Json<Value>, ApiError> {
-    if input.expected_revision < 1 {
-        return Err(ApiError::bad_request("expected_revision must be positive"));
-    }
-    let mut tx = db::begin_write(&state.pool).await?;
-    validate_mtls_binding(
-        &mut tx,
-        &input.mtls_credential_id,
-        input.mtls_credential_version,
-        &user_id,
-    )
-    .await?;
-    let user = sqlx::query("SELECT revision FROM users WHERE id = $1")
-        .bind(&user_id)
-        .fetch_optional(&mut *tx)
-        .await?
-        .ok_or_else(|| ApiError::not_found("user"))?;
-    let revision: i64 = user.get("revision");
-    if revision != input.expected_revision {
-        return Err(ApiError::conflict(format!(
-            "user revision is {revision}; reload before editing"
-        )));
-    }
-    let updated_at = now();
-    let update = sqlx::query("UPDATE node_assignments SET mtls_credential_id = $1, mtls_credential_version = $2 WHERE user_id = $3 AND node_id = $4")
-        .bind(&input.mtls_credential_id)
-        .bind(input.mtls_credential_version)
-        .bind(&user_id)
-        .bind(&node_id)
-        .execute(&mut *tx)
-        .await?;
-    if update.rows_affected() == 0 {
-        return Err(ApiError::not_found("node assignment"));
-    }
-    let next_revision = revision + 1;
-    sqlx::query("UPDATE users SET revision = $1, updated_at = $2 WHERE id = $3 AND revision = $4")
-        .bind(next_revision)
-        .bind(updated_at)
-        .bind(&user_id)
-        .bind(revision)
-        .execute(&mut *tx)
-        .await?;
-    enqueue_job_with_payload_in_tx(
-        &mut tx,
-        "kick",
-        Some(&node_id),
-        None,
-        json!({"user_id": user_id}),
-    )
-    .await?;
-    sqlx::query("INSERT INTO audit_records (id, actor, action, entity_type, entity_id, detail_json, created_at) VALUES ($1, 'admin', 'user.client_certificate_updated', 'user', $2, $3, $4)")
-        .bind(Uuid::new_v4().to_string())
-        .bind(&user_id)
-        .bind(json!({"node_id": node_id, "revision": next_revision}))
-        .bind(updated_at)
-        .execute(&mut *tx)
-        .await?;
-    tx.commit().await?;
-    Ok(Json(
-        json!({"user_id": user_id, "node_id": node_id, "revision": next_revision}),
-    ))
-}
-
-pub async fn unassign(
-    State(_state): State<AppState>,
-    Path((_user_id, _node_id)): Path<(String, String)>,
-    Json(_input): Json<RevisionRequest>,
-) -> Result<Json<Value>, ApiError> {
-    Err(legacy_assignment_error())
-}
-
-fn legacy_assignment_error() -> ApiError {
-    ApiError::new(
-        StatusCode::CONFLICT,
-        "authorization_groups_required",
-        "Direct user-to-node assignments are disabled; manage access through authorization groups.",
-    )
 }
 
 pub async fn rotate_credentials(
@@ -604,7 +500,7 @@ async fn users_json_on(
         return Ok(vec![]);
     }
     let ids: Vec<String> = rows.iter().map(|row| row.get("id")).collect();
-    let assignments=sqlx::query("SELECT user_id,node_id,mtls_credential_id,mtls_credential_version,created_at FROM node_assignments WHERE user_id=ANY($1) ORDER BY user_id,node_id").bind(&ids).fetch_all(&mut *connection).await?;
+    let assignments=sqlx::query("SELECT user_id,node_id,created_at FROM node_assignments WHERE user_id=ANY($1) ORDER BY user_id,node_id").bind(&ids).fetch_all(&mut *connection).await?;
     let sources=sqlx::query("SELECT gu.user_id,gn.node_id,g.id,g.name FROM authorization_group_users gu JOIN authorization_group_nodes gn ON gn.group_id=gu.group_id JOIN authorization_groups g ON g.id=gu.group_id WHERE gu.user_id=ANY($1) ORDER BY lower(g.name) COLLATE \"C\",g.name COLLATE \"C\",g.id").bind(&ids).fetch_all(&mut *connection).await?;
     let memberships=sqlx::query("SELECT gu.user_id,g.id,g.name,g.revision FROM authorization_group_users gu JOIN authorization_groups g ON g.id=gu.group_id WHERE gu.user_id=ANY($1) ORDER BY lower(g.name) COLLATE \"C\",g.name COLLATE \"C\",g.id").bind(&ids).fetch_all(&mut *connection).await?;
     let mut source_map = BTreeMap::<(String, String), Vec<Value>>::new();
@@ -614,6 +510,8 @@ async fn users_json_on(
             .or_default()
             .push(json!({"id":row.get::<String,_>("id"),"name":row.get::<String,_>("name")}));
     }
+    let mut identity_refs =
+        crate::credentials::authorization::assignment_refs_on(connection, &ids).await?;
     let mut assigned = BTreeMap::<String, Vec<Value>>::new();
     for row in assignments {
         let user: String = row.get("user_id");
@@ -621,8 +519,10 @@ async fn users_json_on(
         let sources = source_map
             .remove(&(user.clone(), node.clone()))
             .unwrap_or_default();
-        assigned.entry(user).or_default().push(json!({"node_id":node,"created_at":row.get::<DateTime<Utc>,_>("created_at"),
-            "mtls_credential_id":row.get::<Option<String>,_>("mtls_credential_id"),"mtls_credential_version":row.get::<Option<i64>,_>("mtls_credential_version"),"source_groups":sources}));
+        let identities = identity_refs
+            .remove(&(user.clone(), node.clone()))
+            .unwrap_or_default();
+        assigned.entry(user).or_default().push(json!({"node_id":node,"created_at":row.get::<DateTime<Utc>,_>("created_at"),"managed_identity_ids":identities,"source_groups":sources}));
     }
     let mut groups = BTreeMap::<String, Vec<Value>>::new();
     for row in memberships {
@@ -685,21 +585,6 @@ where
     T: serde::Deserialize<'de>,
 {
     Option::<T>::deserialize(deserializer).map(Some)
-}
-
-async fn validate_mtls_binding(
-    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    id: &str,
-    version: i64,
-    user: &str,
-) -> Result<(), ApiError> {
-    let valid:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM credentials c JOIN credential_versions v ON v.credential_id=c.id WHERE c.id=$1 AND v.version=$2 AND c.kind='tls_identity' AND c.owner_user_id=$3 AND c.archived=FALSE)").bind(id).bind(version).bind(user).fetch_one(&mut **tx).await?;
-    if !valid {
-        return Err(ApiError::bad_request(
-            "invalid, archived, or incorrectly owned mTLS credential",
-        ));
-    }
-    Ok(())
 }
 
 #[cfg(test)]

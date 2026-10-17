@@ -72,6 +72,8 @@ async fn main() -> Result<()> {
         return Ok(());
     }
     let state = AppState::new(pool, secret_box);
+    proxy_monitor::cleanup_probe_directories()?;
+    let mtls = tokio::spawn(credentials::maintenance::run(state.clone()));
     let analytics = tokio::spawn(analytics::run(state.clone()));
     let jobs = tokio::spawn(jobs::run(state.clone()));
     let traffic = tokio::spawn(traffic::run(state.clone()));
@@ -107,7 +109,7 @@ async fn main() -> Result<()> {
     // Abort and join before releasing the instance lock. Dropping worker JoinSets
     // cancels their child jobs; persisted running work is recovered on startup.
     let workers = [
-        analytics, jobs, traffic, network, limits, probes, quota_rank,
+        analytics, jobs, traffic, network, limits, probes, quota_rank, mtls,
     ];
     for worker in &workers {
         worker.abort();

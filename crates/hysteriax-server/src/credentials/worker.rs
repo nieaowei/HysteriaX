@@ -168,47 +168,6 @@ pub async fn apply(pool: &PgPool, secrets: &SecretBox, job: &JobInput) -> Result
                 json!({"credential_id":id,"version":version,"sync_job_id":sync}),
             ))
         }
-        Some("mtls") => {
-            if kind != "tls_identity" || owner.as_deref() != Some(user) {
-                bail!("mTLS credential is not owned by this user");
-            }
-            let mut tx = db::begin_write(pool).await?;
-            verify_latest(&mut tx, id, version).await?;
-            let revision:i64=sqlx::query_scalar("SELECT expected_revision FROM credential_batch_items WHERE batch_id=$1 AND node_id=$2 AND user_id=$3 AND job_id=$4").bind(batch).bind(node).bind(user).bind(&job.id).fetch_one(&mut *tx).await?;
-            let changed = sqlx::query(
-                "UPDATE users SET revision=revision+1,updated_at=$1 WHERE id=$2 AND revision=$3",
-            )
-            .bind(Utc::now())
-            .bind(user)
-            .bind(revision)
-            .execute(&mut *tx)
-            .await?;
-            if changed.rows_affected() != 1 {
-                bail!("user changed before mTLS credential update");
-            }
-            let changed=sqlx::query("UPDATE node_assignments SET mtls_credential_version=$1 WHERE user_id=$2 AND node_id=$3 AND mtls_credential_id=$4").bind(version).bind(user).bind(node).bind(id).execute(&mut *tx).await?;
-            if changed.rows_affected() != 1 {
-                bail!("user assignment no longer references this credential");
-            }
-            // Remaining assignments for the same user in this batch follow the
-            // revision bump made here, but unrelated user edits still conflict.
-            sqlx::query("UPDATE credential_batch_items i SET expected_revision=$1 FROM jobs j WHERE i.batch_id=$2 AND i.user_id=$3 AND i.job_id=j.id AND j.kind='credential-apply' AND j.status IN ('queued','running') AND i.expected_revision=$4").bind(revision+1).bind(batch).bind(user).bind(revision).execute(&mut *tx).await?;
-            let kick = enqueue_job_with_payload_in_tx(
-                &mut tx,
-                "kick",
-                Some(node),
-                None,
-                json!({"user_id":user}),
-            )
-            .await
-            .map_err(|_| anyhow::anyhow!("failed to enqueue credential follow-up job"))?;
-            sqlx::query("UPDATE credential_batch_items SET job_id=$1,applied_at=now(),apply_stage='credential_revocation_queued' WHERE batch_id=$2 AND node_id=$3 AND user_id=$4 AND job_id=$5").bind(&kick).bind(batch).bind(node).bind(user).bind(&job.id).execute(&mut *tx).await?;
-            tx.commit().await?;
-            Ok(output(
-                "credential_revocation_queued",
-                json!({"credential_id":id,"version":version,"kick_job_id":kick}),
-            ))
-        }
         _ => bail!("unknown credential update mode"),
     }
 }

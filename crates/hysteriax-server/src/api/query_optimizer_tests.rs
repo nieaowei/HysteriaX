@@ -98,7 +98,9 @@ async fn audit_totals_follow_bulk_changes_rollback_and_truncate() {
 
 #[tokio::test]
 async fn query_index_upgrade_can_roll_back_without_losing_source_rows() {
-    let pool = crate::db::test_pool().await;
+    // This exercises the 0025–0030 rollback chain against its original schema.
+    // Later feature migrations intentionally block these old downgrade scripts.
+    let pool = crate::db::test_pool_through_version(1, 30).await;
     sqlx::query("INSERT INTO audit_records(id,actor,action,entity_type,entity_id,detail_json,created_at) VALUES('kept','admin','test','test','test','{}',now())").execute(&pool).await.unwrap();
     sqlx::raw_sql(include_str!(
         "../../../../scripts/rollback-ssh-test-confirmation.sql"

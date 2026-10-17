@@ -44,6 +44,7 @@ pub struct JobOutput {
 }
 
 pub async fn run_job(pool: &PgPool, secrets: &SecretBox, job: &JobInput) -> Result<JobOutput> {
+    crate::credentials::rotations::validate_job_on(&mut *pool.acquire().await?, job).await?;
     if let (Some(id), Some(version)) = (
         job.payload.get("credential_id").and_then(Value::as_str),
         job.payload
@@ -288,6 +289,9 @@ async fn deploy(pool: &PgPool, secrets: &SecretBox, job: &JobInput) -> Result<Jo
         .context("deployment job is missing node_id")?;
     let probe_token = generate_token();
     let result = deploy_with_probe(pool, secrets, job, &probe_token).await;
+    if result.is_err() {
+        let _ = crate::credentials::activation::uncertain(pool, &job.id).await;
+    }
     if let Err(error) =
         sqlx::query("DELETE FROM deployment_probe_tokens WHERE node_id = $1 AND token_hash = $2")
             .bind(node_id)
@@ -346,12 +350,29 @@ async fn deploy_with_probe(
     .fetch_optional(pool)
     .await?;
     let snapshot_enc = snapshot_enc.context("target configuration version is missing")?;
-    let snapshot: Value = serde_json::from_str(&secrets.decrypt(&snapshot_enc)?)
+    let mut snapshot: Value = serde_json::from_str(&secrets.decrypt(&snapshot_enc)?)
         .context("stored deployment snapshot is invalid")?;
+    if job.kind == "rollback"
+        && let Some(history) =
+            crate::credentials::activation::historical_snapshot(pool, secrets, node_id, revision)
+                .await?
+    {
+        snapshot = history;
+    }
+    anyhow::ensure!(
+        snapshot["legacy_mtls_reset"] != true,
+        "legacy mTLS history was invalidated; explicitly configure off or managed mode and create a new revision"
+    );
+    let operation =
+        crate::credentials::rotations::configure_job(pool, secrets, job, &mut snapshot).await?;
     let options = snapshot
         .get("server_config")
         .cloned()
         .unwrap_or_else(|| json!({}));
+    anyhow::ensure!(
+        options.pointer("/tls/clientCA").is_none(),
+        "legacy mTLS snapshots cannot be deployed or rolled back; explicitly configure off or managed mode"
+    );
     report_progress(
         pool,
         job,
@@ -359,10 +380,135 @@ async fn deploy_with_probe(
         "Resolving and validating the configuration resource references.",
     )
     .await?;
-    let (resolved_options, resource_files) =
+    let (mut resolved_options, mut resource_files) =
         crate::api::resources::resolve_config_resources(pool, secrets, node_id, &options)
             .await
             .map_err(|error| anyhow::anyhow!(error.message))?;
+    let mtls = crate::credentials::node_mtls::Settings::from_config(&options)?;
+    let persisted_trust = crate::credentials::activation::persisted_trust(pool, &job.id).await?;
+    let resuming_activation = persisted_trust.is_some();
+    let access_state: String = row.get("mtls_state");
+    anyhow::ensure!(
+        access_state != "needs_configuration" || row.get::<bool, _>("mtls_recovery_configured"),
+        "node requires an explicit off or managed policy before deployment"
+    );
+    anyhow::ensure!(
+        access_state == "ready" || job.kind != "rollback" || resuming_activation,
+        "recover the active deployment before rollback"
+    );
+    anyhow::ensure!(
+        access_state == "ready"
+            || job.kind != "sync"
+            || resuming_activation
+            || job.payload["force"] == true,
+        "ordinary synchronization is paused until explicit recovery"
+    );
+
+    let trust = if let Some(trust) = persisted_trust {
+        trust
+    } else if let Some(operation) = &operation {
+        operation.trust.clone()
+    } else if job.kind == "rollback" && mtls.authority().is_some() {
+        crate::credentials::activation::historical_trust(pool, node_id, revision)
+            .await?
+            .context(
+                "rollback unavailable: managed trust history is missing; rebuild or sync the node",
+            )?
+    } else {
+        crate::credentials::node_mtls::desired_trust(pool, node_id, &mtls).await?
+    };
+    if !operation.as_ref().is_some_and(|op| op.skip_users) {
+        crate::credentials::node_mtls::prepare_users(
+            pool,
+            secrets,
+            node_id,
+            &mtls,
+            &trust,
+            job.kind == "rollback",
+        )
+        .await?;
+    }
+    let probe_reference = if let Some((ca, selected)) = mtls.authority() {
+        let version = operation
+            .as_ref()
+            .map(|op| op.probe_version)
+            .unwrap_or_else(|| {
+                if job.kind == "rollback" {
+                    selected
+                } else {
+                    trust.iter().map(|v| v.version).max().unwrap_or(selected)
+                }
+            });
+        if resuming_activation {
+            Some(
+                crate::credentials::activation::probe_for_job(pool, &job.id)
+                    .await?
+                    .context("activation probe snapshot is missing; start a new deployment")?,
+            )
+        } else if job.kind == "rollback" {
+            Some(
+                crate::credentials::activation::historical_probe(pool, node_id, revision)
+                    .await?
+                    .context("rollback unavailable: managed probe history is missing")?,
+            )
+        } else {
+            if crate::credentials::node_mtls::probe_material(
+                pool,
+                secrets,
+                node_id,
+                ca,
+                Some(version),
+            )
+            .await?
+            .is_none()
+            {
+                crate::credentials::maintenance::renew_probe_on(
+                    pool, secrets, node_id, ca, version,
+                )
+                .await?;
+            }
+            Some(sqlx::query_as::<_,(String,i64)>("SELECT credential_id,credential_version FROM mtls_probe_versions WHERE node_id=$1 AND ca_id=$2 AND ca_version=$3 AND NOT discarded AND expires_at>now() ORDER BY credential_version DESC LIMIT 1").bind(node_id).bind(ca).bind(version).fetch_one(pool).await?)
+        }
+    } else {
+        None
+    };
+    if let Some((ca, published)) = mtls.authority()
+        && probe_reference.is_some()
+        && crate::credentials::node_mtls::probe_material(
+            pool,
+            secrets,
+            node_id,
+            ca,
+            Some(published),
+        )
+        .await?
+        .is_none()
+    {
+        let _ =
+            crate::credentials::maintenance::renew_probe_on(pool, secrets, node_id, ca, published)
+                .await;
+    }
+    let probe_identity = if let Some((id, version)) = &probe_reference {
+        let (_, _, _, payload, _) = crate::credentials::load(pool, secrets, id, *version).await?;
+        Some((
+            payload["certificate"]
+                .as_str()
+                .context("probe certificate missing")?
+                .to_owned(),
+            payload["private_key"]
+                .as_str()
+                .context("probe key missing")?
+                .to_owned(),
+        ))
+    } else {
+        None
+    };
+    let (materialized, trust_resource) =
+        crate::credentials::node_mtls::materialize(pool, &resolved_options, &trust).await?;
+    resolved_options = materialized;
+    if let Some(resource) = trust_resource {
+        resource_files.push(resource);
+    }
     let target_host = snapshot["public_host"]
         .as_str()
         .context("deployment snapshot host is missing")?;
@@ -433,6 +579,8 @@ async fn deploy_with_probe(
     )
     .await?;
     if job.kind != "rollback"
+        && !resuming_activation
+        && !operation.as_ref().is_some_and(|op| op.recovery)
         && !force_sync
         && let Some(expected_hash) = deployed_hash
     {
@@ -490,6 +638,85 @@ async fn deploy_with_probe(
         traffic_stats_port,
     )?;
     let deployed_sha256 = hex::encode(Sha256::digest(server_yaml.as_bytes()));
+    let deployed_options = row
+        .get::<Option<String>, _>("deployed_config_enc")
+        .map(|cipher| {
+            secrets
+                .decrypt(&cipher)
+                .and_then(|plain| Ok(serde_json::from_str::<Value>(&plain)?))
+        })
+        .transpose()?;
+    let recovery_previous = if operation.as_ref().is_some_and(|op| op.recovery)
+        && !resuming_activation
+    {
+        let actual=session.execute_checked(&root_command(environment.privilege!="root","if [ -f /etc/hysteriax/config.yaml ]; then sha256sum /etc/hysteriax/config.yaml | awk '{print $1}'; fi")).await?;
+        let actual = actual.trim().to_owned();
+        if row
+            .get::<Option<String>, _>("deployed_content_sha256")
+            .as_deref()
+            == Some(actual.as_str())
+            || actual.is_empty()
+                && row
+                    .get::<Option<String>, _>("deployed_content_sha256")
+                    .is_none()
+        {
+            Some(actual)
+        } else {
+            let expected = crate::credentials::rotations::recovery_marker(pool, &job.id)
+                .await?
+                .context("unknown remote state; inspect the node before recovery")?;
+            let marker=session.execute_checked(&root_command(environment.privilege!="root","if [ -f /opt/hysteriax/activation.json ]; then cat /opt/hysteriax/activation.json; fi")).await?;
+            anyhow::ensure!(
+                serde_json::from_str::<Value>(&marker).ok().as_ref() == Some(&expected)
+                    && expected["config_sha256"].as_str() == Some(actual.as_str()),
+                "remote marker or configuration differs from the known recovery target"
+            );
+            Some(actual)
+        }
+    } else {
+        None
+    };
+    let activation = if crate::credentials::activation::required(
+        &mtls,
+        deployed_options.as_ref(),
+        &row.get::<String, _>("mtls_state"),
+    ) {
+        Some(
+            crate::credentials::activation::begin(
+                pool,
+                secrets,
+                crate::credentials::activation::Begin {
+                    node: node_id,
+                    job: &job.id,
+                    revision,
+                    digest: &deployed_sha256,
+                    snapshot: &snapshot,
+                    trust: &trust,
+                    probe: probe_reference
+                        .as_ref()
+                        .map(|(id, version)| (id.as_str(), *version)),
+                },
+            )
+            .await?,
+        )
+    } else {
+        None
+    };
+    if let Some(previous) = &recovery_previous {
+        let mut tx = db::begin_write(pool).await?;
+        sqlx::query(
+            "UPDATE mtls_activations SET previous_digest=$2 WHERE job_id=$1 AND phase='activating'",
+        )
+        .bind(&job.id)
+        .bind(if previous.is_empty() {
+            None
+        } else {
+            Some(previous)
+        })
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+    }
     let systemd_unit = systemd_unit(port_hopping);
     let remote_staging = format!("/tmp/hysteriax-{node_id}");
     report_progress(
@@ -527,11 +754,68 @@ async fn deploy_with_probe(
             )
             .await?;
     }
+    let same_config_noop = operation.as_ref().is_some_and(|op| !op.recovery)
+        && activation.as_ref().is_some_and(|record| {
+            record.previous_digest.as_deref() == Some(deployed_sha256.as_str())
+        });
+    let mut already_installed = false;
+    if same_config_noop {
+        let actual = session
+            .execute_checked(&root_command(
+                environment.privilege != "root",
+                "sha256sum /etc/hysteriax/config.yaml | awk '{print $1}'",
+            ))
+            .await?;
+        let binary = session
+            .execute_checked(&root_command(
+                environment.privilege != "root",
+                "sha256sum /opt/hysteriax/hysteria | awk '{print $1}'",
+            ))
+            .await?;
+        already_installed = actual.trim() == deployed_sha256 && binary.trim() == expected_hash;
+    }
+    let noop = already_installed;
+
+    if let Some(record) = &activation {
+        session
+            .upload(
+                &format!("{remote_staging}/activation.json"),
+                crate::credentials::activation::marker(record)
+                    .to_string()
+                    .as_bytes(),
+            )
+            .await?;
+        if !record.fresh && !noop {
+            let actual=session.execute_checked(&root_command(environment.privilege!="root","if [ -f /etc/hysteriax/config.yaml ]; then sha256sum /etc/hysteriax/config.yaml | awk '{print $1}'; fi")).await?;
+            let actual = actual.trim();
+            let marker=session.execute_checked(&root_command(environment.privilege!="root","if [ -f /opt/hysteriax/activation.json ]; then cat /opt/hysteriax/activation.json; fi")).await?;
+            let marker = serde_json::from_str::<Value>(&marker).ok();
+            if actual == record.target_digest
+                && marker.as_ref() == Some(&crate::credentials::activation::marker(record))
+            {
+                session
+                    .execute_checked(&root_command(
+                        environment.privilege != "root",
+                        "systemctl restart hysteriax.service",
+                    ))
+                    .await?;
+                already_installed = true;
+            } else if record.previous_digest.as_deref() != Some(actual)
+                && !(actual.is_empty() && record.previous_digest.is_none())
+            {
+                anyhow::ensure!(
+                    force_sync,
+                    "activation outcome cannot be confirmed; run an explicit recovery sync"
+                );
+            }
+        }
+    }
     let probe_expires_at = chrono::Utc::now() + chrono::Duration::minutes(15);
-    sqlx::query("INSERT INTO deployment_probe_tokens (node_id, token_hash, expires_at) VALUES ($1, $2, $3) ON CONFLICT(node_id) DO UPDATE SET token_hash = excluded.token_hash, expires_at = excluded.expires_at")
+    sqlx::query("INSERT INTO deployment_probe_tokens (node_id, token_hash, expires_at,job_id) VALUES ($1, $2, $3,$4) ON CONFLICT(node_id) DO UPDATE SET token_hash = excluded.token_hash, expires_at = excluded.expires_at,job_id=excluded.job_id")
         .bind(node_id)
         .bind(token_digest(probe_token))
         .bind(probe_expires_at)
+        .bind(&job.id)
         .execute(pool)
         .await?;
     report_progress(
@@ -541,7 +825,9 @@ async fn deploy_with_probe(
         "Installing the managed systemd service and applying the new configuration.",
     )
     .await?;
-    if let Err(error) = install_managed_node(&session, &environment, node_id, &remote_staging).await
+    if !already_installed
+        && let Err(error) =
+            install_managed_node(&session, &environment, node_id, &remote_staging).await
     {
         let _ = session.execute(&format!("rm -rf {remote_staging}")).await;
         return Err(error);
@@ -555,10 +841,12 @@ async fn deploy_with_probe(
         &format!("Waiting up to {} seconds for the traffic and online statistics APIs, including certificate provisioning.", startup_timeout.as_secs()),
     )
     .await?;
+    let status_command = root_command(
+        environment.privilege != "root",
+        "systemctl show hysteriax.service --property=ActiveState --property=SubState --property=ExecMainStatus --property=NRestarts",
+    );
     let health_check = wait_for_startup(startup_timeout, || async {
-        let status = session.execute_checked(
-            "systemctl show hysteriax.service --property=ActiveState --property=SubState --property=ExecMainStatus --property=NRestarts",
-        ).await?;
+        let status = session.execute_checked(&status_command).await?;
         if let Some(reason) = startup_service_failure(&status) {
             return Ok(StartupCheck::Failed(reason));
         }
@@ -574,12 +862,14 @@ async fn deploy_with_probe(
                 }
             }
             Ok::<(), anyhow::Error>(())
-        }.await;
+        }
+        .await;
         Ok(match health {
             Ok(()) => StartupCheck::Ready,
             Err(error) => StartupCheck::Pending(error.to_string()),
         })
-    }).await;
+    })
+    .await;
     let mut healthy = health_check.is_ok();
     let mut health_failure = health_check.err().map(|error| error.to_string());
     let mut proxy_probe_result = None;
@@ -612,6 +902,7 @@ async fn deploy_with_probe(
                 options: &resolved_options,
                 resources: &resource_files,
                 target_url: proxy_probe_url.as_deref(),
+                client_identity: probe_identity.as_ref(),
             },
         )
         .await
@@ -622,6 +913,14 @@ async fn deploy_with_probe(
                 health_failure = Some(format!("Hysteria client TCP proxy probe failed: {error}"));
             }
         }
+    }
+    if !healthy && noop {
+        let _ = session.execute(&format!("rm -rf {remote_staging}")).await;
+        crate::credentials::activation::rolled_back(pool, &job.id, Some(&deployed_sha256)).await?;
+        bail!(
+            "CA probe failed without changing the running configuration: {}",
+            health_failure.unwrap_or_else(|| "proxy probe unavailable".into())
+        );
     }
     if !healthy {
         let health_failure = health_failure
@@ -666,17 +965,30 @@ async fn deploy_with_probe(
             None => "The new service did not become healthy; rolling back the installation.",
         };
         report_progress(pool, job, "rolling_back", rollback_message).await?;
-        if rollback_managed_node(&session, &environment).await.is_err() {
+        if let Err(rollback_error) = rollback_managed_node(&session, &environment).await {
             let _ = session.execute(&format!("rm -rf {remote_staging}")).await;
             return Err(ssh::SshError::Command {
                 code: 54,
                 stderr: format!(
-                    "post-deployment health check failed ({health_detail}) and automatic rollback also failed"
+                    "automatic rollback also failed ({rollback_error}); post-deployment health check failed ({health_detail})"
                 ),
             }
             .into());
         }
         let _ = session.execute(&format!("rm -rf {remote_staging}")).await;
+        if activation.is_some() {
+            let actual=session.execute_checked(&root_command(environment.privilege!="root","if [ -f /etc/hysteriax/config.yaml ]; then sha256sum /etc/hysteriax/config.yaml | awk '{print $1}'; fi")).await?;
+            crate::credentials::activation::rolled_back(
+                pool,
+                &job.id,
+                if actual.trim().is_empty() {
+                    None
+                } else {
+                    Some(actual.trim())
+                },
+            )
+            .await?;
+        }
         let rollback_result = match has_previous {
             Some(true) => "previous configuration was restored",
             Some(false) => "failed first installation was cleaned up",
@@ -691,6 +1003,26 @@ async fn deploy_with_probe(
         .into());
     }
 
+    if noop {
+        session.execute_checked(&root_command(environment.privilege!="root",&format!("install -o root -g root -m 0600 {remote_staging}/activation.json /opt/hysteriax/activation.json.new; mv -f /opt/hysteriax/activation.json.new /opt/hysteriax/activation.json"))).await?;
+    }
+    if activation.is_some() {
+        if !operation.as_ref().is_some_and(|op| op.skip_users) {
+            crate::credentials::node_mtls::prepare_users(
+                pool,
+                secrets,
+                node_id,
+                &mtls,
+                &trust,
+                job.kind == "rollback",
+            )
+            .await?;
+        }
+        crate::credentials::activation::verified(pool, &job.id).await?;
+    }
+    if already_installed {
+        let _ = session.execute(&format!("rm -rf {remote_staging}")).await;
+    }
     let deployed_config = secrets.encrypt(&options.to_string())?;
     let state = if job.kind == "rollback" {
         "rolled_back"
@@ -701,7 +1033,7 @@ async fn deploy_with_probe(
     };
     Ok(JobOutput {
         stage: "health_checked".to_owned(),
-        result: json!({"hysteria_version": HYSTERIA_RELEASE_TAG, "architecture": environment.architecture, "traffic_api": "ok", "online_api": "ok", "proxy_probe": proxy_probe_result, "name": name}),
+        result: json!({"hysteria_version": HYSTERIA_RELEASE_TAG, "architecture": environment.architecture, "traffic_api": "ok", "online_api": "ok", "proxy_probe": proxy_probe_result, "name": name,"activation_id":activation.as_ref().map(|a|&a.id)}),
         node_state: Some(state.to_owned()),
         deployed_revision: Some(revision),
         deployed_config: Some(deployed_config),
@@ -801,11 +1133,12 @@ struct ProxyProbe<'a> {
     options: &'a Value,
     resources: &'a [ResourceFile],
     target_url: Option<&'a str>,
+    client_identity: Option<&'a (String, String)>,
 }
 
 async fn run_proxy_probe(
-    pool: &PgPool,
-    secrets: &SecretBox,
+    _pool: &PgPool,
+    _secrets: &SecretBox,
     session: &SshSession,
     probe: ProxyProbe<'_>,
 ) -> Result<Value> {
@@ -820,6 +1153,7 @@ async fn run_proxy_probe(
         options,
         resources: resource_files,
         target_url,
+        client_identity,
     } = probe;
     let (server_address, realm_options) = deployment_probe_server_config(options, listen_addr)?;
     let custom_target = target_url.map(parse_http_probe_target).transpose()?;
@@ -843,24 +1177,19 @@ async fn run_proxy_probe(
     if let Some(ech) = client_ech_config(options, resource_files)? {
         tls["ech"] = Value::String(ech);
     }
-    let needs_client_certificate = options
-        .pointer("/tls/clientCA")
-        .and_then(Value::as_str)
-        .is_some_and(|path| !path.trim().is_empty());
-    let client_certificate = if needs_client_certificate {
-        let row = sqlx::query("SELECT user_id, mtls_credential_id, mtls_credential_version FROM node_assignments WHERE node_id = $1 AND mtls_credential_id IS NOT NULL ORDER BY created_at LIMIT 1")
-            .bind(node_id)
-            .fetch_optional(pool)
-            .await?
-            .context("mTLS deployment probe requires an assigned client certificate and private key")?;
-        let (certificate, private_key) =
-            crate::credentials::assignment_identity(pool, secrets, &row)
-                .await?
-                .context("mTLS identity missing")?;
-        tls["clientCertificate"] = Value::String(client_certificate_path.clone());
-        tls["clientKey"] = Value::String(client_key_path.clone());
-        Some((certificate, private_key))
+    let policy = crate::credentials::node_mtls::Settings::from_config(options)?;
+    let client_certificate = if policy.authority().is_some() {
+        let material = client_identity
+            .cloned()
+            .context("managed deployment probe identity is unavailable")?;
+        tls["clientCertificate"] = json!(client_certificate_path);
+        tls["clientKey"] = json!(client_key_path);
+        Some(material)
     } else {
+        anyhow::ensure!(
+            options.pointer("/tls/clientCA").is_none(),
+            "legacy mTLS configuration requires reconfiguration"
+        );
         None
     };
 
@@ -881,13 +1210,21 @@ async fn run_proxy_probe(
     }
     let client_config_yaml = serde_yaml::to_string(&client_config)?;
     let restricted_egress = options.get("acl").is_some() || options.get("outbounds").is_some();
-    session
-        .execute_checked(&format!(
-            "umask 077; mkdir -p {}; chmod 0700 {}",
-            shell_quote(&remote_dir),
-            shell_quote(&remote_dir)
-        ))
-        .await?;
+    session.execute_checked(&format!(r#"set -eu
+DIR={}
+CONFIG={}
+if [ -f "$DIR/client.pid" ]; then
+  pid=$(cat "$DIR/client.pid")
+  case "$pid" in ''|*[!0-9]*) ;; *)
+    args=$(tr '\000' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true)
+    case "$args" in "/opt/hysteriax/hysteria client -c $CONFIG"*) kill "$pid" 2>/dev/null || true ;; esac
+  ;; esac
+fi
+rm -rf "$DIR"
+umask 077
+mkdir -p "$DIR"
+chmod 0700 "$DIR"
+"#,shell_quote(&remote_dir),shell_quote(&client_config_path))).await?;
 
     let mut client_pid = None;
     let probe_result = async {
@@ -915,9 +1252,8 @@ async fn run_proxy_probe(
         session.execute_checked(&chmod_command).await?;
 
         let start_command = format!(
-            "set -eu; umask 077; HYSTERIA_DISABLE_UPDATE_CHECK=1 nohup /opt/hysteriax/hysteria client -c {} > {} 2>&1 </dev/null & printf '%s\\n' \"$!\"",
-            shell_quote(&client_config_path),
-            shell_quote(&client_log_path)
+            "set -eu; umask 077; HYSTERIA_DISABLE_UPDATE_CHECK=1 nohup /opt/hysteriax/hysteria client -c {} > {} 2>&1 </dev/null & pid=$!; printf '%s\\n' \"$pid\" > {}; printf '%s\\n' \"$pid\"",
+            shell_quote(&client_config_path),shell_quote(&client_log_path),shell_quote(&format!("{remote_dir}/client.pid"))
         );
         client_pid = Some(
             session
@@ -1352,11 +1688,13 @@ for resource in "$STAGE"/resources/*; do
 done
 if [ -f "$ROOT/hysteria" ]; then cp -a "$ROOT/hysteria" "$ROOT/hysteria.previous"; fi
 if [ -f "$ETC/config.yaml" ]; then cp -a "$ETC/config.yaml" "$ROOT/config.previous"; fi
+if [ -f "$ROOT/activation.json" ]; then cp -a "$ROOT/activation.json" "$ROOT/activation.previous"; else rm -f "$ROOT/activation.previous"; fi
 if [ -f /etc/systemd/system/hysteriax.service ]; then cp -a /etc/systemd/system/hysteriax.service "$ROOT/hysteriax.service.previous"; fi
 install -o root -g root -m 0755 "$STAGE/hysteria" "$ROOT/hysteria.new"
 mv -f "$ROOT/hysteria.new" "$ROOT/hysteria"
 install -o root -g hysteriax -m 0640 "$STAGE/server.yaml" "$ETC/config.yaml.new"
 mv -f "$ETC/config.yaml.new" "$ETC/config.yaml"
+if [ -f "$STAGE/activation.json" ]; then install -o root -g root -m 0600 "$STAGE/activation.json" "$ROOT/activation.json"; fi
 install -o root -g root -m 0644 "$STAGE/hysteriax.service" /etc/systemd/system/hysteriax.service.new
 mv -f /etc/systemd/system/hysteriax.service.new /etc/systemd/system/hysteriax.service
 chown hysteriax:hysteriax /var/lib/hysteriax
@@ -1372,6 +1710,7 @@ fi
 if [ -f "$ROOT/.hysteriax-managed" ]; then
   [ ! -f "$ROOT/hysteria.previous" ] || cp -a "$ROOT/hysteria.previous" "$ROOT/hysteria"
   [ ! -f "$ROOT/config.previous" ] || cp -a "$ROOT/config.previous" "$ETC/config.yaml"
+  if [ -f "$ROOT/activation.previous" ]; then cp -a "$ROOT/activation.previous" "$ROOT/activation.json"; else rm -f "$ROOT/activation.json"; fi
   [ ! -f "$ROOT/hysteriax.service.previous" ] || cp -a "$ROOT/hysteriax.service.previous" /etc/systemd/system/hysteriax.service
   systemctl daemon-reload
   systemctl restart hysteriax.service || true
@@ -1401,7 +1740,7 @@ async fn rollback_managed_node(
     session: &SshSession,
     environment: &RemoteEnvironment,
 ) -> Result<()> {
-    let script = "set -eu\nROOT=/opt/hysteriax\nETC=/etc/hysteriax\nif [ -f \"$ROOT/config.previous\" ]; then\n  cp -a \"$ROOT/config.previous\" \"$ETC/config.yaml\"\n  [ ! -f \"$ROOT/hysteria.previous\" ] || cp -a \"$ROOT/hysteria.previous\" \"$ROOT/hysteria\"\n  [ ! -f \"$ROOT/hysteriax.service.previous\" ] || cp -a \"$ROOT/hysteriax.service.previous\" /etc/systemd/system/hysteriax.service\n  systemctl daemon-reload\n  systemctl restart hysteriax.service\n  systemctl is-active --quiet hysteriax.service\nelse\n  systemctl stop hysteriax.service || true\n  systemctl disable hysteriax.service || true\n  rm -f /etc/systemd/system/hysteriax.service \"$ROOT/hysteria\" \"$ETC/config.yaml\" \"$ROOT/.hysteriax-managed\"\n  userdel hysteriax || true\n  groupdel hysteriax || true\n  rm -rf \"$ROOT\" \"$ETC\" /var/lib/hysteriax\nfi\n";
+    let script = "set -eu\nROOT=/opt/hysteriax\nETC=/etc/hysteriax\nif [ -f \"$ROOT/config.previous\" ]; then\n  cp -a \"$ROOT/config.previous\" \"$ETC/config.yaml\"\n  if [ -f \"$ROOT/activation.previous\" ]; then cp -a \"$ROOT/activation.previous\" \"$ROOT/activation.json\"; else rm -f \"$ROOT/activation.json\"; fi\n  [ ! -f \"$ROOT/hysteria.previous\" ] || cp -a \"$ROOT/hysteria.previous\" \"$ROOT/hysteria\"\n  [ ! -f \"$ROOT/hysteriax.service.previous\" ] || cp -a \"$ROOT/hysteriax.service.previous\" /etc/systemd/system/hysteriax.service\n  systemctl daemon-reload\n  systemctl restart hysteriax.service\n  systemctl is-active --quiet hysteriax.service\nelse\n  systemctl stop hysteriax.service || true\n  systemctl disable hysteriax.service || true\n  rm -f /etc/systemd/system/hysteriax.service \"$ROOT/hysteria\" \"$ETC/config.yaml\" \"$ROOT/.hysteriax-managed\"\n  userdel hysteriax || true\n  groupdel hysteriax || true\n  rm -rf \"$ROOT\" \"$ETC\" /var/lib/hysteriax\nfi\n";
     session
         .execute_checked_with_timeout(
             &root_command(environment.privilege != "root", script),

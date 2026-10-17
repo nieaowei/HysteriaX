@@ -62,7 +62,15 @@ pub fn dependencies(path: &str, query: &[(String, String)]) -> Vec<&'static str>
         return vec!["groups", "user_config", "node_config"];
     }
     if path.starts_with("/api/v1/credential-batches") {
-        return vec!["credentials", "jobs", "node_config", "dns"];
+        return vec![
+            "credentials",
+            "jobs",
+            "node_config",
+            "dns",
+            "users",
+            "user_config",
+            "groups",
+        ];
     }
     if path.starts_with("/api/v1/credentials") {
         let mut d = vec!["credentials", "user_config", "node_config", "dns", "jobs"];
@@ -214,9 +222,6 @@ pub fn route(path: &str) -> String {
     }
     if parts.len() > 5 && parts[2] == "nodes" && parts[4] == "resources" {
         parts[5] = ":resource_id";
-    }
-    if parts.len() > 5 && parts[2] == "users" && parts[4] == "assignments" {
-        parts[5] = ":node_id";
     }
     format!("/{}", parts.join("/"))
 }

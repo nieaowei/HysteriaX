@@ -1417,3 +1417,197 @@
 "指纹已确认，继续任务" = "Fingerprint Confirmed, Continuing Task";
 
 "节点或任务状态已变化，请刷新并重新发起操作。" = "The node or task state changed. Refresh and start the operation again.";
+"CA 到期" = "CA expiration";
+"{0} 的托管证书" = "Managed certificates for {0}";
+"共享证书已更新，请刷新相关节点的订阅。" = "Shared certificates updated. Refresh subscriptions for the affected nodes.";
+"准备中，尚未发布" = "Prepared, not yet published";
+"同一用户在共享 CA 的节点间复用证书，无需选择个人证书。" = "Each user shares one identity across nodes using the same CA. No certificate selection is needed.";
+"引用节点：{0}" = "Referenced nodes: {0}";
+"待签发或恢复，暂不发布缺少可用证书的节点。" = "Awaiting issuance or recovery. Nodes without a usable certificate are omitted.";
+"托管 mTLS" = "Managed mTLS";
+"托管证书…" = "Managed Certificates…";
+"有效节点" = "Effective nodes";
+"有效节点（{0}）" = "Effective nodes ({0})";
+"正在签发…" = "Issuing…";
+"此用户尚无托管证书身份。加入托管节点的授权组后自动建立。" = "This user has no managed identity yet. One is created automatically when a group grants access to a managed node.";
+"永久" = "Permanent";
+"系统将签发 {0} 个共享身份 · {1} 个待恢复后签发" = "{0} shared identities will be issued now; {1} await account recovery";
+"证书 v{0} · 签发 CA v{1}" = "Certificate v{0} · Issuing CA v{1}";
+"证书到期" = "Certificate expiration";
+"证书版本（{0}）" = "Certificate versions ({0})";
+"账号到期：{0}" = "Account expiration: {0}";
+"身份已保留，账号恢复可用后自动签发。" = "The identity is retained. Issuance resumes when account access is restored.";
+"重新签发" = "Reissue";
+"重新签发后请刷新订阅。旧证书在自然到期前仍有效，不会因此断开现有连接。" = "Refresh subscriptions after reissuance. Old certificates remain valid until expiry; existing connections are not disconnected.";
+"重新签发将影响此 CA 下全部 {0} 个引用节点。" = "Reissuance affects all {0} referenced nodes using this CA.";
+
+"CA 更新受阻" = "CA update blocked";
+
+"托管证书维护异常" = "Managed certificate maintenance failed";
+
+"旧材料将于 {0} 到期。请恢复阻塞节点并重试更新批次。" = "Previous certificates expire on {0}. Restore the blocking nodes and retry the update batch.";
+
+"旧材料已于 {0} 到期。请恢复阻塞节点并重试更新批次。" = "Previous certificates expired on {0}. Restore the blocking nodes and retry the update batch.";
+
+"托管证书维护失败，当前材料到期：{0}。请检查 CA 和相关任务。" = "Managed certificate maintenance failed; current certificates expire on {0}. Check the CA and related tasks.";
+
+"CA 身份" = "CA identity";
+
+"CA 来源" = "CA source";
+
+"CA 证书链 PEM" = "CA certificate chain PEM";
+
+"凭据中心系统托管" = "Managed by credential center";
+
+"创建 CA 身份" = "Create CA identity";
+
+"发布 CA 新版本" = "Publish CA version";
+
+"客户端证书策略" = "Client certificate policy";
+
+"客户端证书验证" = "Client certificate verification";
+
+"导入证书链与私钥" = "Import chain and private key";
+
+"当前发布版本" = "Published version";
+
+"提前续期（小时）" = "Renew before expiry (hours)";
+
+"替换当前未完成的更新目标" = "Replace the unfinished update target";
+
+"有效期（天）" = "Validity (days)";
+
+"系统生成" = "System generated";
+
+"TLS 证书对和 ECH 密钥可在此创建，或选择凭据中心已有凭据。ECH 需要 TLS 或 ACME 证书；导入 Hysteria 生成的 ech.pem 后，订阅会包含客户端 ECH 配置。" = "Create a TLS identity or ECH key here, or select one from the credential center. ECH requires TLS or ACME; importing Hysteria ech.pem includes client ECH settings in subscriptions.";
+
+"仅未发布目标，或已经到期的已发布目标可被替换。当前批次：{0}" = "Only an unpublished target or an expired published target can be replaced. Current batch: {0}";
+
+"先更新全部引用节点的信任，再发布共享用户证书。离线节点会阻止发布；旧信任保留至全部旧证书到期。" = "Update trust on every referenced node before publishing shared user certificates. Offline nodes block publication; old trust remains until all old certificates expire.";
+
+"托管 mTLS 仅支持凭据中心的手动 TLS 证书。" = "Managed mTLS requires a manual TLS identity from the credential center.";
+
+"有效期 1–365 天；提前续期至少 1 小时且小于有效期。策略修改只影响后续签发，不创建 CA 版本或部署节点。" = "Validity is 1–365 days; renewal lead time must be at least one hour and shorter than validity. Policy changes affect future issuance without creating a CA version or deploying nodes.";
+
+"生成 ECDSA P-256 CA，有效期 10 年，提前一年自动轮换。" = "Generate an ECDSA P-256 CA valid for ten years, with automatic rotation one year before expiry.";
+
+"系统按用户与 CA 共享身份并自动续期，探测证书独立管理，无需先分配用户。共享 CA 是共享信任域；更换 CA 后客户端需要刷新订阅。" = "The system renews one identity per user and CA. Independent probe certificates allow deployment without users. A shared CA is a shared trust domain; clients must refresh subscriptions after changing CA.";
+
+"请选择有效 CA 身份并等待读取当前发布版本。" = "Select a valid CA identity and wait for its published version to load.";
+
+"首张证书是签发 CA，后续为完整上级链；节点仅信任选定签发 CA。私钥保存后不可查看。" = "The first certificate is the issuing CA, followed by its complete parent chain. Nodes trust only the selected issuer. The private key cannot be viewed after saving.";
+
+"mTLS 维护状态" = "mTLS maintenance";
+
+"{0} 天有效，提前 {1} 小时续期" = "Valid for {0} days; renew {1} hours before expiry";
+
+"信任代次" = "Trust generations";
+
+"信任已验证" = "Trust verified";
+
+"共享证书准备" = "Shared certificates prepared";
+
+"准备共享证书" = "Preparing shared certificates";
+
+"准备节点信任" = "Preparing node trust";
+
+"切换探测身份" = "Switching probe identities";
+
+"剩余 {0} 天；旧材料过期后可能无法连接。" = "{0} days remaining; connections may fail after previous certificates expire.";
+
+"发布共享证书" = "Publishing shared certificates";
+
+"就绪" = "Ready";
+
+"已到期的已发布目标被后续批次替换。" = "The expired published target was replaced by a later batch.";
+
+"已完成" = "Complete";
+
+"待配置" = "Configuration required";
+
+"旧材料可用期限" = "Previous material deadline";
+
+"显式选择关闭或有效托管 CA，保存新配置并完成恢复部署。" = "Explicitly select off or a valid managed CA, save a new configuration, and complete recovery deployment.";
+
+"更新阶段" = "Update phase";
+
+"未发布目标被后续批次替换。" = "The unpublished target was replaced by a later batch.";
+
+"激活中" = "Activating";
+
+"等待信任准备" = "Waiting for trust preparation";
+
+"维护异常" = "Maintenance failed";
+
+"该节点暂不发布用户订阅或接受用户认证。请查看部署任务并执行显式恢复同步。" = "User subscriptions and authentication are temporarily blocked on this node. Check its deployment task and run an explicit recovery sync.";
+
+"需要恢复" = "Recovery required";
+
+"共享用户身份" = "Shared user identity";
+
+"节点信任" = "Node trust";
+
+"节点探测身份" = "Node probe identity";
+
+"CA 轮换" = "CA rotation";
+
+"旧信任清理" = "Old trust cleanup";
+
+"部署激活" = "Deployment activation";
+
+"探测历史" = "Probe history";
+
+"显示内部探测凭据" = "Show internal probe credentials";
+
+"等待旧信任清理" = "Waiting for old trust cleanup";
+
+"最早清理时间" = "Earliest cleanup time";
+
+"完成时间" = "Completed at";
+
+"旧客户端及探测证书全部到期后加 5 分钟才可移除旧信任；该任务不阻止后续 CA 发布。" = "Old trust can be removed five minutes after all old user and probe certificates expire. This task does not block later CA publications.";
+
+"待执行" = "Pending";
+
+"筛选" = "Filters";
+
+"恢复同步" = "Recovery sync";
+
+"修改客户端证书策略" = "Update client certificate policy";
+
+"准备 CA 新版本" = "Prepare CA version";
+
+"完成 CA 轮换" = "Complete CA rotation";
+
+"CA 轮换异常" = "CA rotation failed";
+
+"重试 CA 轮换" = "Retry CA rotation";
+
+"替换 CA 更新目标" = "Replace CA update target";
+
+"重新签发托管证书" = "Reissue managed certificates";
+
+"重置旧 mTLS 数据" = "Reset legacy mTLS data";
+
+"创建 CA 请求失败" = "CA creation request failed";
+
+"修改 CA 策略请求失败" = "CA policy request failed";
+
+"发布 CA 请求失败" = "CA publication request failed";
+
+"换发托管证书请求失败" = "Managed certificate reissue request failed";
+
+"更新授权组" = "Update authorization group";
+
+"更新用户授权组" = "Update user authorization groups";
+
+"升级迁移" = "Upgrade migration";
+
+"证书自动维护" = "Automatic certificate maintenance";
+
+"版本升级" = "Version upgrade";
+
+"托管 mTLS 的远端信任仍已部署或结果未确认；请恢复 SSH 并卸载或完成切换，再移除记录" = "Managed mTLS trust is still deployed or unconfirmed. Restore SSH and uninstall or finish switching before removing the record.";
+"当前发布 CA 到期" = "Published CA expiry";
+"准备中版本" = "Preparing version";
+"准备中 CA 到期" = "Preparing CA expiry";

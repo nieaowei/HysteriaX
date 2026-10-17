@@ -26,7 +26,6 @@ def fetch(base, path, ua=None):
 
 def run(base, admin, database, temp, advanced_token, revoked_token, advanced_user_id, empty_token):
     def api(path, payload=None, method=None, expected=200):
-        from credential_test_fixtures import request_with_group_assignment
 
         def raw_request(base, path, token, method, payload):
             data = None if payload is None else json.dumps(payload).encode()
@@ -38,8 +37,7 @@ def run(base, admin, database, temp, advanced_token, revoked_token, advanced_use
             except urllib.error.HTTPError as error:
                 return error.code, error.read()
 
-        code, body = request_with_group_assignment(raw_request, base, path, admin,
-                                                   method or ("POST" if payload is not None else "GET"), payload)
+        code, body = raw_request(base,path,admin,method or ("POST" if payload is not None else "GET"),payload)
         if code != expected:
             raise RuntimeError(f"fixture API returned HTTP {code}, expected {expected}")
         return json.loads(body) if body else None
@@ -101,14 +99,18 @@ def run(base, admin, database, temp, advanced_token, revoked_token, advanced_use
         "config": {"tls": {"cert": f"credential://{identity['id']}/1/certificate", "key": f"credential://{identity['id']}/1/private_key"}},
     }, expected=201)["node"]["id"]
     user = api("/api/v1/users", {"name": "Basic subscription fixture"}, expected=201)["id"]
-    credential = api(f"/api/v1/users/{user}/assignments", {"expected_revision": 1, "node_id": node}, expected=201)["hy2_credential"]
+    from credential_test_fixtures import grant_group
+    def group_request(path,method="GET",body=None,statuses=(200,)):
+        return api(path,body,method,statuses[0])
+    credential = grant_group(group_request,user,[node])["created_credentials"][0]["hy2_credential"]
     receipt = api(f"/api/v1/users/{user}/subscription", {"expected_revision": 2})
     token = receipt["token"]
     if not receipt.get("auto_url", "").endswith(f"/sub/{token}"):
         raise RuntimeError("rotation response did not expose auto_url")
     with database.connect() as connection:
         connection.execute("UPDATE nodes SET deployed_revision = desired_revision, deployed_config_enc = desired_config_enc, state = 'deployed' WHERE id = %s", (node,))
-    api(f"/api/v1/users/{advanced_user_id}/assignments", {"expected_revision": 5, "node_id": node}, expected=201)
+    assert api(f"/api/v1/users/{advanced_user_id}")["revision"]==5
+    grant_group(group_request,advanced_user_id,[node])
     filtered, headers = expect(advanced_token, "?format=uri", mime="text/plain")
     if headers.get("X-HysteriaX-Filtered-Nodes") != "2" or filtered.count(b"hysteria2://") != 1:
         raise RuntimeError("partial compatibility filtering failed")
@@ -182,13 +184,19 @@ def verify_connection(binary, temp, client_bytes, credential, node_port, cert, k
               "outbounds": [{"type": "direct", "tag": "DIRECT"}], "route": {"final": "DIRECT"}}
     server_config = temp / "singbox-server.json"
     server_config.write_text(json.dumps(config))
-    client_config = json.loads(client_bytes)
+    exported = json.loads(client_bytes)
+    proxy = next(entry for entry in exported["outbounds"] if entry["type"]=="hysteria2")
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
         proxy_port = sock.getsockname()[1]
-    client_config["inbounds"][0]["listen_port"] = proxy_port
+    # Keep the exported transport/auth/TLS fields verbatim. The template also
+    # contains DNS, transparent and TUN listeners; this isolated connection check
+    # exposes only SOCKS and forces its traffic through the exported proxy.
+    client_config = {"inbounds":[{"type":"socks","listen":"127.0.0.1","listen_port":proxy_port}],
+                     "outbounds":[proxy],"route":{"final":proxy["tag"]}}
     client_path = temp / "singbox-client.json"
     client_path.write_text(json.dumps(client_config))
+    client_path.chmod(0o600); server_config.chmod(0o600)
     processes = []
     try:
         with (temp / "singbox-runtime.log").open("wb") as log:
@@ -196,7 +204,7 @@ def verify_connection(binary, temp, client_bytes, credential, node_port, cert, k
                 processes.append(subprocess.Popen([str(binary), "run", "-c", str(path)], stdout=log, stderr=log))
             for _ in range(50):
                 if any(process.poll() is not None for process in processes):
-                    raise RuntimeError("sing-box runtime fixture exited before forwarding")
+                    raise RuntimeError("sing-box runtime fixture exited before forwarding: "+(temp/"singbox-runtime.log").read_text(errors="replace")[-3000:].replace(credential,"[redacted]"))
                 try:
                     with socket.create_connection(("127.0.0.1", proxy_port), timeout=0.2):
                         break

@@ -274,7 +274,7 @@ struct NodesView: View {
 
     private var detailRequestKey: String {
         let node = selectedNode
-        return "\(store.serviceAddress):\(selection ?? ""):\(node?.revision ?? 0):\(store.isConnected)"
+        return "\(store.serviceAddress):\(selection ?? ""):\(node?.revision ?? 0):\(node?.deployedRevision ?? 0):\(node?.mtlsState ?? ""):\(node?.mtlsGeneration ?? 0):\(node?.mtlsError ?? ""):\(store.isConnected)"
     }
 
     private func loadDetail() async {
@@ -322,10 +322,12 @@ struct NodesView: View {
             Divider()
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
+                    if let detail, detail.id == node.id, detail.mtlsState != nil && detail.mtlsState != "ready" { NodeMTLSStatusView(detail: detail) }
                     OverviewColumnsLayout(wideColumns: 2, wideMinimum: 576, narrowColumns: 1) {
                         nodeConnections(node)
                         nodeTasksAndPackage(node)
                     }
+                    if let detail, detail.id == node.id, detail.mtlsState == nil || detail.mtlsState == "ready" { NodeMTLSStatusView(detail: detail) }
                     GroupBox {
                         LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), alignment: .leading)], alignment: .leading, spacing: 12) {
                             nodeMetric(L10n.text("采样状态"), value: store.isConnected ? node.localizedFreshness : L10n.text("离线缓存"))
@@ -369,18 +371,18 @@ struct NodesView: View {
     private func nodeActions(_ node: NodeSummary) -> some View {
         HStack(spacing: 8) {
             Button(L10n.text("SSH 测试")) { run(node, action: "ssh-test") }
-                .disabled(operationInProgress(node) || !NodeTaskFeedback.allowsAction("ssh-test", state: node.state))
+                .disabled(operationInProgress(node) || !NodeTaskFeedback.allowsAction("ssh-test", node: node))
             Menu(L10n.text("配置")) {
                 Button(L10n.text("服务器配置")) { serverConfigurationNode = node }
                 Button(L10n.text("代理配置")) { configurationNode = node }
             }.accessibilityIdentifier("node.configure.\(node.id)")
-            Button(node.deployedRevision == nil ? L10n.text("部署") : L10n.text("同步")) {
-                run(node, action: node.deployedRevision == nil ? "deploy" : "sync")
+            Button(node.mtlsState == "recovery_required" ? L10n.text("恢复同步") : node.deployedRevision == nil ? L10n.text("部署") : L10n.text("同步")) {
+                run(node, action: node.mtlsState == "recovery_required" || node.deployedRevision != nil ? "sync" : "deploy")
             }
-            .disabled(operationInProgress(node) || !NodeTaskFeedback.allowsAction("deploy", state: node.state))
+            .disabled(operationInProgress(node) || !NodeTaskFeedback.allowsAction("deploy", node: node))
             Menu(L10n.text("更多")) {
-                Button(L10n.text("部署")) { run(node, action: "deploy") }.disabled(operationInProgress(node) || !NodeTaskFeedback.allowsAction("deploy", state: node.state))
-                Button(L10n.text("回滚")) { run(node, action: "rollback") }.disabled(node.deployedRevision == nil || operationInProgress(node) || !NodeTaskFeedback.allowsAction("rollback", state: node.state))
+                Button(L10n.text("部署")) { run(node, action: "deploy") }.disabled(operationInProgress(node) || !NodeTaskFeedback.allowsAction("deploy", node: node))
+                Button(L10n.text("回滚")) { run(node, action: "rollback") }.disabled(node.deployedRevision == nil || operationInProgress(node) || !NodeTaskFeedback.allowsAction("rollback", node: node))
                 Divider()
                 Button(L10n.text("删除节点"), role: .destructive) { deletionNode = node; showingDeleteConfirmation = true }
                     .foregroundStyle(.red)
@@ -560,7 +562,7 @@ struct NodesView: View {
     }
 
     private func run(_ node: NodeSummary, action: String) {
-        guard store.isConnected, !operationInProgress(node), NodeTaskFeedback.allowsAction(action, state: node.state) else { return }
+        guard store.isConnected, !operationInProgress(node), NodeTaskFeedback.allowsAction(action, node: node) else { return }
         let service = store.serviceAddress
         let submittedAt = Date()
         submittingActions[node.id] = action

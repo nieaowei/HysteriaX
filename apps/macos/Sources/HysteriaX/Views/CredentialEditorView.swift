@@ -7,13 +7,10 @@ struct CredentialEditorView: View {
     @Bindable var store: ManagementStore
     var replacing: CredentialDetail? = nil
     var initialKind = "ssh_private_key"
-    var initialOwner: String? = nil
     var allowedKinds: [String]? = nil
-    var allowsUserOwnership = true
     var onCreated: ((CredentialReceipt) -> Void)? = nil
     @State private var name = ""
     @State private var kind = "ssh_private_key"
-    @State private var owner = ""
     @State private var secret = ""
     @State private var passphrase = ""
     @State private var certificate = ""
@@ -29,8 +26,6 @@ struct CredentialEditorView: View {
     private var kinds: [String] { allowedKinds ?? ["ssh_private_key", "ssh_password", "tls_identity", "ca_certificate", "ech_key", "dns", "api_token"] }
     var body: some View {
         directoryContent
-            .task(id: "\(store.dataRefreshToken):\(kind)") { if kind == "tls_identity" && allowsUserOwnership { await store.prepareDirectories([.users]) } }
-            .disabled([ManagementStore.Directory.users].contains { store.loadingDirectories.contains($0) })
     }
 
     private var directoryContent: some View {
@@ -40,12 +35,6 @@ struct CredentialEditorView: View {
                 if replacing == nil {
                     TextField(L10n.text("名称"), text: $name).accessibilityIdentifier("credential.editor.name")
                     Picker(L10n.text("类型"), selection: $kind) { ForEach(kinds, id: \.self) { Text(CredentialDisplay.kind($0)).tag($0) } }.accessibilityIdentifier("credential.editor.kind")
-                    if kind == "tls_identity" && allowsUserOwnership {
-                        Picker(L10n.text("用途"), selection: $owner) {
-                            Text(L10n.text("节点证书（可共享）")).tag("")
-                            ForEach(store.users) { Text("\($0.name) · mTLS").tag($0.id) }
-                        }
-                    }
                     Toggle(L10n.text("设置到期提醒"), isOn: $hasReminder)
                     if hasReminder { DatePicker(L10n.text("提醒时间"), selection: $reminder) }
                 } else {
@@ -81,7 +70,6 @@ struct CredentialEditorView: View {
         .disabled(saving).interactiveDismissDisabled(saving)
         .onAppear {
             kind = replacing?.kind ?? initialKind
-            owner = replacing?.ownerUserId ?? initialOwner ?? ""
             if let provider = replacing?.metadata["provider"]?.stringValue { dns.provider = provider }
         }
         .fileImporter(isPresented: $importing, allowedContentTypes: [.data]) { result in
@@ -126,7 +114,7 @@ struct CredentialEditorView: View {
                 if let replacing { try await store.publishCredential(replacing, payload: payload) }
                 else {
                     let receipt = try await store.createCredential(name: name, kind: kind,
-                        ownerUserID: kind == "tls_identity" && !owner.isEmpty ? owner : nil,
+
                         reminderAt: hasReminder ? ISO8601DateFormatter().string(from: reminder) : nil, payload: payload)
                     onCreated?(receipt)
                 }
@@ -138,7 +126,7 @@ struct CredentialEditorView: View {
 }
 
 /// Preserve PEM and key bytes instead of applying macOS prose substitutions.
-private struct CredentialPlainTextEditor: NSViewRepresentable {
+struct CredentialPlainTextEditor: NSViewRepresentable {
     @Binding var text: String
     let identifier: String
     let isEditable: Bool

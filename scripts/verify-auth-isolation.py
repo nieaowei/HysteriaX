@@ -19,6 +19,7 @@ import uuid
 
 from psycopg.types.json import Jsonb
 from postgres_test import PostgresTestSchema
+from credential_test_fixtures import grant_group
 
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -118,17 +119,13 @@ def main():
                     payload["quota_bytes"] = quota_bytes
                 return expect("/api/v1/users", "POST", payload, 201)["id"]
 
-            def assign(user_id, node_id, revision, certificate=None, private_key=None):
-                payload = {"expected_revision": revision, "node_id": node_id}
-                if certificate is not None:
-                    payload["client_certificate"] = certificate
-                    payload["client_private_key"] = private_key
-                return expect(
-                    f"/api/v1/users/{user_id}/assignments",
-                    "POST",
-                    payload,
-                    201,
-                )["hy2_credential"]
+            def authorize(user_id,node_id,revision):
+                if expect(f"/api/v1/users/{user_id}")["revision"]!=revision:
+                    raise RuntimeError("authorization fixture user revision changed")
+                def group_api(path,method="GET",payload=None,statuses=(200,)):
+                    return expect(path,method,payload,statuses[0])
+                receipt=grant_group(group_api,user_id,[node_id])
+                return next(item["hy2_credential"] for item in receipt["created_credentials"] if item["node_id"]==node_id)
 
             def auth(node_id, node_token, credential):
                 status, body = request(
@@ -188,9 +185,9 @@ def main():
                 if revoke_status != 204 or revoked_status != 401:
                     raise RuntimeError("administrator token revocation did not reject the revoked token")
 
-                client_certificate = temp / "client-cert.pem"
-                client_private_key = temp / "client-key.pem"
-                wrong_private_key = temp / "wrong-client-key.pem"
+                server_certificate = temp / "server-cert.pem"
+                server_private_key = temp / "server-key.pem"
+                wrong_private_key = temp / "wrong-server-key.pem"
                 subprocess.run(
                     [
                         "openssl",
@@ -200,9 +197,9 @@ def main():
                         "rsa:2048",
                         "-nodes",
                         "-keyout",
-                        str(client_private_key),
+                        str(server_private_key),
                         "-out",
-                        str(client_certificate),
+                        str(server_certificate),
                         "-days",
                         "2",
                         "-subj",
@@ -223,21 +220,19 @@ def main():
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                 )
-                client_certificate_pem = client_certificate.read_text()
-                client_private_key_pem = client_private_key.read_text()
 
                 resource_node, _ = create_node("TLS resource validation node")
                 certificate_id = upload_resource(
                     resource_node,
                     "server-certificate.pem",
                     "certificate",
-                    client_certificate.read_bytes(),
+                    server_certificate.read_bytes(),
                 )
                 private_key_id = upload_resource(
                     resource_node,
                     "server-private-key.pem",
                     "private_key",
-                    client_private_key.read_bytes(),
+                    server_private_key.read_bytes(),
                 )
                 mismatched_key_id = upload_resource(
                     resource_node,
@@ -276,102 +271,42 @@ def main():
                 if mismatched_tls_status != 400:
                     raise RuntimeError("a mismatched uploaded server certificate/key pair was accepted")
 
+                authority = expect("/api/v1/credentials/ca-identities","POST",{"name":"Auth isolation CA","source":"generated","idempotency_key":"auth-isolation-ca"},201)
                 mtls_config = {
-                    "tls": {
-                        "cert": f"credential://{certificate_id}/1/content",
-                        "key": f"credential://{private_key_id}/1/content",
-                        "clientCA": f"credential://{certificate_id}/1/content",
-                    }
+                    "tls":{"cert":f"credential://{certificate_id}/1/content","key":f"credential://{private_key_id}/1/content"},
+                    "mtls":{"mode":"managed","ca_credential_id":authority["id"],"ca_credential_version":1},
                 }
-                node1, token1 = create_node("Isolation node one", mtls_config)
-                node2, token2 = create_node("Isolation node two")
-                user1 = create_user("Only node one")
-                user2 = create_user("Only node two", quota_bytes=250_000)
-                shared = create_user("Assigned to both nodes")
-                mismatched_status, _ = request(
-                    base,
-                    f"/api/v1/users/{user1}/assignments",
-                    admin,
-                    "POST",
-                    {
-                        "expected_revision": 1,
-                        "node_id": node1,
-                        "client_certificate": client_certificate_pem,
-                        "client_private_key": wrong_private_key.read_text(),
-                    },
-                )
-                if mismatched_status != 400:
-                    raise RuntimeError("mTLS assignment accepted a certificate/key mismatch")
-                missing_cert_status, _ = request(
-                    base,
-                    f"/api/v1/users/{user1}/assignments",
-                    admin,
-                    "POST",
-                    {"expected_revision": 1, "node_id": node1},
-                )
-                if missing_cert_status != 400:
-                    raise RuntimeError("mTLS node accepted an assignment without client credentials")
-                credential1 = assign(
-                    user1, node1, 1, client_certificate_pem, client_private_key_pem
-                )
-                credential2 = assign(user2, node2, 1)
-                shared1 = assign(
-                    shared, node1, 1, client_certificate_pem, client_private_key_pem
-                )
-                shared2 = assign(shared, node2, 2)
-
-                rejected_enable_status, _ = request(
-                    base,
-                    f"/api/v1/nodes/{node2}",
-                    admin,
-                    "PATCH",
-                    {
-                        "expected_revision": 1,
-                        "config": {
-                            "tls": {
-                                "cert": f"credential://{certificate_id}/1/content",
-                                "key": f"credential://{private_key_id}/1/content",
-                                "clientCA": f"credential://{certificate_id}/1/content",
-                            }
-                        },
-                    },
-                )
-                if rejected_enable_status != 409:
-                    raise RuntimeError("mTLS configuration was enabled before all assignments had certificates")
-
-                for user_id, expected_revision in ((user2, 2), (shared, 3)):
-                    status, _ = request(
-                        base,
-                        f"/api/v1/users/{user_id}/assignments/{node2}",
-                        admin,
-                        "PUT",
-                        {
-                            "expected_revision": expected_revision,
-                            "client_certificate": client_certificate_pem,
-                            "client_private_key": client_private_key_pem,
-                        },
-                    )
-                    if status != 200:
-                        raise RuntimeError("per-node mTLS certificate update failed")
-
-                enabled_mtls_status, _ = request(
-                    base,
-                    f"/api/v1/nodes/{node2}",
-                    admin,
-                    "PATCH",
-                    {
-                        "expected_revision": 1,
-                        "config": {
-                            "tls": {
-                                "cert": f"credential://{certificate_id}/1/content",
-                                "key": f"credential://{private_key_id}/1/content",
-                                "clientCA": f"credential://{certificate_id}/1/content",
-                            }
-                        },
-                    },
-                )
-                if enabled_mtls_status != 200:
-                    raise RuntimeError("mTLS configuration was not enabled after client credentials were set")
+                node1,token1 = create_node("Isolation node one",mtls_config)
+                node2,token2 = create_node("Isolation node two")
+                user1=create_user("Only node one")
+                user2=create_user("Only node two",quota_bytes=250_000)
+                shared=create_user("Assigned to both nodes")
+                old_status,_=raw_request(base,f"/api/v1/users/{user1}/assignments",admin,"POST",{"expected_revision":1,"node_id":node1})
+                if old_status!=404: raise RuntimeError("retired assignment endpoint still exists")
+                credential1=authorize(user1,node1,1)
+                credential2=authorize(user2,node2,1)
+                shared1=authorize(shared,node1,1)
+                shared2=authorize(shared,node2,2)
+                before=expect(f"/api/v1/users/{shared}")
+                shared_identity=before["managed_certificates"][0]["identity_id"]
+                invalid=expect(f"/api/v1/nodes/{node1}")["config"]
+                invalid["tls"]["clientCA"]="/tmp/forbidden-client-ca.pem"
+                rejected,_=raw_request(base,f"/api/v1/nodes/{node1}",admin,"PATCH",{"expected_revision":1,"config":invalid})
+                if rejected!=400: raise RuntimeError("public node write accepted generated clientCA")
+                enabled=expect(f"/api/v1/nodes/{node2}","PATCH",{"expected_revision":1,"config":mtls_config})
+                if enabled["revision"]!=2: raise RuntimeError("managed CA binding did not save")
+                after=expect(f"/api/v1/users/{shared}")
+                if after["revision"]!=3 or after["managed_certificates"][0]["identity_id"]!=shared_identity:
+                    raise RuntimeError("binding another node duplicated shared identity or changed user revision")
+                if expect(f"/api/v1/users/{user2}")["revision"]!=2: raise RuntimeError("automatic client issuance changed user revision")
+                deadline=time.monotonic()+20
+                while time.monotonic()<deadline:
+                    with database.connect() as connection:
+                        count=connection.execute("SELECT count(*) FROM mtls_user_versions WHERE ca_id=%s",(authority["id"],)).fetchone()[0]
+                        kicks=connection.execute("SELECT count(*) FROM jobs WHERE kind='kick'").fetchone()[0]
+                    if count==3 or kicks:break
+                    time.sleep(.2)
+                if count!=3 or kicks!=0: raise RuntimeError(f"automatic shared issuance has {count} versions and {kicks} kick jobs; expected 3 and 0")
 
                 usage = expect(f"/api/v1/users/{user2}/usage")
                 if usage["data_freshness"]["status"] != "not_collected":
@@ -526,7 +461,7 @@ def main():
                 user2_subscription = expect(
                     f"/api/v1/users/{user2}/subscription",
                     "POST",
-                    {"expected_revision": 3},
+                    {"expected_revision": 2},
                 )
                 future_expiry = "2099-01-01T00:00:00Z"
                 past_expiry = "2000-01-01T00:00:00Z"
@@ -534,7 +469,7 @@ def main():
                     f"/api/v1/users/{user2}",
                     "PATCH",
                     {
-                        "expected_revision": 4,
+                        "expected_revision": 3,
                         "quota_bytes": None,
                         "expires_at": future_expiry,
                     },
@@ -544,7 +479,7 @@ def main():
                 expect(
                     f"/api/v1/users/{user2}",
                     "PATCH",
-                    {"expected_revision": 5, "expires_at": past_expiry},
+                    {"expected_revision": 4, "expires_at": past_expiry},
                 )
                 if auth(node2, token2, credential2).get("ok") is not False:
                     raise RuntimeError("expired user was accepted by the Hysteria callback")
@@ -560,7 +495,7 @@ def main():
                     f"/api/v1/users/{user2}",
                     "PATCH",
                     {
-                        "expected_revision": 6,
+                        "expected_revision": 5,
                         "expires_at": future_expiry,
                         "quota_bytes": 0,
                     },
@@ -576,7 +511,7 @@ def main():
                     raise RuntimeError("over-quota user subscription did not return HTTP 403")
 
                 print(
-                    "Admin token create/use/revoke, two-node auth isolation, server TLS resource parsing/key matching, mTLS certificate requirements/updates, stable identity, simultaneous edit conflict, credential rotation, "
+                    "Admin token create/use/revoke, two-node auth isolation, server TLS resource parsing/key matching, managed CA automatic shared issuance without business revision changes or kicks, stable identity, simultaneous edit conflict, credential rotation, "
                     "per-node usage freshness, pending revocation, quota clearing, expiry denial, and over-quota subscription denial passed."
                 )
             except Exception:

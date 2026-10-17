@@ -54,7 +54,6 @@ final class ManagementStore {
     var overviewHistoryRefreshToken = UUID()
     var supportsOverviewMonitoring = false
     var supportsNodeRecordRemoval = false
-    var supportsAuthorizationGroups = false
     var supportsJobRetryLinks = false
     private let nodeNotifications: NodeAlertNotifications?
     private var historyCache: [String: OverviewHistory] = [:]
@@ -144,7 +143,6 @@ final class ManagementStore {
             dnsError = nil
             requestedDNSRecordID = nil
             supportsNodeRecordRemoval = false
-            supportsAuthorizationGroups = false
             supportsSSHDNSSync = false
             serverMonitoring = nil
             serverMonitoringError = nil
@@ -190,7 +188,6 @@ final class ManagementStore {
         supportsOverviewMonitoring = version.features?.contains("overview_monitoring") == true
         supportsJobRetryLinks = version.features?.contains("job_retry_links") == true
         supportsNodeRecordRemoval = version.features?.contains("node_record_removal") == true
-        supportsAuthorizationGroups = version.features?.contains("authorization_groups") == true
         directoryGeneration = version.directoryGeneration
         await refreshAuthorizationGroups()
         await refreshOverview()
@@ -253,7 +250,6 @@ final class ManagementStore {
             supportsOverviewMonitoring = version.features?.contains("overview_monitoring") == true
             supportsJobRetryLinks = version.features?.contains("job_retry_links") == true
             supportsNodeRecordRemoval = version.features?.contains("node_record_removal") == true
-            supportsAuthorizationGroups = version.features?.contains("authorization_groups") == true
             isConnected = true
             if changed { await refreshAuthorizationGroups() }
             guard refreshGeneration == serviceGeneration, !Task.isCancelled else { return }
@@ -334,6 +330,7 @@ final class ManagementStore {
         guard generation == serviceGeneration else { return created }
         if let node = created.node, !nodes.contains(where: { $0.id == node.id }) {
             let summary = NodeSummary(
+                mtlsState: "ready", mtlsRecoveryConfigured: false, mtlsError: nil, mtlsGeneration: 0,
                 publishedConnection: nil, dnsBinding: nil, package: request.package, packageUsage: nil,
                 id: node.id, name: node.name, ssh: nil, revision: node.revision,
                 deployedRevision: nil, state: node.state, lastSampleAt: nil,
@@ -545,69 +542,6 @@ final class ManagementStore {
         let _: NodeUpdateResponse = try await api.patch(
             APIEndpoints.updateNode(id: nodeID),
             body: NodePatchRequest(expectedRevision: node.revision, sshHostFingerprint: fingerprint)
-        )
-        await refresh()
-    }
-
-    func assign(
-        _ user: UserSummary,
-        to node: NodeSummary,
-        clientCertificate: String? = nil,
-        clientPrivateKey: String? = nil,
-        mtlsCredentialID: String? = nil
-    ) async throws -> String {
-        let api = try requireConnectedAPI()
-        let mtls = try await resolveMTLSCredential(userID: user.id, nodeID: node.id, certificate: clientCertificate, privateKey: clientPrivateKey, selected: mtlsCredentialID)
-        let response: AssignmentReceipt = try await api.post(
-            APIEndpoints.assignUserToNode(id: user.id),
-            body: AssignmentRequest(
-                expectedRevision: user.revision,
-                nodeID: node.id,
-                mtlsCredentialId: mtls?.id,
-                mtlsCredentialVersion: mtls?.version
-            )
-        )
-        await refresh()
-        return response.hy2Credential
-    }
-
-    func setNodeAssignment(
-        userID: String, nodeID: String, expectedRevision: Int, assigned: Bool,
-        clientCertificate: String? = nil, clientPrivateKey: String? = nil, mtlsCredentialID: String? = nil
-    ) async throws -> (revision: Int, credential: String?) {
-        let api = try requireConnectedAPI()
-        if assigned {
-            let mtls = try await resolveMTLSCredential(userID: userID, nodeID: nodeID, certificate: clientCertificate, privateKey: clientPrivateKey, selected: mtlsCredentialID)
-            let response: AssignmentReceipt = try await api.post(
-                APIEndpoints.assignUserToNode(id: userID),
-                body: AssignmentRequest(expectedRevision: expectedRevision, nodeID: nodeID,
-                                        mtlsCredentialId: mtls?.id, mtlsCredentialVersion: mtls?.version)
-            )
-            return (response.revision, response.hy2Credential)
-        }
-        let response: AssignmentMutationResponse = try await api.delete(
-            APIEndpoints.unassignUserFromNode(id: userID, nodeID: nodeID),
-            body: RevisionRequest(expectedRevision: expectedRevision)
-        )
-        return (response.revision, nil)
-    }
-
-    func updateAssignmentClientCertificate(
-        _ user: UserSummary,
-        for node: NodeSummary,
-        clientCertificate: String,
-        clientPrivateKey: String,
-        mtlsCredentialID: String? = nil
-    ) async throws {
-        let api = try requireConnectedAPI()
-        let mtls = try await resolveMTLSCredential(userID: user.id, nodeID: node.id, certificate: clientCertificate, privateKey: clientPrivateKey, selected: mtlsCredentialID)
-        let _: AssignmentMutationResponse = try await api.put(
-            APIEndpoints.updateAssignmentClientCertificate(id: user.id, nodeID: node.id),
-            body: AssignmentCertificateUpdateRequest(
-                expectedRevision: user.revision,
-                mtlsCredentialId: mtls!.id,
-                mtlsCredentialVersion: mtls!.version
-            )
         )
         await refresh()
     }

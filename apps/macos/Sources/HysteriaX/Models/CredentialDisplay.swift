@@ -13,6 +13,7 @@ enum CredentialDisplay {
         case "ssh_private_key": L10n.text("SSH 私钥")
         case "ssh_password": L10n.text("SSH 密码")
         case "tls_identity": L10n.text("TLS 证书对")
+        case "ca_identity": L10n.text("CA 身份")
         case "ca_certificate": L10n.text("CA 证书")
         case "ech_key": L10n.text("ECH 密钥")
         case "dns": L10n.text("ACME DNS 凭据")
@@ -30,6 +31,13 @@ enum CredentialDisplay {
         case "history": L10n.text("历史配置")
         case "ssh": L10n.text("SSH 访问")
         case "mtls": L10n.text("mTLS 身份")
+        case "managed_identity": L10n.text("共享用户身份")
+        case "managed_trust": L10n.text("节点信任")
+        case "managed_probe": L10n.text("节点探测身份")
+        case "managed_rotation": L10n.text("CA 轮换")
+        case "managed_cleanup": L10n.text("旧信任清理")
+        case "managed_activation": L10n.text("部署激活")
+        case "managed_activation_probe": L10n.text("探测历史")
         case "batch": L10n.text("更新任务")
         default: value
         }
@@ -64,7 +72,7 @@ enum CredentialResources {
         }
         visit(.object(configuration))
         var output: [NodeResource] = []
-        for entry in entries where entry.isManaged && entry.ownerUserId == nil {
+        for entry in entries where entry.isManaged && entry.ownerUserId == nil && entry.metadata["managed"]?.boolValue != true {
             let fields: [(String, String)]
             switch entry.kind {
             case "tls_identity": fields = [("tls_identity", "certificate")]

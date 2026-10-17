@@ -8,6 +8,14 @@ import Foundation
     }
     static func main() {
         precondition(NodeTaskFeedback.allowsAction("ssh-test", state: "delete_failed"))
+        precondition(!NodeTaskFeedback.allowsAction("rollback", state: "deployed", mtlsState: "recovery_required"))
+        precondition(!NodeTaskFeedback.allowsAction("deploy", state: "deployed", mtlsState: "needs_configuration"))
+        precondition(!NodeTaskFeedback.allowsAction("sync", state: "deployed", mtlsState: "needs_configuration"))
+        precondition(NodeTaskFeedback.allowsAction("ssh-test", state: "deployed", mtlsState: "needs_configuration"))
+        precondition(NodeTaskFeedback.allowsAction("kick", state: "deployed", mtlsState: "needs_configuration"))
+        precondition(NodeTaskFeedback.allowsAction("sync", state: "deployed", mtlsState: "recovery_required"))
+        precondition(NodeTaskFeedback.allowsAction("sync", state: "deployed", mtlsState: "needs_configuration", recoveryConfigured: true))
+        precondition(!NodeTaskFeedback.allowsAction("rollback", state: "deployed", mtlsState: "needs_configuration", recoveryConfigured: true))
         for action in ["ssh-test", "deploy", "sync", "rollback"] {
             precondition(!NodeTaskFeedback.allowsAction(action, state: "deleting"))
             if action != "ssh-test" { precondition(!NodeTaskFeedback.allowsAction(action, state: "delete_failed")) }

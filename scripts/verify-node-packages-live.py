@@ -21,6 +21,7 @@ import time
 import uuid
 
 from postgres_test import PostgresTestSchema
+from credential_test_fixtures import grant_group
 
 ROOT = Path(__file__).resolve().parent.parent
 spec = importlib.util.spec_from_file_location("matrix", ROOT / "scripts/verify-deployment-matrix.py")
@@ -129,7 +130,7 @@ def main():
                         print("Retrying transient release-download failure", flush=True)
                 print("Disposable Hysteria node deployed", flush=True)
                 user = api("/api/v1/users", "POST", {"name": "Package live user"})["id"]
-                credential = api(f"/api/v1/users/{user}/assignments", "POST", {"expected_revision": 1, "node_id": node_id})["hy2_credential"]
+                credential = grant_group(api,user,[node_id])["created_credentials"][0]["hy2_credential"]
                 sub = api(f"/api/v1/users/{user}/subscription", "POST", {"expected_revision": 2})["token"]
 
                 def auth():

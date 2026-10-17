@@ -14,13 +14,13 @@ token continues to live in Keychain.
 - Complete ACME DNS provider credentials, and general API tokens. The first
   provider integration is the existing ACME DNS configuration; general API
   tokens can be stored and versioned without adding new provider integrations.
-- User mTLS certificate/key pairs, restricted to their owning user.
+- CA identities with a signing key, from generation or strict chain import. User mTLS identities and node probes are system-issued; manual user certificate import is removed.
 
 Operations use encrypted immutable versions. References have the form
 `credential://<id>/<version>/<field>`. Certificates and keys in a TLS identity
 use `certificate` and `private_key`; CA and ECH material uses `content`; DNS
 references use the provider's config-field names. Ordinary ACL/GeoIP/GeoSite
-files remain node resources. Proxy configuration selects one TLS certificate-pair version, and independent CA and ECH references. Its
+files remain node resources. Proxy configuration selects one TLS certificate-pair version and an ECH reference. Managed mTLS selects a CA identity; the service generates clientCA trust files. Its
 **创建…** buttons open the shared credential editor and select the new version
 after creation. Version management remains in the credential center. The configuration-resource uploader accepts only ACL, GeoIP and GeoSite.
 Existing remote-file selections are preserved when opening the form.
@@ -47,20 +47,22 @@ may already have made that old credential unusable.
 TLS/ECH/DNS changes create new node configuration revisions and deploy them.
 The center distinguishes target references from successfully deployed ones,
 and shows each batch item's actual job result. One failed node does not undo
-other successes. Retry applies only failed items from the latest, unarchived
-credential version, rechecking current optimistic revisions. Newer publications
-supersede queued older work. Rollback resolves historical credential versions;
+other successes. Ordinary credential retry applies only failed items from the latest, unarchived
+version, rechecking current optimistic revisions. Newer ordinary publications
+supersede queued older work. CA updates instead use persisted generation, phase
+and actual-reference guards; continuous rotations and delayed trust cleanup can coexist. Rollback resolves historical credential versions;
 it continues using the currently verified SSH connection.
 
-mTLS changes update the relevant user's assignments and queue disconnection of
-old client sessions. Administrator/user/subscription tokens keep their existing
+Managed mTLS signs one shared identity per user and CA credential ID. Ordinary
+renewal and manual reissue do not change business user revisions or disconnect
+clients; previously issued certificates remain valid until natural expiry. Administrator/user/subscription tokens keep their existing
 business rotation and revocation behavior. The API prevents revoking the token
 used by the current request or the last active administrator token.
 
 Archiving keeps existing use available and prevents new bindings/publications.
 Deletion is refused while current/deployed configurations, saved history or
 unfinished tasks reference the credential. Deleting a user archives their
-owned mTLS material. Public metadata can be cached offline; detail reads and
+shared mTLS identity and retains unexpired leaves for old-trust retention. Public metadata can be cached offline; detail reads and
 all writes require a live connection.
 
 ## Expiry and verification
@@ -74,8 +76,10 @@ center does not take over remote ACME issuance or renewal monitoring.
 Management API 1.0.0 keeps `/api/v1` and changes its contract in place; upgrade clients and server together. Credential CRUD and publication
 are under `/credentials`; references are under `/credentials/{id}/references`;
 batch state and retry are under `/credential-batches/{id}`. Node writes accept
-SSH credential IDs/versions, and assignment writes accept mTLS IDs/versions.
-Those positions reject inline secret fields. See the OpenAPI contract for
+SSH credential IDs/versions and mtls off/managed settings with an exact currently
+published CA ID/version. Direct personal node-assignment and certificate-binding
+routes are removed; authorization groups issue shared identities automatically.
+Public node writes reject hand-written tls.clientCA and inline secret fields. See the OpenAPI contract for
 request and response definitions.
 
 Verification commands:
@@ -102,3 +106,10 @@ objects after conversion and retains unused CA certificates as `ca_certificate`.
 A referenced invalid pair aborts migration. Restore the pre-upgrade database and
 matching image for rollback; old private-key objects cannot be recovered through
 the upgraded API.
+
+## Managed mTLS upgrade
+
+See [managed mTLS and upgrade](managed-mtls.md) for signing policy, staged CA
+rotation, blocking-node recovery, historical rollback limits, the one-time old
+user-certificate reset and database/image rollback requirements. The reset runs
+inside the startup format-conversion transaction before workers or API access.

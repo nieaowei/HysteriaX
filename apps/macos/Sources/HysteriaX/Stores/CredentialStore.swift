@@ -1,30 +1,18 @@
 import Foundation
 
 extension ManagementStore {
-    func resolveMTLSCredential(userID: String, nodeID: String, certificate: String?, privateKey: String?, selected: String?) async throws -> (id: String, version: Int)? {
-        if let selected, !selected.isEmpty {
-            let entry = try await credentialDetail(selected)
-            guard entry.ownerUserId == userID && entry.kind == "tls_identity" && !entry.archived else { throw APIClientError.server(L10n.text("请选择该用户的有效 mTLS 凭据。")) }
-            return (entry.id, entry.latestVersion)
-        }
-        guard let certificate, let privateKey else { return nil }
-        let receipt = try await createCredential(name: "\(userID) · \(nodeID) · mTLS", kind: "tls_identity", ownerUserID: userID,
-            payload: ["certificate": .string(certificate), "private_key": .string(privateKey)])
-        return (receipt.id, receipt.version ?? 1)
-    }
-
-    func credentialsPage(page: Int, pageSize: Int, category: String, kind: String, query: String, sort: String, order: String, cacheKey: String? = nil, revalidate: Bool = false) async throws -> CredentialsPage {
-        try await loadListPage(APIEndpoints.listCredentials(page: page, pageSize: pageSize, category: category, kind: kind.isEmpty ? nil : kind, q: query, sort: sort, order: order), cacheKey: cacheKey, ttl: 60, revalidate: revalidate)
+    func credentialsPage(page: Int, pageSize: Int, category: String, kind: String, query: String, sort: String, order: String, cacheKey: String? = nil, revalidate: Bool = false, includeInternal: Bool = false) async throws -> CredentialsPage {
+        try await loadListPage(APIEndpoints.listCredentials(page: page, pageSize: pageSize, category: category, kind: kind.isEmpty ? nil : kind, includeInternal: includeInternal, q: query, sort: sort, order: order), cacheKey: cacheKey, ttl: 60, revalidate: revalidate)
     }
 
     func credentialDetail(_ id: String) async throws -> CredentialDetail {
         try await requireConnectedAPI().get(APIEndpoints.getCredential(id: id))
     }
 
-    func createCredential(name: String, kind: String, ownerUserID: String? = nil,
+    func createCredential(name: String, kind: String,
                           reminderAt: String? = nil, payload: [String: JSONValue]) async throws -> CredentialReceipt {
         let result = try await requireConnectedAPI().post(APIEndpoints.createCredential,
-            body: CredentialCreateRequest(name: name, kind: kind, ownerUserId: ownerUserID, reminderAt: reminderAt, payload: payload))
+            body: CredentialCreateRequest(name: name, kind: kind, reminderAt: reminderAt, payload: payload))
         await refresh()
         return result
     }
@@ -52,3 +40,30 @@ extension ManagementStore {
     }
 }
 
+
+extension ManagementStore {
+    func reissueManagedCertificates(userID: String, request: ManagedUserReissueRequest) async throws -> ManagedUserReissueReceipt {
+        let result = try await requireConnectedAPI().post(APIEndpoints.reissueManagedUserCertificates(id: userID), body: request)
+        await refresh()
+        return result
+    }
+}
+
+extension ManagementStore {
+    func createCAIdentity(_ request: CAIdentityCreateRequest) async throws -> CAIdentityReceipt {
+        let result = try await requireConnectedAPI().post(APIEndpoints.createCAIdentity, body: request)
+        await refresh()
+        return result
+    }
+
+    func publishCAIdentity(_ id: String, request: CAIdentityPublishRequest) async throws -> CAIdentityReceipt {
+        let result = try await requireConnectedAPI().post(APIEndpoints.publishCAIdentityVersion(id: id), body: request)
+        await refresh()
+        return result
+    }
+
+    func updateCAIdentityPolicy(_ id: String, request: CAPolicyUpdateRequest) async throws {
+        let _: CAPolicyReceipt = try await requireConnectedAPI().patch(APIEndpoints.updateCAPolicy(id: id), body: request)
+        await refresh()
+    }
+}

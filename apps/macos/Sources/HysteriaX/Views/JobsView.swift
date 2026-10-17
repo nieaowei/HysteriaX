@@ -278,7 +278,7 @@ struct JobsView: View {
                let node = store.nodes.first(where: { $0.id == job.nodeID }) {
                 Button(L10n.text("重试：{0}", String(describing: (retryLabel(action))))) { retry(job, on: node, action: action) }
                     .accessibilityIdentifier("jobs.retry.\(job.id)")
-                    .disabled(!store.isConnected || !store.supportsJobRetryLinks || !NodeTaskFeedback.allowsAction(action, state: node.state) || (action != "ssh-test" && ["needs_fingerprint", "fingerprint_changed"].contains(node.state)))
+                    .disabled(!store.isConnected || !store.supportsJobRetryLinks || !NodeTaskFeedback.allowsAction(action, node: node) || (action != "ssh-test" && ["needs_fingerprint", "fingerprint_changed"].contains(node.state)))
                     .help(store.supportsJobRetryLinks ? L10n.text("创建关联重试，成功后自动移除失败提醒") : L10n.text("管理服务需更新后才能关联重试"))
             }
         }

@@ -6,8 +6,6 @@ struct UserAuthorizationGroupMembershipView: View {
     @State private var user: UserSummary
 
     @State private var groupIDs: Set<String>
-    @State private var credentialIDsByPair: [String: String] = [:]
-    @State private var requiredMTLSPairs: [AuthorizationPair] = []
     @State private var preview: AuthorizationChangePreview?
     @State private var receipt: UserAuthorizationGroupsMutationResponse?
     @State private var selectingGroups = false
@@ -23,8 +21,8 @@ struct UserAuthorizationGroupMembershipView: View {
 
     var body: some View {
         directoryContent
-            .task(id: store.dataRefreshToken) { await store.prepareDirectories([.nodes, .users, .credentials]) }
-            .disabled([ManagementStore.Directory.nodes, .users, .credentials].contains { store.loadingDirectories.contains($0) })
+            .task(id: store.dataRefreshToken) { await store.prepareDirectories([.nodes, .users]) }
+            .disabled([ManagementStore.Directory.nodes, .users].contains { store.loadingDirectories.contains($0) })
     }
 
     private var directoryContent: some View {
@@ -66,10 +64,6 @@ struct UserAuthorizationGroupMembershipView: View {
                 if let preview {
                     previewSummary(preview)
                 }
-                if !requiredMTLSPairs.isEmpty {
-                    mtlsBindings
-                        .disabled(isPreviewing || isSaving)
-                }
             }
 
                 }
@@ -88,7 +82,7 @@ struct UserAuthorizationGroupMembershipView: View {
                         .disabled(isPreviewing || isSaving || !store.isConnected)
                         .accessibilityIdentifier("users.groups.preview")
                     Button(isSaving ? L10n.text("正在保存…") : L10n.text("保存所属组")) { save() }
-                        .disabled(preview?.missingMtls.isEmpty != true || isSaving || isPreviewing || !store.isConnected)
+                        .disabled(preview == nil || isSaving || isPreviewing || !store.isConnected)
                         .keyboardShortcut(.defaultAction)
                         .accessibilityIdentifier("users.groups.save")
                 }
@@ -106,8 +100,6 @@ struct UserAuthorizationGroupMembershipView: View {
         }
         .onChange(of: groupIDs) { _, _ in
             preview = nil
-            requiredMTLSPairs = []
-            credentialIDsByPair = [:]
             errorMessage = nil
         }
     }
@@ -134,13 +126,9 @@ struct UserAuthorizationGroupMembershipView: View {
                         pairList(preview.removals).padding(.top, 6)
                     }
                 }
-                if !preview.missingMtls.isEmpty {
-                    Text(L10n.text("新增连接中有 {0} 条需要该用户自己的 mTLS 证书。", String(preview.missingMtls.count)))
-                        .font(.callout).foregroundStyle(.orange)
-                } else {
-                    Text(L10n.text("预览有效。再次修改草稿或凭据后，需要重新预览。"))
-                        .font(.caption).foregroundStyle(.secondary)
-                }
+                ManagedIdentityIssuanceSummary(immediate: preview.automaticIssueCount, pending: preview.pendingIssueCount)
+                Text(L10n.text("预览有效。再次修改草稿或凭据后，需要重新预览。"))
+                    .font(.caption).foregroundStyle(.secondary)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.vertical, 4)
@@ -167,58 +155,15 @@ struct UserAuthorizationGroupMembershipView: View {
         .frame(maxHeight: 150)
     }
 
-    private var mtlsBindings: some View {
-        GroupBox {
-            VStack(alignment: .leading, spacing: 12) {
-                ForEach(Array(requiredMTLSPairs.enumerated()), id: \.offset) { index, pair in
-                    let key = pairKey(pair.userId, pair.nodeID)
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("\(user.name) · \(store.nodes.first(where: { $0.id == pair.nodeID })?.name ?? pair.nodeID)")
-                            .font(.callout.weight(.medium))
-                        CredentialPickerView(
-                            store: store,
-                            selection: Binding(
-                                get: { credentialIDsByPair[key] ?? "" },
-                                set: { newValue in
-                                    credentialIDsByPair[key] = newValue
-                                    preview = nil
-                                }
-                            ),
-                            kinds: ["tls_identity"],
-                            ownerUserID: user.id,
-                            title: L10n.text("mTLS 凭据")
-                        )
-                    }
-                    if index < requiredMTLSPairs.count - 1 { Divider() }
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.vertical, 4)
-        } label: {
-            Label(L10n.text("逐项选择用户自己的证书"), systemImage: "checkmark.seal")
-        }
-    }
-
     private func runPreview() {
         isPreviewing = true
         errorMessage = nil
-        let bindings = requiredMTLSPairs.compactMap { pair -> AuthorizationMTLSBinding? in
-            let key = pairKey(pair.userId, pair.nodeID)
-            guard let credentialID = credentialIDsByPair[key],
-                  let credential = store.credentials.first(where: {
-                      $0.id == credentialID && $0.ownerUserId == user.id && $0.kind == "tls_identity" && !$0.archived
-                  }) else { return nil }
-            return AuthorizationMTLSBinding(userId: user.id, nodeID: pair.nodeID, credentialId: credential.id, credentialVersion: credential.latestVersion)
-        }
         Task {
             defer { isPreviewing = false }
             do {
                 user = try await store.authorizationUserDetail(user.id)
-                let result = try await store.previewUserAuthorizationGroups(user, groupIDs: groupIDs.sorted(), mtlsBindings: bindings)
+                let result = try await store.previewUserAuthorizationGroups(user, groupIDs: groupIDs.sorted())
                 preview = result
-                requiredMTLSPairs = result.additions.filter { pair in
-                    result.missingMtls.contains { $0.userId == pair.userId && $0.nodeID == pair.nodeID } || credentialIDsByPair[pairKey(pair.userId, pair.nodeID)] != nil
-                }
             } catch {
                 self.preview = nil
                 errorMessage = L10n.text("无法生成预览。草稿已保留，请重新加载数据后再试。\n{0}", String(describing: (error.localizedDescription)))
@@ -227,21 +172,13 @@ struct UserAuthorizationGroupMembershipView: View {
     }
 
     private func save() {
-        guard let preview, preview.missingMtls.isEmpty else { return }
-        let bindings = preview.additions.compactMap { pair -> AuthorizationMTLSBinding? in
-            let key = pairKey(pair.userId, pair.nodeID)
-            guard let credentialID = credentialIDsByPair[key],
-                  let credential = store.credentials.first(where: {
-                      $0.id == credentialID && $0.ownerUserId == user.id && $0.kind == "tls_identity" && !$0.archived
-                  }) else { return nil }
-            return AuthorizationMTLSBinding(userId: user.id, nodeID: pair.nodeID, credentialId: credential.id, credentialVersion: credential.latestVersion)
-        }
+        guard let preview else { return }
         isSaving = true
         errorMessage = nil
         Task {
             defer { isSaving = false }
             do {
-                receipt = try await store.updateUserAuthorizationGroups(user, groupIDs: groupIDs.sorted(), previewToken: preview.previewToken, mtlsBindings: bindings)
+                receipt = try await store.updateUserAuthorizationGroups(user, groupIDs: groupIDs.sorted(), previewToken: preview.previewToken)
             } catch {
                 self.preview = nil
                 errorMessage = L10n.text("提交前授权数据可能已变化。草稿仍保留，请重新预览。\n{0}", String(describing: (error.localizedDescription)))
@@ -249,5 +186,4 @@ struct UserAuthorizationGroupMembershipView: View {
         }
     }
 
-    private func pairKey(_ userID: String, _ nodeID: String) -> String { "\(userID)|\(nodeID)" }
 }

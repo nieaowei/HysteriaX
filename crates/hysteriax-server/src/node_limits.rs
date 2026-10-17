@@ -1045,7 +1045,7 @@ mod tests {
                 .unwrap();
         assert_eq!(jobs, vec![(id.clone(), "queued".into())]);
         sqlx::query(
-            "INSERT INTO deployment_probe_tokens(node_id,token_hash,expires_at) VALUES ($1,$2,$3)",
+            "INSERT INTO monitoring_probe_tokens(node_id,token_hash,expires_at) VALUES ($1,$2,$3)",
         )
         .bind(&id)
         .bind(crate::security::token_digest("probe"))

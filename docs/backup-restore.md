@@ -38,3 +38,10 @@ The integration restores a real PostgreSQL dump, verifies a stored row, checks A
 ## Credential version recovery
 
 Backups include encrypted credential versions, batch items, application completion markers and pinned configuration snapshots. Keep the matching master key outside the database. The credentials upgrade removes legacy secret columns after transactional conversion; downgrade recovery requires the pre-upgrade database backup and original image together. The migration-only mode is suitable for validating a restored copy without starting SSH, quota or deployment workers. Unfinished application jobs recover after restart; already committed applications acknowledge their completion marker instead of changing bindings again.
+
+The [managed mTLS upgrade](managed-mtls.md) removes old user certificate bindings
+and invalidates old mTLS rollback snapshots. Restore the pre-upgrade database and
+matching image to return to that protocol. Migration-only mode does not perform
+remote disconnects or deployments; those durable tasks run only when the service
+starts normally. Nodes requiring reconfiguration remain inaccessible until an
+explicit off/managed configuration has been deployed successfully.

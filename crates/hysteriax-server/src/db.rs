@@ -77,6 +77,11 @@ pub async fn test_pool() -> PgPool {
 
 #[cfg(test)]
 pub async fn test_pool_with_max_connections(max_connections: u32) -> PgPool {
+    test_pool_through_version(max_connections, i64::MAX).await
+}
+
+#[cfg(test)]
+pub async fn test_pool_through_version(max_connections: u32, through_version: i64) -> PgPool {
     use sqlx::postgres::PgPoolOptions;
     use uuid::Uuid;
 
@@ -108,7 +113,18 @@ pub async fn test_pool_with_max_connections(max_connections: u32) -> PgPool {
         .connect(&database_url)
         .await
         .expect("connect to isolated PostgreSQL test schema");
-    MIGRATOR
+    let migrator = Migrator {
+        migrations: MIGRATOR
+            .iter()
+            .filter(|migration| migration.version <= through_version)
+            .cloned()
+            .collect::<Vec<_>>()
+            .into(),
+        ignore_missing: false,
+        locking: true,
+        no_tx: false,
+    };
+    migrator
         .run(&pool)
         .await
         .expect("run PostgreSQL migrations in isolated test schema");

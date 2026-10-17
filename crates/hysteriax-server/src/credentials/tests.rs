@@ -31,7 +31,6 @@ async fn create(state: &AppState, kind: &str, payload: Value) -> String {
         Json(api::CreateCredential {
             name: format!("Test {kind}"),
             kind: kind.into(),
-            owner_user_id: None,
             reminder_at: None,
             payload,
         }),
@@ -581,129 +580,9 @@ async fn http_contract_authentication_and_current_token_protection() {
 }
 
 #[tokio::test]
-async fn user_identity_scope_archiving_and_unreferenced_deletion_are_enforced() {
+async fn manual_user_certificate_import_is_rejected_and_unused_credentials_are_deletable() {
     let state = state().await;
-    let (_, Json(owner)) = crate::api::users::create(
-        State(state.clone()),
-        Json(serde_json::from_value(json!({"name":"Identity owner"})).unwrap()),
-    )
-    .await
-    .unwrap();
-    let (_, Json(other)) = crate::api::users::create(
-        State(state.clone()),
-        Json(serde_json::from_value(json!({"name":"Other user"})).unwrap()),
-    )
-    .await
-    .unwrap();
-    let owner = owner["id"].as_str().unwrap().to_owned();
-    let other = other["id"].as_str().unwrap().to_owned();
-    let (_, Json(identity)) = api::create(
-        State(state.clone()),
-        actor(),
-        Json(api::CreateCredential {
-            name: "Owned mTLS".into(),
-            kind: "tls_identity".into(),
-            owner_user_id: Some(owner.clone()),
-            reminder_at: None,
-            payload: json!({"certificate":CERT,"private_key":KEY}),
-        }),
-    )
-    .await
-    .unwrap();
-    let identity = identity["id"].as_str().unwrap().to_owned();
-    let ssh = create(&state, "ssh_password", json!({"secret":"unused"})).await;
-    let node = node(&state, "Scope node", &ssh, json!({})).await;
-    let assignment = |user: String| {
-        let state = state.clone();
-        let node = node.clone();
-        let identity = identity.clone();
-        async move {
-            let draft = json!({
-                "action":"create",
-                "name":format!("mTLS {user}"),
-                "user_ids":[user],
-                "node_ids":[node],
-                "mtls_bindings":[{"user_id":user,"node_id":node,"credential_id":identity,"credential_version":1}],
-            });
-            let Json(preview) = crate::api::authorization_groups::preview_create(
-                State(state.clone()),
-                Json(serde_json::from_value(draft.clone()).unwrap()),
-            )
-            .await?;
-            let mut request = draft;
-            request.as_object_mut().unwrap().remove("action");
-            request["preview_token"] = preview["preview_token"].clone();
-            crate::api::authorization_groups::create(
-                State(state),
-                Json(serde_json::from_value(request).unwrap()),
-            )
-            .await
-        }
-    };
-    assert_eq!(
-        assignment(other.clone()).await.unwrap_err().status,
-        axum::http::StatusCode::BAD_REQUEST
-    );
-    let _ = assignment(owner.clone()).await.unwrap();
-    let config = json!({"tls":{"cert":Reference{id:identity.clone(),version:1,field:"certificate".into()}.uri(),"key":Reference{id:identity.clone(),version:1,field:"private_key".into()}.uri()}});
-    assert!(
-        super::resolve_config(&state.pool, &state.secrets, &config, true)
-            .await
-            .is_err()
-    );
-    let _ = api::patch(
-        State(state.clone()),
-        actor(),
-        Path(identity.clone()),
-        Json(api::PatchCredential {
-            expected_revision: 1,
-            name: "Owned mTLS".into(),
-            archived: true,
-            reminder_at: None,
-        }),
-    )
-    .await
-    .unwrap();
-    assert_eq!(
-        api::publish(
-            State(state.clone()),
-            actor(),
-            Path(identity.clone()),
-            Json(api::PublishVersion {
-                expected_revision: 2,
-                payload: json!({"certificate":CERT,"private_key":KEY})
-            })
-        )
-        .await
-        .unwrap_err()
-        .status,
-        axum::http::StatusCode::CONFLICT
-    );
-    let existing=sqlx::query("SELECT user_id,mtls_credential_id,mtls_credential_version FROM node_assignments WHERE user_id=$1").bind(owner).fetch_one(&state.pool).await.unwrap();
-    assert!(
-        super::assignment_identity(&state.pool, &state.secrets, &existing)
-            .await
-            .unwrap()
-            .is_some()
-    );
-    assert_eq!(
-        assignment(other).await.unwrap_err().status,
-        axum::http::StatusCode::BAD_REQUEST
-    );
-    assert_eq!(
-        api::delete(
-            State(state.clone()),
-            actor(),
-            Path(identity),
-            axum::extract::Query(crate::api::nodes::RevisionQuery {
-                expected_revision: Some(2)
-            })
-        )
-        .await
-        .unwrap_err()
-        .status,
-        axum::http::StatusCode::CONFLICT
-    );
+    assert!(serde_json::from_value::<api::CreateCredential>(json!({"name":"Manual user certificate","kind":"tls_identity","owner_user_id":"user","payload":{"certificate":CERT,"private_key":KEY}})).is_err());
     let unused = create(&state, "api_token", json!({"token":"unused-secret"})).await;
     let _ = api::publish(
         State(state.clone()),

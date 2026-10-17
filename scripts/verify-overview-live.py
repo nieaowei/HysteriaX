@@ -20,6 +20,7 @@ import time
 import uuid
 
 from postgres_test import PostgresTestSchema
+from credential_test_fixtures import grant_group
 
 ROOT = Path(__file__).resolve().parent.parent
 spec = importlib.util.spec_from_file_location("matrix", ROOT / "scripts/verify-deployment-matrix.py")
@@ -109,10 +110,10 @@ def main():
                 print("Initial public proxy probes healthy", flush=True)
                 assert healthy["latency_ms"] is not None
                 user = api("/api/v1/users", "POST", {"name": "Overview real user", "enabled": True})["id"]
-                assigned = api(f"/api/v1/users/{user}/assignments", "POST", {"expected_revision": 1, "node_id": node})
+                credential = grant_group(api,user,[node])["created_credentials"][0]["hy2_credential"]
                 client_port = matrix.free_port()
                 client_config = temp / "user.yaml"
-                client_config.write_text(f"server: 127.0.0.1:{udp_port}\nauth: {assigned['hy2_credential']}\ntls:\n  insecure: true\nsocks5:\n  listen: 127.0.0.1:{client_port}\n")
+                client_config.write_text(f"server: 127.0.0.1:{udp_port}\nauth: {credential}\ntls:\n  insecure: true\nsocks5:\n  listen: 127.0.0.1:{client_port}\n")
                 with open(temp / "client.log", "wb") as client_log:
                     client = subprocess.Popen([str(binary), "--disable-update-check", "client", "-c", str(client_config)], stdout=client_log, stderr=client_log)
                     wait_for(lambda: api("/api/v1/overview")["online_users"] == 1, "real user online count", 45)

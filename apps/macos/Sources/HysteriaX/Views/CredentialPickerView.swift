@@ -9,7 +9,7 @@ struct CredentialPickerView: View {
     var title = L10n.text("凭据")
     @State private var creating = false
     private var entries: [CredentialSummary] {
-        store.credentials.filter { kinds.contains($0.kind) && (dnsProvider == nil || $0.metadata["provider"]?.stringValue == dnsProvider) && $0.ownerUserId == ownerUserID && (!$0.archived || $0.id == selection) }
+        store.credentials.filter { kinds.contains($0.kind) && $0.metadata["managed"]?.boolValue != true && (dnsProvider == nil || $0.metadata["provider"]?.stringValue == dnsProvider) && $0.ownerUserId == ownerUserID && (!$0.archived || $0.id == selection) }
     }
     var body: some View {
         directoryContent
@@ -27,7 +27,7 @@ struct CredentialPickerView: View {
             Button(L10n.text("创建…")) { creating = true }.disabled(!store.isConnected)
         }
         .sheet(isPresented: $creating) {
-            CredentialEditorView(store: store, initialKind: kinds.first ?? "ssh_private_key", initialOwner: ownerUserID) { selection = $0.id }
+            CredentialEditorView(store: store, initialKind: kinds.first ?? "ssh_private_key") { selection = $0.id }
         }
     }
 }

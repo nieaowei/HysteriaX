@@ -1,5 +1,14 @@
+pub mod activation;
+pub mod authorization;
+pub mod ca;
+pub mod identities;
+mod legacy_reset;
+pub mod maintenance;
 pub mod migration;
+pub mod node_mtls;
 pub(crate) mod reference_index;
+pub mod retention;
+pub mod rotations;
 #[cfg(test)]
 mod tests;
 pub mod worker;
@@ -442,7 +451,7 @@ pub async fn check_bindings(
     let previous = previous.map(references).transpose()?.unwrap_or_default();
     for (path, r) in references(config)? {
         let existed = previous.iter().any(|(p, old)| p == &path && old == &r);
-        let valid:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM credentials c JOIN credential_versions v ON v.credential_id=c.id WHERE c.id=$1 AND v.version=$2 AND c.owner_user_id IS NULL AND (c.archived=FALSE OR $3))").bind(&r.id).bind(r.version).bind(existed).fetch_one(&mut **tx).await?;
+        let valid:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM credentials c JOIN credential_versions v ON v.credential_id=c.id WHERE c.id=$1 AND v.version=$2 AND c.owner_user_id IS NULL AND NOT coalesce((v.metadata->>'managed')::boolean,FALSE) AND (c.archived=FALSE OR $3))").bind(&r.id).bind(r.version).bind(existed).fetch_one(&mut **tx).await?;
         if !valid {
             bail!(
                 "configuration credential was deleted, archived, or is outside its allowed scope"
@@ -450,7 +459,7 @@ pub async fn check_bindings(
         }
     }
     if let Some((id, version, existed)) = ssh {
-        let valid:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM credentials c JOIN credential_versions v ON v.credential_id=c.id WHERE c.id=$1 AND v.version=$2 AND c.kind IN ('ssh_password','ssh_private_key') AND c.owner_user_id IS NULL AND (c.archived=FALSE OR $3))").bind(id).bind(version).bind(existed).fetch_one(&mut **tx).await?;
+        let valid:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM credentials c JOIN credential_versions v ON v.credential_id=c.id WHERE c.id=$1 AND v.version=$2 AND c.kind IN ('ssh_password','ssh_private_key') AND c.owner_user_id IS NULL AND NOT coalesce((v.metadata->>'managed')::boolean,FALSE) AND (c.archived=FALSE OR $3))").bind(id).bind(version).bind(existed).fetch_one(&mut **tx).await?;
         if !valid {
             bail!("SSH credential was deleted, archived, or has the wrong type");
         }
@@ -486,26 +495,6 @@ pub async fn ssh_node(
             .map(str::to_owned),
         host_fingerprint: row.get("ssh_host_fingerprint"),
     })
-}
-
-pub async fn assignment_identity(
-    pool: &PgPool,
-    secrets: &SecretBox,
-    row: &sqlx::postgres::PgRow,
-) -> Result<Option<(String, String)>> {
-    let Some(id) = row.get::<Option<String>, _>("mtls_credential_id") else {
-        return Ok(None);
-    };
-    let version: i64 = row.get("mtls_credential_version");
-    let (kind, owner, _, payload, _) = load(pool, secrets, &id, version).await?;
-    if kind != "tls_identity" || owner.as_deref() != Some(row.get::<String, _>("user_id").as_str())
-    {
-        bail!("invalid user-owned mTLS credential");
-    }
-    Ok(Some((
-        text(&payload, "certificate")?.into(),
-        text(&payload, "private_key")?.into(),
-    )))
 }
 
 #[cfg(test)]

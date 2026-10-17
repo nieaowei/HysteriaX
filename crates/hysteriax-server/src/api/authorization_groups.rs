@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashSet};
 
 use axum::{
     Json,
@@ -20,23 +20,12 @@ use crate::{
 };
 
 const PREVIEW_TTL_MINUTES: i64 = 10;
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, Hash)]
-#[serde(deny_unknown_fields)]
-struct MTLSBinding {
-    user_id: String,
-    node_id: String,
-    credential_id: String,
-    credential_version: i64,
-}
-
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 struct GroupProposal {
     name: String,
     user_ids: Vec<String>,
     node_ids: Vec<String>,
-    #[serde(default)]
-    mtls_bindings: Vec<MTLSBinding>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -47,8 +36,6 @@ pub(crate) struct GroupPreviewRequest {
     name: Option<String>,
     user_ids: Option<Vec<String>>,
     node_ids: Option<Vec<String>>,
-    #[serde(default)]
-    mtls_bindings: Vec<MTLSBinding>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -58,8 +45,6 @@ pub(crate) struct CreateGroupRequest {
     user_ids: Vec<String>,
     node_ids: Vec<String>,
     preview_token: String,
-    #[serde(default)]
-    mtls_bindings: Vec<MTLSBinding>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -70,8 +55,6 @@ pub(crate) struct UpdateGroupRequest {
     user_ids: Vec<String>,
     node_ids: Vec<String>,
     preview_token: String,
-    #[serde(default)]
-    mtls_bindings: Vec<MTLSBinding>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -85,8 +68,6 @@ pub(crate) struct DeleteGroupRequest {
 #[serde(deny_unknown_fields)]
 struct MembershipProposal {
     group_ids: Vec<String>,
-    #[serde(default)]
-    mtls_bindings: Vec<MTLSBinding>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -94,8 +75,6 @@ struct MembershipProposal {
 pub(crate) struct MembershipPreviewRequest {
     expected_revision: i64,
     group_ids: Vec<String>,
-    #[serde(default)]
-    mtls_bindings: Vec<MTLSBinding>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -104,8 +83,6 @@ pub(crate) struct MembershipUpdateRequest {
     expected_revision: i64,
     group_ids: Vec<String>,
     preview_token: String,
-    #[serde(default)]
-    mtls_bindings: Vec<MTLSBinding>,
 }
 
 #[derive(Clone, Debug)]
@@ -220,13 +197,13 @@ pub(crate) async fn preview_create(
     let old_pairs = effective_pairs(&mut tx, &affected, None).await?;
     let mut new_pairs = old_pairs.clone();
     add_group_pairs(&mut new_pairs, &proposal.user_ids, &proposal.node_ids);
-    let (missing_mtls, guard, result, request_json) = preview_data(
+    let (guard, result, request_json) = preview_data(
         &state, &mut tx, "create", None, None, &affected, &proposal, &old_pairs, &new_pairs,
     )
     .await?;
     let token = store_preview(&mut tx, "create", None, None, request_json, guard, &result).await?;
     tx.commit().await?;
-    Ok(Json(preview_json("create", token, result, missing_mtls)))
+    Ok(Json(preview_json("create", token, result)))
 }
 
 pub(crate) async fn preview_group(
@@ -247,11 +224,7 @@ pub(crate) async fn preview_group(
     let proposal = if action == "update" {
         Some(proposal_from_preview(input.clone())?)
     } else {
-        if input.name.is_some()
-            || input.user_ids.is_some()
-            || input.node_ids.is_some()
-            || !input.mtls_bindings.is_empty()
-        {
+        if input.name.is_some() || input.user_ids.is_some() || input.node_ids.is_some() {
             return Err(ApiError::bad_request(
                 "delete preview accepts only action and expected_revision",
             ));
@@ -280,9 +253,8 @@ pub(crate) async fn preview_group(
         name: current.name.clone(),
         user_ids: Vec::new(),
         node_ids: Vec::new(),
-        mtls_bindings: Vec::new(),
     });
-    let (missing_mtls, guard, result, request_json) = preview_data(
+    let (guard, result, request_json) = preview_data(
         &state,
         &mut tx,
         &action,
@@ -305,7 +277,7 @@ pub(crate) async fn preview_group(
     )
     .await?;
     tx.commit().await?;
-    Ok(Json(preview_json(&action, token, result, missing_mtls)))
+    Ok(Json(preview_json(&action, token, result)))
 }
 
 pub(crate) async fn create(
@@ -316,7 +288,6 @@ pub(crate) async fn create(
         name: input.name,
         user_ids: input.user_ids,
         node_ids: input.node_ids,
-        mtls_bindings: input.mtls_bindings,
     })?;
     let response =
         commit_group_mutation(&state, "create", None, None, &input.preview_token, proposal).await?;
@@ -332,7 +303,6 @@ pub(crate) async fn update(
         name: input.name,
         user_ids: input.user_ids,
         node_ids: input.node_ids,
-        mtls_bindings: input.mtls_bindings,
     })?;
     let response = commit_group_mutation(
         &state,
@@ -355,7 +325,6 @@ pub(crate) async fn delete(
         name: String::new(),
         user_ids: Vec::new(),
         node_ids: Vec::new(),
-        mtls_bindings: Vec::new(),
     };
     let response = commit_group_mutation(
         &state,
@@ -379,7 +348,6 @@ pub(crate) async fn preview_memberships(
     }
     let proposal = normalized_membership(MembershipProposal {
         group_ids: input.group_ids,
-        mtls_bindings: input.mtls_bindings,
     })?;
     let mut tx = db::begin_write(&state.pool).await?;
     let revision = user_revision(&mut tx, &user_id).await?;
@@ -393,19 +361,17 @@ pub(crate) async fn preview_memberships(
         None,
         &proposal.group_ids,
         &[],
-        &proposal.mtls_bindings,
     )
     .await?;
     let (additions, removals) = pair_diff(&old_pairs, &new_pairs);
-    let missing_mtls =
-        missing_mtls_bindings(&state, &mut tx, &additions, &proposal.mtls_bindings).await?;
-    validate_mtls_bindings(&mut tx, &additions, &proposal.mtls_bindings).await?;
     let request_json = json!({
         "expected_revision": input.expected_revision,
         "group_ids": proposal.group_ids,
-        "mtls_bindings": proposal.mtls_bindings,
     });
-    let result = diff_json(&additions, &removals);
+    let result = with_plan(
+        diff_json(&additions, &removals),
+        crate::credentials::authorization::plan_on(&mut tx, &additions).await?,
+    );
     let token = store_preview(
         &mut tx,
         "update_memberships",
@@ -417,12 +383,7 @@ pub(crate) async fn preview_memberships(
     )
     .await?;
     tx.commit().await?;
-    Ok(Json(preview_json(
-        "update_memberships",
-        token,
-        result,
-        missing_mtls,
-    )))
+    Ok(Json(preview_json("update_memberships", token, result)))
 }
 
 pub(crate) async fn update_memberships(
@@ -432,7 +393,6 @@ pub(crate) async fn update_memberships(
 ) -> Result<Json<Value>, ApiError> {
     let proposal = normalized_membership(MembershipProposal {
         group_ids: input.group_ids,
-        mtls_bindings: input.mtls_bindings,
     })?;
     let response = commit_membership(
         &state,
@@ -456,7 +416,6 @@ fn proposal_from_preview(input: GroupPreviewRequest) -> Result<GroupProposal, Ap
         node_ids: input
             .node_ids
             .ok_or_else(|| ApiError::bad_request("node_ids is required"))?,
-        mtls_bindings: input.mtls_bindings,
     })
 }
 
@@ -464,13 +423,11 @@ fn normalized_proposal(mut proposal: GroupProposal) -> Result<GroupProposal, Api
     proposal.name = validate_name(&proposal.name)?.to_owned();
     normalize_ids(&mut proposal.user_ids, "user_ids")?;
     normalize_ids(&mut proposal.node_ids, "node_ids")?;
-    normalize_bindings(&mut proposal.mtls_bindings)?;
     Ok(proposal)
 }
 
 fn normalized_membership(mut proposal: MembershipProposal) -> Result<MembershipProposal, ApiError> {
     normalize_ids(&mut proposal.group_ids, "group_ids")?;
-    normalize_bindings(&mut proposal.mtls_bindings)?;
     Ok(proposal)
 }
 
@@ -500,30 +457,6 @@ fn normalize_ids(values: &mut Vec<String>, field: &str) -> Result<(), ApiError> 
 fn sort_dedup(values: &mut Vec<String>) {
     values.sort();
     values.dedup();
-}
-
-fn normalize_bindings(values: &mut [MTLSBinding]) -> Result<(), ApiError> {
-    values.sort_by(|left, right| {
-        (&left.user_id, &left.node_id).cmp(&(&right.user_id, &right.node_id))
-    });
-    for pair in values.windows(2) {
-        if pair[0].user_id == pair[1].user_id && pair[0].node_id == pair[1].node_id {
-            return Err(ApiError::bad_request(
-                "mtls_bindings contains duplicate user/node pairs",
-            ));
-        }
-    }
-    if values.iter().any(|binding| {
-        binding.user_id.trim().is_empty()
-            || binding.node_id.trim().is_empty()
-            || binding.credential_id.trim().is_empty()
-            || binding.credential_version < 1
-    }) {
-        return Err(ApiError::bad_request(
-            "mtls_bindings contains an invalid entry",
-        ));
-    }
-    Ok(())
 }
 
 fn check_revision(current: i64, expected: Option<i64>) -> Result<(), ApiError> {
@@ -737,21 +670,33 @@ fn diff_json(additions: &[Pair], removals: &[Pair]) -> Value {
     })
 }
 
-fn preview_json(action: &str, token: String, result: Value, missing: Vec<Pair>) -> Value {
-    json!({
-        "preview_token":token,
-        "action":action,
-        "additions_count":result["additions_count"],
-        "removals_count":result["removals_count"],
-        "additions":result["additions"],
-        "removals":result["removals"],
-        "missing_mtls":pairs_json(&missing),
-    })
+fn preview_json(action: &str, token: String, mut result: Value) -> Value {
+    let plan = result
+        .as_object_mut()
+        .expect("preview object")
+        .remove("mtls_plan")
+        .expect("managed plan");
+    result["preview_token"] = json!(token);
+    result["action"] = json!(action);
+    result["managed_identities"] = plan["identities"].clone();
+    result
+}
+fn with_plan(mut result: Value, plan: crate::credentials::authorization::Plan) -> Value {
+    result["automatic_issue_count"] = json!(plan.automatic_issue_count);
+    result["pending_issue_count"] = json!(plan.pending_issue_count);
+    result["mtls_plan"] = json!(plan);
+    result
+}
+fn diff_matches(result: &Value, additions: &[Pair], removals: &[Pair]) -> bool {
+    let expected = diff_json(additions, removals);
+    ["additions_count", "removals_count", "additions", "removals"]
+        .iter()
+        .all(|key| result[*key] == expected[*key])
 }
 
 #[allow(clippy::too_many_arguments)]
 async fn preview_data(
-    state: &AppState,
+    _state: &AppState,
     tx: &mut Transaction<'_, Postgres>,
     action: &str,
     group_id: Option<&str>,
@@ -760,15 +705,8 @@ async fn preview_data(
     proposal: &GroupProposal,
     old_pairs: &HashSet<Pair>,
     new_pairs: &HashSet<Pair>,
-) -> Result<(Vec<Pair>, Value, Value, Value), ApiError> {
+) -> Result<(Value, Value, Value), ApiError> {
     let (additions, removals) = pair_diff(old_pairs, new_pairs);
-    let bindings = if action == "delete" {
-        Vec::new()
-    } else {
-        proposal.mtls_bindings.clone()
-    };
-    validate_mtls_bindings(tx, &additions, &bindings).await?;
-    let missing = missing_mtls_bindings(state, tx, &additions, &bindings).await?;
     let guard = guard_snapshot(
         tx,
         affected_users,
@@ -779,19 +717,20 @@ async fn preview_data(
         } else {
             &proposal.node_ids
         },
-        &bindings,
     )
     .await?;
-    let result = diff_json(&additions, &removals);
+    let result = with_plan(
+        diff_json(&additions, &removals),
+        crate::credentials::authorization::plan_on(tx, &additions).await?,
+    );
     let request_json = json!({
         "action":action,
         "expected_revision":_expected_revision,
         "name":if action == "delete" { Value::Null } else { json!(proposal.name) },
         "user_ids":if action == "delete" { json!([]) } else { json!(proposal.user_ids) },
         "node_ids":if action == "delete" { json!([]) } else { json!(proposal.node_ids) },
-        "mtls_bindings":bindings,
     });
-    Ok((missing, guard, result, request_json))
+    Ok((guard, result, request_json))
 }
 
 async fn guard_snapshot(
@@ -800,7 +739,6 @@ async fn guard_snapshot(
     target_group: Option<&str>,
     proposed_groups: &[String],
     proposed_nodes: &[String],
-    bindings: &[MTLSBinding],
 ) -> Result<Value, ApiError> {
     let mut group_ids = group_ids_for_users(tx, affected_users).await?;
     group_ids.extend(proposed_groups.iter().cloned());
@@ -820,14 +758,14 @@ async fn guard_snapshot(
     let user_rows = if user_ids.is_empty() {
         Vec::new()
     } else {
-        sqlx::query("SELECT id,revision FROM users WHERE id=ANY($1::text[]) ORDER BY id")
+        sqlx::query("SELECT id,revision,enabled AND (expires_at IS NULL OR expires_at>now()) AND (quota_bytes IS NULL OR usage_bytes<quota_bytes) AS eligible FROM users WHERE id=ANY($1::text[]) ORDER BY id")
             .bind(&user_ids)
             .fetch_all(&mut **tx)
             .await?
     };
     let users: Vec<Value> = user_rows
         .iter()
-        .map(|row| json!({"id":row.get::<String,_>("id"),"revision":row.get::<i64,_>("revision")}))
+        .map(|row| json!({"id":row.get::<String,_>("id"),"revision":row.get::<i64,_>("revision"),"eligible":row.get::<bool,_>("eligible")}))
         .collect();
 
     let mut node_ids = proposed_nodes.to_vec();
@@ -837,38 +775,23 @@ async fn guard_snapshot(
     let assignment_rows = if user_ids.is_empty() {
         Vec::new()
     } else {
-        sqlx::query("SELECT user_id,node_id,created_at,mtls_credential_id,mtls_credential_version FROM node_assignments WHERE user_id=ANY($1::text[]) ORDER BY user_id,node_id")
+        sqlx::query("SELECT user_id,node_id,created_at FROM node_assignments WHERE user_id=ANY($1::text[]) ORDER BY user_id,node_id")
             .bind(&user_ids)
             .fetch_all(&mut **tx)
             .await?
     };
     let mut assignments = Vec::with_capacity(assignment_rows.len());
-    let mut credential_ids = Vec::new();
     for row in assignment_rows {
-        let mtls_id: Option<String> = row.get("mtls_credential_id");
-        if let Some(id) = &mtls_id {
-            credential_ids.push(id.clone());
-        }
         let node_id: String = row.get("node_id");
         node_ids.push(node_id.clone());
-        assignments.push(json!({
-            "user_id":row.get::<String,_>("user_id"),
-            "node_id":node_id,
-            "created_at":row.get::<DateTime<Utc>,_>("created_at"),
-            "mtls_credential_id":mtls_id,
-            "mtls_credential_version":row.get::<Option<i64>,_>("mtls_credential_version"),
-        }));
-    }
-    for binding in bindings {
-        credential_ids.push(binding.credential_id.clone());
-        node_ids.push(binding.node_id.clone());
+        assignments.push(json!({"user_id":row.get::<String,_>("user_id"),"node_id":node_id,"created_at":row.get::<DateTime<Utc>,_>("created_at")}));
     }
     node_ids.sort();
     node_ids.dedup();
     let nodes = if node_ids.is_empty() {
         Vec::new()
     } else {
-        sqlx::query("SELECT id,desired_revision,md5(desired_config_enc) AS config_digest FROM nodes WHERE id=ANY($1::text[]) ORDER BY id")
+        sqlx::query("SELECT id,desired_revision,state,mtls_state,mtls_generation,mtls_recovery_configured,mtls_activation_id,md5(desired_config_enc) AS config_digest FROM nodes WHERE id=ANY($1::text[]) ORDER BY id")
             .bind(&node_ids)
             .fetch_all(&mut **tx)
             .await?
@@ -876,104 +799,19 @@ async fn guard_snapshot(
             .map(|row| json!({
                 "id":row.get::<String,_>("id"),
                 "desired_revision":row.get::<i64,_>("desired_revision"),
+                "deleting":matches!(row.get::<String,_>("state").as_str(),"deleting"|"delete_failed"),"mtls_state":row.get::<String,_>("mtls_state"),"mtls_generation":row.get::<i64,_>("mtls_generation"),"mtls_recovery_configured":row.get::<bool,_>("mtls_recovery_configured"),"activation_id":row.get::<Option<String>,_>("mtls_activation_id"),
                 "config_digest":row.get::<String,_>("config_digest"),
             }))
             .collect::<Vec<_>>()
     };
-    credential_ids.sort();
-    credential_ids.dedup();
-    let credentials = if credential_ids.is_empty() {
-        Vec::new()
-    } else {
-        sqlx::query("SELECT id,kind,owner_user_id,revision,latest_version,archived FROM credentials WHERE id=ANY($1::text[]) ORDER BY id")
-            .bind(&credential_ids)
-            .fetch_all(&mut **tx)
-            .await?
-            .iter()
-            .map(|row| json!({
-                "id":row.get::<String,_>("id"),
-                "kind":row.get::<String,_>("kind"),
-                "owner_user_id":row.get::<Option<String>,_>("owner_user_id"),
-                "revision":row.get::<i64,_>("revision"),
-                "latest_version":row.get::<i64,_>("latest_version"),
-                "archived":row.get::<bool,_>("archived"),
-            }))
-            .collect::<Vec<_>>()
-    };
+    let managed = crate::credentials::authorization::guard_on(tx, &node_ids, &user_ids).await?;
     Ok(json!({
         "users":users,
         "groups":groups.iter().map(group_json).collect::<Vec<_>>(),
         "nodes":nodes,
         "assignments":assignments,
-        "credentials":credentials,
+        "managed":managed,
     }))
-}
-
-async fn missing_mtls_bindings(
-    state: &AppState,
-    tx: &mut Transaction<'_, Postgres>,
-    additions: &[Pair],
-    bindings: &[MTLSBinding],
-) -> Result<Vec<Pair>, ApiError> {
-    let selected: HashSet<Pair> = bindings
-        .iter()
-        .map(|binding| (binding.user_id.clone(), binding.node_id.clone()))
-        .collect();
-    let mut missing = Vec::new();
-    for pair @ (_, node_id) in additions {
-        if !selected.contains(pair) && node_requires_mtls(state, tx, node_id).await? {
-            missing.push(pair.clone());
-        }
-    }
-    Ok(missing)
-}
-
-async fn node_requires_mtls(
-    state: &AppState,
-    tx: &mut Transaction<'_, Postgres>,
-    node_id: &str,
-) -> Result<bool, ApiError> {
-    let config_enc: Option<String> =
-        sqlx::query_scalar("SELECT desired_config_enc FROM nodes WHERE id=$1")
-            .bind(node_id)
-            .fetch_optional(&mut **tx)
-            .await?;
-    let config_enc = config_enc.ok_or_else(|| ApiError::not_found(&format!("node {node_id}")))?;
-    let config_json = state.secrets.decrypt(&config_enc)?;
-    let config: Value = serde_json::from_str(&config_json).map_err(|_| ApiError::internal())?;
-    Ok(config
-        .get("tls")
-        .and_then(Value::as_object)
-        .and_then(|tls| tls.get("clientCA"))
-        .and_then(Value::as_str)
-        .is_some_and(|value| !value.trim().is_empty()))
-}
-
-async fn validate_mtls_bindings(
-    tx: &mut Transaction<'_, Postgres>,
-    additions: &[Pair],
-    bindings: &[MTLSBinding],
-) -> Result<(), ApiError> {
-    let additions: HashSet<Pair> = additions.iter().cloned().collect();
-    for binding in bindings {
-        if !additions.contains(&(binding.user_id.clone(), binding.node_id.clone())) {
-            return Err(ApiError::bad_request(
-                "mtls_bindings must refer only to newly authorized user/node pairs",
-            ));
-        }
-        let valid: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM credentials c JOIN credential_versions v ON v.credential_id=c.id WHERE c.id=$1 AND v.version=$2 AND c.kind='tls_identity' AND c.owner_user_id=$3 AND c.archived=FALSE)")
-            .bind(&binding.credential_id)
-            .bind(binding.credential_version)
-            .bind(&binding.user_id)
-            .fetch_one(&mut **tx)
-            .await?;
-        if !valid {
-            return Err(ApiError::bad_request(
-                "invalid, archived, or incorrectly owned mTLS credential",
-            ));
-        }
-    }
-    Ok(())
 }
 
 async fn store_preview(
@@ -1090,6 +928,13 @@ async fn commit_group_mutation(
     preview_token: &str,
     proposal: GroupProposal,
 ) -> Result<Value, ApiError> {
+    let prepared = crate::credentials::authorization::prepare_preview(
+        &state.pool,
+        &state.secrets,
+        preview_token,
+    )
+    .await
+    .map_err(|e| ApiError::conflict(e.to_string()))?;
     let mut tx = db::begin_write(&state.pool).await?;
     let preview = load_preview(&mut tx, preview_token).await?;
     if preview.action != action
@@ -1138,16 +983,6 @@ async fn commit_group_mutation(
         add_group_pairs(&mut planned_pairs, &proposal.user_ids, &proposal.node_ids);
     }
     let (planned_additions, planned_removals) = pair_diff(&old_pairs, &planned_pairs);
-    let bindings = if action == "delete" {
-        Vec::new()
-    } else {
-        proposal.mtls_bindings.clone()
-    };
-    validate_mtls_bindings(&mut tx, &planned_additions, &bindings).await?;
-    let missing = missing_mtls_bindings(state, &mut tx, &planned_additions, &bindings).await?;
-    if !missing.is_empty() {
-        return Err(mtls_required_error(&missing));
-    }
     let guard = guard_snapshot(
         &mut tx,
         &affected_users,
@@ -1158,7 +993,6 @@ async fn commit_group_mutation(
         } else {
             &proposal.node_ids
         },
-        &bindings,
     )
     .await?;
     let request_json = group_request_json(action, expected_revision, &proposal);
@@ -1241,14 +1075,24 @@ async fn commit_group_mutation(
     let (actual_additions, actual_removals) = pair_diff(&old_pairs, &effective_after);
     if actual_additions != planned_additions
         || actual_removals != planned_removals
-        || preview.result_json != diff_json(&actual_additions, &actual_removals)
+        || !diff_matches(&preview.result_json, &actual_additions, &actual_removals)
     {
         return Err(ApiError::conflict(
             "authorization sources changed while applying the preview; preview the change again",
         ));
     }
+    let mut managed_identities = crate::credentials::authorization::commit_prepared(
+        &mut tx,
+        &state.secrets,
+        prepared,
+        &actual_additions,
+    )
+    .await
+    .map_err(|e| ApiError::conflict(e.to_string()))?;
     let (created_credentials, revocation_job_ids, touched_users) =
-        reconcile_assignments(state, &mut tx, &affected_users, &effective_after, &bindings).await?;
+        reconcile_assignments(state, &mut tx, &affected_users, &effective_after).await?;
+    crate::credentials::authorization::annotate_results_on(&mut tx, &mut managed_identities)
+        .await?;
     let mut revision_users: BTreeSet<String> = if group_changed {
         affected_users.iter().cloned().collect()
     } else {
@@ -1266,12 +1110,13 @@ async fn commit_group_mutation(
             },
             target_group_id.as_deref().expect("group ID"),
             json!({
-                "action":action,
-                "user_ids":proposal.user_ids,
-                "node_ids":proposal.node_ids,
-                "additions_count":actual_additions.len(),
-                "removals_count":actual_removals.len(),
-            }),
+                    "action":action,
+                    "user_ids":proposal.user_ids,
+                    "node_ids":proposal.node_ids,
+                    "additions_count":actual_additions.len(),
+                    "removals_count":actual_removals.len(),
+            "managed_identities":managed_identities,
+                }),
             timestamp,
         )
         .await?;
@@ -1281,10 +1126,11 @@ async fn commit_group_mutation(
             "authorization_group.deleted",
             group_id.expect("delete group ID"),
             json!({
-                "revision":expected_revision,
-                "additions_count":actual_additions.len(),
-                "removals_count":actual_removals.len(),
-            }),
+                    "revision":expected_revision,
+                    "additions_count":actual_additions.len(),
+                    "removals_count":actual_removals.len(),
+            "managed_identities":managed_identities,
+                }),
             timestamp,
         )
         .await?;
@@ -1304,6 +1150,7 @@ async fn commit_group_mutation(
         "group":group,
         "additions_count":actual_additions.len(),
         "removals_count":actual_removals.len(),
+        "managed_identities":managed_identities,
         "created_credentials":created_credentials,
         "revocation_job_ids":revocation_job_ids,
     });
@@ -1322,7 +1169,6 @@ fn group_request_json(
         "name":if action == "delete" { Value::Null } else { json!(proposal.name) },
         "user_ids":if action == "delete" { json!([]) } else { json!(proposal.user_ids) },
         "node_ids":if action == "delete" { json!([]) } else { json!(proposal.node_ids) },
-        "mtls_bindings":if action == "delete" { json!([]) } else { json!(proposal.mtls_bindings) },
     })
 }
 
@@ -1381,7 +1227,6 @@ async fn reconcile_assignments(
     tx: &mut Transaction<'_, Postgres>,
     affected_users: &[String],
     effective_after: &HashSet<Pair>,
-    bindings: &[MTLSBinding],
 ) -> Result<(Vec<Value>, Vec<String>, BTreeSet<String>), ApiError> {
     let rows = if affected_users.is_empty() {
         Vec::new()
@@ -1398,31 +1243,18 @@ async fn reconcile_assignments(
     let (mut additions, mut removals) = pair_diff(&materialized, effective_after);
     additions.sort();
     removals.sort();
-    validate_mtls_bindings(tx, &additions, bindings).await?;
-    let missing = missing_mtls_bindings(state, tx, &additions, bindings).await?;
-    if !missing.is_empty() {
-        return Err(mtls_required_error(&missing));
-    }
-    let binding_map: BTreeMap<Pair, &MTLSBinding> = bindings
-        .iter()
-        .map(|binding| ((binding.user_id.clone(), binding.node_id.clone()), binding))
-        .collect();
+    let changed_pairs: Vec<Pair> = additions.iter().chain(removals.iter()).cloned().collect();
     let mut created = Vec::new();
     let mut touched = BTreeSet::new();
     for (user_id, node_id) in additions {
         let credential = generate_token();
         let credential_hash = token_digest(&credential);
         let credential_enc = state.secrets.encrypt(&credential)?;
-        let selected = binding_map.get(&(user_id.clone(), node_id.clone()));
-        let mtls_id = selected.map(|binding| binding.credential_id.as_str());
-        let mtls_version = selected.map(|binding| binding.credential_version);
-        sqlx::query("INSERT INTO node_assignments(user_id,node_id,credential_hash,credential_enc,mtls_credential_id,mtls_credential_version,created_at) VALUES($1,$2,$3,$4,$5,$6,$7)")
+        sqlx::query("INSERT INTO node_assignments(user_id,node_id,credential_hash,credential_enc,created_at) VALUES($1,$2,$3,$4,$5)")
             .bind(&user_id)
             .bind(&node_id)
             .bind(credential_hash)
             .bind(credential_enc)
-            .bind(mtls_id)
-            .bind(mtls_version)
             .bind(now())
             .execute(&mut **tx)
             .await?;
@@ -1458,6 +1290,8 @@ async fn reconcile_assignments(
         jobs.insert(job_id);
         touched.insert(user_id);
     }
+    crate::credentials::authorization::reconcile_on(tx, affected_users, &changed_pairs, None)
+        .await?;
     Ok((created, jobs.into_iter().collect(), touched))
 }
 
@@ -1483,8 +1317,9 @@ async fn audit_group(
     detail: Value,
     timestamp: DateTime<Utc>,
 ) -> Result<(), ApiError> {
-    sqlx::query("INSERT INTO audit_records(id,actor,action,entity_type,entity_id,detail_json,created_at) VALUES($1,'admin',$2,'authorization_group',$3,$4,$5)")
+    sqlx::query("INSERT INTO audit_records(id,actor,action,entity_type,entity_id,detail_json,created_at) VALUES($1,$2,$3,'authorization_group',$4,$5,$6)")
         .bind(Uuid::new_v4().to_string())
+        .bind(super::audit_actor())
         .bind(action)
         .bind(group_id)
         .bind(detail)
@@ -1494,26 +1329,14 @@ async fn audit_group(
     Ok(())
 }
 
-fn mtls_required_error(missing: &[Pair]) -> ApiError {
-    ApiError::new(
-        StatusCode::UNPROCESSABLE_ENTITY,
-        "mtls_binding_required",
-        format!(
-            "a valid user-owned mTLS credential is required for: {}",
-            missing
-                .iter()
-                .map(|(user, node)| format!("{user}/{node}"))
-                .collect::<Vec<_>>()
-                .join(", ")
-        ),
-    )
-}
-
 pub(crate) async fn before_node_delete(
     tx: &mut Transaction<'_, Postgres>,
     node_id: &str,
     timestamp: DateTime<Utc>,
 ) -> Result<(), sqlx::Error> {
+    crate::credentials::authorization::reconcile_node(tx, node_id, true)
+        .await
+        .map_err(|e| sqlx::Error::Protocol(e.to_string()))?;
     sqlx::query("UPDATE users SET revision=revision+1,updated_at=$2 WHERE id IN (SELECT user_id FROM node_assignments WHERE node_id=$1 UNION SELECT gu.user_id FROM authorization_group_users gu JOIN authorization_group_nodes gn ON gn.group_id=gu.group_id WHERE gn.node_id=$1)")
         .bind(node_id)
         .bind(timestamp)
@@ -1537,6 +1360,13 @@ async fn commit_membership(
     if expected_revision < 1 {
         return Err(ApiError::bad_request("expected_revision must be positive"));
     }
+    let prepared = crate::credentials::authorization::prepare_preview(
+        &state.pool,
+        &state.secrets,
+        preview_token,
+    )
+    .await
+    .map_err(|e| ApiError::conflict(e.to_string()))?;
     let mut tx = db::begin_write(&state.pool).await?;
     let preview = load_preview(&mut tx, preview_token).await?;
     if preview.action != "update_memberships"
@@ -1562,16 +1392,9 @@ async fn commit_membership(
         effective_pairs(&mut tx, std::slice::from_ref(&user_id.to_owned()), None).await?;
     let planned_pairs = pairs_for_user_groups(&mut tx, user_id, &proposal.group_ids).await?;
     let (planned_additions, planned_removals) = pair_diff(&old_pairs, &planned_pairs);
-    validate_mtls_bindings(&mut tx, &planned_additions, &proposal.mtls_bindings).await?;
-    let missing =
-        missing_mtls_bindings(state, &mut tx, &planned_additions, &proposal.mtls_bindings).await?;
-    if !missing.is_empty() {
-        return Err(mtls_required_error(&missing));
-    }
     let request_json = json!({
         "expected_revision":expected_revision,
         "group_ids":proposal.group_ids,
-        "mtls_bindings":proposal.mtls_bindings,
     });
     let guard = guard_snapshot(
         &mut tx,
@@ -1579,7 +1402,6 @@ async fn commit_membership(
         None,
         &proposal.group_ids,
         &[],
-        &proposal.mtls_bindings,
     )
     .await?;
     ensure_preview_matches(
@@ -1627,20 +1449,24 @@ async fn commit_membership(
     let (actual_additions, actual_removals) = pair_diff(&old_pairs, &effective_after);
     if actual_additions != planned_additions
         || actual_removals != planned_removals
-        || preview.result_json != diff_json(&actual_additions, &actual_removals)
+        || !diff_matches(&preview.result_json, &actual_additions, &actual_removals)
     {
         return Err(ApiError::conflict(
             "authorization sources changed while applying the preview; preview the change again",
         ));
     }
-    let (created_credentials, revocation_job_ids, touched_users) = reconcile_assignments(
-        state,
+    let mut managed_identities = crate::credentials::authorization::commit_prepared(
         &mut tx,
-        &[user_id.to_owned()],
-        &effective_after,
-        &proposal.mtls_bindings,
+        &state.secrets,
+        prepared,
+        &actual_additions,
     )
-    .await?;
+    .await
+    .map_err(|e| ApiError::conflict(e.to_string()))?;
+    let (created_credentials, revocation_job_ids, touched_users) =
+        reconcile_assignments(state, &mut tx, &[user_id.to_owned()], &effective_after).await?;
+    crate::credentials::authorization::annotate_results_on(&mut tx, &mut managed_identities)
+        .await?;
     if current_set != target_set || !touched_users.is_empty() {
         bump_user_revisions(&mut tx, &BTreeSet::from([user_id.to_owned()]), timestamp).await?;
     }
@@ -1653,6 +1479,7 @@ async fn commit_membership(
             "group_ids":proposal.group_ids,
             "additions_count":actual_additions.len(),
             "removals_count":actual_removals.len(),
+        "managed_identities":managed_identities,
         }),
         timestamp,
     )
@@ -1670,6 +1497,7 @@ async fn commit_membership(
         "group_ids":proposal.group_ids,
         "assignments":assignments,
         "created_credentials":created_credentials,
+        "managed_identities":managed_identities,
         "revocation_job_ids":revocation_job_ids,
     });
     tx.commit().await?;
@@ -1680,11 +1508,15 @@ async fn assignments_json(
     tx: &mut Transaction<'_, Postgres>,
     user_id: &str,
 ) -> Result<Vec<Value>, ApiError> {
-    let rows = sqlx::query("SELECT node_id,mtls_credential_id,mtls_credential_version,created_at FROM node_assignments WHERE user_id=$1 ORDER BY node_id")
-        .bind(user_id)
-        .fetch_all(&mut **tx)
-        .await?;
+    let rows = sqlx::query(
+        "SELECT node_id,created_at FROM node_assignments WHERE user_id=$1 ORDER BY node_id",
+    )
+    .bind(user_id)
+    .fetch_all(&mut **tx)
+    .await?;
     let mut assignments = Vec::with_capacity(rows.len());
+    let mut identities =
+        crate::credentials::authorization::assignment_refs_on(tx, &[user_id.to_owned()]).await?;
     for row in rows {
         let node_id: String = row.get("node_id");
         let source_groups = sqlx::query_scalar::<_, Value>("SELECT COALESCE(jsonb_agg(jsonb_build_object('id',g.id,'name',g.name) ORDER BY lower(g.name) COLLATE \"C\",g.name COLLATE \"C\",g.id),'[]'::jsonb) FROM authorization_group_users gu JOIN authorization_group_nodes gn ON gn.group_id=gu.group_id JOIN authorization_groups g ON g.id=gu.group_id WHERE gu.user_id=$1 AND gn.node_id=$2")
@@ -1693,10 +1525,11 @@ async fn assignments_json(
             .fetch_one(&mut **tx)
             .await?;
         assignments.push(json!({
+            "managed_identity_ids":identities.remove(&(user_id.to_owned(),node_id.clone())).unwrap_or_default(),
             "node_id":node_id,
             "created_at":row.get::<DateTime<Utc>,_>("created_at"),
-            "mtls_credential_id":row.get::<Option<String>,_>("mtls_credential_id"),
-            "mtls_credential_version":row.get::<Option<i64>,_>("mtls_credential_version"),
+
+
             "source_groups":source_groups,
         }));
     }
@@ -1858,7 +1691,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn preview_rejects_changed_node_config_and_archived_personal_binding_atomically() {
+    async fn preview_rejects_changed_node_config_and_legacy_manual_binding() {
         let state = fixture().await;
         let draft =
             json!({"action":"create","name":"Guarded","user_ids":["user"],"node_ids":["node"]});
@@ -1880,29 +1713,9 @@ mod tests {
             .status,
             StatusCode::CONFLICT
         );
-        sqlx::raw_sql("INSERT INTO credentials(id,name,kind,owner_user_id,created_at,updated_at) VALUES('personal','Personal','tls_identity','user',now(),now()); INSERT INTO credential_versions(credential_id,version,payload_enc,created_at) VALUES('personal',1,'encrypted',now());").execute(&state.pool).await.unwrap();
         let mut draft = draft;
-        draft["mtls_bindings"] = json!([{"user_id":"user","node_id":"node","credential_id":"personal","credential_version":1}]);
-        let Json(preview) = preview_create(
-            State(state.clone()),
-            Json(serde_json::from_value(draft.clone()).unwrap()),
-        )
-        .await
-        .unwrap();
-        sqlx::query("UPDATE credentials SET archived=true,revision=revision+1 WHERE id='personal'")
-            .execute(&state.pool)
-            .await
-            .unwrap();
-        draft.as_object_mut().unwrap().remove("action");
-        draft["preview_token"] = preview["preview_token"].clone();
-        assert!(
-            create(
-                State(state.clone()),
-                Json(serde_json::from_value(draft).unwrap())
-            )
-            .await
-            .is_err()
-        );
+        draft["mtls_bindings"] = json!([]);
+        assert!(serde_json::from_value::<GroupPreviewRequest>(draft).is_err());
         assert_eq!(
             sqlx::query_scalar::<_, i64>("SELECT count(*) FROM authorization_groups")
                 .fetch_one(&state.pool)
@@ -1993,7 +1806,6 @@ mod tests {
             name: "Large".into(),
             user_ids: (0..601).map(|n| format!("user-{n}")).collect(),
             node_ids: vec![],
-            mtls_bindings: vec![],
         };
         assert_eq!(normalized_proposal(proposal).unwrap().user_ids.len(), 601);
     }

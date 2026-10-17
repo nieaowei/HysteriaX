@@ -199,6 +199,7 @@ enum JobDisplayText {
     }
 
     private static let errors = [
+        "managed mTLS remote trust is still deployed or unconfirmed; recover SSH and uninstall or complete the switch before removing the node record": "托管 mTLS 的远端信任仍已部署或结果未确认；请恢复 SSH 并卸载或完成切换，再移除记录",
         "node changed before SSH credential update; retry after reviewing current configuration": "节点在更新 SSH 凭据前已发生变化，请检查当前配置后重试",
         "node changed before credential update; retry after reviewing current configuration": "节点在更新凭据前已发生变化，请检查当前配置后重试",
         "invalid SSH credential": "SSH 凭据无效",
@@ -325,6 +326,24 @@ enum AuditDisplayText {
             "credential.version_published": L10n.text("发布凭据版本"),
             "credential.deleted": L10n.text("删除凭据"),
             "credential.batch_retried": L10n.text("重试凭据更新批次"),
+            "ca.created": L10n.text("创建 CA 身份"),
+            "ca.policy_updated": L10n.text("修改客户端证书策略"),
+            "ca.version_prepared": L10n.text("准备 CA 新版本"),
+            "ca.published": L10n.text("发布 CA 新版本"),
+            "ca.rotation_completed": L10n.text("完成 CA 轮换"),
+            "ca.rotation_failed": L10n.text("CA 轮换异常"),
+            "ca.rotation_retried": L10n.text("重试 CA 轮换"),
+            "ca.target_superseded": L10n.text("替换 CA 更新目标"),
+            "mtls.user_reissued": L10n.text("重新签发托管证书"),
+            "mtls.legacy_reset": L10n.text("重置旧 mTLS 数据"),
+            "ca.create_request_failed": L10n.text("创建 CA 请求失败"),
+            "ca.policy_request_failed": L10n.text("修改 CA 策略请求失败"),
+            "ca.publish_request_failed": L10n.text("发布 CA 请求失败"),
+            "ca.reissue_request_failed": L10n.text("换发托管证书请求失败"),
+            "authorization_group.created": L10n.text("创建授权组"),
+            "authorization_group.updated": L10n.text("更新授权组"),
+            "authorization_group.deleted": L10n.text("删除授权组"),
+            "authorization_group.user_membership_updated": L10n.text("更新用户授权组"),
             "dns.connection.created": L10n.text("创建 DNS 连接"),
             "dns.connection.updated": L10n.text("更新 DNS 连接"),
             "dns.connection.deleted": L10n.text("删除 DNS 连接"),
@@ -353,8 +372,8 @@ enum AuditDisplayText {
         func joined(_ values: [String]) -> String? { values.isEmpty ? nil : values.sorted().joined(separator: ",") }
         return (
             joined(actionLabels.filter { $0.value.localizedCaseInsensitiveContains(query) }.map(\.key)),
-            joined(["node", "user", "resource", "admin_token", "credential", "dns"].filter { entityType($0).localizedCaseInsensitiveContains(query) }),
-            joined(["admin", "system"].filter { actor($0).localizedCaseInsensitiveContains(query) })
+            joined(["node", "user", "resource", "admin_token", "credential", "dns", "ca_rotation", "migration"].filter { entityType($0).localizedCaseInsensitiveContains(query) }),
+            joined(["admin", "system", "system:mtls", "system:mtls-maintenance", "system:upgrade"].filter { actor($0).localizedCaseInsensitiveContains(query) })
         )
     }
 
@@ -366,6 +385,8 @@ enum AuditDisplayText {
         case "admin_token": L10n.text("管理员令牌")
         case "credential": L10n.text("凭据")
         case "dns": "DNS"
+        case "ca_rotation": L10n.text("CA 轮换")
+        case "migration": L10n.text("升级迁移")
         default: value
         }
     }
@@ -374,6 +395,8 @@ enum AuditDisplayText {
         switch value {
         case "admin": L10n.text("管理员")
         case "system": L10n.text("系统")
+        case "system:mtls", "system:mtls-maintenance": L10n.text("系统") + " · " + L10n.text("证书自动维护")
+        case "system:upgrade": L10n.text("系统") + " · " + L10n.text("版本升级")
         default: value
         }
     }

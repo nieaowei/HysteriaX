@@ -1,6 +1,252 @@
 // Generated from openapi/openapi.yaml by scripts/generate-swift-api-models.rb. Do not edit.
 import Foundation
 
+struct ManagedUserIdentity: Codable, Sendable {
+    let identityId: String
+    let caCredentialId: String
+    let caName: String
+    let revision: Int
+    let authorizationRevision: Int
+    let credentialId: String?
+    let archived: Bool
+    let maintenanceError: String?
+    let nextActionAt: String?
+    let publishedCaVersion: Int
+    let caExpiresAt: String
+    let policyRevision: Int
+    let versions: [ManagedIdentityVersion]
+    let nodeIds: [String]
+
+    enum CodingKeys: String, CodingKey {
+        case identityId = "identity_id"
+        case caCredentialId = "ca_credential_id"
+        case caName = "ca_name"
+        case revision
+        case authorizationRevision = "authorization_revision"
+        case credentialId = "credential_id"
+        case archived
+        case maintenanceError = "maintenance_error"
+        case nextActionAt = "next_action_at"
+        case publishedCaVersion = "published_ca_version"
+        case caExpiresAt = "ca_expires_at"
+        case policyRevision = "policy_revision"
+        case versions
+        case nodeIds = "node_ids"
+    }
+}
+
+struct ManagedIdentityVersion: Codable, Sendable {
+    let version: Int
+    let caVersion: Int
+    let notBefore: String
+    let expiresAt: String
+    let released: Bool
+    let discarded: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case version
+        case caVersion = "ca_version"
+        case notBefore = "not_before"
+        case expiresAt = "expires_at"
+        case released
+        case discarded
+    }
+}
+
+struct ManagedCAPolicy: Codable, Sendable {
+    let clientValidityDays: Int
+    let renewBeforeHours: Int
+
+    enum CodingKeys: String, CodingKey {
+        case clientValidityDays = "client_validity_days"
+        case renewBeforeHours = "renew_before_hours"
+    }
+}
+
+struct CAIdentityReceipt: Codable, Sendable {
+    let id: String
+    let revision: Int
+    let version: Int
+    let policyRevision: Int?
+    let batchId: String?
+    let rotationId: String?
+    let published: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case revision
+        case version
+        case policyRevision = "policy_revision"
+        case batchId = "batch_id"
+        case rotationId = "rotation_id"
+        case published
+    }
+}
+
+struct CAPolicyReceipt: Codable, Sendable {
+    let id: String
+    let policyRevision: Int
+    let policy: ManagedCAPolicy
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case policyRevision = "policy_revision"
+        case policy
+    }
+}
+
+struct CAIdentityState: Codable, Sendable {
+    let source: String
+    let policyRevision: Int
+    let publishedVersion: Int
+    let clientValidityDays: Int
+    let renewBeforeHours: Int
+    let cleanup: [CATrustCleanup]?
+    let maintenanceError: String?
+
+    enum CodingKeys: String, CodingKey {
+        case source
+        case policyRevision = "policy_revision"
+        case publishedVersion = "published_version"
+        case clientValidityDays = "client_validity_days"
+        case renewBeforeHours = "renew_before_hours"
+        case cleanup
+        case maintenanceError = "maintenance_error"
+    }
+}
+
+struct ManagedUserReissueReceipt: Codable, Sendable {
+    let userId: String
+    let identities: [ManagedIdentityReceipt]
+    let refreshSubscription: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case userId = "user_id"
+        case identities
+        case refreshSubscription = "refresh_subscription"
+    }
+}
+
+struct ManagedIdentityReceipt: Codable, Sendable {
+    let caCredentialId: String
+    let identityId: String
+    let credentialVersion: Int?
+    let issued: Bool
+    let affectedNodeIds: [String]
+
+    enum CodingKeys: String, CodingKey {
+        case caCredentialId = "ca_credential_id"
+        case identityId = "identity_id"
+        case credentialVersion = "credential_version"
+        case issued
+        case affectedNodeIds = "affected_node_ids"
+    }
+}
+
+struct CARotationState: Codable, Sendable {
+    let id: String
+    let version: Int
+    let phase: String
+    let errorMessage: String?
+    let nextActionAt: String
+    let outcome: String?
+    let publishedAt: String?
+    let status: CARotationStatus
+    let nodes: [CARotationNode]
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case version
+        case phase
+        case errorMessage = "error_message"
+        case nextActionAt = "next_action_at"
+        case outcome
+        case publishedAt = "published_at"
+        case status
+        case nodes
+    }
+}
+
+struct CARotationStatus: Codable, Sendable {
+    let previousVersion: Int
+    let oldCaExpiresAt: String
+    let clientCertificateExpiresAt: String?
+    let probeCertificateExpiresAt: String?
+    let deadline: String
+    let daysRemaining: Int
+    let blockedNodeIds: [String]
+    let eligibleUserCount: Int
+    let preparedUserCount: Int
+
+    enum CodingKeys: String, CodingKey {
+        case previousVersion = "previous_version"
+        case oldCaExpiresAt = "old_ca_expires_at"
+        case clientCertificateExpiresAt = "client_certificate_expires_at"
+        case probeCertificateExpiresAt = "probe_certificate_expires_at"
+        case deadline
+        case daysRemaining = "days_remaining"
+        case blockedNodeIds = "blocked_node_ids"
+        case eligibleUserCount = "eligible_user_count"
+        case preparedUserCount = "prepared_user_count"
+    }
+}
+
+struct CARotationNode: Codable, Sendable {
+    let nodeID: String
+    let name: String?
+    let trustPrepared: Bool
+    let probeSwitched: Bool
+    let jobId: String?
+    let status: String?
+    let stage: String?
+    let errorMessage: String?
+
+    enum CodingKeys: String, CodingKey {
+        case nodeID = "node_id"
+        case name
+        case trustPrepared = "trust_prepared"
+        case probeSwitched = "probe_switched"
+        case jobId = "job_id"
+        case status
+        case stage
+        case errorMessage = "error_message"
+    }
+}
+
+struct CATrustCleanup: Codable, Sendable {
+    let version: Int
+    let nextActionAt: String
+    let completedAt: String?
+    let nodes: [CATrustCleanupNode]
+
+    enum CodingKeys: String, CodingKey {
+        case version
+        case nextActionAt = "next_action_at"
+        case completedAt = "completed_at"
+        case nodes
+    }
+}
+
+struct CATrustCleanupNode: Codable, Sendable {
+    let nodeID: String
+    let name: String?
+    let completed: Bool
+    let jobId: String?
+    let status: String?
+    let stage: String?
+    let errorMessage: String?
+
+    enum CodingKeys: String, CodingKey {
+        case nodeID = "node_id"
+        case name
+        case completed
+        case jobId = "job_id"
+        case status
+        case stage
+        case errorMessage = "error_message"
+    }
+}
+
 struct AuthorizationGroupReference: Codable, Sendable {
     let id: String
     let name: String
@@ -57,37 +303,67 @@ struct AuthorizationPair: Codable, Sendable {
     }
 }
 
-struct AuthorizationMTLSBinding: Codable, Sendable {
+struct AuthorizationManagedIdentity: Codable, Sendable {
+    let policyRevision: Int?
     let userId: String
-    let nodeID: String
-    let credentialId: String
-    let credentialVersion: Int
+    let caCredentialId: String
+    let caVersions: [Int]
+    let issueNow: Bool
+    let pending: Bool
 
     enum CodingKeys: String, CodingKey {
+        case policyRevision = "policy_revision"
         case userId = "user_id"
-        case nodeID = "node_id"
-        case credentialId = "credential_id"
-        case credentialVersion = "credential_version"
+        case caCredentialId = "ca_credential_id"
+        case caVersions = "ca_versions"
+        case issueNow = "issue_now"
+        case pending
+    }
+}
+
+struct AuthorizationIdentityResult: Codable, Sendable {
+    let policyRevision: Int?
+    let caVersions: [Int]?
+    let affectedNodeIds: [String]?
+    let userId: String
+    let caCredentialId: String
+    let identityId: String?
+    let issued: Bool
+    let pending: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case policyRevision = "policy_revision"
+        case caVersions = "ca_versions"
+        case affectedNodeIds = "affected_node_ids"
+        case userId = "user_id"
+        case caCredentialId = "ca_credential_id"
+        case identityId = "identity_id"
+        case issued
+        case pending
     }
 }
 
 struct AuthorizationChangePreview: Codable, Sendable {
+    let automaticIssueCount: Int
+    let pendingIssueCount: Int
+    let managedIdentities: [AuthorizationManagedIdentity]
     let action: String
     let previewToken: String
     let additionsCount: Int
     let removalsCount: Int
     let additions: [AuthorizationPair]
     let removals: [AuthorizationPair]
-    let missingMtls: [AuthorizationPair]
 
     enum CodingKeys: String, CodingKey {
+        case automaticIssueCount = "automatic_issue_count"
+        case pendingIssueCount = "pending_issue_count"
+        case managedIdentities = "managed_identities"
         case action
         case previewToken = "preview_token"
         case additionsCount = "additions_count"
         case removalsCount = "removals_count"
         case additions
         case removals
-        case missingMtls = "missing_mtls"
     }
 }
 
@@ -104,6 +380,7 @@ struct AuthorizationCreatedCredential: Codable, Sendable {
 }
 
 struct AuthorizationGroupMutationResponse: Codable, Sendable {
+    let managedIdentities: [AuthorizationIdentityResult]?
     let group: AuthorizationGroupSummary?
     let additionsCount: Int
     let removalsCount: Int
@@ -111,6 +388,7 @@ struct AuthorizationGroupMutationResponse: Codable, Sendable {
     let revocationJobIds: [String]
 
     enum CodingKeys: String, CodingKey {
+        case managedIdentities = "managed_identities"
         case group
         case additionsCount = "additions_count"
         case removalsCount = "removals_count"
@@ -120,6 +398,7 @@ struct AuthorizationGroupMutationResponse: Codable, Sendable {
 }
 
 struct UserAuthorizationGroupsMutationResponse: Codable, Sendable {
+    let managedIdentities: [AuthorizationIdentityResult]?
     let userId: String
     let revision: Int
     let groupIds: [String]
@@ -128,6 +407,7 @@ struct UserAuthorizationGroupsMutationResponse: Codable, Sendable {
     let revocationJobIds: [String]
 
     enum CodingKeys: String, CodingKey {
+        case managedIdentities = "managed_identities"
         case userId = "user_id"
         case revision
         case groupIds = "group_ids"
@@ -389,6 +669,7 @@ struct CredentialDetail: Codable, Sendable, Identifiable {
     let metadata: [String: JSONValue]
     let createdAt: String
     let updatedAt: String?
+    let ca: CAIdentityState?
     let versions: [CredentialVersion]
     let references: [CredentialReference]
     let batches: [CredentialBatch]
@@ -409,6 +690,7 @@ struct CredentialDetail: Codable, Sendable, Identifiable {
         case metadata
         case createdAt = "created_at"
         case updatedAt = "updated_at"
+        case ca
         case versions
         case references
         case batches
@@ -428,6 +710,12 @@ struct CredentialVersion: Codable, Sendable {
 }
 
 struct CredentialReference: Codable, Sendable {
+    let identityId: String?
+    let caId: String?
+    let caVersion: Int?
+    let desired: Bool?
+    let deployed: Bool?
+    let phase: String?
     let entityType: String
     let entityID: String
     let source: String
@@ -438,6 +726,12 @@ struct CredentialReference: Codable, Sendable {
     let configRevision: Int?
 
     enum CodingKeys: String, CodingKey {
+        case identityId = "identity_id"
+        case caId = "ca_id"
+        case caVersion = "ca_version"
+        case desired
+        case deployed
+        case phase
         case entityType = "entity_type"
         case entityID = "entity_id"
         case source
@@ -466,6 +760,7 @@ struct CredentialReceipt: Codable, Sendable {
 }
 
 struct CredentialBatch: Codable, Sendable, Identifiable {
+    let caRotation: CARotationState?
     let dnsItems: [DNSCredentialBatchItem]?
     let id: String
     let credentialId: String
@@ -474,6 +769,7 @@ struct CredentialBatch: Codable, Sendable, Identifiable {
     let items: [CredentialBatchItem]
 
     enum CodingKeys: String, CodingKey {
+        case caRotation = "ca_rotation"
         case dnsItems = "dns_items"
         case id
         case credentialId = "credential_id"
@@ -587,7 +883,49 @@ struct NodeUsageUpdateResponse: Codable, Sendable {
     }
 }
 
+struct NodeMTLSSettings: Codable, Sendable {
+    let mode: String
+    let caCredentialId: String?
+    let caCredentialVersion: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case mode
+        case caCredentialId = "ca_credential_id"
+        case caCredentialVersion = "ca_credential_version"
+    }
+}
+
+struct NodeMTLSTrust: Codable, Sendable {
+    let caCredentialId: String
+    let caCredentialVersion: Int
+    let desired: Bool
+    let deployed: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case caCredentialId = "ca_credential_id"
+        case caCredentialVersion = "ca_credential_version"
+        case desired
+        case deployed
+    }
+}
+
+struct NodeMTLSStatus: Codable, Sendable {
+    let target: NodeMTLSSettings
+    let deployed: NodeMTLSSettings?
+    let trust: [NodeMTLSTrust]
+
+    enum CodingKeys: String, CodingKey {
+        case target
+        case deployed
+        case trust
+    }
+}
+
 struct NodeSummary: Codable, Sendable, Identifiable {
+    let mtlsState: String?
+    let mtlsRecoveryConfigured: Bool?
+    let mtlsError: String?
+    let mtlsGeneration: Int?
     let publishedConnection: PublishedConnection?
     let dnsBinding: DNSBinding?
     let package: NodePackage?
@@ -606,6 +944,10 @@ struct NodeSummary: Codable, Sendable, Identifiable {
     let proxyProbeUrl: String?
 
     enum CodingKeys: String, CodingKey {
+        case mtlsState = "mtls_state"
+        case mtlsRecoveryConfigured = "mtls_recovery_configured"
+        case mtlsError = "mtls_error"
+        case mtlsGeneration = "mtls_generation"
         case publishedConnection = "published_connection"
         case dnsBinding = "dns_binding"
         case package
@@ -676,6 +1018,11 @@ struct NodeConnectionDetail: Codable, Sendable {
 }
 
 struct NodeDetail: Codable, Sendable, Identifiable {
+    let mtlsState: String?
+    let mtlsRecoveryConfigured: Bool?
+    let mtlsError: String?
+    let mtlsGeneration: Int?
+    let mtls: NodeMTLSStatus?
     let publishedConnection: PublishedConnection?
     let dnsBinding: DNSBinding?
     let package: NodePackage?
@@ -700,6 +1047,11 @@ struct NodeDetail: Codable, Sendable, Identifiable {
     let updatedAt: String
 
     enum CodingKeys: String, CodingKey {
+        case mtlsState = "mtls_state"
+        case mtlsRecoveryConfigured = "mtls_recovery_configured"
+        case mtlsError = "mtls_error"
+        case mtlsGeneration = "mtls_generation"
+        case mtls
         case publishedConnection = "published_connection"
         case dnsBinding = "dns_binding"
         case package
@@ -726,22 +1078,21 @@ struct NodeDetail: Codable, Sendable, Identifiable {
 }
 
 struct AssignmentInfo: Codable, Sendable {
+    let managedIdentityIds: [String]?
     let nodeID: String
     let createdAt: String
-    let mtlsCredentialId: String?
-    let mtlsCredentialVersion: Int?
     let sourceGroups: [AuthorizationGroupSource]?
 
     enum CodingKeys: String, CodingKey {
+        case managedIdentityIds = "managed_identity_ids"
         case nodeID = "node_id"
         case createdAt = "created_at"
-        case mtlsCredentialId = "mtls_credential_id"
-        case mtlsCredentialVersion = "mtls_credential_version"
         case sourceGroups = "source_groups"
     }
 }
 
 struct UserSummary: Codable, Sendable, Identifiable {
+    let managedCertificates: [ManagedUserIdentity]?
     let id: String
     let name: String
     let enabled: Bool
@@ -756,6 +1107,7 @@ struct UserSummary: Codable, Sendable, Identifiable {
     let updatedAt: String
 
     enum CodingKeys: String, CodingKey {
+        case managedCertificates = "managed_certificates"
         case id
         case name
         case enabled
@@ -943,22 +1295,6 @@ struct ResourceReceipt: Codable, Sendable {
     }
 }
 
-struct AssignmentReceipt: Codable, Sendable {
-    let userId: String
-    let nodeID: String
-    let revision: Int
-    let hy2Credential: String
-    let note: String
-
-    enum CodingKeys: String, CodingKey {
-        case userId = "user_id"
-        case nodeID = "node_id"
-        case revision
-        case hy2Credential = "hy2_credential"
-        case note
-    }
-}
-
 struct SubscriptionReceipt: Codable, Sendable {
     let userId: String
     let revision: Int
@@ -974,18 +1310,6 @@ struct SubscriptionReceipt: Codable, Sendable {
         case url
         case autoUrl = "auto_url"
         case note
-    }
-}
-
-struct AssignmentMutationResponse: Codable, Sendable {
-    let userId: String
-    let nodeID: String
-    let revision: Int
-
-    enum CodingKeys: String, CodingKey {
-        case userId = "user_id"
-        case nodeID = "node_id"
-        case revision
     }
 }
 
