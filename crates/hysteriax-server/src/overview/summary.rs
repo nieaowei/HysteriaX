@@ -26,6 +26,7 @@ pub(crate) struct NodeReading {
     open_gaps: i64,
     pending_revocations: i64,
     has_package: bool,
+    acme_status: Option<Value>,
     #[sqlx(flatten)]
     package: node_limits::PackageReading,
     alerts: sqlx::types::Json<Vec<Alert>>,
@@ -62,6 +63,7 @@ impl NodeReading {
         };
         Ok(
             json!({"id": self.id, "name": self.name, "state": self.state,
+            "acme_status": self.acme_status,
             "revision": self.revision, "deployed_revision": self.deployed_revision,
             "updated_at": self.updated_at, "last_sample_at": self.last_sample_at,
             "data_freshness": freshness, "open_gaps": self.open_gaps,

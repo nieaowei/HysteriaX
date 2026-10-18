@@ -31,12 +31,12 @@ public logs or screenshots.
 
 UA tokens use word boundaries and extract versions immediately after `/` or
 whitespace. A wrapper application's version is never used as the sing-box kernel
-version. Prerelease/malformed versions use the conservative unknown-version profile.
+version. Prerelease/malformed versions are treated as unknown; sing-box JSON then preserves advanced nodes and their required fields.
 
 The selection page presents explicit-format links, clipboard copying, and a
 manual selection fallback. It loads no external assets, disables indexing, and
 sends no referrer. Copy the chosen link into your client; opening it in a browser
-uses an unknown kernel version and may filter advanced nodes.
+uses an unknown kernel version; sing-box JSON preserves all representable nodes.
 
 Mihomo uses the fixed configuration in `src/api/subscriptions/mihomo-template.yaml`:
 local mixed and redirect ports, LAN access, DNS-over-HTTPS/TLS with fake-IP,
@@ -63,18 +63,33 @@ are the same as the original YAML renderer.
 | --- | --- | --- | --- |
 | Basic Hysteria2, SNI, TLS verify flag, Salamander | Existing renderer | 1.11+ baseline | Supported |
 | Port hopping | Existing renderer | 1.11+ baseline, including unknown version | Filtered pending client validation |
-| mTLS certificate/key | Existing renderer | Identified sing-box 1.13+ | Cannot embed; filtered |
-| ECH config list | Existing renderer | Identified sing-box 1.14.2+ validation profile | Filtered pending client validation |
-| Gecko | Existing renderer | Identified sing-box 1.14+ | Filtered pending client validation |
-| Realm and STUN/insecure settings | Existing renderer | Identified sing-box 1.14+ | Filtered pending client validation |
+| mTLS certificate/key | Existing renderer | Unknown version or sing-box 1.13+ | Cannot embed; filtered |
+| ECH config list | Existing renderer | Unknown version or sing-box 1.14.2+ validation profile | Filtered pending client validation |
+| Gecko | Existing renderer | Unknown version or sing-box 1.14+ | Filtered pending client validation |
+| Realm and STUN/insecure settings | Existing renderer | Unknown version or sing-box 1.14+ | Filtered pending client validation |
+
+sing-box 1.14 enables ChromeParrot (a Chrome-like QUIC ClientHello) for Hysteria2 by
+default, and that path of its QUIC stack refuses a TLS configuration carrying a client
+certificate (`quic: server-side tls.Config fields are not supported with ChromeParrot`).
+Hysteria2 outbounds that carry a client certificate are therefore emitted with
+`disable_chrome_parrot: true`; nodes without one keep the default ChromeParrot handshake.
+
+The sing-box template itself uses `dns.optimistic`, which sing-box accepts from 1.14.0.
+`disable_chrome_parrot` and `dns.optimistic` are both omitted when the request identifies a
+known sing-box kernel older than 1.14.0, which predates them and would reject the document as
+unknown fields; an unknown kernel keeps both. That gate is groundwork only: the template still
+uses other constructs introduced with 1.14.0 (`services` with the `api` type, `http_clients`
+and `route.default_http_client`, `rule_set` tag arrays, the DNS `evaluate` action and
+`match_response`, `experimental.cache_file.store_dns`), so the effective minimum for a working
+sing-box subscription remains 1.14.0.
 
 Mihomo output is validated with v1.19.31. Auto requests identifying an older Mihomo
 version conservatively filter mTLS/ECH/Gecko/Realm nodes; the fixed legacy YAML
 endpoint preserves its original contract. A known sing-box version older than 1.11
 is rejected when nodes are present. For explicit sing-box exports from the management
-app or a browser, no kernel version is available: advanced nodes above the baseline
-are filtered. A subscribing client can send its real kernel UA, e.g.
-`sing-box/1.14.2`, to enable supported advanced fields.
+app or a browser, no kernel version is available. Unknown sing-box kernel versions retain all representable nodes, including complete mTLS,
+ECH, Gecko and Realm settings. Recognized older kernels continue to apply their known
+compatibility limits. No extra version parameter is required.
 
 sing-box only represents integral Mbps bandwidth limits. Limits that cannot be
 converted exactly to its integer fields cause the node to be filtered rather than

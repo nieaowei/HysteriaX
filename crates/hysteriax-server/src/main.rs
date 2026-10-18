@@ -13,6 +13,7 @@ mod events;
 mod jobs;
 mod kick_requests;
 mod monitoring;
+mod node_acme;
 mod node_limits;
 mod overview;
 mod proxy_monitor;

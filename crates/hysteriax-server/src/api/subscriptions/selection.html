@@ -108,7 +108,7 @@
         <label class="address-label" for="singbox-url">订阅地址</label>
         <input id="singbox-url" aria-label="sing-box 订阅地址" readonly spellcheck="false" value="{{AUTO_URL}}?format=singbox">
         <div class="links"><button type="button" aria-label="复制 sing-box 订阅地址">复制地址</button><a href="{{AUTO_URL}}?format=singbox">查看订阅<span class="arrow" aria-hidden="true">↗</span></a></div>
-        <details><summary>兼容性说明</summary><p>mTLS 需要 1.13+，Gecko / Realm 需要 1.14+，ECH 使用验证版本 1.14.2+。无法确认客户端版本时仅生成基础兼容配置。</p><p>浏览器查看和管理端导出会过滤上述高级功能。请在支持的 sing-box 客户端中添加此链接并更新订阅，以启用高级功能。</p></details>
+        <details><summary>兼容性说明</summary><p>mTLS 需要 1.13+，Gecko / Realm 需要 1.14+，ECH 使用验证版本 1.14.2+。版本未知时提供全部可表示节点，并保留完整高级配置。</p><p>已识别的旧版内核仍按兼容性过滤。请确认实际内核满足所用功能的最低版本要求。</p></details>
       </article>
       <article>
         <div class="card-top"><span class="file-kind">Base64</span><span class="category">通用订阅</span></div>

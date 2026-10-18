@@ -3,7 +3,7 @@ import SwiftUI
 struct ManagedMTLSFields: View {
     @Bindable var store: ManagementStore
     @Binding var draft: ManagedMTLSDraft
-    let manualTLS: Bool
+    let hasServerCertificate: Bool
     @State private var creating = false
     @State private var authority: CredentialDetail?
     @State private var loading = false
@@ -41,7 +41,7 @@ struct ManagedMTLSFields: View {
                 }
                 Text(L10n.text("系统按用户与 CA 共享身份并自动续期，探测证书独立管理，无需先分配用户。共享 CA 是共享信任域；更换 CA 后客户端需要刷新订阅。"))
                     .font(.caption).foregroundStyle(.secondary)
-                if !manualTLS { Text(L10n.text("托管 mTLS 仅支持凭据中心的手动 TLS 证书。" )).foregroundStyle(.red) }
+                if !hasServerCertificate { Text(L10n.text("托管 mTLS 需要手动 TLS 或 ACME 证书。" )).foregroundStyle(.red) }
                 if let error { Text(error).font(.caption).foregroundStyle(.red) }
             }
         }

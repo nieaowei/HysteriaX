@@ -59,7 +59,7 @@ response_models = %w[
   CredentialSummary CredentialsPage CredentialDetail CredentialVersion CredentialReference CredentialReceipt
   CredentialBatch CredentialBatchItem CredentialBatchReceipt
   NodePackage NodePackageUsage NodeAlert NodeUsageUpdateResponse
-  NodeMTLSSettings NodeMTLSTrust NodeMTLSStatus NodeSummary NodesPage NodeSSHDetail NodeConnectionDetail NodeDetail
+  NodeACMEStatus NodeMTLSSettings NodeMTLSTrust NodeMTLSStatus NodeSummary NodesPage NodeSSHDetail NodeConnectionDetail NodeDetail
   AssignmentInfo UserSummary UsersPage JobOutcome JobResult JobSummary JobsPage AuditSummary AuditPage
   NodeResource ResourceReceipt SubscriptionReceipt
   RotatedCredential RotatedCredentials JobReceipt

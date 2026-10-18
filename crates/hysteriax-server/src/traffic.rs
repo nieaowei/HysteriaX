@@ -153,6 +153,15 @@ async fn sample_node(
             bail!("SSH host fingerprint changed from {expected} to {observed}")
         }
     };
+    if let Err(error) = tokio::time::timeout(
+        Duration::from_secs(8),
+        crate::node_acme::sample(pool, secrets, node_id, &session),
+    )
+    .await
+    .unwrap_or_else(|_| Err(anyhow::anyhow!("ACME status collection timed out")))
+    {
+        tracing::debug!(node_id, %error, "ACME observation unavailable");
+    }
     crate::kick_requests::resume_node(pool, node_id).await?;
     let before_instance = systemd_instance(&session).await?;
     let stats_secret_enc: String =

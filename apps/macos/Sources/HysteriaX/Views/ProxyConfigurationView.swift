@@ -169,6 +169,8 @@ struct ProxyConfigurationView: View {
                                 Text(L10n.text("ACME 域名"))
                             }
                             StringListEditor(entries: $acmeDomains, prompt: L10n.text("域名"))
+                            Text(L10n.text("全部域名共同签发和续期一张 SAN 证书；任一域名验证失败会阻止续期。"))
+                                .font(.caption).foregroundStyle(.secondary)
                             TextField(L10n.text("ACME 邮箱"), text: $acmeEmail)
                             Picker("ACME CA", selection: $acmeCA) {
                                 Text(L10n.text("默认 CA")).tag("")
@@ -210,7 +212,7 @@ struct ProxyConfigurationView: View {
                             .font(.callout).foregroundStyle(.secondary)
                     }
                     NodeMTLSStatusView(detail: detail)
-                    ManagedMTLSFields(store: store, draft: $managedMTLS, manualTLS: tlsMode == "tls")
+                    ManagedMTLSFields(store: store, draft: $managedMTLS, hasServerCertificate: tlsMode == "tls" || tlsMode == "acme")
                     Section(L10n.text("配置资源")) {
                         Picker(L10n.text("资源类型"), selection: $resourceKind) {
                             Text(L10n.text("ACL 规则")).tag("acl")
@@ -505,6 +507,9 @@ struct ProxyConfigurationView: View {
         var serverConfig = config
         // Management policy is saved through the API, never emitted to hy2.
         serverConfig.removeValue(forKey: "mtls")
+        if serverConfig.removeValue(forKey: "acme") != nil {
+            serverConfig["tls"] = .object(["cert": .string("<managed-acme-certificate>"), "key": .string("<managed-acme-private-key>")])
+        }
         if managedMTLS.mode == "managed", var tls = serverConfig["tls"]?.objectValue {
             tls["clientCA"] = .string("<managed-client-ca>")
             serverConfig["tls"] = .object(tls)
@@ -1397,8 +1402,8 @@ struct ProxyConfigurationView: View {
 
     private func save() {
         if let error = managedMTLS.validationError { errorMessage = error; return }
-        if managedMTLS.mode == "managed" && tlsMode != "tls" {
-            errorMessage = L10n.text("托管 mTLS 仅支持凭据中心的手动 TLS 证书。"); return
+        if managedMTLS.mode == "managed" && tlsMode != "tls" && tlsMode != "acme" {
+            errorMessage = L10n.text("托管 mTLS 需要手动 TLS 或 ACME 证书。"); return
         }
         guard let detail, validateDraft(),
               let trafficStatsPort = Int(self.trafficStatsPort),

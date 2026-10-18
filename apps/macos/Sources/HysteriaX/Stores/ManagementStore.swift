@@ -330,6 +330,7 @@ final class ManagementStore {
         guard generation == serviceGeneration else { return created }
         if let node = created.node, !nodes.contains(where: { $0.id == node.id }) {
             let summary = NodeSummary(
+                acmeStatus: nil,
                 mtlsState: "ready", mtlsRecoveryConfigured: false, mtlsError: nil, mtlsGeneration: 0,
                 publishedConnection: nil, dnsBinding: nil, package: request.package, packageUsage: nil,
                 id: node.id, name: node.name, ssh: nil, revision: node.revision,

@@ -54,15 +54,22 @@ async fn auth(state: &AppState, node: &str, token: &str, password: &str) -> bool
 }
 
 #[test]
-fn node_policy_accepts_only_two_modes_and_rejects_manual_client_ca_or_acme() {
+fn node_policy_accepts_acme_and_rejects_manual_client_ca_or_conflicting_sources() {
     for mut config in [
         json!({"mtls":{"mode":"external"}}),
         json!({"mtls":{"mode":"off","ca_credential_id":"x"}}),
         json!({"tls":{"clientCA":"credential://x/1/content"}}),
-        json!({"acme":{},"mtls":{"mode":"managed","ca_credential_id":uuid::Uuid::new_v4().to_string(),"ca_credential_version":1}}),
+        json!({"tls":{},"acme":{},"mtls":{"mode":"managed","ca_credential_id":uuid::Uuid::new_v4().to_string(),"ca_credential_version":1}}),
     ] {
         assert!(node_mtls::validate_input(&mut config).is_err());
     }
+    let mut acme = json!({"acme":{"domains":["a.example","b.example"]},"mtls":{"mode":"managed","ca_credential_id":uuid::Uuid::new_v4().to_string(),"ca_credential_version":1}});
+    assert!(
+        node_mtls::validate_input(&mut acme)
+            .unwrap()
+            .authority()
+            .is_some()
+    );
     let mut config = json!({});
     assert_eq!(
         node_mtls::validate_input(&mut config).unwrap(),
@@ -490,4 +497,89 @@ async fn legacy_mtls_snapshot_is_rejected_before_ssh_or_signing() {
         .await
         .unwrap();
     assert_eq!(count, 0);
+}
+
+#[tokio::test]
+async fn acme_managed_node_preview_compiles_certificate_before_trust() {
+    let state = state().await;
+    let ca = generated(&state).await;
+    let mut request = serde_json::to_value(node_request(&state, &ca, 1).await).unwrap();
+    request["config"].as_object_mut().unwrap().remove("tls");
+    request["config"]["acme"] = json!({"domains":["a.example","b.example"],"type":"http"});
+    let (_, Json(receipt)) = crate::api::nodes::create(
+        State(state.clone()),
+        Json(serde_json::from_value(request).unwrap()),
+    )
+    .await
+    .unwrap();
+    let id = receipt["node"]["id"].as_str().unwrap();
+    let Json(detail) = crate::api::nodes::get(State(state.clone()), Path(id.into()))
+        .await
+        .unwrap();
+    assert!(detail["config"].get("acme").is_some());
+    assert!(detail["config"].get("tls").is_none());
+    let preview: Value = serde_yaml::from_str(detail["yaml_preview"].as_str().unwrap()).unwrap();
+    assert!(preview.get("acme").is_none());
+    assert!(preview.get("mtls").is_none());
+    assert!(
+        preview["tls"]["cert"]
+            .as_str()
+            .unwrap()
+            .contains("/certificates/")
+    );
+    assert!(
+        preview["tls"]["clientCA"]
+            .as_str()
+            .unwrap()
+            .contains("/resources/mtls-trust-")
+    );
+    assert!(detail["acme_status"].is_null());
+    let snapshot: String = sqlx::query_scalar(
+        "SELECT config_enc FROM config_versions WHERE node_id=$1 AND revision=1",
+    )
+    .bind(id)
+    .fetch_one(&state.pool)
+    .await
+    .unwrap();
+    let snapshot: Value = serde_json::from_str(&state.secrets.decrypt(&snapshot).unwrap()).unwrap();
+    assert_eq!(
+        snapshot["acme_component_version"],
+        crate::node_acme::VERSION
+    );
+}
+
+#[tokio::test]
+async fn acme_observation_is_hidden_after_deployment_changes_without_mutating_mtls() {
+    let state = state().await;
+    let ca = generated(&state).await;
+    let node = managed_node(&state, &ca).await;
+    let id = node["id"].as_str().unwrap();
+    sqlx::query("UPDATE nodes SET deployed_revision=1,deployed_content_sha256='first' WHERE id=$1")
+        .bind(id)
+        .execute(&state.pool)
+        .await
+        .unwrap();
+    let status = json!({"schema_version":1,"component_version":"0.1.0","policy_id":"policy","state":"ready","domains":["a.example"],"failures":0,"collected_at":chrono::Utc::now()});
+    sqlx::query("INSERT INTO node_acme_observations(node_id,revision,deployment_digest,policy_id,status,sampled_at) VALUES($1,1,'first','policy',$2,now())").bind(id).bind(&status).execute(&state.pool).await.unwrap();
+    assert_eq!(
+        crate::node_acme::observed(&state.pool, id).await.unwrap(),
+        Some(status)
+    );
+    let Json(detail) = crate::api::nodes::get(State(state.clone()), Path(id.into()))
+        .await
+        .unwrap();
+    assert_eq!(detail["revision"], 1);
+    assert_eq!(detail["mtls_state"], "ready");
+    assert_eq!(detail["acme_status"]["state"], "ready");
+    sqlx::query("UPDATE nodes SET deployed_content_sha256='second' WHERE id=$1")
+        .bind(id)
+        .execute(&state.pool)
+        .await
+        .unwrap();
+    assert!(
+        crate::node_acme::observed(&state.pool, id)
+            .await
+            .unwrap()
+            .is_none()
+    );
 }

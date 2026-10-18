@@ -157,6 +157,7 @@ Mac 客户端的 API 模型由 OpenAPI 生成。构建并检查应用能否启�
 | [授权组](docs/authorization-groups.md) | 用户与节点授权、批量成员管理。 |
 | [订阅格式](docs/subscriptions.md) | 格式识别、客户端要求和节点过滤规则。 |
 | [节点套餐](docs/node-packages.md) | 有效期、整机流量统计、额度重置和预警。 |
+| [节点 ACME](docs/node-acme.md) | 独立证书维护、SAN 与 mTLS、节点备份及恢复。 |
 | [DNS 管理](docs/dns.md) | Cloudflare 连接、记录管理和节点域名绑定。 |
 | [配置字段覆盖](docs/field-coverage.md) · [兼容性](docs/compatibility.md) | 支持的 Hysteria 配置及功能限制。 |
 | [备份与恢复](docs/backup-restore.md) · [故障排查](docs/troubleshooting.md) | 数据保护与常见问题处理。 |

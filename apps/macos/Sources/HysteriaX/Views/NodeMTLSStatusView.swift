@@ -3,6 +3,7 @@ import SwiftUI
 struct NodeMTLSStatusView: View {
     let detail: NodeDetail
     var body: some View {
+        if let acme = detail.acmeStatus { NodeACMEStatusView(status: acme) }
         GroupBox(L10n.text("mTLS 维护状态")) {
             VStack(alignment: .leading, spacing: 8) {
                 LabeledContent(L10n.text("状态"), value: stateTitle)
@@ -39,5 +40,28 @@ struct NodeMTLSStatusView: View {
     }
     private func setting(_ label: String, value: NodeMTLSSettings) -> some View {
         LabeledContent(label, value: value.mode == "managed" ? "\(value.caCredentialId ?? "—") · v\(value.caCredentialVersion ?? 0)" : L10n.text("关闭"))
+    }
+}
+
+struct NodeACMEStatusView: View {
+    let status: NodeACMEStatus
+    var body: some View {
+        GroupBox(L10n.text("节点 ACME 证书")) {
+            VStack(alignment: .leading, spacing: 8) {
+                LabeledContent(L10n.text("状态"), value: status.displayState)
+                LabeledContent(L10n.text("域名"), value: status.domains.joined(separator: ", "))
+                if let expiry = status.notAfter { LabeledContent(L10n.text("证书到期"), value: DateDisplayText.local(expiry)) }
+                if let success = status.lastSuccess { LabeledContent(L10n.text("最近签发成功"), value: DateDisplayText.local(success)) }
+                if let next = status.nextAttempt { LabeledContent(L10n.text("下次尝试"), value: DateDisplayText.local(next)) }
+                LabeledContent(L10n.text("组件版本"), value: status.componentVersion)
+                LabeledContent(L10n.text("最后观测时间"), value: DateDisplayText.local(status.collectedAt))
+                if let fingerprint = status.fingerprint {
+                    LabeledContent(L10n.text("证书指纹"), value: fingerprint).font(.caption.monospaced()).textSelection(.enabled)
+                }
+                if let error = status.error, !error.isEmpty { Text(error).foregroundStyle(.red).textSelection(.enabled) }
+                Text(L10n.text("管理服务离线时节点继续维护证书；此处显示最后一次观测结果。"))
+                    .font(.caption).foregroundStyle(.secondary)
+            }.frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 4)
+        }.accessibilityIdentifier("node.acme.status")
     }
 }

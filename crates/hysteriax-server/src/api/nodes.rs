@@ -312,6 +312,7 @@ pub async fn create(
     let now = now();
     let config_json = input.config.to_string();
     let deployment_snapshot = json!({
+        "acme_component_version": crate::node_acme::VERSION,
         "server_config": input.config.clone(),
         "listen_addr": input.listen_addr.clone(),
         "traffic_stats_port": input.traffic_stats_port,
@@ -603,6 +604,7 @@ pub async fn patch(
 
     let config_json = config.to_string();
     let deployment_snapshot = json!({
+        "acme_component_version": crate::node_acme::VERSION,
         "server_config": config.clone(),
         "listen_addr": listen_addr.clone(),
         "traffic_stats_port": traffic_stats_port,
@@ -1138,6 +1140,7 @@ async fn node_json(state: &AppState, row: &sqlx::postgres::PgRow) -> Result<Valu
     let mtls_status = json!({"target":crate::credentials::node_mtls::Settings::from_config(&config)?,"deployed":deployed_mtls,"trust":trust.into_iter().map(|row|json!({"ca_credential_id":row.get::<String,_>("ca_id"),"ca_credential_version":row.get::<i64,_>("ca_version"),"desired":row.get::<bool,_>("desired"),"deployed":row.get::<bool,_>("deployed")})).collect::<Vec<_>>()});
     Ok(json!({
         "mtls":mtls_status,
+        "acme_status": crate::node_acme::observed(&state.pool, &node_id).await?,
         "package": package, "package_usage": package_usage,
         "id": node_id, "name": row.get::<String, _>("name"),
         "ssh": {"host": row.get::<String, _>("ssh_host"), "port": row.get::<i32, _>("ssh_port"), "username": row.get::<String, _>("ssh_username"), "auth_type": if credential_kind == "ssh_password" { "password" } else { "private_key" }, "credential_id": row.get::<String,_>("ssh_credential_id"), "credential_version": row.get::<i64,_>("ssh_credential_version"), "secret_configured": true, "host_fingerprint": row.get::<Option<String>, _>("ssh_host_fingerprint")},

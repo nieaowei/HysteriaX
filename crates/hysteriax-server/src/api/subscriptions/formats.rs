@@ -99,6 +99,15 @@ impl ClientInfo {
         // A wrapper application's version is not the target kernel's version.
         self.format == Some(format) && self.version.is_some_and(|v| v >= minimum)
     }
+
+    /// ChromeParrot, its `disable_chrome_parrot` opt-out and `dns.optimistic` all arrived
+    /// with sing-box 1.14.0. A known older kernel rejects any of them as an unknown field
+    /// and drops the whole document, so it must receive none. An unknown kernel keeps every
+    /// field: generic downloads and management-app exports are not tied to a kernel version.
+    fn supports_singbox_1_14_fields(&self) -> bool {
+        !(self.format == Some(SubscriptionFormat::Singbox)
+            && self.version.is_some_and(|v| v < Version(1, 14, 0)))
+    }
 }
 
 fn parse_version(value: &str) -> Option<Version> {
@@ -217,21 +226,30 @@ impl SubscriptionNode {
             return None;
         }
         if format == SubscriptionFormat::Singbox {
+            // Generic downloaders do not advertise the destination kernel.
+            // Unknown versions retain every representable feature; only a known
+            // sing-box kernel can establish a lower compatibility ceiling.
+            let known_kernel = client.format == Some(format) && client.version.is_some();
             if client.format == Some(format)
                 && client.version.is_some_and(|v| v < Version(1, 11, 0))
             {
                 return Some("singbox_requires_1_11");
             }
             if (self.certificate.is_some() || self.private_key.is_some())
+                && known_kernel
                 && !client.at_least(format, Version(1, 13, 0))
             {
                 return Some("mtls_requires_singbox_1_13");
             }
             // ECH is enabled only for the fixture validated with our pinned 1.14.2 binary.
-            if self.ech_config.is_some() && !client.at_least(format, Version(1, 14, 2)) {
+            if self.ech_config.is_some()
+                && known_kernel
+                && !client.at_least(format, Version(1, 14, 2))
+            {
                 return Some("ech_requires_singbox_1_14_2");
             }
             if (self.realm.is_some() || self.obfs.as_deref() == Some("gecko"))
+                && known_kernel
                 && !client.at_least(format, Version(1, 14, 0))
             {
                 return Some("realm_or_gecko_requires_singbox_1_14");
@@ -275,7 +293,9 @@ impl SubscriptionNode {
         None
     }
 
-    fn singbox(&self) -> Value {
+    /// `chrome_parrot` is false only for a known kernel older than sing-box 1.14.0, which
+    /// has neither the ChromeParrot handshake nor its `disable_chrome_parrot` opt-out.
+    fn singbox(&self, chrome_parrot: bool) -> Value {
         let mut tls = json!({"enabled": true, "insecure": self.skip_cert_verify});
         if let Some(sni) = &self.sni {
             tls["server_name"] = json!(sni);
@@ -320,6 +340,14 @@ impl SubscriptionNode {
             }
         }
         outbound["tls"] = tls;
+        if self.certificate.is_some() && chrome_parrot {
+            // sing-box 1.14+ uses ChromeParrot (a Chrome-like QUIC ClientHello) for
+            // Hysteria2 by default; that path of its QUIC stack refuses a TLS config
+            // carrying a client certificate with
+            // "quic: server-side tls.Config fields are not supported with ChromeParrot".
+            // mTLS nodes therefore have to ask for the standard handshake.
+            outbound["disable_chrome_parrot"] = json!(true);
+        }
         for (name, bandwidth) in [("up_mbps", &self.up), ("down_mbps", &self.down)] {
             if let Some(value) = bandwidth.as_deref().and_then(bandwidth_mbps) {
                 outbound[name] = json!(value);
@@ -429,7 +457,7 @@ pub(super) fn render_subscription(
             "application/yaml; charset=utf-8",
         ),
         SubscriptionFormat::Singbox => (
-            render_singbox_template(&compatible)?,
+            render_singbox_template(&compatible, client)?,
             "application/json; charset=utf-8",
         ),
         SubscriptionFormat::Uri | SubscriptionFormat::Base64 => {
@@ -459,9 +487,19 @@ pub(super) fn render_subscription(
 }
 
 /// Keep connection credentials dynamic; the template contains only shared policy.
-fn render_singbox_template(nodes: &[&SubscriptionNode]) -> Result<String, ApiError> {
+fn render_singbox_template(
+    nodes: &[&SubscriptionNode],
+    client: &ClientInfo,
+) -> Result<String, ApiError> {
     let mut config: Value = serde_json::from_str(include_str!("singbox-template.json"))
         .map_err(|_| ApiError::internal())?;
+    let modern_fields = client.supports_singbox_1_14_fields();
+    if !modern_fields {
+        // A known kernel older than 1.14.0 predates this DNS field and would reject the document.
+        if let Some(dns) = config["dns"].as_object_mut() {
+            dns.remove("optimistic");
+        }
+    }
     let groups = config["outbounds"]
         .as_array_mut()
         .ok_or_else(ApiError::internal)?;
@@ -515,7 +553,10 @@ fn render_singbox_template(nodes: &[&SubscriptionNode]) -> Result<String, ApiErr
             group["outbounds"] = json!(names);
         }
     }
-    let mut outbounds: Vec<_> = nodes.iter().map(|node| node.singbox()).collect();
+    let mut outbounds: Vec<_> = nodes
+        .iter()
+        .map(|node| node.singbox(modern_fields))
+        .collect();
     outbounds.append(groups);
     config["outbounds"] = json!(outbounds);
     serde_json::to_string_pretty(&config).map_err(|_| ApiError::internal())
@@ -654,6 +695,71 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn unknown_kernel_exports_advanced_nodes_with_all_required_material() {
+        let mut advanced = node();
+        advanced.certificate = Some("cert".into());
+        advanced.private_key = Some("key".into());
+        advanced.ech_config = Some("QUJD".into());
+        advanced.obfs = Some("gecko".into());
+        advanced.obfs_password = Some("obfs-secret".into());
+        advanced.realm = Some(SubscriptionRealm {
+            server_url: "https://realm.example".into(),
+            token: "realm-token".into(),
+            realm_id: "realm-id".into(),
+            stun_servers: None,
+            skip_cert_verify: None,
+        });
+        for ua in [
+            "",
+            "curl/8.0",
+            "Mozilla/5.0",
+            "sing-box",
+            "sing-box/1.14.0-alpha.1",
+            "v2rayN/7.0",
+        ] {
+            let client = ClientInfo::detect(ua);
+            let response = render_subscription(
+                std::slice::from_ref(&advanced),
+                SubscriptionFormat::Singbox,
+                &client,
+            )
+            .unwrap();
+            assert_eq!(response.headers()["x-hysteriax-filtered-nodes"], "0");
+            let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let json: Value = serde_json::from_slice(&bytes).unwrap();
+            let outbound = &json["outbounds"][0];
+            assert_eq!(outbound["tls"]["client_certificate"], json!(["cert"]));
+            assert_eq!(outbound["tls"]["client_key"], json!(["key"]));
+            assert_eq!(outbound["obfs"]["type"], "gecko");
+            assert_eq!(outbound["realm"]["token"], "realm-token");
+            assert!(
+                outbound["tls"]["ech"]["config"][0]
+                    .as_str()
+                    .unwrap()
+                    .contains("QUJD")
+            );
+        }
+        assert!(
+            advanced
+                .incompatible(
+                    SubscriptionFormat::Singbox,
+                    &ClientInfo::detect("sing-box/1.12.0")
+                )
+                .is_some()
+        );
+        assert!(
+            advanced
+                .incompatible(
+                    SubscriptionFormat::Singbox,
+                    &ClientInfo::detect("sing-box/1.14.2")
+                )
+                .is_none()
+        );
+    }
+
     #[test]
     fn capabilities_never_strip_required_fields() {
         let mut n = node();
@@ -661,7 +767,7 @@ mod tests {
         n.private_key = Some("key".into());
         assert!(
             n.incompatible(SubscriptionFormat::Singbox, &ClientInfo::default())
-                .is_some()
+                .is_none()
         );
         assert!(
             n.incompatible(
@@ -764,12 +870,13 @@ mod tests {
         n.obfs_password = Some("secret".into());
         n.obfs_min_packet_size = Some(512);
         n.obfs_max_packet_size = Some(1200);
-        let v = n.singbox();
+        let v = n.singbox(true);
         assert_eq!(v["server_ports"], json!(["443:443", "445:446"]));
         assert!(v.get("server_port").is_none());
         assert_eq!(v["hop_interval"], "30s");
         assert_eq!(v["tls"]["client_certificate"], json!(["cert", "chain"]));
         assert_eq!(v["tls"]["client_key"], json!(["key"]));
+        assert_eq!(v["disable_chrome_parrot"], json!(true));
         assert!(
             v["tls"]["ech"]["config"][0]
                 .as_str()
@@ -786,13 +893,65 @@ mod tests {
             stun_servers: Some(vec!["stun.example:3478".into()]),
             skip_cert_verify: Some(true),
         });
-        let v = n.singbox();
+        let v = n.singbox(true);
         for key in ["server", "server_port", "server_ports", "hop_interval"] {
             assert!(v.get(key).is_none());
         }
         assert_eq!(v["realm"]["realm_id"], "realm-id");
         assert_eq!(v["realm"]["http_client"]["tls"]["insecure"], true);
         assert_eq!(v["tls"]["handshake_timeout"], "30s");
+    }
+
+    #[test]
+    fn singbox_keeps_chrome_parrot_without_client_certificate() {
+        let n = node();
+        assert!(n.certificate.is_none());
+        assert!(n.singbox(true).get("disable_chrome_parrot").is_none());
+    }
+
+    #[tokio::test]
+    async fn known_singbox_before_1_14_omits_1_14_only_fields() {
+        let mut advanced = node();
+        advanced.certificate = Some("cert".into());
+        advanced.private_key = Some("key".into());
+        for (ua, modern) in [
+            ("sing-box/1.13.21", false),
+            ("sing-box/1.13.0", false),
+            ("sing-box/1.14.0", true),
+            ("sing-box/1.14.3", true),
+            ("sing-box", true),
+            ("curl/8.0", true),
+            ("", true),
+        ] {
+            let client = ClientInfo::detect(ua);
+            let response = render_subscription(
+                std::slice::from_ref(&advanced),
+                SubscriptionFormat::Singbox,
+                &client,
+            )
+            .unwrap();
+            assert_eq!(
+                response.headers()["x-hysteriax-filtered-nodes"],
+                "0",
+                "{ua}"
+            );
+            let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let json: Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(
+                json["dns"].get("optimistic").is_some(),
+                modern,
+                "dns.optimistic for {ua}"
+            );
+            let outbound = &json["outbounds"][0];
+            assert!(outbound["tls"].get("client_certificate").is_some(), "{ua}");
+            assert_eq!(
+                outbound.get("disable_chrome_parrot").is_some(),
+                modern,
+                "disable_chrome_parrot for {ua}"
+            );
+        }
     }
 
     #[test]
@@ -891,7 +1050,7 @@ mod tests {
             nodes.push(n);
         }
         for assigned in [nodes.iter().collect::<Vec<_>>(), vec![&nodes[0]], vec![]] {
-            let body = render_singbox_template(&assigned).unwrap();
+            let body = render_singbox_template(&assigned, &ClientInfo::default()).unwrap();
             let config: Value = serde_json::from_str(&body).unwrap();
             let outbounds = config["outbounds"].as_array().unwrap();
             let tags: Vec<_> = outbounds

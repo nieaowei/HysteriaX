@@ -883,6 +883,40 @@ struct NodeUsageUpdateResponse: Codable, Sendable {
     }
 }
 
+struct NodeACMEStatus: Codable, Sendable {
+    let schemaVersion: Int
+    let componentVersion: String
+    let policyId: String
+    let state: String
+    let serviceState: String?
+    let domains: [String]
+    let fingerprint: String?
+    let notBefore: String?
+    let notAfter: String?
+    let lastSuccess: String?
+    let nextAttempt: String?
+    let error: String?
+    let failures: Int
+    let collectedAt: String
+
+    enum CodingKeys: String, CodingKey {
+        case schemaVersion = "schema_version"
+        case componentVersion = "component_version"
+        case policyId = "policy_id"
+        case state
+        case serviceState = "service_state"
+        case domains
+        case fingerprint
+        case notBefore = "not_before"
+        case notAfter = "not_after"
+        case lastSuccess = "last_success"
+        case nextAttempt = "next_attempt"
+        case error
+        case failures
+        case collectedAt = "collected_at"
+    }
+}
+
 struct NodeMTLSSettings: Codable, Sendable {
     let mode: String
     let caCredentialId: String?
@@ -922,6 +956,7 @@ struct NodeMTLSStatus: Codable, Sendable {
 }
 
 struct NodeSummary: Codable, Sendable, Identifiable {
+    let acmeStatus: NodeACMEStatus?
     let mtlsState: String?
     let mtlsRecoveryConfigured: Bool?
     let mtlsError: String?
@@ -944,6 +979,7 @@ struct NodeSummary: Codable, Sendable, Identifiable {
     let proxyProbeUrl: String?
 
     enum CodingKeys: String, CodingKey {
+        case acmeStatus = "acme_status"
         case mtlsState = "mtls_state"
         case mtlsRecoveryConfigured = "mtls_recovery_configured"
         case mtlsError = "mtls_error"
@@ -1018,6 +1054,7 @@ struct NodeConnectionDetail: Codable, Sendable {
 }
 
 struct NodeDetail: Codable, Sendable, Identifiable {
+    let acmeStatus: NodeACMEStatus?
     let mtlsState: String?
     let mtlsRecoveryConfigured: Bool?
     let mtlsError: String?
@@ -1047,6 +1084,7 @@ struct NodeDetail: Codable, Sendable, Identifiable {
     let updatedAt: String
 
     enum CodingKeys: String, CodingKey {
+        case acmeStatus = "acme_status"
         case mtlsState = "mtls_state"
         case mtlsRecoveryConfigured = "mtls_recovery_configured"
         case mtlsError = "mtls_error"

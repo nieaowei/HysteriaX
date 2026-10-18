@@ -59,6 +59,21 @@ final class NodeAlertNotifications: NSObject, UNUserNotificationCenterDelegate {
         let key = "nodePackageNotified.\(service)"
         var seen = Set(defaults.stringArray(forKey: key) ?? [])
         for node in nodes {
+            if let acme = node.acmeStatus, !acme.isStale {
+                let days = acme.daysRemaining
+                let threshold = days.map { $0 < 0 ? 0 : $0 <= 7 ? 7 : $0 <= 14 ? 14 : $0 <= 30 ? 30 : -1 } ?? -1
+                let failure = acme.state == "failed"
+                if failure || threshold >= 0 {
+                    let identifier = "acme:\(node.id):\(acme.policyId):\(acme.fingerprint ?? "pending"):\(failure ? "failed" : String(threshold))"
+                    if !seen.contains(identifier) {
+                        do {
+                            try await transport.send(id: identifier, title: L10n.text("{0}：{1}", node.name, failure ? L10n.text("证书维护失败") : (days ?? 1) < 0 ? L10n.text("已到期") : L10n.text("即将到期")), body: L10n.text("节点 ACME 证书到期：{0}。请检查节点状态并通过同步重试恢复。", DateDisplayParser.shared.parse(acme.notAfter).map { L10n.date($0) } ?? L10n.text("未知")))
+                            seen.insert(identifier)
+                            defaults.set(Array(seen), forKey: key)
+                        } catch { /* Retry undelivered notifications at the next refresh. */ }
+                    }
+                }
+            }
             for alert in node.packageUsage?.alerts ?? [] where !seen.contains(alert.id) {
                 do {
                     try await transport.send(

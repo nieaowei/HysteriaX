@@ -69,10 +69,14 @@ def run(base, admin, database, temp, advanced_token, revoked_token, advanced_use
     expect("invalid-token", status=404)
     expect(revoked_token, status=404)
     expect(advanced_token, "?format=uri", status=422)
-    expect(advanced_token, "?format=singbox", ua="Mozilla/5.0", status=422)
+    unknown, unknown_headers = expect(advanced_token, "?format=singbox", ua="Mozilla/5.0", mime="application/json")
+    if unknown_headers.get("X-HysteriaX-Filtered-Nodes") != "0":
+        raise RuntimeError("unknown kernel version filtered advanced nodes")
     expect(advanced_token, ua="sing-box/1.13.0", status=422)
     advanced, _ = expect(advanced_token, ua="sing-box/1.14.2", mime="application/json")
     advanced_config = json.loads(advanced)
+    if json.loads(unknown) != advanced_config:
+        raise RuntimeError("unknown kernel version lost advanced fields")
     hy2 = [o for o in advanced_config["outbounds"] if o["type"] == "hysteria2"]
     if len(hy2) != 2 or not any("realm" in o for o in hy2) or not any("ech" in o["tls"] for o in hy2):
         raise RuntimeError("advanced sing-box fields were lost")
@@ -115,8 +119,11 @@ def run(base, admin, database, temp, advanced_token, revoked_token, advanced_use
     if headers.get("X-HysteriaX-Filtered-Nodes") != "2" or filtered.count(b"hysteria2://") != 1:
         raise RuntimeError("partial compatibility filtering failed")
     filtered, headers = expect(advanced_token, "?format=singbox", mime="application/json")
-    if headers.get("X-HysteriaX-Filtered-Nodes") != "2":
-        raise RuntimeError("unknown-version sing-box did not conservatively filter advanced nodes")
+    if headers.get("X-HysteriaX-Filtered-Nodes") != "0" or len([o for o in json.loads(filtered)["outbounds"] if o["type"] == "hysteria2"]) != 3:
+        raise RuntimeError("unknown-version sing-box did not preserve all assigned nodes")
+    _, known_headers = expect(advanced_token, "?format=singbox", ua="sing-box/1.13.0", mime="application/json")
+    if known_headers.get("X-HysteriaX-Filtered-Nodes") != "2":
+        raise RuntimeError("known older kernel compatibility filtering was bypassed")
     for ua, mime in [("MIHOMO/v1.19.31", "application/yaml"), ("clash.meta/1.19.31", "application/yaml"),
                      ("clashmeta 1.19.31", "application/yaml"), ("SingBox/1.14.2", "application/json"),
                      ("sing-box/1.11.0", "application/json"), ("Shadowrocket/2.2.0", "text/plain"),

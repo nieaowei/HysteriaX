@@ -503,6 +503,16 @@ async fn deploy_with_probe(
     } else {
         None
     };
+    let acme_component = crate::node_acme::component_config(&resolved_options)?;
+    if acme_component.is_some() {
+        anyhow::ensure!(
+            snapshot["acme_component_version"]
+                .as_str()
+                .unwrap_or(crate::node_acme::VERSION)
+                == crate::node_acme::VERSION,
+            "saved ACME component version is unavailable"
+        );
+    }
     let (materialized, trust_resource) =
         crate::credentials::node_mtls::materialize(pool, &resolved_options, &trust).await?;
     resolved_options = materialized;
@@ -616,6 +626,14 @@ async fn deploy_with_probe(
     )
     .await?;
     let artifact = download_hysteria(asset_name, expected_hash).await?;
+    let acme_artifacts = if acme_component.is_some() {
+        Some((
+            crate::node_acme::artifact(&environment.architecture).await?,
+            crate::node_acme::licenses().await?,
+        ))
+    } else {
+        None
+    };
     let node_token: String = secrets.decrypt(&row.get::<String, _>("node_token_enc"))?;
     let stats_secret: String =
         secrets.decrypt(&row.get::<String, _>("traffic_stats_secret_enc"))?;
@@ -746,6 +764,65 @@ async fn deploy_with_probe(
             systemd_unit.as_bytes(),
         )
         .await?;
+    session
+        .upload(
+            &format!("{remote_staging}/rollback.sh"),
+            include_bytes!("../../../deploy/node-rollback.sh"),
+        )
+        .await?;
+    session
+        .upload(
+            &format!("{remote_staging}/acme-prepare.sh"),
+            include_bytes!("../../../deploy/node-acme-prepare.sh"),
+        )
+        .await?;
+    if let Some(component) = &acme_component {
+        let (binary, licenses) = acme_artifacts
+            .as_ref()
+            .context("ACME artifacts were not staged")?;
+        session
+            .upload(&format!("{remote_staging}/acme-LICENSES.tar"), licenses)
+            .await?;
+        session
+            .upload(&format!("{remote_staging}/hysteriax-acme"), binary)
+            .await?;
+        session
+            .upload(
+                &format!("{remote_staging}/acme.json"),
+                &serde_json::to_vec(component)?,
+            )
+            .await?;
+        let storage = component["acme"]["dir"]
+            .as_str()
+            .context("ACME storage missing")?;
+        let layout = format!(
+            "ACME_STORAGE={}\nACME_STATE={}\nACME_PUBLISH={}\n",
+            shell_quote(storage),
+            shell_quote(component["state_dir"].as_str().unwrap()),
+            shell_quote(component["publish_dir"].as_str().unwrap())
+        );
+        session
+            .upload(
+                &format!("{remote_staging}/acme-layout.sh"),
+                layout.as_bytes(),
+            )
+            .await?;
+        let escaped = storage
+            .replace('\\', "\\\\")
+            .replace('"', "\\\"")
+            .replace('%', "%%");
+        let unit = format!(
+            "{}\n# Legacy/custom CertMagic account directory\n",
+            include_str!("../../../deploy/hysteriax-acme.service")
+        );
+        let unit = unit.replace("ReadWritePaths=/var/lib/hysteriax-acme /var/lib/hysteriax/acme /var/lib/hysteriax/certificates", &format!("ReadWritePaths=/var/lib/hysteriax-acme /var/lib/hysteriax/certificates \"{escaped}\""));
+        session
+            .upload(
+                &format!("{remote_staging}/hysteriax-acme.service"),
+                unit.as_bytes(),
+            )
+            .await?;
+    }
     for resource in &resource_files {
         session
             .upload(
@@ -825,10 +902,45 @@ async fn deploy_with_probe(
         "Installing the managed systemd service and applying the new configuration.",
     )
     .await?;
+    if already_installed && acme_component.is_some() {
+        let resume = format!(
+            "STAGE={}\n{}",
+            shell_quote(&remote_staging),
+            include_str!("../../../deploy/node-acme-resume.sh")
+        );
+        session
+            .execute_checked_with_timeout(
+                &root_command(environment.privilege != "root", &resume),
+                Duration::from_secs(360),
+            )
+            .await?;
+    }
     if !already_installed
         && let Err(error) =
             install_managed_node(&session, &environment, node_id, &remote_staging).await
     {
+        if let Some(record) = &activation {
+            // A completed remote script can report a confirmed local rollback.
+            // Transport timeouts remain uncertain: the writer may still be running.
+            let completed = error.chain().any(|cause| {
+                cause
+                    .downcast_ref::<ssh::SshError>()
+                    .is_some_and(|e| matches!(e, ssh::SshError::Command { .. }))
+            });
+            if completed {
+                let inspect = "if [ -f /etc/hysteriax/config.yaml ]; then systemctl is-active --quiet hysteriax.service && sha256sum /etc/hysteriax/config.yaml | awk '{print $1}'; fi";
+                if let Ok(actual) = session
+                    .execute_checked(&root_command(environment.privilege != "root", inspect))
+                    .await
+                {
+                    let actual = actual.trim();
+                    let digest = (!actual.is_empty()).then_some(actual);
+                    if digest == record.previous_digest.as_deref() {
+                        crate::credentials::activation::rolled_back(pool, &job.id, digest).await?;
+                    }
+                }
+            }
+        }
         let _ = session.execute(&format!("rm -rf {remote_staging}")).await;
         return Err(error);
     }
@@ -1603,7 +1715,7 @@ async fn uninstall(pool: &PgPool, secrets: &SecretBox, job: &JobInput) -> Result
         "Stopping the managed service and removing its files and service account.",
     )
     .await?;
-    let script = "set -eu\nROOT=/opt/hysteriax\nETC=/etc/hysteriax\nif [ ! -f \"$ROOT/.hysteriax-managed\" ]; then\n  if [ -e \"$ROOT\" ] || [ -e \"$ETC\" ] || [ -e /etc/systemd/system/hysteriax.service ] || getent passwd hysteriax >/dev/null 2>&1; then echo 'HysteriaX ownership marker is missing; refusing to remove remote files' >&2; exit 55; fi\n  exit 0\nfi\nsystemctl stop hysteriax.service || true\nsystemctl disable hysteriax.service || true\nrm -f /etc/systemd/system/hysteriax.service\nsystemctl daemon-reload\nrm -rf \"$ROOT\" \"$ETC\" /var/lib/hysteriax\nuserdel hysteriax || true\ngroupdel hysteriax || true\n";
+    let script = "set -eu\nROOT=/opt/hysteriax\nETC=/etc/hysteriax\nif [ ! -f \"$ROOT/.hysteriax-managed\" ]; then\n  if [ -e \"$ROOT\" ] || [ -e \"$ETC\" ] || [ -e /etc/systemd/system/hysteriax.service ] || getent passwd hysteriax >/dev/null 2>&1; then echo 'HysteriaX ownership marker is missing; refusing to remove remote files' >&2; exit 55; fi\n  exit 0\nfi\nsystemctl stop hysteriax-acme.service || true\nsystemctl disable hysteriax-acme.service || true\nsystemctl stop hysteriax.service || true\nsystemctl disable hysteriax.service || true\nif [ -f /var/lib/hysteriax-acme/.hysteriax-managed ]; then exec 9<>/var/lib/hysteriax-acme/node.lock; flock -w 10 9; fi\nrm -f /etc/systemd/system/hysteriax-acme.service /etc/systemd/system/hysteriax.service\nsystemctl daemon-reload\nrm -rf \"$ROOT\" \"$ETC\" /var/lib/hysteriax /var/lib/hysteriax-acme\nuserdel hysteriax-acme || true\ngroupdel hysteriax-acme || true\nuserdel hysteriax || true\ngroupdel hysteriax || true\n";
     session
         .execute_checked_with_timeout(
             &root_command(environment.privilege != "root", script),
@@ -1668,67 +1780,14 @@ async fn install_managed_node(
     session.execute_checked(&command(&preflight)).await?;
 
     let apply = format!(
-        r#"set -eu
-ROOT=/opt/hysteriax
-ETC=/etc/hysteriax
-STAGE={remote_staging}
-if ! getent group hysteriax >/dev/null 2>&1; then groupadd --system hysteriax; fi
-if ! getent passwd hysteriax >/dev/null 2>&1; then useradd --system --home-dir /var/lib/hysteriax --shell /usr/sbin/nologin --gid hysteriax hysteriax; fi
-mkdir -p "$ROOT" "$ETC" "$ETC/resources" /var/lib/hysteriax
-chown root:hysteriax "$ETC/resources"
-chmod 0750 "$ETC/resources"
-for resource in "$STAGE"/resources/*; do
-  [ -f "$resource" ] || continue
-  target="$ETC/resources/$(basename "$resource")"
-  if [ -e "$target" ]; then
-    if ! cmp -s "$resource" "$target"; then echo 'managed resource id conflicts with existing contents' >&2; exit 49; fi
-  else
-    install -o root -g hysteriax -m 0640 "$resource" "$target"
-  fi
-done
-if [ -f "$ROOT/hysteria" ]; then cp -a "$ROOT/hysteria" "$ROOT/hysteria.previous"; fi
-if [ -f "$ETC/config.yaml" ]; then cp -a "$ETC/config.yaml" "$ROOT/config.previous"; fi
-if [ -f "$ROOT/activation.json" ]; then cp -a "$ROOT/activation.json" "$ROOT/activation.previous"; else rm -f "$ROOT/activation.previous"; fi
-if [ -f /etc/systemd/system/hysteriax.service ]; then cp -a /etc/systemd/system/hysteriax.service "$ROOT/hysteriax.service.previous"; fi
-install -o root -g root -m 0755 "$STAGE/hysteria" "$ROOT/hysteria.new"
-mv -f "$ROOT/hysteria.new" "$ROOT/hysteria"
-install -o root -g hysteriax -m 0640 "$STAGE/server.yaml" "$ETC/config.yaml.new"
-mv -f "$ETC/config.yaml.new" "$ETC/config.yaml"
-if [ -f "$STAGE/activation.json" ]; then install -o root -g root -m 0600 "$STAGE/activation.json" "$ROOT/activation.json"; fi
-install -o root -g root -m 0644 "$STAGE/hysteriax.service" /etc/systemd/system/hysteriax.service.new
-mv -f /etc/systemd/system/hysteriax.service.new /etc/systemd/system/hysteriax.service
-chown hysteriax:hysteriax /var/lib/hysteriax
-systemctl daemon-reload
-systemctl enable hysteriax.service >/dev/null
-if systemctl restart hysteriax.service && systemctl is-active --quiet hysteriax.service; then
-  touch "$ROOT/.hysteriax-managed"
-  chown root:root "$ROOT/.hysteriax-managed"
-  chmod 0600 "$ROOT/.hysteriax-managed"
-  rm -rf "$STAGE"
-  exit 0
-fi
-if [ -f "$ROOT/.hysteriax-managed" ]; then
-  [ ! -f "$ROOT/hysteria.previous" ] || cp -a "$ROOT/hysteria.previous" "$ROOT/hysteria"
-  [ ! -f "$ROOT/config.previous" ] || cp -a "$ROOT/config.previous" "$ETC/config.yaml"
-  if [ -f "$ROOT/activation.previous" ]; then cp -a "$ROOT/activation.previous" "$ROOT/activation.json"; else rm -f "$ROOT/activation.json"; fi
-  [ ! -f "$ROOT/hysteriax.service.previous" ] || cp -a "$ROOT/hysteriax.service.previous" /etc/systemd/system/hysteriax.service
-  systemctl daemon-reload
-  systemctl restart hysteriax.service || true
-  echo 'Hysteria service did not become active; previous configuration was restored' >&2
-else
-  systemctl stop hysteriax.service || true
-  systemctl disable hysteriax.service || true
-  rm -f /etc/systemd/system/hysteriax.service "$ROOT/hysteria" "$ETC/config.yaml"
-  userdel hysteriax || true
-  groupdel hysteriax || true
-  rm -rf "$ROOT" "$ETC" /var/lib/hysteriax
-  echo 'Hysteria service did not become active; failed first installation was cleaned up' >&2
-fi
-exit 53
-"#
+        "STAGE={}\n{}",
+        shell_quote(remote_staging),
+        include_str!("../../../deploy/node-install.sh")
     );
     session
-        .execute_checked_with_timeout(&command(&apply), Duration::from_secs(180))
+        // The certificate command has its own 175-second deadline. Leave time
+        // for stopping services and completing the rollback after it cancels.
+        .execute_checked_with_timeout(&command(&apply), Duration::from_secs(360))
         .await
         .with_context(|| {
             format!("install or restart managed Hysteria service for node {node_id}")
@@ -1740,7 +1799,7 @@ async fn rollback_managed_node(
     session: &SshSession,
     environment: &RemoteEnvironment,
 ) -> Result<()> {
-    let script = "set -eu\nROOT=/opt/hysteriax\nETC=/etc/hysteriax\nif [ -f \"$ROOT/config.previous\" ]; then\n  cp -a \"$ROOT/config.previous\" \"$ETC/config.yaml\"\n  if [ -f \"$ROOT/activation.previous\" ]; then cp -a \"$ROOT/activation.previous\" \"$ROOT/activation.json\"; else rm -f \"$ROOT/activation.json\"; fi\n  [ ! -f \"$ROOT/hysteria.previous\" ] || cp -a \"$ROOT/hysteria.previous\" \"$ROOT/hysteria\"\n  [ ! -f \"$ROOT/hysteriax.service.previous\" ] || cp -a \"$ROOT/hysteriax.service.previous\" /etc/systemd/system/hysteriax.service\n  systemctl daemon-reload\n  systemctl restart hysteriax.service\n  systemctl is-active --quiet hysteriax.service\nelse\n  systemctl stop hysteriax.service || true\n  systemctl disable hysteriax.service || true\n  rm -f /etc/systemd/system/hysteriax.service \"$ROOT/hysteria\" \"$ETC/config.yaml\" \"$ROOT/.hysteriax-managed\"\n  userdel hysteriax || true\n  groupdel hysteriax || true\n  rm -rf \"$ROOT\" \"$ETC\" /var/lib/hysteriax\nfi\n";
+    let script = include_str!("../../../deploy/node-rollback.sh");
     session
         .execute_checked_with_timeout(
             &root_command(environment.privilege != "root", script),

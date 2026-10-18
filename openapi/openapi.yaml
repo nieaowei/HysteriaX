@@ -1165,7 +1165,7 @@ paths:
       description: |
         Explicit format overrides User-Agent. Auto recognizes Mihomo, sing-box,
         Shadowrocket, v2rayN and v2rayNG; unknown clients receive an HTML selection page.
-        Advanced nodes are filtered when the client/version cannot preserve required features.
+        Known incompatible client versions filter advanced nodes. Unknown sing-box versions retain all representable nodes and required advanced fields.
         All incompatible nodes produce 422; an unassigned user receives an empty subscription.
       parameters:
         - name: format
@@ -1173,7 +1173,7 @@ paths:
           schema: { type: string, enum: [auto, mihomo, singbox, base64, uri], default: auto }
         - name: User-Agent
           in: header
-          description: Client kernel and version; unknown versions use conservative capabilities.
+          description: Client kernel and version; unknown sing-box versions retain all representable nodes and advanced fields.
           schema: { type: string }
       servers:
         - url: https://{domain}
@@ -2053,7 +2053,7 @@ components:
       type: object
       required: [action, preview_token, additions_count, removals_count, additions, removals, automatic_issue_count, pending_issue_count, managed_identities]
       properties:
-        automatic_issue_count: { type: integer, minimum: 0, description: Immediate shared identities to issue, deduplicated by user and CA identity. }
+        automatic_issue_count: { type: integer, minimum: 0, description: "Immediate shared identities to issue, deduplicated by user and CA identity." }
         pending_issue_count: { type: integer, minimum: 0, description: Identities deferred until account access is restored. }
         managed_identities: { type: array, items: { $ref: '#/components/schemas/AuthorizationManagedIdentity' } }
         action: { type: string, enum: [create, update, delete, update_memberships] }
@@ -2123,10 +2123,29 @@ components:
           $ref: '#/components/schemas/NodeMTLSSettings'
           type: [object, 'null']
         trust: { type: array, items: { $ref: '#/components/schemas/NodeMTLSTrust' } }
+    NodeACMEStatus:
+      type: object
+      required: [schema_version, component_version, policy_id, state, domains, failures, collected_at]
+      properties:
+        schema_version: { type: integer, enum: [1] }
+        component_version: { type: string }
+        policy_id: { type: string }
+        state: { type: string, enum: [pending, issuing, renewing, ready, failed, expired] }
+        service_state: { type: string }
+        domains: { type: array, items: { type: string } }
+        fingerprint: { type: [string, 'null'] }
+        not_before: { type: [string, 'null'], format: date-time }
+        not_after: { type: [string, 'null'], format: date-time }
+        last_success: { type: [string, 'null'], format: date-time }
+        next_attempt: { type: [string, 'null'], format: date-time }
+        error: { type: [string, 'null'] }
+        failures: { type: integer }
+        collected_at: { type: string, format: date-time }
     NodeSummary:
       type: object
       required: [id, name, revision, state]
       properties:
+        acme_status: { $ref: '#/components/schemas/NodeACMEStatus', type: [object, 'null'] }
         mtls_state: { type: string, enum: [ready, needs_configuration, activating, recovery_required] }
         mtls_recovery_configured: { type: boolean, description: Explicit recovery policy has been saved; recovery deployment may be requested. }
         mtls_error: { type: [string, 'null'] }
@@ -2194,6 +2213,7 @@ components:
       type: object
       required: [id, name, revision, config, yaml_preview, ssh, public, state, created_at, updated_at]
       properties:
+        acme_status: { $ref: '#/components/schemas/NodeACMEStatus', type: [object, 'null'] }
         mtls_state: { type: string, enum: [ready, needs_configuration, activating, recovery_required] }
         mtls_recovery_configured: { type: boolean, description: Explicit recovery policy has been saved; recovery deployment may be requested. }
         mtls_error: { type: [string, 'null'] }
@@ -2956,7 +2976,7 @@ components:
       properties:
         name: { type: string, minLength: 1, maxLength: 180 }
         source: { type: string, enum: [generated, imported] }
-        certificate: { type: string, writeOnly: true, description: Issuing CA first, followed by a complete validated chain to a self-signed root. Required for imported CAs. }
+        certificate: { type: string, writeOnly: true, description: "Issuing CA first, followed by a complete validated chain to a self-signed root. Required for imported CAs." }
         private_key: { type: string, writeOnly: true }
         policy: { $ref: '#/components/schemas/ManagedCAPolicy' }
         idempotency_key: { type: string, minLength: 1, maxLength: 180 }

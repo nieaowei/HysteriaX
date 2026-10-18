@@ -49,8 +49,9 @@ impl Settings {
                 "invalid managed CA reference"
             );
             ensure!(
-                config.get("tls").is_some() && config.get("acme").is_none(),
-                "managed mTLS requires manual TLS certificates"
+                (config.get("tls").is_some() || config.get("acme").is_some())
+                    && !(config.get("tls").is_some() && config.get("acme").is_some()),
+                "managed mTLS requires TLS or ACME certificates"
             );
         }
         Ok(policy)
@@ -182,7 +183,7 @@ pub async fn materialize(
     trust: &[TrustVersion],
 ) -> Result<(Value, Option<ResourceFile>)> {
     let settings = Settings::from_config(config)?;
-    let mut resolved = config.clone();
+    let mut resolved = crate::node_acme::compile(config)?;
     if settings == Settings::Off {
         return Ok((resolved, None));
     }

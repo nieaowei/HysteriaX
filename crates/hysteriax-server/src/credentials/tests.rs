@@ -116,11 +116,18 @@ async fn dns_tokens_with_quotes_and_newlines_never_appear_in_node_preview() {
         .await
         .unwrap();
     let preview: Value = serde_yaml::from_str(detail["yaml_preview"].as_str().unwrap()).unwrap();
-    assert_eq!(
-        preview
-            .pointer("/acme/dns/config/cloudflare_api_token")
-            .unwrap(),
-        "[redacted]"
+    assert!(preview.get("acme").is_none());
+    assert!(
+        preview["tls"]["cert"]
+            .as_str()
+            .unwrap()
+            .contains("/certificates/")
+    );
+    assert!(
+        preview["tls"]["key"]
+            .as_str()
+            .unwrap()
+            .ends_with("/current/key.pem")
     );
     assert!(!detail.to_string().contains("test-token"));
 }

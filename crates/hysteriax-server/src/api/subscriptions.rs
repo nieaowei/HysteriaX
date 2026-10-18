@@ -294,7 +294,7 @@ async fn cached_subscription(
         .bind(user_id).bind(now).fetch_one(&state.pool).await?;
     let boundary: Option<DateTime<Utc>> = boundaries.get("boundary");
     let key = format!(
-        "subscription:{user_id}:{version}:{format:?}:{}:{:?}:{}:{}",
+        "subscription:v2-unknown-kernel:{user_id}:{version}:{format:?}:{}:{:?}:{}:{}",
         client.name,
         client.version,
         token_digest(&eligible.join("|")),

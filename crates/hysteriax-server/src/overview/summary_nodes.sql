@@ -9,7 +9,7 @@ WITH node_jobs AS (
     FROM node_alerts WHERE active GROUP BY node_id
 )
 SELECT n.id, n.name, n.state, n.desired_revision AS revision, n.deployed_revision,
-    n.updated_at, n.last_sample_at,
+    n.updated_at, n.last_sample_at, acme.status AS acme_status,
     COALESCE(g.open_gaps, 0) AS open_gaps,
     COALESCE(j.pending_revocations, 0) AS pending_revocations,
     p.node_id IS NOT NULL AS has_package,
@@ -25,6 +25,7 @@ SELECT n.id, n.name, n.state, n.desired_revision AS revision, n.deployed_revisio
     probe.connection_ms AS probe_connection_ms, probe.latency_ms AS probe_latency_ms,
     probe.reason AS probe_reason, health.health AS probe_health
 FROM nodes n
+LEFT JOIN node_acme_observations acme ON acme.node_id=n.id AND acme.revision=n.deployed_revision AND acme.deployment_digest=n.deployed_content_sha256
 LEFT JOIN node_packages p ON p.node_id = n.id
 LEFT JOIN node_jobs j ON j.node_id = n.id
 LEFT JOIN gaps g ON g.node_id = n.id

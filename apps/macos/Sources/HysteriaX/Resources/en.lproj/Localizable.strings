@@ -1611,3 +1611,35 @@
 "当前发布 CA 到期" = "Published CA expiry";
 "准备中版本" = "Preparing version";
 "准备中 CA 到期" = "Preparing CA expiry";
+
+"托管 mTLS 需要手动 TLS 或 ACME 证书。" = "Managed mTLS requires a manual TLS or ACME certificate.";
+
+"全部域名共同签发和续期一张 SAN 证书；任一域名验证失败会阻止续期。" = "All domains share one SAN certificate and renewal. A validation failure for any domain blocks renewal.";
+
+"节点 ACME 证书" = "Node ACME certificate";
+
+"最近签发成功" = "Last successful issuance";
+
+"下次尝试" = "Next attempt";
+
+"组件版本" = "Component version";
+
+"最后观测时间" = "Last observed";
+
+"证书指纹" = "Certificate fingerprint";
+
+"管理服务离线时节点继续维护证书；此处显示最后一次观测结果。" = "The node maintains certificates while management is offline. This is the last observation.";
+
+"证书组件已停止" = "Certificate service stopped";
+
+"正在签发" = "Issuing";
+
+"正在续期" = "Renewing";
+
+"证书维护失败" = "Certificate maintenance failed";
+
+"等待签发" = "Awaiting issuance";
+
+"节点 ACME 证书到期：{0}。请检查节点状态并通过同步重试恢复。" = "Node ACME certificate expiry: {0}. Check the node and retry recovery through synchronization.";
+
+"数据陈旧" = "Stale data";

@@ -120,6 +120,32 @@ import Foundation
         precondition(catalog.contains { $0.reference == "credential://archived-cert/1/content" })
         precondition(!catalog.contains { $0.reference == "credential://archived-cert/2/content" })
         precondition(catalog.contains { $0.reference == "credential://active-cert/2/content" })
+        let stamp = ISO8601DateFormatter()
+        var acme: [String: Any] = ["schema_version": 1, "component_version": "0.1.0", "policy_id": "policy", "state": "ready", "domains": ["a.example", "b.example"], "failures": 0, "fingerprint": "fingerprint", "collected_at": stamp.string(from: Date()), "not_after": stamp.string(from: Date().addingTimeInterval(20 * 86400))]
+        func acmeNode() throws -> NodeSummary {
+            try decoder.decode(NodeSummary.self, from: JSONSerialization.data(withJSONObject: ["id": "acme-node", "name": "ACME", "revision": 1, "state": "deployed", "acme_status": acme]))
+        }
+        let acme20 = try acmeNode()
+        precondition(acme20.acmeStatus?.isStale == false && legacy.acmeStatus == nil)
+        let beforeACME = transport.sent.count
+        await again.deliver(nodes: [acme20], service: "server1")
+        await again.deliver(nodes: [acme20], service: "server1")
+        precondition(transport.sent.count == beforeACME + 1)
+        acme["not_after"] = stamp.string(from: Date().addingTimeInterval(10 * 86400))
+        await again.deliver(nodes: [try acmeNode()], service: "server1")
+        precondition(transport.sent.count == beforeACME + 2)
+        acme["not_after"] = stamp.string(from: Date().addingTimeInterval(5 * 86400))
+        await again.deliver(nodes: [try acmeNode()], service: "server1")
+        precondition(transport.sent.count == beforeACME + 3)
+        acme["state"] = "failed"; acme["failures"] = 1
+        await again.deliver(nodes: [try acmeNode()], service: "server1")
+        await again.deliver(nodes: [try acmeNode()], service: "server1")
+        precondition(transport.sent.count == beforeACME + 4)
+        acme["collected_at"] = "2020-01-01T00:00:00Z"
+        let staleACME = try acmeNode()
+        precondition(staleACME.acmeStatus!.isStale)
+        await again.deliver(nodes: [staleACME], service: "different-service")
+        precondition(transport.sent.count == beforeACME + 4)
         print("Node package client tests passed: cache, drafts, API, denied permission, delivery retry and persistent deduplication.")
     }
 }

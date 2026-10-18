@@ -105,7 +105,7 @@ def main():
             }
             if any(columns.get(name) != value for name, value in expected.items()):
                 raise RuntimeError(f"PostgreSQL native column types differ: {columns}")
-            if not {"deployment_probe_tokens", "node_packages", "node_network_samples", "node_alerts"}.issubset(tables):
+            if not {"deployment_probe_tokens", "node_packages", "node_network_samples", "node_alerts", "node_acme_observations"}.issubset(tables):
                 raise RuntimeError("deployment-probe or node-package tables were not created")
 
             duplicate_environment = environment.copy()
