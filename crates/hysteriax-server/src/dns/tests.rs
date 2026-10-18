@@ -448,6 +448,8 @@ async fn subscriptions_keep_published_connection_during_target_edits() {
     let response = api::subscriptions::download(
         State(state.clone()),
         Path("fixture-subscription-token".into()),
+        axum::extract::RawQuery(None),
+        axum::http::HeaderMap::new(),
     )
     .await;
     assert_eq!(response.status(), axum::http::StatusCode::OK);

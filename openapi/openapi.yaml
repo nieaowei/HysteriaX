@@ -1166,11 +1166,17 @@ paths:
         Explicit format overrides User-Agent. Auto recognizes Mihomo, sing-box,
         Shadowrocket, v2rayN and v2rayNG; unknown clients receive an HTML selection page.
         Known incompatible client versions filter advanced nodes. Unknown sing-box versions retain all representable nodes and required advanced fields.
-        All incompatible nodes produce 422; an unassigned user receives an empty subscription.
+        Known sing-box kernels below 1.14.0 receive 422, including empty subscriptions.
+        All incompatible nodes produce 422; otherwise an unassigned user receives an empty subscription.
+        Explicit platform overrides OS detection from User-Agent for listener/TUN filtering.
       parameters:
         - name: format
           in: query
           schema: { type: string, enum: [auto, mihomo, singbox, base64, uri], default: auto }
+        - name: platform
+          in: query
+          description: Target runtime OS; auto uses User-Agent, unknown OS retains the original template. openwrt aliases linux. Invalid or repeated values return 400.
+          schema: { type: string, enum: [auto, linux, openwrt, windows, macos, android, ios], default: auto }
         - name: User-Agent
           in: header
           description: Client kernel and version; unknown sing-box versions retain all representable nodes and advanced fields.
@@ -1209,6 +1215,17 @@ paths:
     get:
       summary: Download Mihomo subscription
       operationId: downloadSubscription
+      x-swift-include-optional-query: true
+      description: Preserves all node fields regardless of kernel version. Platform filtering applies to listeners.
+      parameters:
+        - name: platform
+          in: query
+          description: Target runtime OS; auto uses User-Agent, unknown OS retains the original template. openwrt aliases linux. Invalid or repeated values return 400.
+          schema: { type: string, enum: [auto, linux, openwrt, windows, macos, android, ios], default: auto }
+        - name: User-Agent
+          in: header
+          description: OS tokens used for platform detection when platform is omitted or auto.
+          schema: { type: string }
       servers:
         - url: https://{domain}
           variables:
@@ -1219,8 +1236,10 @@ paths:
           description: Mihomo YAML configuration
           headers:
             Cache-Control: { schema: { type: string, const: 'private, no-store' } }
+            Vary: { schema: { type: string, const: User-Agent } }
           content:
             application/yaml: { schema: { type: string } }
+        '400': { $ref: '#/components/responses/Error' }
         '403': { $ref: '#/components/responses/Error' }
         '404': { $ref: '#/components/responses/Error' }
   /hy2/auth/{node_id}/{node_token}:

@@ -39,6 +39,60 @@ pub(super) fn requested_format(
     }
 }
 
+/// Target runtime, independent of the subscription format and kernel version.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum Platform {
+    #[default]
+    Unknown,
+    Linux,
+    Windows,
+    Macos,
+    Android,
+    Ios,
+}
+
+impl Platform {
+    fn detect(ua: &str) -> Self {
+        let tokens: Vec<_> = ua.split(|c: char| !c.is_ascii_alphanumeric()).collect();
+        let has = |names: &[&str]| tokens.iter().any(|token| names.contains(token));
+        // Mobile UAs also contain Linux / Mac OS X; match the specific OS first.
+        if has(&["android"]) {
+            Self::Android
+        } else if has(&["ios", "iphone", "ipad"]) {
+            Self::Ios
+        } else if has(&["windows", "win32", "win64"]) {
+            Self::Windows
+        } else if has(&["macos", "macintosh", "darwin"]) {
+            Self::Macos
+        } else if has(&["linux", "openwrt"]) {
+            Self::Linux
+        } else {
+            Self::Unknown
+        }
+    }
+
+    pub fn requested(query: Option<&str>) -> Result<Option<Self>, ApiError> {
+        let values: Vec<_> = url::form_urlencoded::parse(query.unwrap_or("").as_bytes())
+            .filter(|(key, _)| key == "platform")
+            .map(|(_, value)| value.into_owned())
+            .collect();
+        if values.len() > 1 {
+            return Err(ApiError::bad_request("platform must occur once"));
+        }
+        match values.first().map(String::as_str).unwrap_or("auto") {
+            "auto" => Ok(None),
+            "linux" | "openwrt" => Ok(Some(Self::Linux)),
+            "windows" => Ok(Some(Self::Windows)),
+            "macos" => Ok(Some(Self::Macos)),
+            "android" => Ok(Some(Self::Android)),
+            "ios" => Ok(Some(Self::Ios)),
+            _ => Err(ApiError::bad_request(
+                "platform must be auto, linux, openwrt, windows, macos, android, or ios",
+            )),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) struct Version(u32, u32, u32);
 
@@ -47,11 +101,13 @@ pub(super) struct ClientInfo {
     pub name: &'static str,
     pub format: Option<SubscriptionFormat>,
     pub version: Option<Version>,
+    pub platform: Platform,
 }
 
 impl ClientInfo {
     pub fn detect(ua: &str) -> Self {
         let ua = ua.to_ascii_lowercase();
+        let platform = Platform::detect(&ua);
         // Match specific families before generic names, with token boundaries (not "notmihomo").
         for (alias, name, format) in [
             ("clash.meta", "mihomo", SubscriptionFormat::Mihomo),
@@ -86,11 +142,13 @@ impl ClientInfo {
                     name,
                     format: Some(format),
                     version,
+                    platform,
                 };
             }
         }
         Self {
             name: "unknown",
+            platform,
             ..Self::default()
         }
     }
@@ -98,15 +156,6 @@ impl ClientInfo {
     fn at_least(&self, format: SubscriptionFormat, minimum: Version) -> bool {
         // A wrapper application's version is not the target kernel's version.
         self.format == Some(format) && self.version.is_some_and(|v| v >= minimum)
-    }
-
-    /// ChromeParrot, its `disable_chrome_parrot` opt-out and `dns.optimistic` all arrived
-    /// with sing-box 1.14.0. A known older kernel rejects any of them as an unknown field
-    /// and drops the whole document, so it must receive none. An unknown kernel keeps every
-    /// field: generic downloads and management-app exports are not tied to a kernel version.
-    fn supports_singbox_1_14_fields(&self) -> bool {
-        !(self.format == Some(SubscriptionFormat::Singbox)
-            && self.version.is_some_and(|v| v < Version(1, 14, 0)))
     }
 }
 
@@ -231,15 +280,9 @@ impl SubscriptionNode {
             // sing-box kernel can establish a lower compatibility ceiling.
             let known_kernel = client.format == Some(format) && client.version.is_some();
             if client.format == Some(format)
-                && client.version.is_some_and(|v| v < Version(1, 11, 0))
+                && client.version.is_some_and(|v| v < Version(1, 14, 0))
             {
-                return Some("singbox_requires_1_11");
-            }
-            if (self.certificate.is_some() || self.private_key.is_some())
-                && known_kernel
-                && !client.at_least(format, Version(1, 13, 0))
-            {
-                return Some("mtls_requires_singbox_1_13");
+                return Some("singbox_requires_1_14");
             }
             // ECH is enabled only for the fixture validated with our pinned 1.14.2 binary.
             if self.ech_config.is_some()
@@ -247,12 +290,6 @@ impl SubscriptionNode {
                 && !client.at_least(format, Version(1, 14, 2))
             {
                 return Some("ech_requires_singbox_1_14_2");
-            }
-            if (self.realm.is_some() || self.obfs.as_deref() == Some("gecko"))
-                && known_kernel
-                && !client.at_least(format, Version(1, 14, 0))
-            {
-                return Some("realm_or_gecko_requires_singbox_1_14");
             }
             if self
                 .obfs
@@ -293,9 +330,7 @@ impl SubscriptionNode {
         None
     }
 
-    /// `chrome_parrot` is false only for a known kernel older than sing-box 1.14.0, which
-    /// has neither the ChromeParrot handshake nor its `disable_chrome_parrot` opt-out.
-    fn singbox(&self, chrome_parrot: bool) -> Value {
+    fn singbox(&self) -> Value {
         let mut tls = json!({"enabled": true, "insecure": self.skip_cert_verify});
         if let Some(sni) = &self.sni {
             tls["server_name"] = json!(sni);
@@ -340,7 +375,7 @@ impl SubscriptionNode {
             }
         }
         outbound["tls"] = tls;
-        if self.certificate.is_some() && chrome_parrot {
+        if self.certificate.is_some() {
             // sing-box 1.14+ uses ChromeParrot (a Chrome-like QUIC ClientHello) for
             // Hysteria2 by default; that path of its QUIC stack refuses a TLS config
             // carrying a client certificate with
@@ -433,6 +468,17 @@ pub(super) fn render_subscription(
     format: SubscriptionFormat,
     client: &ClientInfo,
 ) -> Result<Response, ApiError> {
+    // Reject the whole template, including empty subscriptions, before node filtering.
+    if format == SubscriptionFormat::Singbox
+        && client.format == Some(format)
+        && client.version.is_some_and(|v| v < Version(1, 14, 0))
+    {
+        return Err(ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "subscription_incompatible",
+            "sing-box 1.14.0 or newer is required.",
+        ));
+    }
     let mut compatible = Vec::new();
     for node in nodes {
         if let Some(reason) = node.incompatible(format, client) {
@@ -453,7 +499,7 @@ pub(super) fn render_subscription(
     }
     let (body, content_type) = match format {
         SubscriptionFormat::Mihomo => (
-            render_mihomo_template(&compatible)?,
+            render_mihomo_template(&compatible, client.platform)?,
             "application/yaml; charset=utf-8",
         ),
         SubscriptionFormat::Singbox => (
@@ -493,13 +539,7 @@ fn render_singbox_template(
 ) -> Result<String, ApiError> {
     let mut config: Value = serde_json::from_str(include_str!("singbox-template.json"))
         .map_err(|_| ApiError::internal())?;
-    let modern_fields = client.supports_singbox_1_14_fields();
-    if !modern_fields {
-        // A known kernel older than 1.14.0 predates this DNS field and would reject the document.
-        if let Some(dns) = config["dns"].as_object_mut() {
-            dns.remove("optimistic");
-        }
-    }
+    filter_singbox_platform(&mut config, client.platform);
     let groups = config["outbounds"]
         .as_array_mut()
         .ok_or_else(ApiError::internal)?;
@@ -553,18 +593,57 @@ fn render_singbox_template(
             group["outbounds"] = json!(names);
         }
     }
-    let mut outbounds: Vec<_> = nodes
-        .iter()
-        .map(|node| node.singbox(modern_fields))
-        .collect();
+    let mut outbounds: Vec<_> = nodes.iter().map(|node| node.singbox()).collect();
     outbounds.append(groups);
     config["outbounds"] = json!(outbounds);
     serde_json::to_string_pretty(&config).map_err(|_| ApiError::internal())
 }
 
-fn render_mihomo_template(nodes: &[&SubscriptionNode]) -> Result<String, ApiError> {
+/// Filter host-specific listeners while keeping node credentials and routing policy intact.
+fn filter_singbox_platform(config: &mut Value, platform: Platform) {
+    if matches!(platform, Platform::Unknown | Platform::Linux) {
+        return;
+    }
+    if let Some(inbounds) = config["inbounds"].as_array_mut() {
+        inbounds.retain(|inbound| match inbound["type"].as_str() {
+            Some("tproxy") => false,
+            Some("redirect") => platform == Platform::Macos,
+            _ => true,
+        });
+        for inbound in inbounds {
+            if inbound["type"] == "tun"
+                && let Some(options) = inbound.as_object_mut()
+            {
+                options.remove("auto_redirect"); // Linux-only firewall integration.
+                if matches!(
+                    platform,
+                    Platform::Macos | Platform::Android | Platform::Ios
+                ) {
+                    options.remove("interface_name"); // OS / VPN service owns the name.
+                }
+                if matches!(platform, Platform::Android | Platform::Ios) {
+                    options.remove("auto_route"); // Routing is managed by the VPN service.
+                }
+            }
+        }
+    }
+}
+
+fn render_mihomo_template(
+    nodes: &[&SubscriptionNode],
+    platform: Platform,
+) -> Result<String, ApiError> {
     let mut config: serde_yaml::Value = serde_yaml::from_str(include_str!("mihomo-template.yaml"))
         .map_err(|_| ApiError::internal())?;
+    if matches!(
+        platform,
+        Platform::Windows | Platform::Android | Platform::Ios
+    ) {
+        config
+            .as_mapping_mut()
+            .ok_or_else(ApiError::internal)?
+            .remove(serde_yaml::Value::from("redir-port"));
+    }
     let proxies = nodes
         .iter()
         .map(|node| node.to_mihomo())
@@ -779,7 +858,7 @@ mod tests {
         assert!(
             n.incompatible(
                 SubscriptionFormat::Singbox,
-                &ClientInfo::detect("sing-box/1.13.0")
+                &ClientInfo::detect("sing-box/1.14.0")
             )
             .is_none()
         );
@@ -870,7 +949,7 @@ mod tests {
         n.obfs_password = Some("secret".into());
         n.obfs_min_packet_size = Some(512);
         n.obfs_max_packet_size = Some(1200);
-        let v = n.singbox(true);
+        let v = n.singbox();
         assert_eq!(v["server_ports"], json!(["443:443", "445:446"]));
         assert!(v.get("server_port").is_none());
         assert_eq!(v["hop_interval"], "30s");
@@ -893,7 +972,7 @@ mod tests {
             stun_servers: Some(vec!["stun.example:3478".into()]),
             skip_cert_verify: Some(true),
         });
-        let v = n.singbox(true);
+        let v = n.singbox();
         for key in ["server", "server_port", "server_ports", "hop_interval"] {
             assert!(v.get(key).is_none());
         }
@@ -906,51 +985,149 @@ mod tests {
     fn singbox_keeps_chrome_parrot_without_client_certificate() {
         let n = node();
         assert!(n.certificate.is_none());
-        assert!(n.singbox(true).get("disable_chrome_parrot").is_none());
+        assert!(n.singbox().get("disable_chrome_parrot").is_none());
     }
 
-    #[tokio::test]
-    async fn known_singbox_before_1_14_omits_1_14_only_fields() {
-        let mut advanced = node();
-        advanced.certificate = Some("cert".into());
-        advanced.private_key = Some("key".into());
-        for (ua, modern) in [
-            ("sing-box/1.13.21", false),
-            ("sing-box/1.13.0", false),
-            ("sing-box/1.14.0", true),
-            ("sing-box/1.14.3", true),
-            ("sing-box", true),
-            ("curl/8.0", true),
-            ("", true),
+    #[test]
+    fn rejects_singbox_before_1_14_even_when_empty() {
+        let nodes = [node()];
+        for ua in [
+            "sing-box/1.10.0",
+            "sing-box/1.11.0",
+            "sing-box/1.12.22",
+            "sing-box/1.13.21",
         ] {
-            let client = ClientInfo::detect(ua);
-            let response = render_subscription(
-                std::slice::from_ref(&advanced),
-                SubscriptionFormat::Singbox,
-                &client,
-            )
-            .unwrap();
-            assert_eq!(
-                response.headers()["x-hysteriax-filtered-nodes"],
-                "0",
-                "{ua}"
-            );
-            let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
-                .await
+            for assigned in [nodes.as_slice(), &[]] {
+                let error = render_subscription(
+                    assigned,
+                    SubscriptionFormat::Singbox,
+                    &ClientInfo::detect(ua),
+                )
+                .err()
                 .unwrap();
-            let json: Value = serde_json::from_slice(&bytes).unwrap();
+                assert_eq!(error.status, StatusCode::UNPROCESSABLE_ENTITY);
+                assert_eq!(error.code, "subscription_incompatible");
+                assert!(error.message.contains("1.14.0"));
+            }
+        }
+        for ua in [
+            "sing-box/1.14.0",
+            "sing-box/1.14.3",
+            "sing-box",
+            "curl/8.0",
+            "",
+        ] {
+            let mut n = node();
+            n.certificate = Some("cert".into());
+            let body = render_singbox_template(&[&n], &ClientInfo::detect(ua)).unwrap();
+            let config: Value = serde_json::from_str(&body).unwrap();
+            assert!(config["dns"].get("optimistic").is_some());
+            assert_eq!(config["outbounds"][0]["disable_chrome_parrot"], true);
+        }
+    }
+
+    #[test]
+    fn platform_detection_and_explicit_override() {
+        for (ua, platform) in [
+            ("sing-box/1.14.2 (linux; amd64)", Platform::Linux),
+            ("sing-box (OpenWrt)", Platform::Linux),
+            ("sing-box/1.14.2 (Windows NT 10.0)", Platform::Windows),
+            ("Mozilla/5.0 (Macintosh; Intel Mac OS X)", Platform::Macos),
+            ("sing-box/1.14.2 (darwin; arm64)", Platform::Macos),
+            ("Mozilla/5.0 (Linux; Android 15)", Platform::Android),
+            (
+                "Mozilla/5.0 (iPhone; CPU iPhone OS 18 like Mac OS X)",
+                Platform::Ios,
+            ),
+            ("sing-box/1.14.2 (iPad)", Platform::Ios),
+            ("notwindows notlinux notandroid", Platform::Unknown),
+            ("sing-box", Platform::Unknown),
+        ] {
+            assert_eq!(ClientInfo::detect(ua).platform, platform, "{ua}");
+        }
+        assert_eq!(Platform::requested(None).unwrap(), None);
+        assert_eq!(Platform::requested(Some("platform=auto")).unwrap(), None);
+        for (value, expected) in [
+            ("linux", Platform::Linux),
+            ("openwrt", Platform::Linux),
+            ("windows", Platform::Windows),
+            ("macos", Platform::Macos),
+            ("android", Platform::Android),
+            ("ios", Platform::Ios),
+        ] {
             assert_eq!(
-                json["dns"].get("optimistic").is_some(),
-                modern,
-                "dns.optimistic for {ua}"
+                Platform::requested(Some(&format!("format=singbox&platform={value}"))).unwrap(),
+                Some(expected)
             );
-            let outbound = &json["outbounds"][0];
-            assert!(outbound["tls"].get("client_certificate").is_some(), "{ua}");
+        }
+        for query in [
+            "platform=",
+            "platform=unknown",
+            "platform=windows&platform=linux",
+        ] {
             assert_eq!(
-                outbound.get("disable_chrome_parrot").is_some(),
-                modern,
-                "disable_chrome_parrot for {ua}"
+                Platform::requested(Some(query)).err().unwrap().status,
+                StatusCode::BAD_REQUEST
             );
+        }
+    }
+
+    #[test]
+    fn platform_templates_preserve_nodes_and_only_supported_listeners() {
+        let mut n = node();
+        n.certificate = Some("cert".into());
+        n.private_key = Some("key".into());
+        for platform in [
+            Platform::Unknown,
+            Platform::Linux,
+            Platform::Windows,
+            Platform::Macos,
+            Platform::Android,
+            Platform::Ios,
+        ] {
+            let client = ClientInfo {
+                platform,
+                ..ClientInfo::default()
+            };
+            let config: Value =
+                serde_json::from_str(&render_singbox_template(&[&n], &client).unwrap()).unwrap();
+            let inbounds = config["inbounds"].as_array().unwrap();
+            let has = |kind| inbounds.iter().any(|i| i["type"] == kind);
+            let linux = matches!(platform, Platform::Unknown | Platform::Linux);
+            assert_eq!(has("tproxy"), linux);
+            assert_eq!(has("redirect"), linux || platform == Platform::Macos);
+            assert!(has("http") && has("socks") && has("tun") && has("direct"));
+            let tun = inbounds.iter().find(|i| i["type"] == "tun").unwrap();
+            assert_eq!(tun.get("auto_redirect").is_some(), linux);
+            assert_eq!(
+                tun.get("interface_name").is_some(),
+                linux || platform == Platform::Windows
+            );
+            assert_eq!(
+                tun.get("auto_route").and_then(Value::as_bool),
+                if matches!(platform, Platform::Android | Platform::Ios) {
+                    None
+                } else {
+                    Some(true)
+                }
+            );
+            assert_eq!(config["outbounds"][0], n.singbox());
+            assert_eq!(config["route"]["final"], "默认代理");
+            assert!(
+                config["route"]["rules"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|r| r["inbound"] == "dns-in")
+            );
+            let yaml: serde_yaml::Value =
+                serde_yaml::from_str(&render_mihomo_template(&[&n], platform).unwrap()).unwrap();
+            assert_eq!(
+                yaml.get("redir-port").is_some(),
+                linux || platform == Platform::Macos
+            );
+            assert_eq!(yaml["mixed-port"].as_u64(), Some(7888));
+            assert_eq!(yaml["proxies"][0]["certificate"].as_str(), Some("cert"));
         }
     }
 

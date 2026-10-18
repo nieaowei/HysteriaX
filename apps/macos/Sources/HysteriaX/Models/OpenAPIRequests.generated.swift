@@ -1055,11 +1055,11 @@ enum APIEndpoints {
     static let healthCheck: APIOperation<NoRequest, APIHealth> = APIOperation<NoRequest, APIHealth>(method: "GET", path: "healthz", queryParameters: [:])
     static let readinessCheck: APIOperation<NoRequest, APIHealth> = APIOperation<NoRequest, APIHealth>(method: "GET", path: "readyz", queryParameters: [:])
     static let getOpenAPISpec: APIOperation<NoRequest, NoResponse> = APIOperation<NoRequest, NoResponse>(method: "GET", path: "openapi.yaml", queryParameters: [:])
-    static func downloadAutomaticSubscription(token: String, format: String? = nil) -> APIOperation<NoRequest, NoResponse> {
-        APIOperation(method: "GET", path: "sub/\(token)", queryParameters: ["format": format.map { String($0) }].compactMapValues { $0 })
+    static func downloadAutomaticSubscription(token: String, format: String? = nil, platform: String? = nil) -> APIOperation<NoRequest, NoResponse> {
+        APIOperation(method: "GET", path: "sub/\(token)", queryParameters: ["format": format.map { String($0) }, "platform": platform.map { String($0) }].compactMapValues { $0 })
     }
-    static func downloadSubscription(token: String) -> APIOperation<NoRequest, NoResponse> {
-        APIOperation(method: "GET", path: "sub/\(token)/clash.yaml", queryParameters: [:])
+    static func downloadSubscription(token: String, platform: String? = nil) -> APIOperation<NoRequest, NoResponse> {
+        APIOperation(method: "GET", path: "sub/\(token)/clash.yaml", queryParameters: ["platform": platform.map { String($0) }].compactMapValues { $0 })
     }
     static func authenticateHysteriaUser(nodeID: String, nodeToken: String) -> APIOperation<AuthenticateHysteriaUserRequest, HysteriaAuthResponse> {
         APIOperation(method: "POST", path: "hy2/auth/\(nodeID)/\(nodeToken)", queryParameters: [:])

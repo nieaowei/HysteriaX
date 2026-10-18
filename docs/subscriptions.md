@@ -6,7 +6,8 @@
 behavior. An explicit `format=mihomo|singbox|base64|uri` overrides format detection;
 it does not override the capability check. Invalid or repeated format values return 400.
 The existing `/sub/{token}/clash.yaml` always returns the established Mihomo YAML,
-including its current advanced fields, regardless of UA or query parameters.
+including its current advanced fields, regardless of UA or format query parameters.
+Platform filtering also applies to this fixed YAML endpoint.
 
 Management subscription responses retain `url` (the fixed YAML address) and add
 optional `auto_url`. Both addresses share the existing token and revocation rules.
@@ -46,9 +47,11 @@ are generated dynamically into `SELECT`; an empty assignment uses `DIRECT` there
 `allow-lan: true` and `bind-address: '*'` expose the local proxy listeners to
 devices that can reach the client machine's network interfaces.
 The template deliberately omits the sample's external controller and shared secret.
-sing-box provides `127.0.0.1:7890`, a node selector (first node selected initially),
-a direct outbound, and a final route to the selector. With no assigned deployed
-nodes, sing-box selects direct routing. URI output contains one `hysteria2://` link per
+sing-box uses the policy in `singbox-template.json`, with HTTP port 8080, SOCKS
+port 1080, DNS port 1053, Redirect/TProxy listeners and a TUN interface where
+supported by the target platform. Its TUN enables automatic routing by default
+(`auto_route: true`); Android/iOS omit this option because the VPN service manages routing.
+URI output contains one `hysteria2://` link per
 line; Base64 encodes exactly that UTF-8 list, including the trailing newline. An empty
 URI/Base64 subscription is empty. URI lists carry connection parameters rather than
 client routing or bandwidth tuning.
@@ -61,9 +64,9 @@ are the same as the original YAML renderer.
 
 | Feature | Mihomo | sing-box | URI/Base64 |
 | --- | --- | --- | --- |
-| Basic Hysteria2, SNI, TLS verify flag, Salamander | Existing renderer | 1.11+ baseline | Supported |
-| Port hopping | Existing renderer | 1.11+ baseline, including unknown version | Filtered pending client validation |
-| mTLS certificate/key | Existing renderer | Unknown version or sing-box 1.13+ | Cannot embed; filtered |
+| Basic Hysteria2, SNI, TLS verify flag, Salamander | Existing renderer | 1.14+ baseline | Supported |
+| Port hopping | Existing renderer | 1.14+ baseline, including unknown version | Filtered pending client validation |
+| mTLS certificate/key | Existing renderer | Unknown version or sing-box 1.14+ | Cannot embed; filtered |
 | ECH config list | Existing renderer | Unknown version or sing-box 1.14.2+ validation profile | Filtered pending client validation |
 | Gecko | Existing renderer | Unknown version or sing-box 1.14+ | Filtered pending client validation |
 | Realm and STUN/insecure settings | Existing renderer | Unknown version or sing-box 1.14+ | Filtered pending client validation |
@@ -74,19 +77,45 @@ certificate (`quic: server-side tls.Config fields are not supported with ChromeP
 Hysteria2 outbounds that carry a client certificate are therefore emitted with
 `disable_chrome_parrot: true`; nodes without one keep the default ChromeParrot handshake.
 
-The sing-box template itself uses `dns.optimistic`, which sing-box accepts from 1.14.0.
-`disable_chrome_parrot` and `dns.optimistic` are both omitted when the request identifies a
-known sing-box kernel older than 1.14.0, which predates them and would reject the document as
-unknown fields; an unknown kernel keeps both. That gate is groundwork only: the template still
-uses other constructs introduced with 1.14.0 (`services` with the `api` type, `http_clients`
-and `route.default_http_client`, `rule_set` tag arrays, the DNS `evaluate` action and
-`match_response`, `experimental.cache_file.store_dns`), so the effective minimum for a working
-sing-box subscription remains 1.14.0.
+The complete sing-box template requires 1.14.0 or newer. Known sing-box kernels
+below 1.14.0 receive HTTP 422 (`subscription_incompatible`) even when the user has
+no nodes. There is no legacy template or older-version field downgrade. ECH nodes
+still require the independently validated 1.14.2 profile for known kernels.
+
+## Target platform
+
+Both automatic subscriptions and `/sub/{token}/clash.yaml` accept
+`platform=auto|linux|openwrt|windows|macos|android|ios` (`openwrt` aliases Linux).
+Invalid or repeated platform parameters return 400. Explicit platform overrides UA
+platform detection; omitted/auto uses OS tokens from the UA. Android and iOS take
+precedence over Linux/macOS tokens in mobile UAs. Downloaders without OS tokens
+retain the original template. Platform and kernel version are independent: setting
+`platform` never bypasses the kernel version check.
+
+Examples: `/sub/{token}?format=singbox&platform=windows` and
+`/sub/{token}/clash.yaml?platform=android`. Browser UAs describe the downloading
+machine, which may differ from the destination; use an explicit platform when
+exporting for another device. A bare `sing-box` UA has no platform information.
+
+| Target | sing-box filtering | Mihomo filtering |
+| --- | --- | --- |
+| Unknown / Linux / OpenWrt | Original listeners and TUN options | Original template |
+| macOS | Remove TProxy, TUN `auto_redirect` and fixed `interface_name` | Keep Redirect |
+| Windows | Remove TProxy, Redirect and TUN `auto_redirect` | Remove `redir-port` |
+| Android / iOS | Remove TProxy, Redirect and TUN `interface_name`, `auto_redirect`, `auto_route` (managed by VPN service) | Remove `redir-port` |
+
+Node credentials, DNS rules, routing policy, and proxy selection groups are
+preserved. The DNS listener remains present, so `dns-in` route references remain
+valid. Filtering preserves the template
+settings; it does not configure external Redirect/TProxy firewall rules.
+Platform-specific output is isolated in the response cache, and both subscription
+endpoints include `Vary: User-Agent`. This is configuration filtering, not a claim
+of runtime validation on every OS or GUI client.
 
 Mihomo output is validated with v1.19.31. Auto requests identifying an older Mihomo
 version conservatively filter mTLS/ECH/Gecko/Realm nodes; the fixed legacy YAML
-endpoint preserves its original contract. A known sing-box version older than 1.11
-is rejected when nodes are present. For explicit sing-box exports from the management
+endpoint preserves its original contract. A known sing-box version older than 1.14
+is rejected, including empty subscriptions. For explicit sing-box exports from the management
 app or a browser, no kernel version is available. Unknown sing-box kernel versions retain all representable nodes, including complete mTLS,
 ECH, Gecko and Realm settings. Recognized older kernels continue to apply their known
 compatibility limits. No extra version parameter is required.

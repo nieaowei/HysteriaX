@@ -160,19 +160,29 @@ pub async fn rotate(
     ))
 }
 
-pub async fn download(State(state): State<AppState>, Path(token): Path<String>) -> Response {
+pub async fn download(
+    State(state): State<AppState>,
+    Path(token): Path<String>,
+    RawQuery(query): RawQuery,
+    headers: HeaderMap,
+) -> Response {
     let result = async {
         let user_id = validate_subscription(&state, &token).await?;
-        cached_subscription(
-            &state,
-            &user_id,
-            SubscriptionFormat::Mihomo,
-            &ClientInfo::default(),
-        )
-        .await
+        // The fixed YAML endpoint keeps its version-independent node contract.
+        let detected = ClientInfo::detect(
+            headers
+                .get(header::USER_AGENT)
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or(""),
+        );
+        let client = ClientInfo {
+            platform: formats::Platform::requested(query.as_deref())?.unwrap_or(detected.platform),
+            ..ClientInfo::default()
+        };
+        cached_subscription(&state, &user_id, SubscriptionFormat::Mihomo, &client).await
     }
     .await;
-    subscription_response(result, false)
+    subscription_response(result, true)
 }
 
 pub async fn download_auto(
@@ -184,9 +194,12 @@ pub async fn download_auto(
     let result = async {
         let user_id = validate_subscription(&state, &token).await?;
         let requested = formats::requested_format(query.as_deref())?;
-        let client = ClientInfo::detect(
+        let mut client = ClientInfo::detect(
             headers.get(header::USER_AGENT).and_then(|v| v.to_str().ok()).unwrap_or(""),
         );
+        if let Some(platform) = formats::Platform::requested(query.as_deref())? {
+            client.platform = platform;
+        }
         let format = requested.or(client.format);
         tracing::info!(client = client.name, version = ?client.version, format = ?format, "subscription format selected");
         if let Some(format) = format {
@@ -294,9 +307,10 @@ async fn cached_subscription(
         .bind(user_id).bind(now).fetch_one(&state.pool).await?;
     let boundary: Option<DateTime<Utc>> = boundaries.get("boundary");
     let key = format!(
-        "subscription:v2-unknown-kernel:{user_id}:{version}:{format:?}:{}:{:?}:{}:{}",
+        "subscription:v3-platform:{user_id}:{version}:{format:?}:{}:{:?}:{:?}:{}:{}",
         client.name,
         client.version,
+        client.platform,
         token_digest(&eligible.join("|")),
         token_digest(&boundaries.get::<Value, _>("valid_versions").to_string())
     );

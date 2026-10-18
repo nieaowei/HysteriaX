@@ -776,9 +776,13 @@ async fn subscription_cache_expires_at_certificate_boundary_without_a_write_even
     .await
     .unwrap();
     async fn download(state: &AppState) -> String {
-        let response =
-            crate::api::subscriptions::download(State(state.clone()), Path("test-token".into()))
-                .await;
+        let response = crate::api::subscriptions::download(
+            State(state.clone()),
+            Path("test-token".into()),
+            axum::extract::RawQuery(None),
+            axum::http::HeaderMap::new(),
+        )
+        .await;
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(response.headers()["cache-control"], "private, no-store");
         String::from_utf8(

@@ -11,6 +11,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+import yaml
+
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 
@@ -121,16 +123,46 @@ def run(base, admin, database, temp, advanced_token, revoked_token, advanced_use
     filtered, headers = expect(advanced_token, "?format=singbox", mime="application/json")
     if headers.get("X-HysteriaX-Filtered-Nodes") != "0" or len([o for o in json.loads(filtered)["outbounds"] if o["type"] == "hysteria2"]) != 3:
         raise RuntimeError("unknown-version sing-box did not preserve all assigned nodes")
-    _, known_headers = expect(advanced_token, "?format=singbox", ua="sing-box/1.13.0", mime="application/json")
-    if known_headers.get("X-HysteriaX-Filtered-Nodes") != "2":
-        raise RuntimeError("known older kernel compatibility filtering was bypassed")
+    expect(advanced_token, "?format=singbox", ua="sing-box/1.13.0", status=422)
     for ua, mime in [("MIHOMO/v1.19.31", "application/yaml"), ("clash.meta/1.19.31", "application/yaml"),
                      ("clashmeta 1.19.31", "application/yaml"), ("SingBox/1.14.2", "application/json"),
-                     ("sing-box/1.11.0", "application/json"), ("Shadowrocket/2.2.0", "text/plain"),
+                     ("Shadowrocket/2.2.0", "text/plain"),
                      ("v2rayN/7.0", "text/plain"), ("v2rayNG/1.9", "text/plain")]:
         expect(token, ua=ua, mime=mime)
     expect(token, "?format=mihomo", ua="sing-box/1.14.2", mime="application/yaml")
     expect(token, "?format=singbox", ua="mihomo/1.19.31", mime="application/json")
+    for version in ["1.11.0", "1.12.22", "1.13.21"]:
+        for target in [token, empty_token]:
+            body, _ = expect(target, "?format=singbox", ua=f"sing-box/{version}", status=422)
+            if json.loads(body)["error"]["code"] != "subscription_incompatible":
+                raise RuntimeError("old sing-box did not return the compatibility error")
+    for query in ["?format=singbox&platform=invalid", "?format=singbox&platform=linux&platform=windows"]:
+        expect(token, query, status=400)
+    # Alternate the same account/version across platforms to catch cache collisions.
+    for platform_ in ["linux", "windows", "macos", "android", "ios", "openwrt", "windows"]:
+        body, _ = expect(token, f"?format=singbox&platform={platform_}", ua="sing-box/1.14.2 (linux)", mime="application/json")
+        config = json.loads(body)
+        types = {i["type"] for i in config["inbounds"]}
+        if ("tproxy" in types) != (platform_ in ["linux", "openwrt"]):
+            raise RuntimeError("platform override/cache isolation failed")
+        if ("redirect" in types) != (platform_ in ["linux", "openwrt", "macos"]):
+            raise RuntimeError("redirect platform filtering failed")
+        path = temp / f"singbox-{platform_}.json"
+        path.write_bytes(body)
+        subprocess.run([str(binary), "check", "-c", str(path)], check=True)
+        yaml_body, _ = expect(token, f"?format=mihomo&platform={platform_}", mime="application/yaml")
+        if ("redir-port" in yaml.safe_load(yaml_body)) != (platform_ in ["linux", "openwrt", "macos"]):
+            raise RuntimeError("Mihomo platform filtering failed")
+        legacy_status, legacy, legacy_headers = fetch(base, f"/sub/{token}/clash.yaml?platform={platform_}", "mihomo/1.19.31")
+        if legacy_status != 200 or legacy_headers.get("Vary") != "User-Agent":
+            raise RuntimeError("fixed YAML platform response headers failed")
+        if ("redir-port" in yaml.safe_load(legacy)) != (platform_ in ["linux", "openwrt", "macos"]):
+            raise RuntimeError("fixed YAML platform filtering failed")
+    for os_ in ["linux", "windows", "macos", "android", "ios", "linux"]:
+        body, _ = expect(token, "?format=singbox", ua=f"sing-box/1.14.2 ({os_})", mime="application/json")
+        types = {i["type"] for i in json.loads(body)["inbounds"]}
+        if ("tproxy" in types) != (os_ == "linux"):
+            raise RuntimeError("UA platform detection/cache isolation failed")
     expect(token, ua="sing-box/1.10.0", status=422)
     code, body, headers = fetch(base, f"/sub/{token}/clash.yaml?format=uri", "sing-box/1.14.2")
     if code != 200 or headers.get_content_type() != "application/yaml":
