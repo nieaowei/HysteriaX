@@ -33,9 +33,10 @@ enum ProxyProbeURLValidation {
     }
 }
 
-enum JSONValue: Codable, Sendable {
+enum JSONValue: Codable, Sendable, Equatable {
     case string(String)
     case integer(Int)
+    case unsignedInteger(UInt64)
     case bool(Bool)
     case decimal(Double)
     case array([JSONValue])
@@ -47,6 +48,7 @@ enum JSONValue: Codable, Sendable {
         if container.decodeNil() { self = .null }
         else if let value = try? container.decode(Bool.self) { self = .bool(value) }
         else if let value = try? container.decode(Int.self) { self = .integer(value) }
+        else if let value = try? container.decode(UInt64.self) { self = .unsignedInteger(value) }
         else if let value = try? container.decode(Double.self) { self = .decimal(value) }
         else if let value = try? container.decode(String.self) { self = .string(value) }
         else if let value = try? [JSONValue](from: decoder) { self = .array(value) }
@@ -57,6 +59,7 @@ enum JSONValue: Codable, Sendable {
         switch self {
         case .string(let value): try value.encode(to: encoder)
         case .integer(let value): try value.encode(to: encoder)
+        case .unsignedInteger(let value): try value.encode(to: encoder)
         case .bool(let value): try value.encode(to: encoder)
         case .decimal(let value): try value.encode(to: encoder)
         case .array(let value): try value.encode(to: encoder)
@@ -120,16 +123,23 @@ enum SubscriptionFileFormat: String, CaseIterable, Sendable {
         }
     }
 
-    func subscriptionURL(autoURL: String?, legacyURL: String) throws -> String {
-        if self == .mihomo { return legacyURL }
-        guard let autoURL, var components = URLComponents(string: autoURL) else {
-            throw APIClientError.server(L10n.text("此服务端尚未提供多格式订阅，请先升级服务端。"))
-        }
-        var items = components.queryItems ?? []
-        items.removeAll { $0.name == "format" }
+    func subscriptionURL(baseURL: String, template: String? = nil, platform: String? = nil) throws -> String {
+        guard var components = URLComponents(string: baseURL) else { throw APIClientError.invalidBaseURL }
+        if self == .mihomo || self == .singbox {
+            guard let platform, TemplatePlatform.all.contains(platform) else { throw APIClientError.server(L10n.text("请明确选择目标平台。")) }
+        } else if template != nil { throw APIClientError.invalidResponse }
+        var items = (components.queryItems ?? []).filter { !["format", "platform", "template"].contains($0.name) }
         items.append(URLQueryItem(name: "format", value: rawValue))
+        if let template { items.append(URLQueryItem(name: "template", value: template)) }
+        if let platform, self == .mihomo || self == .singbox { items.append(URLQueryItem(name: "platform", value: platform)) }
         components.queryItems = items
-        guard let url = components.url else { throw APIClientError.invalidBaseURL }
-        return url.absoluteString
+        guard let url = components.url else { throw APIClientError.invalidBaseURL }; return url.absoluteString
+    }
+}
+
+enum TemplatePlatform {
+    static let all = ["linux", "macos", "windows", "android", "ios"]
+    static func title(_ value: String) -> String {
+        switch value { case "linux": "Linux/OpenWrt"; case "macos": "macOS"; case "windows": "Windows"; case "android": "Android"; case "ios": "iOS"; default: L10n.text("通用配置") }
     }
 }

@@ -1,0 +1,68 @@
+{
+  "mihomo": [
+    {
+      "name": "hopping-30",
+      "paths": [],
+      "valid": true
+    },
+    {
+      "name": "hopping-30",
+      "paths": [],
+      "valid": true
+    },
+    {
+      "name": "hopping-30.5",
+      "paths": [
+        "/proxies/0/hop-interval"
+      ],
+      "valid": false
+    },
+    {
+      "name": "ech-invalid-type",
+      "paths": [
+        "/proxies/0/ech-opts/enable"
+      ],
+      "valid": false
+    },
+    {
+      "name": "realm-invalid-stun",
+      "paths": [
+        "/proxies/0/realm-opts/stun-servers"
+      ],
+      "valid": false
+    }
+  ],
+  "singbox": [
+    {
+      "name": "hopping",
+      "paths": [],
+      "valid": true
+    },
+    {
+      "name": "realm-mtls-ech",
+      "paths": [],
+      "valid": true
+    },
+    {
+      "name": "ech-invalid-type",
+      "paths": [
+        "/outbounds/12"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mtls-invalid-certificate",
+      "paths": [
+        "/outbounds/12"
+      ],
+      "valid": false
+    },
+    {
+      "name": "gecko-invalid-packet-size",
+      "paths": [
+        "/outbounds/12"
+      ],
+      "valid": false
+    }
+  ]
+}

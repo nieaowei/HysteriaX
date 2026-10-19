@@ -33,11 +33,18 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+        with:
+          cache-workspace-crates: true
+          key: template-codegen-${{ hashFiles('crates/hysteriax-template-validator/src/**', 'crates/hysteriax-template-validator/build.rs', 'crates/hysteriax-template-validator/Cargo.toml', 'crates/hysteriax-server/src/api/subscriptions/templates/*.schema.json', 'crates/hysteriax-server/src/api/subscriptions/templates/schema_transform.rs') }}
       - run: cargo fmt --all -- --check
       - run: cargo check --workspace --all-targets
       - run: cargo test --workspace
       - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: python3 scripts/verify-subscription-schema-build-gate.py
+      - run: python3 scripts/verify-subscription-validator-compatibility.py
+      - run: python3 scripts/verify-subscription-schema-runtime.py
       - run: scripts/verify-subscription.sh
+      - run: scripts/verify-subscription-template-lifecycle.py --container "${{ job.services.postgres.id }}"
       - run: scripts/verify-realm-live.py
       - run: scripts/verify-migrations.py
       - run: scripts/verify-restart-recovery.py

@@ -9,6 +9,7 @@ FROM rust:1.97-bookworm AS build
 ARG TARGETARCH
 WORKDIR /src
 COPY Cargo.toml Cargo.lock* ./
+COPY crates/hysteriax-template-validator crates/hysteriax-template-validator
 COPY crates/hysteriax-server/Cargo.toml crates/hysteriax-server/Cargo.toml
 COPY crates/hysteriax-server/migrations crates/hysteriax-server/migrations
 COPY crates/hysteriax-server/src crates/hysteriax-server/src
@@ -16,7 +17,9 @@ COPY openapi/openapi.yaml openapi/openapi.yaml
 COPY deploy deploy
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,id=hysteriax-target-${TARGETARCH},target=/src/target,sharing=locked \
-    cargo build --locked --release -p hysteriax-server && cp target/release/hysteriax-server /hysteriax-server
+    cargo build --locked --release -p hysteriax-server \
+    && target/release/hysteriax-server --check-template-runtime \
+    && cp target/release/hysteriax-server /hysteriax-server
 
 FROM debian:bookworm-slim
 ARG HYSTERIAX_VERSION=dev
@@ -36,6 +39,7 @@ RUN set -eu; case "$TARGETARCH" in \
     printf '%s  /tmp/hysteria\n' "$expected" | sha256sum -c -; \
     install -m 0755 /tmp/hysteria /usr/local/bin/hysteria; rm /tmp/hysteria
 COPY --from=build /hysteriax-server /usr/local/bin/hysteriax-server
+COPY deploy/licenses/jsonschema.LICENSE /usr/local/share/hysteriax/licenses/jsonschema.LICENSE
 COPY --from=acme-build /artifacts /usr/local/share/hysteriax/acme
 USER hysteriax
 EXPOSE 8080

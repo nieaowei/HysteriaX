@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/hysteriax-server"]
+members = ["crates/hysteriax-server", "crates/hysteriax-template-validator"]
 resolver = "2"
 
 [workspace.package]

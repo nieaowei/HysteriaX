@@ -21,6 +21,7 @@ use crate::{
 };
 
 mod formats;
+pub(crate) mod templates;
 use formats::{ClientInfo, SubscriptionFormat, SubscriptionNode, SubscriptionRealm};
 
 #[derive(Deserialize)]
@@ -110,7 +111,7 @@ pub async fn get_user(
         let token: String = row.get("token_enc");
         let token = state.secrets.decrypt(&token)?;
         Some(
-            json!({"id": row.get::<String, _>("id"), "token": token, "url": subscription_url(&token), "auto_url": auto_subscription_url(&token), "created_at": row.get::<chrono::DateTime<chrono::Utc>, _>("created_at")}),
+            json!({"id": row.get::<String, _>("id"), "token": token, "url": auto_subscription_url(&token), "created_at": row.get::<chrono::DateTime<chrono::Utc>, _>("created_at")}),
         )
     } else {
         None
@@ -156,33 +157,8 @@ pub async fn rotate(
         .bind(Uuid::new_v4().to_string()).bind(&user_id).bind(json!({"revision": next_revision})).bind(timestamp).execute(&mut *tx).await?;
     tx.commit().await?;
     Ok(Json(
-        json!({"user_id": user_id, "revision": next_revision, "token": token, "url": subscription_url(&token), "auto_url": auto_subscription_url(&token), "note": "The old subscription URL has been revoked."}),
+        json!({"user_id": user_id, "revision": next_revision, "token": token, "url": auto_subscription_url(&token), "note": "The old subscription URL has been revoked."}),
     ))
-}
-
-pub async fn download(
-    State(state): State<AppState>,
-    Path(token): Path<String>,
-    RawQuery(query): RawQuery,
-    headers: HeaderMap,
-) -> Response {
-    let result = async {
-        let user_id = validate_subscription(&state, &token).await?;
-        // The fixed YAML endpoint keeps its version-independent node contract.
-        let detected = ClientInfo::detect(
-            headers
-                .get(header::USER_AGENT)
-                .and_then(|v| v.to_str().ok())
-                .unwrap_or(""),
-        );
-        let client = ClientInfo {
-            platform: formats::Platform::requested(query.as_deref())?.unwrap_or(detected.platform),
-            ..ClientInfo::default()
-        };
-        cached_subscription(&state, &user_id, SubscriptionFormat::Mihomo, &client).await
-    }
-    .await;
-    subscription_response(result, true)
 }
 
 pub async fn download_auto(
@@ -195,21 +171,116 @@ pub async fn download_auto(
         let user_id = validate_subscription(&state, &token).await?;
         let requested = formats::requested_format(query.as_deref())?;
         let mut client = ClientInfo::detect(
-            headers.get(header::USER_AGENT).and_then(|v| v.to_str().ok()).unwrap_or(""),
+            headers
+                .get(header::USER_AGENT)
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or(""),
         );
         if let Some(platform) = formats::Platform::requested(query.as_deref())? {
             client.platform = platform;
         }
-        let format = requested.or(client.format);
-        tracing::info!(client = client.name, version = ?client.version, format = ?format, "subscription format selected");
-        if let Some(format) = format {
-            cached_subscription(&state,&user_id,format,&client).await
-        } else {
-            Ok(formats::selection_page(&auto_subscription_url(&token)))
+        let templates: Vec<_> =
+            url::form_urlencoded::parse(query.as_deref().unwrap_or("").as_bytes())
+                .filter(|(key, _)| key == "template")
+                .map(|(_, v)| v.into_owned())
+                .collect();
+        if templates.len() > 1 || templates.first().is_some_and(|v| v.is_empty()) {
+            return Err(ApiError::bad_request(
+                "template must occur once and be nonempty",
+            ));
         }
+        let id = templates.first().map(String::as_str);
+        if requested
+            .is_some_and(|f| matches!(f, SubscriptionFormat::Uri | SubscriptionFormat::Base64))
+            && id.is_some()
+        {
+            return Err(ApiError::bad_request(
+                "URI/Base64 cannot be combined with a template",
+            ));
+        }
+        let format = requested.or(client.format);
+        if matches!(
+            format,
+            Some(SubscriptionFormat::Uri | SubscriptionFormat::Base64)
+        ) && id.is_none()
+        {
+            return cached_template(&state, &user_id, format.unwrap(), &client, None).await;
+        }
+        if id.is_none() && format.is_none() {
+            return template_selection(&state, &token, None, client.platform).await;
+        }
+        let format_name = match format {
+            Some(SubscriptionFormat::Mihomo) => Some("mihomo"),
+            Some(SubscriptionFormat::Singbox) => Some("singbox"),
+            _ => None,
+        };
+        let published = templates::published(&state, id, format_name).await?;
+        let selected = if published.2 == "mihomo" {
+            SubscriptionFormat::Mihomo
+        } else {
+            SubscriptionFormat::Singbox
+        };
+        if requested.is_some_and(|f| f != selected) {
+            return Err(ApiError::bad_request("format conflicts with template"));
+        }
+        if templates::platform_name(client.platform).is_none() {
+            return template_selection(&state, &token, Some(&published.0), client.platform).await;
+        }
+        cached_template(&state, &user_id, selected, &client, Some(&published)).await
     }
     .await;
     subscription_response(result, true)
+}
+async fn template_selection(
+    state: &AppState,
+    token: &str,
+    id: Option<&str>,
+    platform: formats::Platform,
+) -> Result<Response, ApiError> {
+    fn escape(s: &str) -> String {
+        s.replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;")
+            .replace('\"', "&quot;")
+            .replace('\'', "&#39;")
+    }
+    let rows=sqlx::query("SELECT id,name,format FROM subscription_templates WHERE NOT archived AND published_version IS NOT NULL AND ($1::text IS NULL OR id=$1) ORDER BY name,id").bind(id).fetch_all(&state.pool).await?;
+    let mut html = String::from(
+        "<!doctype html><html lang=\"zh-CN\"><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width\"><title>HysteriaX 订阅</title><h1>选择模板与目标平台</h1><p>复制下面对应设备的明确平台地址。</p>",
+    );
+    for row in rows {
+        html.push_str(&format!(
+            "<h2>{} ({})</h2><ul>",
+            escape(&row.get::<String, _>("name")),
+            escape(&row.get::<String, _>("format"))
+        ));
+        for target in templates::document::PLATFORMS {
+            if templates::platform_name(platform).is_some_and(|p| p != target) {
+                continue;
+            }
+            let url = url::form_urlencoded::Serializer::new(String::new())
+                .append_pair("template", &row.get::<String, _>("id"))
+                .append_pair("format", &row.get::<String, _>("format"))
+                .append_pair("platform", target)
+                .finish();
+            let url = format!("{}?{url}", auto_subscription_url(token));
+            html.push_str(&format!("<li><a href=\"{}\">{}</a><br><input aria-label=\"订阅地址\" readonly size=\"90\" value=\"{}\"></li>",escape(&url),if target=="linux"{"Linux/OpenWrt"}else{target},escape(&url)));
+        }
+        html.push_str("</ul>");
+    }
+    if id.is_none() {
+        html.push_str("<h2>节点链接</h2><ul>");
+        for format in ["uri", "base64"] {
+            let url = format!("{}?format={format}", auto_subscription_url(token));
+            html.push_str(&format!(
+                "<li><a href=\"{}\">{format}</a></li>",
+                escape(&url)
+            ));
+        }
+        html.push_str("</ul>");
+    }
+    html.push_str("</html>");
+    Ok(([(header::CONTENT_TYPE, "text/html; charset=utf-8")], html).into_response())
 }
 
 fn subscription_response(result: Result<Response, ApiError>, automatic: bool) -> Response {
@@ -247,10 +318,15 @@ async fn validate_subscription(state: &AppState, token: &str) -> Result<String, 
     .await?
     .ok_or_else(|| ApiError::not_found("subscription"))?;
     let user_id: String = credential.get("user_id");
+    validate_user(state, &user_id).await?;
+    Ok(user_id)
+}
+
+async fn validate_user(state: &AppState, user_id: &str) -> Result<(), ApiError> {
     let user = sqlx::query(
         "SELECT enabled, expires_at, quota_bytes, usage_bytes FROM users WHERE id = $1",
     )
-    .bind(&user_id)
+    .bind(user_id)
     .fetch_optional(&state.pool)
     .await?
     .ok_or_else(|| ApiError::not_found("subscription"))?;
@@ -266,16 +342,10 @@ async fn validate_subscription(state: &AppState, token: &str) -> Result<String, 
         ));
     }
 
-    Ok(user_id)
+    Ok(())
 }
 
-async fn cached_subscription(
-    state: &AppState,
-    user_id: &str,
-    format: SubscriptionFormat,
-    client: &ClientInfo,
-) -> Result<Response, ApiError> {
-    // Qualification is always live; the cache contains only a response for this exact eligible set.
+async fn eligible_nodes(state: &AppState, user_id: &str) -> Result<Vec<String>, ApiError> {
     let rows=sqlx::query("SELECT n.id,p.config,coalesce(p.usage_bytes,0) usage_bytes,p.next_reset_at FROM node_assignments a JOIN nodes n ON n.id=a.node_id LEFT JOIN node_packages p ON p.node_id=n.id WHERE a.user_id=$1 AND n.state NOT IN ('deleting','delete_failed') AND n.mtls_state='ready' AND n.deployed_revision IS NOT NULL AND n.deployed_config_enc IS NOT NULL ORDER BY lower(n.name) COLLATE \"C\",n.name COLLATE \"C\",n.id")
         .bind(user_id).fetch_all(&state.pool).await?;
     let now = Utc::now();
@@ -298,6 +368,24 @@ async fn cached_subscription(
             eligible.push(row.get("id"));
         }
     }
+    Ok(eligible)
+}
+
+async fn cached_template(
+    state: &AppState,
+    user_id: &str,
+    format: SubscriptionFormat,
+    client: &ClientInfo,
+    template: Option<&(String, i64, String, templates::document::Document)>,
+) -> Result<Response, ApiError> {
+    if let Some((_, _, _, document)) = template {
+        document.effective(
+            templates::platform_name(client.platform)
+                .ok_or_else(|| ApiError::bad_request("select a target platform"))?,
+        )?;
+    }
+    let eligible = eligible_nodes(state, user_id).await?;
+    let now = Utc::now();
     let version = crate::cache_domains::version(
         &state.pool,
         &["node_config", "user_config", "credentials", "resources"],
@@ -307,12 +395,13 @@ async fn cached_subscription(
         .bind(user_id).bind(now).fetch_one(&state.pool).await?;
     let boundary: Option<DateTime<Utc>> = boundaries.get("boundary");
     let key = format!(
-        "subscription:v3-platform:{user_id}:{version}:{format:?}:{}:{:?}:{:?}:{}:{}",
+        "subscription:v4-template:{user_id}:{version}:{format:?}:{}:{:?}:{:?}:{}:{}:{:?}",
         client.name,
         client.version,
         client.platform,
         token_digest(&eligible.join("|")),
-        token_digest(&boundaries.get::<Value, _>("valid_versions").to_string())
+        token_digest(&boundaries.get::<Value, _>("valid_versions").to_string()),
+        template.map(|t| (&t.0, t.1))
     );
     let monotonic_now = std::time::Instant::now();
     let deadline =
@@ -329,15 +418,23 @@ async fn cached_subscription(
                 let nodes = load_subscription_nodes_eligible(state, user_id, Some(&eligible))
                     .await
                     .map_err(IntoResponse::into_response)?;
-                let response = formats::render_subscription(&nodes, format, client)
-                    .map_err(IntoResponse::into_response)?;
+                let response = if let Some((id, _, format, document)) = template {
+                    templates::response_from_nodes(id, document, format, &nodes, client)
+                } else {
+                    formats::render_subscription(&nodes, format, client)
+                }
+                .map_err(IntoResponse::into_response)?;
                 crate::cache::CachedResponse::capture(response).await
             },
         )
         .await;
     if boundary.is_some_and(|at| at <= Utc::now()) {
         let nodes = load_subscription_nodes_eligible(state, user_id, Some(&eligible)).await?;
-        return formats::render_subscription(&nodes, format, client);
+        return if let Some((id, _, format, document)) = template {
+            templates::response_from_nodes(id, document, format, &nodes, client)
+        } else {
+            formats::render_subscription(&nodes, format, client)
+        };
     }
     Ok(match response {
         Ok(value) => value.response(),
@@ -606,7 +703,6 @@ fn build_node(
     realm_opts: Option<SubscriptionRealm>,
     config: &Value,
 ) -> SubscriptionNode {
-    let suffix = id.split('-').next().unwrap_or(id);
     let hop_interval = ports.as_ref().map(|_| 30);
     let bandwidth = config.get("bandwidth").and_then(Value::as_object);
     let obfs = config.get("obfs").and_then(Value::as_object);
@@ -627,7 +723,9 @@ fn build_node(
         .and_then(|kind| obfs.and_then(|value| value.get(kind)))
         .and_then(Value::as_object);
     SubscriptionNode {
-        name: format!("{name}-{suffix}"),
+        id: id.to_owned(),
+        display_name: name.to_owned(),
+        name: format!("hx:{id}:{name}"),
         server: server.to_owned(),
         port,
         ports,
@@ -719,10 +817,6 @@ fn auto_subscription_url(token: &str) -> String {
     format!("{}/sub/{token}", base.trim_end_matches('/'))
 }
 
-fn subscription_url(token: &str) -> String {
-    format!("{}/clash.yaml", auto_subscription_url(token))
-}
-
 #[cfg(test)]
 mod tests {
     use serde_json::json;
@@ -748,7 +842,10 @@ mod tests {
         );
         let yaml = serde_yaml::to_string(&proxy.to_mihomo()).unwrap();
         let value: serde_yaml::Value = serde_yaml::from_str(&yaml).unwrap();
-        assert_eq!(value["name"].as_str(), Some("東京: edge-7ed8a6e1"));
+        assert_eq!(
+            value["name"].as_str(),
+            Some("hx:7ed8a6e1-1234-5678-9abc-def012345678:東京: edge")
+        );
         assert_eq!(value["server"].as_str(), Some("2001:db8::1"));
         assert_eq!(value["password"].as_str(), Some("pass:word/with?symbols"));
         assert_eq!(value["ports"].as_str(), Some("443,445-446"));

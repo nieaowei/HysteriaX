@@ -215,7 +215,9 @@ final class HysteriaXLiveUITests: XCTestCase {
         XCTAssertTrue(identified(app, "user.selected.summary").waitForExistence(timeout: 15))
 
         chooseMenuAction(app, menu: "订阅", action: "生成/轮换订阅地址")
-        acknowledgeNotice(app)
+        let subscriptionDone = button(app, "完成")
+        XCTAssertTrue(subscriptionDone.waitForExistence(timeout: 15))
+        subscriptionDone.click()
         let subscriptionToken = try await activeSubscriptionToken(userID, credentials: credentials)
         let subscriptionBeforeRotation = try await subscriptionYAML(subscriptionToken, credentials: credentials)
         XCTAssertEqual(subscriptionBeforeRotation.components(separatedBy: "type: hysteria2").count - 1, 2)
@@ -231,7 +233,7 @@ final class HysteriaXLiveUITests: XCTestCase {
         XCTAssertEqual(disabledUser["enabled"] as? Bool, false)
         let (disabledSubscriptionStatus, _) = try await request(
             base: credentials.serviceAddress,
-            path: "/sub/\(subscriptionToken)/clash.yaml"
+            path: "/sub/\(subscriptionToken)?format=mihomo&platform=linux"
         )
         XCTAssertEqual(disabledSubscriptionStatus, 403)
 
@@ -381,7 +383,7 @@ final class HysteriaXLiveUITests: XCTestCase {
     private func subscriptionYAML(_ token: String, credentials: UITestCredentials) async throws -> String {
         let (status, data) = try await request(
             base: credentials.serviceAddress,
-            path: "/sub/\(token)/clash.yaml"
+            path: "/sub/\(token)?format=mihomo&platform=linux"
         )
         XCTAssertEqual(status, 200)
         return try XCTUnwrap(String(data: data, encoding: .utf8))

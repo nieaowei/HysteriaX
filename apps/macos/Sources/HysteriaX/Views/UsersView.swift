@@ -52,6 +52,7 @@ private struct UserDirectoryView: View {
     @Bindable var store: ManagementStore
     @Bindable var pageState: AuthorizationPageState
     var onOpenAuthorizationGroup: (String) -> Void
+    @State private var subscriptionUser: UserSummary?
     @State private var showingAddUser = false
     @State private var showingEditUser = false
     @State private var certificateUser: UserSummary?
@@ -189,6 +190,7 @@ private struct UserDirectoryView: View {
         .sheet(item: $membershipUser) { user in
             UserAuthorizationGroupMembershipView(store: store, user: user)
         }
+        .sheet(item: $subscriptionUser) { user in UserSubscriptionTemplateSheet(store: store, user: user) }
         .sheet(item: $certificateUser) { user in
             UserManagedCertificatesView(store: store, user: user)
         }
@@ -368,26 +370,12 @@ private struct UserDirectoryView: View {
             Button(L10n.text("托管证书…"), systemImage: "checkmark.shield") { certificateUser = user }
                 .accessibilityIdentifier("users.managedCertificates")
             Menu(L10n.text("订阅")) {
-                Button(L10n.text("复制当前订阅地址")) { copyCurrentSubscription(user) }
-                    .accessibilityLabel(L10n.text("复制当前订阅地址"))
+                Button(L10n.text("选择模板与目标平台…")) { subscriptionUser = user }
                     .accessibilityIdentifier("users.subscription.copy")
                 Button(L10n.text("生成/轮换订阅地址")) { rotateSubscription(user) }
-                    .accessibilityLabel(L10n.text("生成/轮换订阅地址"))
                     .accessibilityIdentifier("users.subscription.rotate")
-                Menu(L10n.text("复制指定格式地址")) {
-                    ForEach(SubscriptionFileFormat.allCases, id: \.rawValue) { format in
-                        Button(format.title) { copyCurrentSubscription(user, format: format) }
-                            .accessibilityIdentifier("users.subscription.copy.\(format.rawValue)")
-                    }
-                }
-                Button(L10n.text("导出 Mihomo YAML…")) { exportSubscription(user, format: .mihomo) }
-                    .accessibilityLabel(L10n.text("导出 Mihomo YAML"))
-                    .accessibilityIdentifier("users.subscription.export")
-                Menu(L10n.text("导出其他格式")) {
-                    ForEach(SubscriptionFileFormat.allCases.filter { $0 != .mihomo }, id: \.rawValue) { format in
-                        Button("\(format.title)…") { exportSubscription(user, format: format) }
-                            .accessibilityIdentifier("users.subscription.export.\(format.rawValue)")
-                    }
+                ForEach([SubscriptionFileFormat.uri, .base64], id: \.rawValue) { format in
+                    Button(format.title) { copyCurrentSubscription(user, format: format) }
                 }
             }
             .accessibilityLabel(L10n.text("订阅"))
@@ -529,8 +517,8 @@ private struct UserDirectoryView: View {
     private func rotateSubscription(_ user: UserSummary) {
         Task {
             do {
-                let url = try await store.rotateSubscription(for: user)
-                copy(url, message: L10n.text("新的订阅地址已复制，旧地址已撤销。"))
+                _ = try await store.rotateSubscription(for: user)
+                subscriptionUser = user
             } catch { showError(error) }
         }
     }

@@ -43,7 +43,55 @@ pub(crate) fn audit_actor() -> String {
 }
 
 pub fn router(state: AppState) -> Router {
+    use subscriptions::templates as st;
     let admin = Router::new()
+        .route(
+            "/api/v1/subscription-templates",
+            get(st::list).post(st::create),
+        )
+        .route("/api/v1/subscription-templates/fields", get(st::fields))
+        .route("/api/v1/subscription-templates/source", post(st::source))
+        .route("/api/v1/subscription-templates/import", post(st::import))
+        .route(
+            "/api/v1/subscription-templates/{id}",
+            get(st::get).patch(st::patch),
+        )
+        .route(
+            "/api/v1/subscription-templates/{id}/draft",
+            get(st::draft).put(st::save),
+        )
+        .route(
+            "/api/v1/subscription-templates/{id}/validate",
+            post(st::validate_draft),
+        )
+        .route(
+            "/api/v1/subscription-templates/{id}/refactor",
+            post(st::refactor),
+        )
+        .route(
+            "/api/v1/subscription-templates/{id}/preview",
+            post(st::preview),
+        )
+        .route(
+            "/api/v1/subscription-templates/{id}/publish",
+            post(st::publish),
+        )
+        .route(
+            "/api/v1/subscription-templates/{id}/versions",
+            get(st::versions),
+        )
+        .route(
+            "/api/v1/subscription-templates/{id}/rollback",
+            post(st::rollback),
+        )
+        .route(
+            "/api/v1/subscription-templates/{id}/versions/{version}",
+            get(st::version),
+        )
+        .route(
+            "/api/v1/subscription-templates/{id}/export",
+            get(st::export),
+        )
         .route(
             "/api/v1/users/{id}/managed-certificates/reissue",
             post(managed_mtls::reissue_user),
@@ -225,7 +273,6 @@ pub fn router(state: AppState) -> Router {
         .route("/readyz", get(readyz))
         .route("/openapi.yaml", get(openapi))
         .route("/sub/{token}", get(subscriptions::download_auto))
-        .route("/sub/{token}/clash.yaml", get(subscriptions::download))
         .route(
             "/hy2/auth/{node_id}/{node_token}",
             post(subscriptions::hy2_auth),
@@ -314,7 +361,7 @@ async fn api_version(
     let directory_generation = crate::cache::configuration_generation(&state.pool).await?;
     Ok(Json(json!({
         "api_version": "1.0.0",
-        "features": ["job_fingerprint_confirmation", "ssh_test_confirmation", "ssh_dns_sync", "client_summary", "node_packages", "overview_monitoring", "job_retry_links", "credentials", "node_record_removal", "dns_management", "authorization_groups", "managed_mtls"],
+        "features": ["subscription_templates", "job_fingerprint_confirmation", "ssh_test_confirmation", "ssh_dns_sync", "client_summary", "node_packages", "overview_monitoring", "job_retry_links", "credentials", "node_record_removal", "dns_management", "authorization_groups", "managed_mtls"],
         "directory_generation":directory_generation,
         "current_admin_token_id": actor.id,
         "service_version": env!("CARGO_PKG_VERSION"),

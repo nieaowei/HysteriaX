@@ -34,10 +34,17 @@ use crate::{security::SecretBox, state::AppState};
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let migrate_only = match env::args().skip(1).collect::<Vec<_>>().as_slice() {
+    let arguments = env::args().skip(1).collect::<Vec<_>>();
+    if arguments.as_slice() == ["--check-template-runtime"] {
+        let result = api::subscriptions::templates::check_runtime()
+            .map_err(|error| anyhow::anyhow!("template runtime check: {}", error.message))?;
+        println!("{}", serde_json::to_string(&result)?);
+        return Ok(());
+    }
+    let migrate_only = match arguments.as_slice() {
         [] => false,
         [arg] if arg == "--migrate-only" => true,
-        _ => bail!("usage: hysteriax-server [--migrate-only]"),
+        _ => bail!("usage: hysteriax-server [--migrate-only | --check-template-runtime]"),
     };
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -62,6 +69,9 @@ async fn main() -> Result<()> {
         .context("HYSTERIAX_MASTER_KEY must be a base64 encoded 32-byte key")?;
     let secret_box = SecretBox::from_base64(&master_key)?;
     credentials::migration::migrate(&pool, &secret_box).await?;
+    api::subscriptions::templates::initialize(&pool, &secret_box)
+        .await
+        .map_err(|e| anyhow::anyhow!("initialize subscription templates: {}", e.message))?;
     credentials::reference_index::initialize(&pool, &secret_box)
         .await
         .map_err(|error| anyhow::anyhow!("initialize reference index: {}", error.message))?;

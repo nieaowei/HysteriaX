@@ -445,10 +445,13 @@ async fn subscriptions_keep_published_connection_during_target_edits() {
     sqlx::query("INSERT INTO node_assignments(user_id,node_id,credential_hash,credential_enc,created_at) VALUES('user',$1,'fixture-hash',$2,now())").bind(&id).bind(state.secrets.encrypt("fixture-password").unwrap()).execute(&state.pool).await.unwrap();
     sqlx::query("INSERT INTO subscription_credentials(id,user_id,token_hash,token_enc,created_at) VALUES('subscription','user',$1,$2,now())").bind(crate::security::token_digest("fixture-subscription-token")).bind(state.secrets.encrypt("fixture-subscription-token").unwrap()).execute(&state.pool).await.unwrap();
     let _ = api::nodes::patch(State(state.clone()),Path(id.clone()),Json(serde_json::from_value(json!({"expected_revision":1,"public_host":"new.example.test","public_port":8443,"tls_sni":"new.example.test"})).unwrap())).await.unwrap();
-    let response = api::subscriptions::download(
+    api::subscriptions::templates::initialize(&state.pool, &state.secrets)
+        .await
+        .unwrap();
+    let response = api::subscriptions::download_auto(
         State(state.clone()),
         Path("fixture-subscription-token".into()),
-        axum::extract::RawQuery(None),
+        axum::extract::RawQuery(Some("format=mihomo&platform=linux".into())),
         axum::http::HeaderMap::new(),
     )
     .await;

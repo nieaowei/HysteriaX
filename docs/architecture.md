@@ -11,7 +11,7 @@
 
 PostgreSQL migrations are embedded in the service binary and run at startup. The schema uses `BOOLEAN`, `TIMESTAMPTZ`, `JSONB`, and `BIGINT`; encrypted secrets remain ciphertext text. Each configuration edit carries an `expected_revision`; stale writes return HTTP 409. A node configuration update and its queued sync job are committed in the same transaction. Transactional advisory locks preserve serialized write and event-cursor ordering. A session advisory lock rejects a second service instance using the same database.
 
-Management API contract 1.0.0 uses `/api/v1`; The v1 contract is changed in place; clients and server must upgrade together. Subscriptions, health endpoints and Hysteria authentication callbacks keep their public URLs.
+Management API contract 1.0.0 uses `/api/v1`; The v1 contract is changed in place; clients and server must upgrade together. The canonical subscription route is `/sub/{token}`; legacy `/clash.yaml` links are retired by the template upgrade. Health endpoints and Hysteria authentication callbacks keep their public URLs.
 
 The service requires a 32-byte base64 master key. XChaCha20-Poly1305 encrypts SSH authentication material, node and user credentials, subscription tokens, configuration snapshots, and node resources. SHA-256 digests are used to validate high entropy bearer credentials. The master key is read from the process environment and is not written into PostgreSQL.
 
@@ -41,3 +41,11 @@ The traffic worker samples each deployed node over SSH every ten seconds, update
 
 
 Node removal has two explicit operations. `DELETE /api/v1/nodes/{id}` performs managed remote uninstall before removing an installed node. `DELETE /api/v1/nodes/{id}/record` removes only the management record without SSH, after checking the optimistic revision and rejecting running remote deployment/uninstall/credential changes. It cancels other active jobs, signals their local workers, removes dependent assignments/configuration/monitoring/revocation requests, and retains historical job identifiers, names, events and an explicit `node.record_removed` audit. Shared credentials and users remain. The remote service may still be running; client capability `node_record_removal` gates the separate operation.
+
+## Versioned subscription templates
+
+`api/subscriptions/templates/` owns the lossless native document, versioned upstream field catalogs, overlay merge and validation, policy references/refactoring, dynamic node injection, encrypted persistence, and administrator endpoints. PostgreSQL migration 0037 separates templates/drafts from published history. Startup seeds once under the existing serialized write lock using the master key; built-in files are initialization resources only.
+
+Public native generation reads a published snapshot, resolves the explicit/UA target platform, merges its visible overlay, obtains currently authorized eligible nodes, applies client compatibility and injection selection, validates the final configuration, and serializes it. Cache keys carry template ID/version; the current publication pointer is read before accessing the response cache. URI/Base64 remain direct node exports. The retired `/clash.yaml` route has no compatibility layer.
+
+The Mac feature uses separate document/schema helpers, an observable feature Store, native field controls, injection editor, inspector, and template/platform subscription sheet. Schema catalogs feed both backend structural validation and typed controls. Unknown fields are preserved with unverified diagnostics. Publication and runtime never invoke proxy kernels; fixed kernels remain test tools only. See [subscription contract and upgrade](subscriptions.md).

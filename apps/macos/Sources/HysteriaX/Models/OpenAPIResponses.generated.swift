@@ -1,6 +1,52 @@
 // Generated from openapi/openapi.yaml by scripts/generate-swift-api-models.rb. Do not edit.
 import Foundation
 
+struct SubscriptionTemplate: Codable, Sendable, Identifiable {
+    let id: String
+    let name: String
+    let format: String
+    let revision: Int
+    let archived: Bool
+    let isDefault: Bool
+    let publishedVersion: Int?
+    let updatedAt: String
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case format
+        case revision
+        case archived
+        case isDefault = "is_default"
+        case publishedVersion = "published_version"
+        case updatedAt = "updated_at"
+    }
+}
+
+struct SubscriptionTemplatesPage: Codable, Sendable {
+    let items: [SubscriptionTemplate]
+    let page: Int
+    let pageSize: Int
+    let total: Int
+
+    enum CodingKeys: String, CodingKey {
+        case items
+        case page
+        case pageSize = "page_size"
+        case total
+    }
+}
+
+struct SubscriptionTemplateDraft: Codable, Sendable {
+    let template: SubscriptionTemplate
+    let document: [String: JSONValue]
+
+    enum CodingKeys: String, CodingKey {
+        case template
+        case document
+    }
+}
+
 struct ManagedUserIdentity: Codable, Sendable {
     let identityId: String
     let caCredentialId: String
@@ -1338,7 +1384,6 @@ struct SubscriptionReceipt: Codable, Sendable {
     let revision: Int
     let token: String
     let url: String
-    let autoUrl: String?
     let note: String
 
     enum CodingKeys: String, CodingKey {
@@ -1346,7 +1391,6 @@ struct SubscriptionReceipt: Codable, Sendable {
         case revision
         case token
         case url
-        case autoUrl = "auto_url"
         case note
     }
 }
@@ -1441,14 +1485,12 @@ struct ActiveSubscription: Codable, Sendable {
     let id: String
     let token: String
     let url: String
-    let autoUrl: String?
     let createdAt: String
 
     enum CodingKeys: String, CodingKey {
         case id
         case token
         case url
-        case autoUrl = "auto_url"
         case createdAt = "created_at"
     }
 }

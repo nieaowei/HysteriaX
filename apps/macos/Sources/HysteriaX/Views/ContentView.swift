@@ -1,7 +1,7 @@
 import SwiftUI
 
 private enum MainSection: String, CaseIterable, Identifiable {
-    case overview, nodes, dns, users, credentials, jobs, audit
+    case overview, nodes, dns, users, credentials, templates, jobs, audit
 
     var id: String { rawValue }
     var title: String {
@@ -10,6 +10,7 @@ private enum MainSection: String, CaseIterable, Identifiable {
         case .dns: "DNS"
         case .nodes: L10n.text("节点")
         case .users: L10n.text("用户")
+        case .templates: L10n.text("订阅模板")
         case .credentials: L10n.text("凭据")
         case .jobs: L10n.text("任务")
         case .audit: L10n.text("审计")
@@ -21,6 +22,7 @@ private enum MainSection: String, CaseIterable, Identifiable {
         case .dns: L10n.text("DNS 记录")
         case .nodes: L10n.text("节点")
         case .users: L10n.text("用户")
+        case .templates: L10n.text("订阅模板")
         case .credentials: L10n.text("凭据")
         case .jobs: L10n.text("任务")
         case .audit: L10n.text("审计")
@@ -32,6 +34,7 @@ private enum MainSection: String, CaseIterable, Identifiable {
         case .dns: "dns.page"
         case .nodes: "nodes.title"
         case .users: "users.title"
+        case .templates: "templates.page"
         case .credentials: "credentials.page"
         case .jobs: "jobs.title"
         case .audit: "audit.title"
@@ -43,6 +46,7 @@ private enum MainSection: String, CaseIterable, Identifiable {
         case .dns: "network"
         case .nodes: "server.rack"
         case .users: "person.2"
+        case .templates: "doc.text"
         case .credentials: "key.horizontal"
         case .jobs: "list.bullet.rectangle"
         case .audit: "clock.arrow.circlepath"
@@ -54,6 +58,7 @@ private enum MainSection: String, CaseIterable, Identifiable {
         case .dns: .cyan
         case .nodes: .indigo
         case .users: .green
+        case .templates: .mint
         case .credentials: .orange
         case .jobs: .purple
         case .audit: .teal
@@ -83,6 +88,8 @@ struct ContentView: View {
             L10n.text("管理 SSH 连接、Hysteria 配置和部署状态。")
         case .users:
             L10n.text("管理启停、到期、流量额度和节点分配。")
+        case .templates:
+            L10n.text("管理全局订阅模板、平台覆盖、草稿与发布版本。")
         case .credentials:
             L10n.text("集中管理凭据、引用、到期时间和更新结果。")
         case .jobs:
@@ -179,6 +186,7 @@ struct ContentView: View {
                 selectedSection = type == "user" ? "users" : type == "job" ? "jobs" : "nodes"
             }
         }
+        case .templates: SubscriptionTemplatesView(store: store)
         case .audit: AuditView(store: store)
         }
     }

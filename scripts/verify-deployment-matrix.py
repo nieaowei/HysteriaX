@@ -658,7 +658,7 @@ def main():
                         subscription_token = subscription["token"]
                         status, subscription_yaml = request(
                             base,
-                            f"/sub/{subscription_token}/clash.yaml",
+                            f"/sub/{subscription_token}?format=mihomo&platform=linux",
                             method="GET",
                         )
                         if status != 200 or subscription_yaml.count(b"type: hysteria2") != 2:
@@ -672,7 +672,7 @@ def main():
                             return cert_path,key_path
                         shared_files = save_material(shared_material,"shared-generation-1")
                         user_one_sub = expect(f"/api/v1/users/{user_one}/subscription","POST",{"expected_revision":expect(f"/api/v1/users/{user_one}")["revision"]})["token"]
-                        status,one_yaml = request(base,f"/sub/{user_one_sub}/clash.yaml",method="GET")
+                        status,one_yaml = request(base,f"/sub/{user_one_sub}?format=mihomo&platform=linux",method="GET")
                         one_proxy = yaml.safe_load(one_yaml)["proxies"][0]
                         if one_proxy["certificate"]==shared_material[0] or one_proxy["private-key"]==shared_material[1]:raise RuntimeError("different matrix users share client material")
                         subscription_path = temp / "matrix-shared-subscription.yaml"
@@ -745,7 +745,7 @@ def main():
                             raise RuntimeError("over-quota shared user was accepted on node two")
                         sub_status, _ = request(
                             base,
-                            f"/sub/{subscription_token}/clash.yaml",
+                            f"/sub/{subscription_token}?format=mihomo&platform=linux",
                             method="GET",
                         )
                         if sub_status != 403:
@@ -770,7 +770,7 @@ def main():
                         expect(f"/api/v1/users/{shared_user}","PATCH",{"expected_revision":current_user["revision"],"quota_bytes":None})
                         revisions={u:expect(f"/api/v1/users/{u}")["revision"] for u in (user_one,user_two,shared_user)}
                         def shared_proxies():
-                            status,body=request(base,f"/sub/{subscription_token}/clash.yaml",method="GET")
+                            status,body=request(base,f"/sub/{subscription_token}?format=mihomo&platform=linux",method="GET")
                             if status!=200:raise RuntimeError("matrix managed subscription unavailable")
                             return yaml.safe_load(body)["proxies"]
                         def wait_rotation(receipt):

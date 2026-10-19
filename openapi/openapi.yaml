@@ -14,6 +14,659 @@ servers:
 security:
   - BearerAuth: []
 paths:
+  /subscription-templates/{id}/refactor:
+    parameters:
+    - name: id
+      in: path
+      required: true
+      schema:
+        type: string
+    post:
+      operationId: refactorSubscriptionTemplate
+      summary: Rename a group or rule set and references in all local draft layers without
+        persisting
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - expected_revision
+              - document
+              - kind
+              - old_name
+              - new_name
+              properties:
+                expected_revision:
+                  type: integer
+                document:
+                  type: object
+                kind:
+                  type: string
+                  enum:
+                  - group
+                  - rule_set
+                old_name:
+                  type: string
+                new_name:
+                  type: string
+      responses:
+        '200':
+          description: Transformed local document and diagnostics; save separately
+          content:
+            application/json:
+              schema:
+                type: object
+        '409':
+          $ref: '#/components/responses/Error'
+  /subscription-templates/{id}/versions/{version}:
+    parameters:
+    - name: id
+      in: path
+      required: true
+      schema:
+        type: string
+    - name: version
+      in: path
+      required: true
+      schema:
+        type: string
+    get:
+      operationId: getSubscriptionTemplateVersion
+      summary: Read an immutable historical document for comparison
+      responses:
+        '200':
+          description: Version document and current metadata; no-store
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubscriptionTemplateDraft'
+        '404':
+          $ref: '#/components/responses/Error'
+  /subscription-templates:
+    get:
+      operationId: listSubscriptionTemplates
+      summary: List global subscription template metadata
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubscriptionTemplatesPage'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
+      parameters:
+      - name: page
+        in: query
+        required: false
+        schema:
+          type: integer
+      - name: page_size
+        in: query
+        required: false
+        schema:
+          type: integer
+      - name: format
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: archived
+        in: query
+        required: false
+        schema:
+          type: boolean
+      x-swift-include-optional-query: true
+    post:
+      operationId: createSubscriptionTemplate
+      summary: Create a fixed-format encrypted draft
+      responses:
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
+        '201':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubscriptionTemplate'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                expected_revision:
+                  type: integer
+                name:
+                  type: string
+                format:
+                  type: string
+                document:
+                  type: object
+                  additionalProperties: true
+              required:
+              - expected_revision
+              - name
+              - format
+  /subscription-templates/fields:
+    get:
+      operationId: subscriptionTemplateFields
+      summary: Versioned native field schema and baseline platform capabilities
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
+      parameters:
+      - name: format
+        in: query
+        required: true
+        schema:
+          type: string
+      x-swift-include-optional-query: true
+  /subscription-templates/source:
+    post:
+      operationId: subscriptionTemplateSource
+      summary: Parse or serialize exactly one native configuration layer
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                format:
+                  type: string
+                source:
+                  type: string
+                config:
+                  type: object
+                  additionalProperties: true
+              required:
+              - format
+  /subscription-templates/import:
+    post:
+      operationId: importSubscriptionTemplate
+      summary: Analyze node removal and reference mapping before draft acceptance
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                format:
+                  type: string
+                source:
+                  type: string
+                package:
+                  type: object
+                  additionalProperties: true
+              required:
+              - format
+  /subscription-templates/{id}:
+    parameters:
+    - name: id
+      in: path
+      required: true
+      schema:
+        type: string
+    get:
+      operationId: getSubscriptionTemplate
+      summary: Read metadata
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubscriptionTemplate'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
+    patch:
+      operationId: updateSubscriptionTemplate
+      summary: Rename, set default, or archive with same-format replacement
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubscriptionTemplate'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                expected_revision:
+                  type: integer
+                name:
+                  type: string
+                is_default:
+                  type: boolean
+                archived:
+                  type: boolean
+                replacement_id:
+                  type: string
+                replacement_revision:
+                  type: integer
+              required:
+              - expected_revision
+  /subscription-templates/{id}/draft:
+    parameters:
+    - name: id
+      in: path
+      required: true
+      schema:
+        type: string
+    get:
+      operationId: getSubscriptionTemplateDraft
+      summary: Read lossless structured draft
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubscriptionTemplateDraft'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
+    put:
+      operationId: saveSubscriptionTemplateDraft
+      summary: Save a syntax-valid draft; incomplete semantics are allowed
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubscriptionTemplate'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                expected_revision:
+                  type: integer
+                document:
+                  type: object
+                  additionalProperties: true
+              required:
+              - expected_revision
+              - document
+  /subscription-templates/{id}/validate:
+    parameters:
+    - name: id
+      in: path
+      required: true
+      schema:
+        type: string
+    post:
+      operationId: validateSubscriptionTemplate
+      summary: Check structure, platform applicability and references on all five targets
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                document:
+                  type: object
+                  additionalProperties: true
+              required: []
+  /subscription-templates/{id}/preview:
+    parameters:
+    - name: id
+      in: path
+      required: true
+      schema:
+        type: string
+    post:
+      operationId: previewSubscriptionTemplate
+      summary: Render authorized eligible nodes; no-store and redacted by default
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                user_id:
+                  type: string
+                platform:
+                  type: string
+                kernel_version:
+                  type: string
+                reveal_secrets:
+                  type: boolean
+                document:
+                  type: object
+                  additionalProperties: true
+              required:
+              - user_id
+              - platform
+  /subscription-templates/{id}/publish:
+    parameters:
+    - name: id
+      in: path
+      required: true
+      schema:
+        type: string
+    post:
+      operationId: publishSubscriptionTemplate
+      summary: Atomically publish a validated immutable version
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubscriptionTemplate'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                expected_revision:
+                  type: integer
+              required:
+              - expected_revision
+  /subscription-templates/{id}/rollback:
+    parameters:
+    - name: id
+      in: path
+      required: true
+      schema:
+        type: string
+    post:
+      operationId: rollbackSubscriptionTemplate
+      summary: Revalidate and republish historical content as a new version
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubscriptionTemplate'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                expected_revision:
+                  type: integer
+                version:
+                  type: integer
+              required:
+              - expected_revision
+              - version
+  /subscription-templates/{id}/versions:
+    parameters:
+    - name: id
+      in: path
+      required: true
+      schema:
+        type: string
+    get:
+      operationId: listSubscriptionTemplateVersions
+      summary: Paginate immutable version metadata
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
+      parameters:
+      - name: page
+        in: query
+        required: false
+        schema:
+          type: integer
+      - name: page_size
+        in: query
+        required: false
+        schema:
+          type: integer
+      x-swift-include-optional-query: true
+  /subscription-templates/{id}/export:
+    parameters:
+    - name: id
+      in: path
+      required: true
+      schema:
+        type: string
+    get:
+      operationId: exportSubscriptionTemplate
+      summary: Export a complete roundtrippable template package
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
   /credentials/ca-identities:
     post:
       operationId: createCAIdentity
@@ -1168,14 +1821,18 @@ paths:
         Known incompatible client versions filter advanced nodes. Unknown sing-box versions retain all representable nodes and required advanced fields.
         Known sing-box kernels below 1.14.0 receive 422, including empty subscriptions.
         All incompatible nodes produce 422; otherwise an unassigned user receives an empty subscription.
-        Explicit platform overrides OS detection from User-Agent for listener/TUN filtering.
+        Explicit platform overrides OS detection. Published platform overlays merge without silent filtering. URI/Base64 reject template parameters. Explicit format must match the selected template. Draft saves do not change subscriptions.
       parameters:
+        - name: template
+          in: query
+          description: Active published global template ID; always uses its latest published version.
+          schema: { type: string }
         - name: format
           in: query
           schema: { type: string, enum: [auto, mihomo, singbox, base64, uri], default: auto }
         - name: platform
           in: query
-          description: Target runtime OS; auto uses User-Agent, unknown OS retains the original template. openwrt aliases linux. Invalid or repeated values return 400.
+          description: Target runtime OS; auto uses User-Agent; unknown OS shows the explicit platform selection page. openwrt aliases linux. Invalid or repeated values return 400.
           schema: { type: string, enum: [auto, linux, openwrt, windows, macos, android, ios], default: auto }
         - name: User-Agent
           in: header
@@ -1206,42 +1863,6 @@ paths:
         '403': { $ref: '#/components/responses/Error' }
         '404': { $ref: '#/components/responses/Error' }
         '422': { $ref: '#/components/responses/Error' }
-  /sub/{token}/clash.yaml:
-    parameters:
-      - name: token
-        in: path
-        required: true
-        schema: { type: string }
-    get:
-      summary: Download Mihomo subscription
-      operationId: downloadSubscription
-      x-swift-include-optional-query: true
-      description: Preserves all node fields regardless of kernel version. Platform filtering applies to listeners.
-      parameters:
-        - name: platform
-          in: query
-          description: Target runtime OS; auto uses User-Agent, unknown OS retains the original template. openwrt aliases linux. Invalid or repeated values return 400.
-          schema: { type: string, enum: [auto, linux, openwrt, windows, macos, android, ios], default: auto }
-        - name: User-Agent
-          in: header
-          description: OS tokens used for platform detection when platform is omitted or auto.
-          schema: { type: string }
-      servers:
-        - url: https://{domain}
-          variables:
-            domain: { default: localhost }
-      security: []
-      responses:
-        '200':
-          description: Mihomo YAML configuration
-          headers:
-            Cache-Control: { schema: { type: string, const: 'private, no-store' } }
-            Vary: { schema: { type: string, const: User-Agent } }
-          content:
-            application/yaml: { schema: { type: string } }
-        '400': { $ref: '#/components/responses/Error' }
-        '403': { $ref: '#/components/responses/Error' }
-        '404': { $ref: '#/components/responses/Error' }
   /hy2/auth/{node_id}/{node_token}:
     parameters:
       - name: node_id
@@ -1706,6 +2327,91 @@ components:
         application/json:
           schema: { $ref: '#/components/schemas/APIErrorResponse' }
   schemas:
+    SubscriptionTemplate:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        format:
+          type: string
+          enum:
+          - mihomo
+          - singbox
+        revision:
+          type: integer
+        archived:
+          type: boolean
+        is_default:
+          type: boolean
+        published_version:
+          type:
+          - integer
+          - 'null'
+        updated_at:
+          type: string
+      required:
+      - id
+      - name
+      - format
+      - revision
+      - archived
+      - is_default
+      - published_version
+      - updated_at
+    SubscriptionTemplatesPage:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/SubscriptionTemplate'
+        page:
+          type: integer
+        page_size:
+          type: integer
+        total:
+          type: integer
+      required:
+      - items
+      - page
+      - page_size
+      - total
+    SubscriptionTemplateDraft:
+      type: object
+      properties:
+        template:
+          $ref: '#/components/schemas/SubscriptionTemplate'
+        document:
+          type: object
+          allOf:
+          - $ref: '#/components/schemas/SubscriptionTemplateDocument'
+      required:
+      - template
+      - document
+    SubscriptionTemplateDocument:
+      type: object
+      properties:
+        schema_version:
+          type: integer
+          const: 1
+        common:
+          type: object
+          additionalProperties: true
+        platforms:
+          type: object
+          additionalProperties: true
+        injections:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+      required:
+      - schema_version
+      - common
+      - platforms
+      - injections
     ClientSummary:
       type: object
       required: [node_count, user_total, user_enabled, user_expired, user_expiring, user_depleted, notification_nodes, notification_credentials]
@@ -2453,7 +3159,6 @@ components:
         revision: { type: integer }
         token: { type: string, description: One-time subscription token returned on rotation. }
         url: { type: string }
-        auto_url: { type: string, description: Automatic subscription URL; optional for compatibility with older servers. }
         note: { type: string }
     RotatedCredential:
       type: object
@@ -2516,7 +3221,6 @@ components:
         id: { type: string, format: uuid }
         token: { type: string, description: Current subscription token. }
         url: { type: string }
-        auto_url: { type: string, description: Automatic subscription URL; optional for compatibility with older servers. }
         created_at: { type: string, format: date-time }
     SubscriptionStatus:
       type: object

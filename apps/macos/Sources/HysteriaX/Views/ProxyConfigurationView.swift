@@ -1673,6 +1673,7 @@ private enum NodeConfigurationYAML {
             let data = try? JSONEncoder().encode(string)
             return data.flatMap { String(data: $0, encoding: .utf8) } ?? "\"\""
         case .integer(let integer): return String(integer)
+        case .unsignedInteger(let integer): return String(integer)
         case .bool(let boolean): return boolean ? "true" : "false"
         case .decimal(let decimal): return String(decimal)
         case .array: return "[]"

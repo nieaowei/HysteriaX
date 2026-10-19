@@ -181,7 +181,7 @@ def main():
             assert expect(f"/api/v1/nodes/{node_id}")["mtls_state"] == "needs_configuration"
             assert sql("SELECT json_build_object('users',(SELECT count(*) FROM users),'groups',(SELECT count(*) FROM authorization_groups),'assignments',(SELECT count(*) FROM node_assignments),'password',(SELECT credential_hash FROM node_assignments LIMIT 1),'revision',(SELECT revision FROM users LIMIT 1))") == before
             assert live.raw_request(base, f"/api/v1/users/{user}/assignments", token)[0] == 404
-            assert not yaml.safe_load(live.raw_request(base, f"/sub/{subscription}/clash.yaml")[1]).get("proxies")
+            assert not yaml.safe_load(live.raw_request(base, f"/sub/{subscription}?format=mihomo&platform=linux")[1]).get("proxies")
             traffic()
             assert sql("SELECT count(*) FROM kick_requests WHERE state<>'completed'") != "0"
             print("Actual v31 deployment upgraded with corrupt discarded material; business state preserved and offline legacy session pending", flush=True)
@@ -203,7 +203,7 @@ def main():
                     break
                 time.sleep(0.5)
             assert expect(f"/api/v1/nodes/{node_id}")["mtls_state"] == "ready"
-            exported = yaml.safe_load(live.raw_request(base, f"/sub/{subscription}/clash.yaml")[1])["proxies"][0]
+            exported = yaml.safe_load(live.raw_request(base, f"/sub/{subscription}?format=mihomo&platform=linux")[1])["proxies"][0]
             assert exported["certificate"] != old_cert and exported["private-key"] != old_key
             start_client(exported["certificate"], exported["private-key"], password_before)
             traffic()
@@ -223,7 +223,7 @@ def main():
             live.run(["docker", "exec", node, "systemctl", "restart", "hysteriax.service"])
             start_client(old_cert, old_key, password_before)
             traffic()
-            assert yaml.safe_load(live.raw_request(base, f"/sub/{subscription}/clash.yaml")[1])["proxies"][0]["certificate"] == old_cert
+            assert yaml.safe_load(live.raw_request(base, f"/sub/{subscription}?format=mihomo&platform=linux")[1])["proxies"][0]["certificate"] == old_cert
             print("Matching old image + database + remote snapshot rollback restored legacy subscription and real traffic", flush=True)
         finally:
             if client is not None:

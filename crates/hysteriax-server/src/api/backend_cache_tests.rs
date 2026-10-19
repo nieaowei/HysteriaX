@@ -3,6 +3,9 @@ use super::*;
 #[tokio::test]
 async fn subscription_cache_checks_quota_and_revocation_on_every_request() {
     let (state, base, task) = server().await;
+    subscriptions::templates::initialize(&state.pool, &state.secrets)
+        .await
+        .unwrap();
     let config = state.secrets.encrypt("{}").unwrap();
     sqlx::query("INSERT INTO nodes(id,name,ssh_host,ssh_port,ssh_username,ssh_auth_type,ssh_secret_enc,public_host,public_port,listen_addr,node_token_hash,node_token_enc,traffic_stats_secret_enc,desired_config_enc,deployed_config_enc,deployed_revision,state,created_at,updated_at) VALUES('node','Node','localhost',22,'root','password','unused','cached.example.test',443,':443','node-hash','unused','unused',$1,$1,1,'deployed',now(),now())")
         .bind(config).execute(&state.pool).await.unwrap();
@@ -11,7 +14,7 @@ async fn subscription_cache_checks_quota_and_revocation_on_every_request() {
     sqlx::query("INSERT INTO subscription_credentials(id,user_id,token_hash,token_enc,created_at) VALUES('subscription','user',$1,$2,now())")
         .bind(token_digest("subscription-token")).bind(state.secrets.encrypt("subscription-token").unwrap()).execute(&state.pool).await.unwrap();
     let client = reqwest::Client::new();
-    let url = format!("{base}/sub/subscription-token/clash.yaml");
+    let url = format!("{base}/sub/subscription-token?template=default-mihomo&platform=linux");
     for _ in 0..2 {
         let response = client.get(&url).send().await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);

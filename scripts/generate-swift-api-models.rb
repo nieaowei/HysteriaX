@@ -51,6 +51,7 @@ models = {
   "Revision" => "RevisionRequest",
 }
 response_models = %w[
+  SubscriptionTemplate SubscriptionTemplatesPage SubscriptionTemplateDraft
   ManagedUserIdentity ManagedIdentityVersion ManagedCAPolicy CAIdentityReceipt CAPolicyReceipt CAIdentityState ManagedUserReissueReceipt ManagedIdentityReceipt CARotationState CARotationStatus CARotationNode CATrustCleanup CATrustCleanupNode
   AuthorizationGroupReference AuthorizationGroupSource AuthorizationGroupSummary AuthorizationPair AuthorizationManagedIdentity AuthorizationIdentityResult
   AuthorizationChangePreview AuthorizationCreatedCredential AuthorizationGroupMutationResponse
@@ -70,7 +71,7 @@ response_models = %w[
   ClientSummary AdminTokenSummary AdminTokenReceipt ServerMonitoring
   OverviewIssue OverviewNode OverviewNodesPage OverviewResponse OverviewBucket OverviewHistory
 ]
-identifiable_models = %w[AuthorizationGroupSummary DNSConnection DNSZone DNSRecord CredentialSummary CredentialDetail CredentialBatch NodeSummary NodeDetail UserSummary JobSummary AuditSummary NodeResource AdminTokenSummary]
+identifiable_models = %w[SubscriptionTemplate AuthorizationGroupSummary DNSConnection DNSZone DNSRecord CredentialSummary CredentialDetail CredentialBatch NodeSummary NodeDetail UserSummary JobSummary AuditSummary NodeResource AdminTokenSummary]
 
 def resolve_schema(schema, schemas, stack = [])
   if schema.key?("$ref")

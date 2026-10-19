@@ -1,0 +1,3817 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "default": {
+    "allow-lan": false,
+    "authentication": [],
+    "bind-address": "*",
+    "dns": {
+      "default-nameserver": [
+        "114.114.114.114",
+        "223.5.5.5",
+        "8.8.8.8",
+        "1.0.0.1"
+      ],
+      "enable": false,
+      "enhanced-mode": "redir-host",
+      "fake-ip-filter": [
+        "dns.msftnsci.com",
+        "www.msftnsci.com",
+        "www.msftconnecttest.com"
+      ],
+      "fake-ip-filter-mode": "blacklist",
+      "fake-ip-range": "198.18.0.1/16",
+      "fake-ip-ttl": 1,
+      "fallback-filter": {
+        "geoip": true,
+        "geoip-code": "CN",
+        "geosite": [],
+        "ipcidr": []
+      },
+      "ipv6": false,
+      "ipv6-timeout": 100,
+      "nameserver": [
+        "https://doh.pub/dns-query",
+        "tls://223.5.5.5:853"
+      ],
+      "use-hosts": true,
+      "use-system-hosts": true
+    },
+    "etag-support": true,
+    "experimental": {
+      "quic-go-disable-ecn": true
+    },
+    "external-controller-cors": {
+      "allow-origins": [
+        "*"
+      ],
+      "allow-private-network": true
+    },
+    "external-ui-url": "https://github.com/MetaCubeX/metacubexd/archive/refs/heads/gh-pages.zip",
+    "geo-auto-update": false,
+    "geo-update-interval": 24,
+    "geodata-loader": "memconservative",
+    "geox-url": {
+      "asn": "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/GeoLite2-ASN.mmdb",
+      "geoip": "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geoip.dat",
+      "geosite": "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geosite.dat",
+      "mmdb": "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geoip.metadb"
+    },
+    "hosts": {},
+    "iptables": {
+      "bypass": [],
+      "dns-redirect": true,
+      "enable": false,
+      "inbound-interface": "lo"
+    },
+    "ipv6": true,
+    "lan-allowed-ips": [
+      "0.0.0.0/0",
+      "::/0"
+    ],
+    "log-level": "info",
+    "mode": "rule",
+    "ntp": {
+      "enable": false,
+      "interval": 30,
+      "port": 123,
+      "server": "time.apple.com",
+      "write-to-system": false
+    },
+    "profile": {
+      "store-selected": true
+    },
+    "proxies": [],
+    "proxy-groups": [],
+    "rules": [],
+    "sniffer": {
+      "enable": false,
+      "force-dns-mapping": true,
+      "force-domain": [],
+      "override-destination": true,
+      "parse-pure-ip": true,
+      "port-whitelist": [],
+      "skip-domain": [],
+      "sniff": {}
+    },
+    "tcp-concurrent": false,
+    "tuic-server": {
+      "alpn": [
+        "h3"
+      ],
+      "authentication-timeout": 1000,
+      "certificate": "",
+      "congestion-controller": "",
+      "enable": false,
+      "listen": "",
+      "max-idle-time": 15000,
+      "max-udp-relay-packet-size": 1500,
+      "private-key": ""
+    },
+    "tun": {
+      "auto-detect-interface": true,
+      "auto-route": true,
+      "device": "",
+      "dns-hijack": [
+        "0.0.0.0:53"
+      ],
+      "enable": false,
+      "inet6-address": [
+        "fdfe:dcba:9876::1/126"
+      ],
+      "recvmsgx": true,
+      "sendmsgx": false,
+      "stack": "gVisor"
+    },
+    "unified-delay": false
+  },
+  "properties": {
+    "allow-lan": {
+      "default": false,
+      "type": "boolean",
+      "x-default-behavior": "literal",
+      "x-default-source": "Mihomo v1.19.31 DefaultRawConfig",
+      "x-validation-version": "1.19.31"
+    },
+    "authentication": {
+      "default": [],
+      "items": {
+        "type": "string",
+        "x-default-behavior": "native_when_unset",
+        "x-validation-version": "1.19.31"
+      },
+      "type": "array",
+      "x-default-behavior": "literal",
+      "x-default-source": "Mihomo v1.19.31 DefaultRawConfig",
+      "x-validation-version": "1.19.31"
+    },
+    "bind-address": {
+      "default": "*",
+      "type": "string",
+      "x-default-behavior": "literal",
+      "x-default-source": "Mihomo v1.19.31 DefaultRawConfig",
+      "x-validation-version": "1.19.31"
+    },
+    "clash-for-android": {
+      "additionalProperties": false,
+      "properties": {
+        "append-system-dns": {
+          "type": "boolean",
+          "x-default-behavior": "native_when_unset",
+          "x-validation-version": "1.19.31"
+        },
+        "ui-subtitle-pattern": {
+          "type": "string",
+          "x-default-behavior": "native_when_unset",
+          "x-validation-version": "1.19.31"
+        }
+      },
+      "type": "object",
+      "x-default-behavior": "native_when_unset",
+      "x-validation-version": "1.19.31"
+    },
+    "disable-keep-alive": {
+      "type": "boolean",
+      "x-default-behavior": "native_when_unset",
+      "x-validation-version": "1.19.31"
+    },
+    "dns": {
+      "additionalProperties": false,
+      "default": {
+        "default-nameserver": [
+          "114.114.114.114",
+          "223.5.5.5",
+          "8.8.8.8",
+          "1.0.0.1"
+        ],
+        "enable": false,
+        "enhanced-mode": "redir-host",
+        "fake-ip-filter": [
+          "dns.msftnsci.com",
+          "www.msftnsci.com",
+          "www.msftconnecttest.com"
+        ],
+        "fake-ip-filter-mode": "blacklist",
+        "fake-ip-range": "198.18.0.1/16",
+        "fake-ip-ttl": 1,
+        "fallback-filter": {
+          "geoip": true,
+          "geoip-code": "CN",
+          "geosite": [],
+          "ipcidr": []
+        },
+        "ipv6": false,
+        "ipv6-timeout": 100,
+        "nameserver": [
+          "https://doh.pub/dns-query",
+          "tls://223.5.5.5:853"
+        ],
+        "use-hosts": true,
+        "use-system-hosts": true
+      },
+      "properties": {
+        "cache-algorithm": {
+          "type": "string",
+          "x-default-behavior": "native_when_unset",
+          "x-validation-version": "1.19.31"
+        },
+        "cache-max-size": {
+          "type": "integer",
+          "x-default-behavior": "native_when_unset",
+          "x-validation-version": "1.19.31"
+        },
+        "default-nameserver": {
+          "default": [
+            "114.114.114.114",
+            "223.5.5.5",
+            "8.8.8.8",
+            "1.0.0.1"
+          ],
+          "items": {
+            "type": "string",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "type": "array",
+          "x-default-behavior": "literal",
+          "x-default-source": "Mihomo v1.19.31 DefaultRawConfig",
+          "x-validation-version": "1.19.31"
+        },
+        "direct-nameserver": {
+          "items": {
+            "type": "string",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "type": "array",
+          "x-default-behavior": "native_when_unset",
+          "x-validation-version": "1.19.31"
+        },
+        "direct-nameserver-follow-policy": {
+          "type": "boolean",
+          "x-default-behavior": "native_when_unset",
+          "x-validation-version": "1.19.31"
+        },
+        "enable": {
+          "default": false,
+          "type": "boolean",
+          "x-default-behavior": "literal",
+          "x-default-source": "Mihomo v1.19.31 DefaultRawConfig",
+          "x-validation-version": "1.19.31"
+        },
+        "enhanced-mode": {
+          "default": "redir-host",
+          "pattern": "^(?:[fF][aA][kK][eE]-[iI][pP]|[nN][oO][rR][mM][aA][lL]|[rR][eE][dD][iI][rR]-[hH][oO][sS][tT])$",
+          "type": "string",
+          "x-default-behavior": "literal",
+          "x-default-source": "Mihomo v1.19.31 DefaultRawConfig",
+          "x-enum-choices": [
+            "fake-ip",
+            "normal",
+            "redir-host"
+          ],
+          "x-validation-version": "1.19.31"
+        },
+        "fake-ip-filter": {
+          "default": [
+            "dns.msftnsci.com",
+            "www.msftnsci.com",
+            "www.msftconnecttest.com"
+          ],
+          "items": {
+            "type": "string",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "type": "array",
+          "x-default-behavior": "literal",
+          "x-default-source": "Mihomo v1.19.31 DefaultRawConfig",
+          "x-validation-version": "1.19.31"
+        },
+        "fake-ip-filter-mode": {
+          "default": "blacklist",
+          "pattern": "^(?:[bB][lL][aA][cC][kK][lL][iI][sS][tT]|[rR][uU][lL][eE]|[wW][hH][iI][tT][eE][lL][iI][sS][tT])$",
+          "type": "string",
+          "x-default-behavior": "literal",
+          "x-default-source": "Mihomo v1.19.31 DefaultRawConfig",
+          "x-enum-choices": [
+            "blacklist",
+            "rule",
+            "whitelist"
+          ],
+          "x-validation-version": "1.19.31"
+        },
+        "fake-ip-range": {
+          "default": "198.18.0.1/16",
+          "type": "string",
+          "x-default-behavior": "literal",
+          "x-default-source": "Mihomo v1.19.31 DefaultRawConfig",
+          "x-validation-version": "1.19.31"
+        },
+        "fake-ip-range6": {
+          "type": "string",
+          "x-default-behavior": "native_when_unset",
+          "x-validation-version": "1.19.31"
+        },
+        "fake-ip-ttl": {
+          "default": 1,
+          "type": "integer",
+          "x-default-behavior": "literal",
+          "x-default-source": "Mihomo v1.19.31 DefaultRawConfig",
+          "x-validation-version": "1.19.31"
+        },
+        "fallback": {
+          "items": {
+            "type": "string",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "type": "array",
+          "x-default-behavior": "native_when_unset",
+          "x-validation-version": "1.19.31"
+        },
+        "fallback-filter": {
+          "additionalProperties": false,
+          "default": {
+            "geoip": true,
+            "geoip-code": "CN",
+            "geosite": [],
+            "ipcidr": []
+          },
+          "properties": {
+            "domain": {
+              "items": {
+                "type": "string",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "type": "array",
+              "x-default-behavior": "native_when_unset",
+              "x-validation-version": "1.19.31"
+            },
+            "geoip": {
+              "default": true,
+              "type": "boolean",
+              "x-default-behavior": "literal",
+              "x-default-source": "Mihomo v1.19.31 DefaultRawConfig",
+              "x-validation-version": "1.19.31"
+            },
+            "geoip-code": {
+              "default": "CN",
+              "type": "string",
+              "x-default-behavior": "literal",
+              "x-default-source": "Mihomo v1.19.31 DefaultRawConfig",
+              "x-validation-version": "1.19.31"
+            },
+            "geosite": {
+              "default": [],
+              "items": {
+                "type": "string",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "type": "array",
+              "x-default-behavior": "literal",
+              "x-default-source": "Mihomo v1.19.31 DefaultRawConfig",
+              "x-validation-version": "1.19.31"
+            },
+            "ipcidr": {
+              "default": [],
+              "items": {
+                "type": "string",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "type": "array",
+              "x-default-behavior": "literal",
+              "x-default-source": "Mihomo v1.19.31 DefaultRawConfig",
+              "x-validation-version": "1.19.31"
+            }
+          },
+          "type": "object",
+          "x-default-behavior": "literal",
+          "x-default-source": "Mihomo v1.19.31 DefaultRawConfig",
+          "x-validation-version": "1.19.31"
+        },
+        "fallback-lazy-query": {
+          "type": "boolean",
+          "x-default-behavior": "native_when_unset",
+          "x-validation-version": "1.19.31"
+        },
+        "ipv6": {
+          "default": false,
+          "type": "boolean",
+          "x-default-behavior": "literal",
+          "x-default-source": "Mihomo v1.19.31 DefaultRawConfig",
+          "x-validation-version": "1.19.31"
+        },
+        "ipv6-timeout": {
+          "default": 100,
+          "minimum": 0,
+          "type": "integer",
+          "x-default-behavior": "literal",
+          "x-default-source": "Mihomo v1.19.31 DefaultRawConfig",
+          "x-validation-version": "1.19.31"
+        },
+        "listen": {
+          "type": "string",
+          "x-default-behavior": "native_when_unset",
+          "x-validation-version": "1.19.31"
+        },
+        "listen-routing-mark": {
+          "type": "integer",
+          "x-default-behavior": "native_when_unset",
+          "x-validation-version": "1.19.31"
+        },
+        "nameserver": {
+          "default": [
+            "https://doh.pub/dns-query",
+            "tls://223.5.5.5:853"
+          ],
+          "items": {
+            "type": "string",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "type": "array",
+          "x-default-behavior": "literal",
+          "x-default-source": "Mihomo v1.19.31 DefaultRawConfig",
+          "x-validation-version": "1.19.31"
+        },
+        "nameserver-policy": {
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "type": "string",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              {
+                "items": {
+                  "type": "string",
+                  "x-default-behavior": "native_when_unset",
+                  "x-validation-version": "1.19.31"
+                },
+                "type": "array",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              }
+            ],
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "type": "object",
+          "x-default-behavior": "native_when_unset",
+          "x-validation-version": "1.19.31"
+        },
+        "prefer-h3": {
+          "type": "boolean",
+          "x-default-behavior": "native_when_unset",
+          "x-validation-version": "1.19.31"
+        },
+        "proxy-server-nameserver": {
+          "items": {
+            "type": "string",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "type": "array",
+          "x-default-behavior": "native_when_unset",
+          "x-validation-version": "1.19.31"
+        },
+        "proxy-server-nameserver-policy": {
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "type": "string",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              {
+                "items": {
+                  "type": "string",
+                  "x-default-behavior": "native_when_unset",
+                  "x-validation-version": "1.19.31"
+                },
+                "type": "array",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              }
+            ],
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "type": "object",
+          "x-default-behavior": "native_when_unset",
+          "x-validation-version": "1.19.31"
+        },
+        "respect-rules": {
+          "type": "boolean",
+          "x-default-behavior": "native_when_unset",
+          "x-validation-version": "1.19.31"
+        },
+        "use-hosts": {
+          "default": true,
+          "type": "boolean",
+          "x-default-behavior": "literal",
+          "x-default-source": "Mihomo v1.19.31 DefaultRawConfig",
+          "x-validation-version": "1.19.31"
+        },
+        "use-system-hosts": {
+          "default": true,
+          "type": "boolean",
+          "x-default-behavior": "literal",
+          "x-default-source": "Mihomo v1.19.31 DefaultRawConfig",
+          "x-validation-version": "1.19.31"
+        }
+      },
+      "type": "object",
+      "x-default-behavior": "literal",
+      "x-default-source": "Mihomo v1.19.31 DefaultRawConfig",
+      "x-validation-version": "1.19.31"
+    },
+    "etag-support": {
+      "default": true,
+      "type": "boolean",
+      "x-default-behavior": "literal",
+      "x-default-source": "Mihomo v1.19.31 DefaultRawConfig",
+      "x-validation-version": "1.19.31"
+    },
+    "experimental": {
+      "additionalProperties": false,
+      "default": {
+        "quic-go-disable-ecn": true
+      },
+      "properties": {
+        "dialer-ip4p-convert": {
+          "type": "boolean",
+          "x-default-behavior": "native_when_unset",
+          "x-validation-version": "1.19.31"
+        },
+        "fingerprints": {
+          "items": {
+            "type": "string",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "type": "array",
+          "x-default-behavior": "native_when_unset",
+          "x-validation-version": "1.19.31"
+        },
+        "quic-go-disable-ecn": {
+          "default": true,
+          "type": "boolean",
+          "x-default-behavior": "literal",
+          "x-default-source": "Mihomo v1.19.31 DefaultRawConfig",
+          "x-validation-version": "1.19.31"
+        },
+        "quic-go-disable-gso": {
+          "type": "boolean",
+          "x-default-behavior": "native_when_unset",
+          "x-validation-version": "1.19.31"
+        }
+      },
+      "type": "object",
+      "x-default-behavior": "literal",
+      "x-default-source": "Mihomo v1.19.31 DefaultRawConfig",
+      "x-validation-version": "1.19.31"
+    },
+    "external-controller": {
+      "type": "string",
+      "x-default-behavior": "native_when_unset",
+      "x-validation-version": "1.19.31"
+    },
+    "external-controller-cors": {
+      "additionalProperties": false,
+      "default": {
+        "allow-origins": [
+          "*"
+        ],
+        "allow-private-network": true
+      },
+      "properties": {
+        "allow-origins": {
+          "default": [
+            "*"
+          ],
+          "items": {
+            "type": "string",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "type": "array",
+          "x-default-behavior": "literal",
+          "x-default-source": "Mihomo v1.19.31 DefaultRawConfig",
+          "x-validation-version": "1.19.31"
+        },
+        "allow-private-network": {
+          "default": true,
+          "type": "boolean",
+          "x-default-behavior": "literal",
+          "x-default-source": "Mihomo v1.19.31 DefaultRawConfig",
+          "x-validation-version": "1.19.31"
+        }
+      },
+      "type": "object",
+      "x-default-behavior": "literal",
+      "x-default-source": "Mihomo v1.19.31 DefaultRawConfig",
+      "x-validation-version": "1.19.31"
+    },
+    "external-controller-pipe": {
+      "type": "string",
+      "x-default-behavior": "native_when_unset",
+      "x-validation-version": "1.19.31"
+    },
+    "external-controller-routing-mark": {
+      "type": "integer",
+      "x-default-behavior": "native_when_unset",
+      "x-validation-version": "1.19.31"
+    },
+    "external-controller-tls": {
+      "type": "string",
+      "x-default-behavior": "native_when_unset",
+      "x-validation-version": "1.19.31"
+    },
+    "external-controller-unix": {
+      "type": "string",
+      "x-default-behavior": "native_when_unset",
+      "x-validation-version": "1.19.31"
+    },
+    "external-doh-server": {
+      "type": "string",
+      "x-default-behavior": "native_when_unset",
+      "x-validation-version": "1.19.31"
+    },
+    "external-ui": {
+      "type": "string",
+      "x-default-behavior": "native_when_unset",
+      "x-validation-version": "1.19.31"
+    },
+    "external-ui-name": {
+      "type": "string",
+      "x-default-behavior": "native_when_unset",
+      "x-validation-version": "1.19.31"
+    },
+    "external-ui-url": {
+      "default": "https://github.com/MetaCubeX/metacubexd/archive/refs/heads/gh-pages.zip",
+      "type": "string",
+      "x-default-behavior": "literal",
+      "x-default-source": "Mihomo v1.19.31 DefaultRawConfig",
+      "x-validation-version": "1.19.31"
+    },
+    "find-process-mode": {
+      "pattern": "^(?:[aA][lL][wW][aA][yY][sS]|[sS][tT][rR][iI][cC][tT]|[oO][fF][fF])$",
+      "type": "string",
+      "x-default-behavior": "native_when_unset",
+      "x-enum-choices": [
+        "always",
+        "strict",
+        "off"
+      ],
+      "x-validation-version": "1.19.31"
+    },
+    "geo-auto-update": {
+      "default": false,
+      "type": "boolean",
+      "x-default-behavior": "literal",
+      "x-default-source": "Mihomo v1.19.31 DefaultRawConfig",
+      "x-validation-version": "1.19.31"
+    },
+    "geo-update-interval": {
+      "default": 24,
+      "type": "integer",
+      "x-default-behavior": "literal",
+      "x-default-source": "Mihomo v1.19.31 DefaultRawConfig",
+      "x-validation-version": "1.19.31"
+    },
+    "geodata-loader": {
+      "default": "memconservative",
+      "type": "string",
+      "x-default-behavior": "literal",
+      "x-default-source": "Mihomo v1.19.31 DefaultRawConfig",
+      "x-validation-version": "1.19.31"
+    },
+    "geodata-mode": {
+      "type": "boolean",
+      "x-default-behavior": "native_when_unset",
+      "x-validation-version": "1.19.31"
+    },
+    "geosite-matcher": {
+      "type": "string",
+      "x-default-behavior": "native_when_unset",
+      "x-validation-version": "1.19.31"
+    },
+    "geox-url": {
+      "additionalProperties": false,
+      "default": {
+        "asn": "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/GeoLite2-ASN.mmdb",
+        "geoip": "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geoip.dat",
+        "geosite": "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geosite.dat",
+        "mmdb": "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geoip.metadb"
+      },
+      "properties": {
+        "asn": {
+          "default": "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/GeoLite2-ASN.mmdb",
+          "type": "string",
+          "x-default-behavior": "literal",
+          "x-default-source": "Mihomo v1.19.31 DefaultRawConfig",
+          "x-validation-version": "1.19.31"
+        },
+        "geoip": {
+          "default": "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geoip.dat",
+          "type": "string",
+          "x-default-behavior": "literal",
+          "x-default-source": "Mihomo v1.19.31 DefaultRawConfig",
+          "x-validation-version": "1.19.31"
+        },
+        "geosite": {
+          "default": "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geosite.dat",
+          "type": "string",
+          "x-default-behavior": "literal",
+          "x-default-source": "Mihomo v1.19.31 DefaultRawConfig",
+          "x-validation-version": "1.19.31"
+        },
+        "mmdb": {
+          "default": "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geoip.metadb",
+          "type": "string",
+          "x-default-behavior": "literal",
+          "x-default-source": "Mihomo v1.19.31 DefaultRawConfig",
+          "x-validation-version": "1.19.31"
+        }
+      },
+      "type": "object",
+      "x-default-behavior": "literal",
+      "x-default-source": "Mihomo v1.19.31 DefaultRawConfig",
+      "x-validation-version": "1.19.31"
+    },
+    "global-client-fingerprint": {
+      "type": "string",
+      "x-default-behavior": "native_when_unset",
+      "x-validation-version": "1.19.31"
+    },
+    "global-ua": {
+      "type": "string",
+      "x-default-behavior": "native_when_unset",
+      "x-validation-version": "1.19.31"
+    },
+    "hosts": {
+      "additionalProperties": {
+        "anyOf": [
+          {
+            "type": "string",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          {
+            "items": {
+              "type": "string",
+              "x-default-behavior": "native_when_unset",
+              "x-validation-version": "1.19.31"
+            },
+            "type": "array",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          }
+        ],
+        "x-default-behavior": "native_when_unset",
+        "x-validation-version": "1.19.31"
+      },
+      "default": {},
+      "type": "object",
+      "x-default-behavior": "literal",
+      "x-default-source": "Mihomo v1.19.31 DefaultRawConfig",
+      "x-validation-version": "1.19.31"
+    },
+    "inbound-mptcp": {
+      "type": "boolean",
+      "x-default-behavior": "native_when_unset",
+      "x-validation-version": "1.19.31"
+    },
+    "inbound-tfo": {
+      "type": "boolean",
+      "x-default-behavior": "native_when_unset",
+      "x-validation-version": "1.19.31"
+    },
+    "interface-name": {
+      "type": "string",
+      "x-default-behavior": "native_when_unset",
+      "x-validation-version": "1.19.31"
+    },
+    "iptables": {
+      "additionalProperties": false,
+      "default": {
+        "bypass": [],
+        "dns-redirect": true,
+        "enable": false,
+        "inbound-interface": "lo"
+      },
+      "properties": {
+        "bypass": {
+          "default": [],
+          "items": {
+            "type": "string",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "type": "array",
+          "x-default-behavior": "literal",
+          "x-default-source": "Mihomo v1.19.31 DefaultRawConfig",
+          "x-validation-version": "1.19.31"
+        },
+        "dns-redirect": {
+          "default": true,
+          "type": "boolean",
+          "x-default-behavior": "literal",
+          "x-default-source": "Mihomo v1.19.31 DefaultRawConfig",
+          "x-validation-version": "1.19.31"
+        },
+        "enable": {
+          "default": false,
+          "type": "boolean",
+          "x-default-behavior": "literal",
+          "x-default-source": "Mihomo v1.19.31 DefaultRawConfig",
+          "x-validation-version": "1.19.31"
+        },
+        "inbound-interface": {
+          "default": "lo",
+          "type": "string",
+          "x-default-behavior": "literal",
+          "x-default-source": "Mihomo v1.19.31 DefaultRawConfig",
+          "x-validation-version": "1.19.31"
+        }
+      },
+      "type": "object",
+      "x-default-behavior": "literal",
+      "x-default-source": "Mihomo v1.19.31 DefaultRawConfig",
+      "x-validation-version": "1.19.31"
+    },
+    "ipv6": {
+      "default": true,
+      "type": "boolean",
+      "x-default-behavior": "literal",
+      "x-default-source": "Mihomo v1.19.31 DefaultRawConfig",
+      "x-validation-version": "1.19.31"
+    },
+    "keep-alive-idle": {
+      "type": "integer",
+      "x-default-behavior": "native_when_unset",
+      "x-validation-version": "1.19.31"
+    },
+    "keep-alive-interval": {
+      "type": "integer",
+      "x-default-behavior": "native_when_unset",
+      "x-validation-version": "1.19.31"
+    },
+    "lan-allowed-ips": {
+      "default": [
+        "0.0.0.0/0",
+        "::/0"
+      ],
+      "items": {
+        "type": "string",
+        "x-default-behavior": "native_when_unset",
+        "x-validation-version": "1.19.31"
+      },
+      "type": "array",
+      "x-default-behavior": "literal",
+      "x-default-source": "Mihomo v1.19.31 DefaultRawConfig",
+      "x-validation-version": "1.19.31"
+    },
+    "lan-disallowed-ips": {
+      "items": {
+        "type": "string",
+        "x-default-behavior": "native_when_unset",
+        "x-validation-version": "1.19.31"
+      },
+      "type": "array",
+      "x-default-behavior": "native_when_unset",
+      "x-validation-version": "1.19.31"
+    },
+    "listeners": {
+      "items": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "certificate": {
+                "type": "string",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "client-auth-cert": {
+                "type": "string",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "client-auth-type": {
+                "type": "string",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "ech-key": {
+                "type": "string",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "listen": {
+                "type": "string",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "name": {
+                "type": "string",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "port": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "x-default-behavior": "native_when_unset",
+                    "x-validation-version": "1.19.31"
+                  },
+                  {
+                    "maximum": 65535,
+                    "minimum": 0,
+                    "type": "integer",
+                    "x-default-behavior": "native_when_unset",
+                    "x-validation-version": "1.19.31"
+                  }
+                ],
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "private-key": {
+                "type": "string",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "proxy": {
+                "type": "string",
+                "x-default-behavior": "native_when_unset",
+                "x-tag-reference": "outbound",
+                "x-validation-version": "1.19.31"
+              },
+              "reality-config": {
+                "additionalProperties": false,
+                "properties": {
+                  "dest": {
+                    "type": "string",
+                    "x-default-behavior": "native_when_unset",
+                    "x-validation-version": "1.19.31"
+                  },
+                  "limit-fallback-download": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "after-bytes": {
+                        "minimum": 0,
+                        "type": "integer",
+                        "x-default-behavior": "native_when_unset",
+                        "x-validation-version": "1.19.31"
+                      },
+                      "burst-bytes-per-sec": {
+                        "minimum": 0,
+                        "type": "integer",
+                        "x-default-behavior": "native_when_unset",
+                        "x-validation-version": "1.19.31"
+                      },
+                      "bytes-per-sec": {
+                        "minimum": 0,
+                        "type": "integer",
+                        "x-default-behavior": "native_when_unset",
+                        "x-validation-version": "1.19.31"
+                      }
+                    },
+                    "type": "object",
+                    "x-default-behavior": "native_when_unset",
+                    "x-validation-version": "1.19.31"
+                  },
+                  "limit-fallback-upload": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "after-bytes": {
+                        "minimum": 0,
+                        "type": "integer",
+                        "x-default-behavior": "native_when_unset",
+                        "x-validation-version": "1.19.31"
+                      },
+                      "burst-bytes-per-sec": {
+                        "minimum": 0,
+                        "type": "integer",
+                        "x-default-behavior": "native_when_unset",
+                        "x-validation-version": "1.19.31"
+                      },
+                      "bytes-per-sec": {
+                        "minimum": 0,
+                        "type": "integer",
+                        "x-default-behavior": "native_when_unset",
+                        "x-validation-version": "1.19.31"
+                      }
+                    },
+                    "type": "object",
+                    "x-default-behavior": "native_when_unset",
+                    "x-validation-version": "1.19.31"
+                  },
+                  "max-time-difference": {
+                    "type": "integer",
+                    "x-default-behavior": "native_when_unset",
+                    "x-validation-version": "1.19.31"
+                  },
+                  "private-key": {
+                    "type": "string",
+                    "x-default-behavior": "native_when_unset",
+                    "x-validation-version": "1.19.31"
+                  },
+                  "proxy": {
+                    "type": "string",
+                    "x-default-behavior": "native_when_unset",
+                    "x-validation-version": "1.19.31"
+                  },
+                  "server-names": {
+                    "items": {
+                      "type": "string",
+                      "x-default-behavior": "native_when_unset",
+                      "x-validation-version": "1.19.31"
+                    },
+                    "type": "array",
+                    "x-default-behavior": "native_when_unset",
+                    "x-validation-version": "1.19.31"
+                  },
+                  "short-id": {
+                    "items": {
+                      "type": "string",
+                      "x-default-behavior": "native_when_unset",
+                      "x-validation-version": "1.19.31"
+                    },
+                    "type": "array",
+                    "x-default-behavior": "native_when_unset",
+                    "x-validation-version": "1.19.31"
+                  }
+                },
+                "type": "object",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "routing-mark": {
+                "type": "integer",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "rule": {
+                "type": "string",
+                "x-default-behavior": "native_when_unset",
+                "x-tag-reference": "sub_rule",
+                "x-validation-version": "1.19.31"
+              },
+              "type": {
+                "const": "http",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "users": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "password": {
+                      "type": "string",
+                      "x-default-behavior": "native_when_unset",
+                      "x-validation-version": "1.19.31"
+                    },
+                    "username": {
+                      "type": "string",
+                      "x-default-behavior": "native_when_unset",
+                      "x-validation-version": "1.19.31"
+                    }
+                  },
+                  "type": "object",
+                  "x-default-behavior": "native_when_unset",
+                  "x-validation-version": "1.19.31"
+                },
+                "type": "array",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "type": "object",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "certificate": {
+                "type": "string",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "client-auth-cert": {
+                "type": "string",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "client-auth-type": {
+                "type": "string",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "ech-key": {
+                "type": "string",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "listen": {
+                "type": "string",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "name": {
+                "type": "string",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "port": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "x-default-behavior": "native_when_unset",
+                    "x-validation-version": "1.19.31"
+                  },
+                  {
+                    "maximum": 65535,
+                    "minimum": 0,
+                    "type": "integer",
+                    "x-default-behavior": "native_when_unset",
+                    "x-validation-version": "1.19.31"
+                  }
+                ],
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "private-key": {
+                "type": "string",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "proxy": {
+                "type": "string",
+                "x-default-behavior": "native_when_unset",
+                "x-tag-reference": "outbound",
+                "x-validation-version": "1.19.31"
+              },
+              "reality-config": {
+                "additionalProperties": false,
+                "properties": {
+                  "dest": {
+                    "type": "string",
+                    "x-default-behavior": "native_when_unset",
+                    "x-validation-version": "1.19.31"
+                  },
+                  "limit-fallback-download": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "after-bytes": {
+                        "minimum": 0,
+                        "type": "integer",
+                        "x-default-behavior": "native_when_unset",
+                        "x-validation-version": "1.19.31"
+                      },
+                      "burst-bytes-per-sec": {
+                        "minimum": 0,
+                        "type": "integer",
+                        "x-default-behavior": "native_when_unset",
+                        "x-validation-version": "1.19.31"
+                      },
+                      "bytes-per-sec": {
+                        "minimum": 0,
+                        "type": "integer",
+                        "x-default-behavior": "native_when_unset",
+                        "x-validation-version": "1.19.31"
+                      }
+                    },
+                    "type": "object",
+                    "x-default-behavior": "native_when_unset",
+                    "x-validation-version": "1.19.31"
+                  },
+                  "limit-fallback-upload": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "after-bytes": {
+                        "minimum": 0,
+                        "type": "integer",
+                        "x-default-behavior": "native_when_unset",
+                        "x-validation-version": "1.19.31"
+                      },
+                      "burst-bytes-per-sec": {
+                        "minimum": 0,
+                        "type": "integer",
+                        "x-default-behavior": "native_when_unset",
+                        "x-validation-version": "1.19.31"
+                      },
+                      "bytes-per-sec": {
+                        "minimum": 0,
+                        "type": "integer",
+                        "x-default-behavior": "native_when_unset",
+                        "x-validation-version": "1.19.31"
+                      }
+                    },
+                    "type": "object",
+                    "x-default-behavior": "native_when_unset",
+                    "x-validation-version": "1.19.31"
+                  },
+                  "max-time-difference": {
+                    "type": "integer",
+                    "x-default-behavior": "native_when_unset",
+                    "x-validation-version": "1.19.31"
+                  },
+                  "private-key": {
+                    "type": "string",
+                    "x-default-behavior": "native_when_unset",
+                    "x-validation-version": "1.19.31"
+                  },
+                  "proxy": {
+                    "type": "string",
+                    "x-default-behavior": "native_when_unset",
+                    "x-validation-version": "1.19.31"
+                  },
+                  "server-names": {
+                    "items": {
+                      "type": "string",
+                      "x-default-behavior": "native_when_unset",
+                      "x-validation-version": "1.19.31"
+                    },
+                    "type": "array",
+                    "x-default-behavior": "native_when_unset",
+                    "x-validation-version": "1.19.31"
+                  },
+                  "short-id": {
+                    "items": {
+                      "type": "string",
+                      "x-default-behavior": "native_when_unset",
+                      "x-validation-version": "1.19.31"
+                    },
+                    "type": "array",
+                    "x-default-behavior": "native_when_unset",
+                    "x-validation-version": "1.19.31"
+                  }
+                },
+                "type": "object",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "routing-mark": {
+                "type": "integer",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "rule": {
+                "type": "string",
+                "x-default-behavior": "native_when_unset",
+                "x-tag-reference": "sub_rule",
+                "x-validation-version": "1.19.31"
+              },
+              "type": {
+                "const": "mixed",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "udp": {
+                "type": "boolean",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "users": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "password": {
+                      "type": "string",
+                      "x-default-behavior": "native_when_unset",
+                      "x-validation-version": "1.19.31"
+                    },
+                    "username": {
+                      "type": "string",
+                      "x-default-behavior": "native_when_unset",
+                      "x-validation-version": "1.19.31"
+                    }
+                  },
+                  "type": "object",
+                  "x-default-behavior": "native_when_unset",
+                  "x-validation-version": "1.19.31"
+                },
+                "type": "array",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "type": "object",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "listen": {
+                "type": "string",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "name": {
+                "type": "string",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "port": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "x-default-behavior": "native_when_unset",
+                    "x-validation-version": "1.19.31"
+                  },
+                  {
+                    "maximum": 65535,
+                    "minimum": 0,
+                    "type": "integer",
+                    "x-default-behavior": "native_when_unset",
+                    "x-validation-version": "1.19.31"
+                  }
+                ],
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "proxy": {
+                "type": "string",
+                "x-default-behavior": "native_when_unset",
+                "x-tag-reference": "outbound",
+                "x-validation-version": "1.19.31"
+              },
+              "routing-mark": {
+                "type": "integer",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "rule": {
+                "type": "string",
+                "x-default-behavior": "native_when_unset",
+                "x-tag-reference": "sub_rule",
+                "x-validation-version": "1.19.31"
+              },
+              "type": {
+                "const": "redir",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "type": "object",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "certificate": {
+                "type": "string",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "client-auth-cert": {
+                "type": "string",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "client-auth-type": {
+                "type": "string",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "ech-key": {
+                "type": "string",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "listen": {
+                "type": "string",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "name": {
+                "type": "string",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "port": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "x-default-behavior": "native_when_unset",
+                    "x-validation-version": "1.19.31"
+                  },
+                  {
+                    "maximum": 65535,
+                    "minimum": 0,
+                    "type": "integer",
+                    "x-default-behavior": "native_when_unset",
+                    "x-validation-version": "1.19.31"
+                  }
+                ],
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "private-key": {
+                "type": "string",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "proxy": {
+                "type": "string",
+                "x-default-behavior": "native_when_unset",
+                "x-tag-reference": "outbound",
+                "x-validation-version": "1.19.31"
+              },
+              "reality-config": {
+                "additionalProperties": false,
+                "properties": {
+                  "dest": {
+                    "type": "string",
+                    "x-default-behavior": "native_when_unset",
+                    "x-validation-version": "1.19.31"
+                  },
+                  "limit-fallback-download": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "after-bytes": {
+                        "minimum": 0,
+                        "type": "integer",
+                        "x-default-behavior": "native_when_unset",
+                        "x-validation-version": "1.19.31"
+                      },
+                      "burst-bytes-per-sec": {
+                        "minimum": 0,
+                        "type": "integer",
+                        "x-default-behavior": "native_when_unset",
+                        "x-validation-version": "1.19.31"
+                      },
+                      "bytes-per-sec": {
+                        "minimum": 0,
+                        "type": "integer",
+                        "x-default-behavior": "native_when_unset",
+                        "x-validation-version": "1.19.31"
+                      }
+                    },
+                    "type": "object",
+                    "x-default-behavior": "native_when_unset",
+                    "x-validation-version": "1.19.31"
+                  },
+                  "limit-fallback-upload": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "after-bytes": {
+                        "minimum": 0,
+                        "type": "integer",
+                        "x-default-behavior": "native_when_unset",
+                        "x-validation-version": "1.19.31"
+                      },
+                      "burst-bytes-per-sec": {
+                        "minimum": 0,
+                        "type": "integer",
+                        "x-default-behavior": "native_when_unset",
+                        "x-validation-version": "1.19.31"
+                      },
+                      "bytes-per-sec": {
+                        "minimum": 0,
+                        "type": "integer",
+                        "x-default-behavior": "native_when_unset",
+                        "x-validation-version": "1.19.31"
+                      }
+                    },
+                    "type": "object",
+                    "x-default-behavior": "native_when_unset",
+                    "x-validation-version": "1.19.31"
+                  },
+                  "max-time-difference": {
+                    "type": "integer",
+                    "x-default-behavior": "native_when_unset",
+                    "x-validation-version": "1.19.31"
+                  },
+                  "private-key": {
+                    "type": "string",
+                    "x-default-behavior": "native_when_unset",
+                    "x-validation-version": "1.19.31"
+                  },
+                  "proxy": {
+                    "type": "string",
+                    "x-default-behavior": "native_when_unset",
+                    "x-validation-version": "1.19.31"
+                  },
+                  "server-names": {
+                    "items": {
+                      "type": "string",
+                      "x-default-behavior": "native_when_unset",
+                      "x-validation-version": "1.19.31"
+                    },
+                    "type": "array",
+                    "x-default-behavior": "native_when_unset",
+                    "x-validation-version": "1.19.31"
+                  },
+                  "short-id": {
+                    "items": {
+                      "type": "string",
+                      "x-default-behavior": "native_when_unset",
+                      "x-validation-version": "1.19.31"
+                    },
+                    "type": "array",
+                    "x-default-behavior": "native_when_unset",
+                    "x-validation-version": "1.19.31"
+                  }
+                },
+                "type": "object",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "routing-mark": {
+                "type": "integer",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "rule": {
+                "type": "string",
+                "x-default-behavior": "native_when_unset",
+                "x-tag-reference": "sub_rule",
+                "x-validation-version": "1.19.31"
+              },
+              "type": {
+                "const": "socks",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "udp": {
+                "type": "boolean",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "users": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "password": {
+                      "type": "string",
+                      "x-default-behavior": "native_when_unset",
+                      "x-validation-version": "1.19.31"
+                    },
+                    "username": {
+                      "type": "string",
+                      "x-default-behavior": "native_when_unset",
+                      "x-validation-version": "1.19.31"
+                    }
+                  },
+                  "type": "object",
+                  "x-default-behavior": "native_when_unset",
+                  "x-validation-version": "1.19.31"
+                },
+                "type": "array",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "type": "object",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "listen": {
+                "type": "string",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "name": {
+                "type": "string",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "port": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "x-default-behavior": "native_when_unset",
+                    "x-validation-version": "1.19.31"
+                  },
+                  {
+                    "maximum": 65535,
+                    "minimum": 0,
+                    "type": "integer",
+                    "x-default-behavior": "native_when_unset",
+                    "x-validation-version": "1.19.31"
+                  }
+                ],
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "proxy": {
+                "type": "string",
+                "x-default-behavior": "native_when_unset",
+                "x-tag-reference": "outbound",
+                "x-validation-version": "1.19.31"
+              },
+              "routing-mark": {
+                "type": "integer",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "rule": {
+                "type": "string",
+                "x-default-behavior": "native_when_unset",
+                "x-tag-reference": "sub_rule",
+                "x-validation-version": "1.19.31"
+              },
+              "type": {
+                "const": "tproxy",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "udp": {
+                "type": "boolean",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "type": "object",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "auto-detect-interface": {
+                "type": "boolean",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "auto-redirect": {
+                "type": "boolean",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "auto-redirect-input-mark": {
+                "minimum": 0,
+                "type": "integer",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "auto-redirect-iproute2-fallback-rule-index": {
+                "type": "integer",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "auto-redirect-output-mark": {
+                "minimum": 0,
+                "type": "integer",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "auto-route": {
+                "type": "boolean",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "device": {
+                "type": "string",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "disable-icmp-forwarding": {
+                "type": "boolean",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "dns-hijack": {
+                "items": {
+                  "type": "string",
+                  "x-default-behavior": "native_when_unset",
+                  "x-validation-version": "1.19.31"
+                },
+                "type": "array",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "endpoint-independent-nat": {
+                "type": "boolean",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "exclude-dst-port": {
+                "items": {
+                  "minimum": 0,
+                  "type": "integer",
+                  "x-default-behavior": "native_when_unset",
+                  "x-validation-version": "1.19.31"
+                },
+                "type": "array",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "exclude-dst-port-range": {
+                "items": {
+                  "type": "string",
+                  "x-default-behavior": "native_when_unset",
+                  "x-validation-version": "1.19.31"
+                },
+                "type": "array",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "exclude-interface": {
+                "items": {
+                  "type": "string",
+                  "x-default-behavior": "native_when_unset",
+                  "x-validation-version": "1.19.31"
+                },
+                "type": "array",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "exclude-mac-address": {
+                "items": {
+                  "type": "string",
+                  "x-default-behavior": "native_when_unset",
+                  "x-validation-version": "1.19.31"
+                },
+                "type": "array",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "exclude-package": {
+                "items": {
+                  "type": "string",
+                  "x-default-behavior": "native_when_unset",
+                  "x-validation-version": "1.19.31"
+                },
+                "type": "array",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "exclude-src-port": {
+                "items": {
+                  "minimum": 0,
+                  "type": "integer",
+                  "x-default-behavior": "native_when_unset",
+                  "x-validation-version": "1.19.31"
+                },
+                "type": "array",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "exclude-src-port-range": {
+                "items": {
+                  "type": "string",
+                  "x-default-behavior": "native_when_unset",
+                  "x-validation-version": "1.19.31"
+                },
+                "type": "array",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "exclude-uid": {
+                "items": {
+                  "minimum": 0,
+                  "type": "integer",
+                  "x-default-behavior": "native_when_unset",
+                  "x-validation-version": "1.19.31"
+                },
+                "type": "array",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "exclude-uid-range": {
+                "items": {
+                  "type": "string",
+                  "x-default-behavior": "native_when_unset",
+                  "x-validation-version": "1.19.31"
+                },
+                "type": "array",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "file-descriptor": {
+                "type": "integer",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "gso": {
+                "type": "boolean",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "gso-max-size": {
+                "minimum": 0,
+                "type": "integer",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "icmp-timeout": {
+                "type": "integer",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "include-android-user": {
+                "items": {
+                  "type": "integer",
+                  "x-default-behavior": "native_when_unset",
+                  "x-validation-version": "1.19.31"
+                },
+                "type": "array",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "include-interface": {
+                "items": {
+                  "type": "string",
+                  "x-default-behavior": "native_when_unset",
+                  "x-validation-version": "1.19.31"
+                },
+                "type": "array",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "include-mac-address": {
+                "items": {
+                  "type": "string",
+                  "x-default-behavior": "native_when_unset",
+                  "x-validation-version": "1.19.31"
+                },
+                "type": "array",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "include-package": {
+                "items": {
+                  "type": "string",
+                  "x-default-behavior": "native_when_unset",
+                  "x-validation-version": "1.19.31"
+                },
+                "type": "array",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "include-uid": {
+                "items": {
+                  "minimum": 0,
+                  "type": "integer",
+                  "x-default-behavior": "native_when_unset",
+                  "x-validation-version": "1.19.31"
+                },
+                "type": "array",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "include-uid-range": {
+                "items": {
+                  "type": "string",
+                  "x-default-behavior": "native_when_unset",
+                  "x-validation-version": "1.19.31"
+                },
+                "type": "array",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "inet4-address": {
+                "items": {
+                  "type": "string",
+                  "x-default-behavior": "native_when_unset",
+                  "x-validation-version": "1.19.31"
+                },
+                "type": "array",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "inet4-route-address": {
+                "items": {
+                  "type": "string",
+                  "x-default-behavior": "native_when_unset",
+                  "x-validation-version": "1.19.31"
+                },
+                "type": "array",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "inet4-route-exclude-address": {
+                "items": {
+                  "type": "string",
+                  "x-default-behavior": "native_when_unset",
+                  "x-validation-version": "1.19.31"
+                },
+                "type": "array",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "inet6-address": {
+                "items": {
+                  "type": "string",
+                  "x-default-behavior": "native_when_unset",
+                  "x-validation-version": "1.19.31"
+                },
+                "type": "array",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "inet6-route-address": {
+                "items": {
+                  "type": "string",
+                  "x-default-behavior": "native_when_unset",
+                  "x-validation-version": "1.19.31"
+                },
+                "type": "array",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "inet6-route-exclude-address": {
+                "items": {
+                  "type": "string",
+                  "x-default-behavior": "native_when_unset",
+                  "x-validation-version": "1.19.31"
+                },
+                "type": "array",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "iproute2-rule-index": {
+                "type": "integer",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "iproute2-table-index": {
+                "type": "integer",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "listen": {
+                "type": "string",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "loopback-address": {
+                "items": {
+                  "type": "string",
+                  "x-default-behavior": "native_when_unset",
+                  "x-validation-version": "1.19.31"
+                },
+                "type": "array",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "mtu": {
+                "minimum": 0,
+                "type": "integer",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "name": {
+                "type": "string",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "port": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "x-default-behavior": "native_when_unset",
+                    "x-validation-version": "1.19.31"
+                  },
+                  {
+                    "maximum": 65535,
+                    "minimum": 0,
+                    "type": "integer",
+                    "x-default-behavior": "native_when_unset",
+                    "x-validation-version": "1.19.31"
+                  }
+                ],
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "proxy": {
+                "type": "string",
+                "x-default-behavior": "native_when_unset",
+                "x-tag-reference": "outbound",
+                "x-validation-version": "1.19.31"
+              },
+              "recvmsgx": {
+                "type": "boolean",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "route-address": {
+                "items": {
+                  "type": "string",
+                  "x-default-behavior": "native_when_unset",
+                  "x-validation-version": "1.19.31"
+                },
+                "type": "array",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "route-address-set": {
+                "items": {
+                  "type": "string",
+                  "x-default-behavior": "native_when_unset",
+                  "x-validation-version": "1.19.31"
+                },
+                "type": "array",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "route-exclude-address": {
+                "items": {
+                  "type": "string",
+                  "x-default-behavior": "native_when_unset",
+                  "x-validation-version": "1.19.31"
+                },
+                "type": "array",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "route-exclude-address-set": {
+                "items": {
+                  "type": "string",
+                  "x-default-behavior": "native_when_unset",
+                  "x-validation-version": "1.19.31"
+                },
+                "type": "array",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "routing-mark": {
+                "type": "integer",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "rule": {
+                "type": "string",
+                "x-default-behavior": "native_when_unset",
+                "x-tag-reference": "sub_rule",
+                "x-validation-version": "1.19.31"
+              },
+              "sendmsgx": {
+                "type": "boolean",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "stack": {
+                "pattern": "^(?:[gG][vV][iI][sS][oO][rR]|[mM][iI][pP][sS]|[mM][iI][xX][eE][dD]|[sS][yY][sS][tT][eE][mM])$",
+                "type": "string",
+                "x-default-behavior": "native_when_unset",
+                "x-enum-choices": [
+                  "gvisor",
+                  "mips",
+                  "mixed",
+                  "system"
+                ],
+                "x-validation-version": "1.19.31"
+              },
+              "strict-route": {
+                "type": "boolean",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "type": {
+                "const": "tun",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "udp-timeout": {
+                "type": "integer",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "type": "object",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "listen": {
+                "type": "string",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "name": {
+                "type": "string",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "network": {
+                "items": {
+                  "type": "string",
+                  "x-default-behavior": "native_when_unset",
+                  "x-validation-version": "1.19.31"
+                },
+                "type": "array",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "port": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "x-default-behavior": "native_when_unset",
+                    "x-validation-version": "1.19.31"
+                  },
+                  {
+                    "maximum": 65535,
+                    "minimum": 0,
+                    "type": "integer",
+                    "x-default-behavior": "native_when_unset",
+                    "x-validation-version": "1.19.31"
+                  }
+                ],
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "proxy": {
+                "type": "string",
+                "x-default-behavior": "native_when_unset",
+                "x-tag-reference": "outbound",
+                "x-validation-version": "1.19.31"
+              },
+              "routing-mark": {
+                "type": "integer",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "rule": {
+                "type": "string",
+                "x-default-behavior": "native_when_unset",
+                "x-tag-reference": "sub_rule",
+                "x-validation-version": "1.19.31"
+              },
+              "target": {
+                "type": "string",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "type": {
+                "const": "tunnel",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "type": "object",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          }
+        ],
+        "x-default-behavior": "native_when_unset",
+        "x-validation-version": "1.19.31"
+      },
+      "type": "array",
+      "x-default-behavior": "native_when_unset",
+      "x-validation-version": "1.19.31"
+    },
+    "log-level": {
+      "default": "info",
+      "pattern": "^(?:[dD][eE][bB][uU][gG]|[eE][rR][rR][oO][rR]|[iI][nN][fF][oO]|[sS][iI][lL][eE][nN][tT]|[wW][aA][rR][nN][iI][nN][gG])$",
+      "type": "string",
+      "x-default-behavior": "literal",
+      "x-default-source": "Mihomo v1.19.31 DefaultRawConfig",
+      "x-enum-choices": [
+        "debug",
+        "error",
+        "info",
+        "silent",
+        "warning"
+      ],
+      "x-validation-version": "1.19.31"
+    },
+    "mixed-port": {
+      "maximum": 65535,
+      "minimum": 0,
+      "type": "integer",
+      "x-default-behavior": "native_when_unset",
+      "x-validation-version": "1.19.31"
+    },
+    "mode": {
+      "default": "rule",
+      "pattern": "^(?:[dD][iI][rR][eE][cC][tT]|[gG][lL][oO][bB][aA][lL]|[rR][uU][lL][eE])$",
+      "type": "string",
+      "x-default-behavior": "literal",
+      "x-default-source": "Mihomo v1.19.31 DefaultRawConfig",
+      "x-enum-choices": [
+        "direct",
+        "global",
+        "rule"
+      ],
+      "x-validation-version": "1.19.31"
+    },
+    "ntp": {
+      "additionalProperties": false,
+      "default": {
+        "enable": false,
+        "interval": 30,
+        "port": 123,
+        "server": "time.apple.com",
+        "write-to-system": false
+      },
+      "properties": {
+        "dialer-proxy": {
+          "type": "string",
+          "x-default-behavior": "native_when_unset",
+          "x-validation-version": "1.19.31"
+        },
+        "enable": {
+          "default": false,
+          "type": "boolean",
+          "x-default-behavior": "literal",
+          "x-default-source": "Mihomo v1.19.31 DefaultRawConfig",
+          "x-validation-version": "1.19.31"
+        },
+        "interval": {
+          "default": 30,
+          "type": "integer",
+          "x-default-behavior": "literal",
+          "x-default-source": "Mihomo v1.19.31 DefaultRawConfig",
+          "x-validation-version": "1.19.31"
+        },
+        "port": {
+          "default": 123,
+          "type": "integer",
+          "x-default-behavior": "literal",
+          "x-default-source": "Mihomo v1.19.31 DefaultRawConfig",
+          "x-validation-version": "1.19.31"
+        },
+        "server": {
+          "default": "time.apple.com",
+          "type": "string",
+          "x-default-behavior": "literal",
+          "x-default-source": "Mihomo v1.19.31 DefaultRawConfig",
+          "x-validation-version": "1.19.31"
+        },
+        "write-to-system": {
+          "default": false,
+          "type": "boolean",
+          "x-default-behavior": "literal",
+          "x-default-source": "Mihomo v1.19.31 DefaultRawConfig",
+          "x-validation-version": "1.19.31"
+        }
+      },
+      "type": "object",
+      "x-default-behavior": "literal",
+      "x-default-source": "Mihomo v1.19.31 DefaultRawConfig",
+      "x-validation-version": "1.19.31"
+    },
+    "port": {
+      "maximum": 65535,
+      "minimum": 0,
+      "type": "integer",
+      "x-default-behavior": "native_when_unset",
+      "x-validation-version": "1.19.31"
+    },
+    "profile": {
+      "additionalProperties": false,
+      "default": {
+        "store-selected": true
+      },
+      "properties": {
+        "store-fake-ip": {
+          "type": "boolean",
+          "x-default-behavior": "native_when_unset",
+          "x-validation-version": "1.19.31"
+        },
+        "store-selected": {
+          "default": true,
+          "type": "boolean",
+          "x-default-behavior": "literal",
+          "x-default-source": "Mihomo v1.19.31 DefaultRawConfig",
+          "x-validation-version": "1.19.31"
+        }
+      },
+      "type": "object",
+      "x-default-behavior": "literal",
+      "x-default-source": "Mihomo v1.19.31 DefaultRawConfig",
+      "x-validation-version": "1.19.31"
+    },
+    "proxies": {
+      "default": [],
+      "description": "Read-only dynamic Hysteria2 nodes",
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "alpn": {
+            "items": {
+              "type": "string",
+              "x-default-behavior": "native_when_unset",
+              "x-validation-version": "1.19.31"
+            },
+            "type": "array",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "bbr-profile": {
+            "type": "string",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "certificate": {
+            "type": "string",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "cwnd": {
+            "type": "integer",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "dialer-proxy": {
+            "type": "string",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "down": {
+            "type": "string",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "ech-opts": {
+            "additionalProperties": false,
+            "properties": {
+              "config": {
+                "type": "string",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "enable": {
+                "type": "boolean",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "query-server-name": {
+                "type": "string",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              }
+            },
+            "type": "object",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "fingerprint": {
+            "type": "string",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "handshake-timeout": {
+            "type": "integer",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "hop-interval": {
+            "anyOf": [
+              {
+                "type": "string",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              {
+                "minimum": 0,
+                "type": "integer",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              }
+            ],
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "initial-connection-receive-window": {
+            "minimum": 0,
+            "type": "integer",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "initial-stream-receive-window": {
+            "minimum": 0,
+            "type": "integer",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "interface-name": {
+            "type": "string",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "ip-version": {
+            "pattern": "^(?:[dD][uU][aA][lL]|[iI][pP][vV]4|[iI][pP][vV]4-[pP][rR][eE][fF][eE][rR]|[iI][pP][vV]6|[iI][pP][vV]6-[pP][rR][eE][fF][eE][rR])$",
+            "type": "string",
+            "x-default-behavior": "native_when_unset",
+            "x-enum-choices": [
+              "dual",
+              "ipv4",
+              "ipv4-prefer",
+              "ipv6",
+              "ipv6-prefer"
+            ],
+            "x-validation-version": "1.19.31"
+          },
+          "max-connection-receive-window": {
+            "minimum": 0,
+            "type": "integer",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "max-stream-receive-window": {
+            "minimum": 0,
+            "type": "integer",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "mptcp": {
+            "type": "boolean",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "name": {
+            "type": "string",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "name-cert-verify": {
+            "type": "string",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "obfs": {
+            "type": "string",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "obfs-max-packet-size": {
+            "type": "integer",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "obfs-min-packet-size": {
+            "type": "integer",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "obfs-password": {
+            "type": "string",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "password": {
+            "type": "string",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "port": {
+            "maximum": 65535,
+            "minimum": 1,
+            "type": "integer",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "ports": {
+            "type": "string",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "private-key": {
+            "type": "string",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "realm-opts": {
+            "additionalProperties": false,
+            "properties": {
+              "alpn": {
+                "items": {
+                  "type": "string",
+                  "x-default-behavior": "native_when_unset",
+                  "x-validation-version": "1.19.31"
+                },
+                "type": "array",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "certificate": {
+                "type": "string",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "enable": {
+                "type": "boolean",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "fingerprint": {
+                "type": "string",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "name-cert-verify": {
+                "type": "string",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "private-key": {
+                "type": "string",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "realm-id": {
+                "type": "string",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "server-url": {
+                "type": "string",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "skip-cert-verify": {
+                "type": "boolean",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "sni": {
+                "type": "string",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "stun-servers": {
+                "items": {
+                  "type": "string",
+                  "x-default-behavior": "native_when_unset",
+                  "x-validation-version": "1.19.31"
+                },
+                "type": "array",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "token": {
+                "type": "string",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              }
+            },
+            "type": "object",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "routing-mark": {
+            "type": "integer",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "server": {
+            "type": "string",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "skip-cert-verify": {
+            "type": "boolean",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "sni": {
+            "type": "string",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "tfo": {
+            "type": "boolean",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "type": {
+            "const": "hysteria2",
+            "type": "string",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "udp": {
+            "type": "boolean",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "udp-mtu": {
+            "type": "integer",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "up": {
+            "type": "string",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          }
+        },
+        "required": [
+          "name",
+          "type",
+          "server",
+          "password"
+        ],
+        "type": "object",
+        "x-default-behavior": "native_when_unset",
+        "x-validation-version": "1.19.31"
+      },
+      "type": "array",
+      "x-default-behavior": "literal",
+      "x-default-source": "Mihomo v1.19.31 DefaultRawConfig",
+      "x-validation-version": "1.19.31"
+    },
+    "proxy-groups": {
+      "default": [],
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "default-selected": {
+            "type": "string",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "disable-udp": {
+            "type": "boolean",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "empty-fallback": {
+            "default": "COMPATIBLE",
+            "type": "string",
+            "x-default-behavior": "literal",
+            "x-default-source": "Mihomo v1.19.31 parser defaults",
+            "x-tag-reference": "outbound",
+            "x-validation-version": "1.19.31"
+          },
+          "exclude-filter": {
+            "type": "string",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "exclude-type": {
+            "type": "string",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "expected-status": {
+            "type": "string",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "filter": {
+            "type": "string",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "hidden": {
+            "type": "boolean",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "icon": {
+            "type": "string",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "include-all": {
+            "type": "boolean",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "include-all-providers": {
+            "type": "boolean",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "include-all-proxies": {
+            "type": "boolean",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "interval": {
+            "type": "integer",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "lazy": {
+            "default": true,
+            "type": "boolean",
+            "x-default-behavior": "literal",
+            "x-default-source": "Mihomo v1.19.31 parser defaults",
+            "x-validation-version": "1.19.31"
+          },
+          "max-failed-times": {
+            "type": "integer",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "name": {
+            "type": "string",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "proxies": {
+            "items": {
+              "type": "string",
+              "x-default-behavior": "native_when_unset",
+              "x-tag-reference": "outbound",
+              "x-validation-version": "1.19.31"
+            },
+            "type": "array",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "strategy": {
+            "type": "string",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "timeout": {
+            "type": "integer",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "tolerance": {
+            "minimum": 0,
+            "type": "integer",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "type": {
+            "enum": [
+              "select",
+              "url-test",
+              "fallback",
+              "load-balance",
+              "relay"
+            ],
+            "type": "string",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "url": {
+            "type": "string",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "use": {
+            "items": {
+              "type": "string",
+              "x-default-behavior": "native_when_unset",
+              "x-validation-version": "1.19.31"
+            },
+            "type": "array",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          }
+        },
+        "type": "object",
+        "x-default-behavior": "native_when_unset",
+        "x-validation-version": "1.19.31"
+      },
+      "type": "array",
+      "x-default-behavior": "literal",
+      "x-default-source": "Mihomo v1.19.31 DefaultRawConfig",
+      "x-validation-version": "1.19.31"
+    },
+    "proxy-providers": {
+      "additionalProperties": false,
+      "description": "Nodes are supplied by authorized dynamic injection",
+      "maxProperties": 0,
+      "type": "object",
+      "x-default-behavior": "native_when_unset",
+      "x-validation-version": "1.19.31"
+    },
+    "redir-port": {
+      "maximum": 65535,
+      "minimum": 0,
+      "type": "integer",
+      "x-default-behavior": "native_when_unset",
+      "x-validation-version": "1.19.31"
+    },
+    "routing-mark": {
+      "type": "integer",
+      "x-default-behavior": "native_when_unset",
+      "x-validation-version": "1.19.31"
+    },
+    "rule-providers": {
+      "additionalProperties": {
+        "additionalProperties": false,
+        "properties": {
+          "behavior": {
+            "enum": [
+              "domain",
+              "ipcidr",
+              "classical"
+            ],
+            "type": "string",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "format": {
+            "default": "yaml",
+            "enum": [
+              "",
+              "yaml",
+              "text",
+              "mrs"
+            ],
+            "type": "string",
+            "x-default-behavior": "literal",
+            "x-default-source": "Mihomo v1.19.31 parser defaults",
+            "x-validation-version": "1.19.31"
+          },
+          "header": {
+            "additionalProperties": {
+              "items": {
+                "type": "string",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "type": "array",
+              "x-default-behavior": "native_when_unset",
+              "x-validation-version": "1.19.31"
+            },
+            "type": "object",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "interval": {
+            "type": "integer",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "path": {
+            "type": "string",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "path-in-bundle": {
+            "type": "string",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "payload": {
+            "items": {
+              "type": "string",
+              "x-default-behavior": "native_when_unset",
+              "x-validation-version": "1.19.31"
+            },
+            "type": "array",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "proxy": {
+            "type": "string",
+            "x-default-behavior": "native_when_unset",
+            "x-tag-reference": "outbound",
+            "x-validation-version": "1.19.31"
+          },
+          "size-limit": {
+            "type": "integer",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "type": {
+            "enum": [
+              "http",
+              "file",
+              "inline"
+            ],
+            "type": "string",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "url": {
+            "type": "string",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          }
+        },
+        "type": "object",
+        "x-default-behavior": "native_when_unset",
+        "x-validation-version": "1.19.31"
+      },
+      "type": "object",
+      "x-default-behavior": "native_when_unset",
+      "x-validation-version": "1.19.31"
+    },
+    "rules": {
+      "default": [],
+      "items": {
+        "type": "string",
+        "x-default-behavior": "native_when_unset",
+        "x-validation-version": "1.19.31"
+      },
+      "type": "array",
+      "x-default-behavior": "literal",
+      "x-default-source": "Mihomo v1.19.31 DefaultRawConfig",
+      "x-validation-version": "1.19.31"
+    },
+    "secret": {
+      "type": "string",
+      "x-default-behavior": "native_when_unset",
+      "x-validation-version": "1.19.31"
+    },
+    "skip-auth-prefixes": {
+      "items": {
+        "type": "string",
+        "x-default-behavior": "native_when_unset",
+        "x-validation-version": "1.19.31"
+      },
+      "type": "array",
+      "x-default-behavior": "native_when_unset",
+      "x-validation-version": "1.19.31"
+    },
+    "sniffer": {
+      "additionalProperties": false,
+      "default": {
+        "enable": false,
+        "force-dns-mapping": true,
+        "force-domain": [],
+        "override-destination": true,
+        "parse-pure-ip": true,
+        "port-whitelist": [],
+        "skip-domain": [],
+        "sniff": {}
+      },
+      "properties": {
+        "enable": {
+          "default": false,
+          "type": "boolean",
+          "x-default-behavior": "literal",
+          "x-default-source": "Mihomo v1.19.31 DefaultRawConfig",
+          "x-validation-version": "1.19.31"
+        },
+        "force-dns-mapping": {
+          "default": true,
+          "type": "boolean",
+          "x-default-behavior": "literal",
+          "x-default-source": "Mihomo v1.19.31 DefaultRawConfig",
+          "x-validation-version": "1.19.31"
+        },
+        "force-domain": {
+          "default": [],
+          "items": {
+            "type": "string",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "type": "array",
+          "x-default-behavior": "literal",
+          "x-default-source": "Mihomo v1.19.31 DefaultRawConfig",
+          "x-validation-version": "1.19.31"
+        },
+        "override-destination": {
+          "default": true,
+          "type": "boolean",
+          "x-default-behavior": "literal",
+          "x-default-source": "Mihomo v1.19.31 DefaultRawConfig",
+          "x-validation-version": "1.19.31"
+        },
+        "parse-pure-ip": {
+          "default": true,
+          "type": "boolean",
+          "x-default-behavior": "literal",
+          "x-default-source": "Mihomo v1.19.31 DefaultRawConfig",
+          "x-validation-version": "1.19.31"
+        },
+        "port-whitelist": {
+          "default": [],
+          "items": {
+            "type": "string",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "type": "array",
+          "x-default-behavior": "literal",
+          "x-default-source": "Mihomo v1.19.31 DefaultRawConfig",
+          "x-validation-version": "1.19.31"
+        },
+        "skip-domain": {
+          "default": [],
+          "items": {
+            "type": "string",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "type": "array",
+          "x-default-behavior": "literal",
+          "x-default-source": "Mihomo v1.19.31 DefaultRawConfig",
+          "x-validation-version": "1.19.31"
+        },
+        "skip-dst-address": {
+          "items": {
+            "type": "string",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "type": "array",
+          "x-default-behavior": "native_when_unset",
+          "x-validation-version": "1.19.31"
+        },
+        "skip-src-address": {
+          "items": {
+            "type": "string",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "type": "array",
+          "x-default-behavior": "native_when_unset",
+          "x-validation-version": "1.19.31"
+        },
+        "sniff": {
+          "additionalProperties": {
+            "additionalProperties": false,
+            "properties": {
+              "override-destination": {
+                "type": "boolean",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              },
+              "ports": {
+                "items": {
+                  "type": "string",
+                  "x-default-behavior": "native_when_unset",
+                  "x-validation-version": "1.19.31"
+                },
+                "type": "array",
+                "x-default-behavior": "native_when_unset",
+                "x-validation-version": "1.19.31"
+              }
+            },
+            "type": "object",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "default": {},
+          "type": "object",
+          "x-default-behavior": "literal",
+          "x-default-source": "Mihomo v1.19.31 DefaultRawConfig",
+          "x-validation-version": "1.19.31"
+        },
+        "sniffing": {
+          "items": {
+            "type": "string",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "type": "array",
+          "x-default-behavior": "native_when_unset",
+          "x-validation-version": "1.19.31"
+        }
+      },
+      "type": "object",
+      "x-default-behavior": "literal",
+      "x-default-source": "Mihomo v1.19.31 DefaultRawConfig",
+      "x-validation-version": "1.19.31"
+    },
+    "socks-port": {
+      "maximum": 65535,
+      "minimum": 0,
+      "type": "integer",
+      "x-default-behavior": "native_when_unset",
+      "x-validation-version": "1.19.31"
+    },
+    "ss-config": {
+      "type": "string",
+      "x-default-behavior": "native_when_unset",
+      "x-validation-version": "1.19.31"
+    },
+    "sub-rules": {
+      "additionalProperties": {
+        "items": {
+          "type": "string",
+          "x-default-behavior": "native_when_unset",
+          "x-validation-version": "1.19.31"
+        },
+        "type": "array",
+        "x-default-behavior": "native_when_unset",
+        "x-validation-version": "1.19.31"
+      },
+      "type": "object",
+      "x-default-behavior": "native_when_unset",
+      "x-validation-version": "1.19.31"
+    },
+    "tcp-concurrent": {
+      "default": false,
+      "type": "boolean",
+      "x-default-behavior": "literal",
+      "x-default-source": "Mihomo v1.19.31 DefaultRawConfig",
+      "x-validation-version": "1.19.31"
+    },
+    "tls": {
+      "additionalProperties": false,
+      "properties": {
+        "certificate": {
+          "type": "string",
+          "x-default-behavior": "native_when_unset",
+          "x-validation-version": "1.19.31"
+        },
+        "client-auth-cert": {
+          "type": "string",
+          "x-default-behavior": "native_when_unset",
+          "x-validation-version": "1.19.31"
+        },
+        "client-auth-type": {
+          "type": "string",
+          "x-default-behavior": "native_when_unset",
+          "x-validation-version": "1.19.31"
+        },
+        "custom-certifactes": {
+          "items": {
+            "type": "string",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "type": "array",
+          "x-default-behavior": "native_when_unset",
+          "x-validation-version": "1.19.31"
+        },
+        "ech-key": {
+          "type": "string",
+          "x-default-behavior": "native_when_unset",
+          "x-validation-version": "1.19.31"
+        },
+        "private-key": {
+          "type": "string",
+          "x-default-behavior": "native_when_unset",
+          "x-validation-version": "1.19.31"
+        }
+      },
+      "type": "object",
+      "x-default-behavior": "native_when_unset",
+      "x-validation-version": "1.19.31"
+    },
+    "tproxy-port": {
+      "maximum": 65535,
+      "minimum": 0,
+      "type": "integer",
+      "x-default-behavior": "native_when_unset",
+      "x-validation-version": "1.19.31"
+    },
+    "tuic-server": {
+      "additionalProperties": false,
+      "default": {
+        "alpn": [
+          "h3"
+        ],
+        "authentication-timeout": 1000,
+        "certificate": "",
+        "congestion-controller": "",
+        "enable": false,
+        "listen": "",
+        "max-idle-time": 15000,
+        "max-udp-relay-packet-size": 1500,
+        "private-key": ""
+      },
+      "properties": {
+        "alpn": {
+          "default": [
+            "h3"
+          ],
+          "items": {
+            "type": "string",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "type": "array",
+          "x-default-behavior": "literal",
+          "x-default-source": "Mihomo v1.19.31 DefaultRawConfig",
+          "x-validation-version": "1.19.31"
+        },
+        "authentication-timeout": {
+          "default": 1000,
+          "type": "integer",
+          "x-default-behavior": "literal",
+          "x-default-source": "Mihomo v1.19.31 DefaultRawConfig",
+          "x-validation-version": "1.19.31"
+        },
+        "certificate": {
+          "default": "",
+          "type": "string",
+          "x-default-behavior": "literal",
+          "x-default-source": "Mihomo v1.19.31 DefaultRawConfig",
+          "x-validation-version": "1.19.31"
+        },
+        "congestion-controller": {
+          "default": "",
+          "type": "string",
+          "x-default-behavior": "literal",
+          "x-default-source": "Mihomo v1.19.31 DefaultRawConfig",
+          "x-validation-version": "1.19.31"
+        },
+        "cwnd": {
+          "type": "integer",
+          "x-default-behavior": "native_when_unset",
+          "x-validation-version": "1.19.31"
+        },
+        "enable": {
+          "default": false,
+          "type": "boolean",
+          "x-default-behavior": "literal",
+          "x-default-source": "Mihomo v1.19.31 DefaultRawConfig",
+          "x-validation-version": "1.19.31"
+        },
+        "listen": {
+          "default": "",
+          "type": "string",
+          "x-default-behavior": "literal",
+          "x-default-source": "Mihomo v1.19.31 DefaultRawConfig",
+          "x-validation-version": "1.19.31"
+        },
+        "max-idle-time": {
+          "default": 15000,
+          "type": "integer",
+          "x-default-behavior": "literal",
+          "x-default-source": "Mihomo v1.19.31 DefaultRawConfig",
+          "x-validation-version": "1.19.31"
+        },
+        "max-udp-relay-packet-size": {
+          "default": 1500,
+          "type": "integer",
+          "x-default-behavior": "literal",
+          "x-default-source": "Mihomo v1.19.31 DefaultRawConfig",
+          "x-validation-version": "1.19.31"
+        },
+        "private-key": {
+          "default": "",
+          "type": "string",
+          "x-default-behavior": "literal",
+          "x-default-source": "Mihomo v1.19.31 DefaultRawConfig",
+          "x-validation-version": "1.19.31"
+        },
+        "token": {
+          "items": {
+            "type": "string",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "type": "array",
+          "x-default-behavior": "native_when_unset",
+          "x-validation-version": "1.19.31"
+        },
+        "users": {
+          "additionalProperties": {
+            "type": "string",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "type": "object",
+          "x-default-behavior": "native_when_unset",
+          "x-validation-version": "1.19.31"
+        }
+      },
+      "type": "object",
+      "x-default-behavior": "literal",
+      "x-default-source": "Mihomo v1.19.31 DefaultRawConfig",
+      "x-validation-version": "1.19.31"
+    },
+    "tun": {
+      "additionalProperties": false,
+      "default": {
+        "auto-detect-interface": true,
+        "auto-route": true,
+        "device": "",
+        "dns-hijack": [
+          "0.0.0.0:53"
+        ],
+        "enable": false,
+        "inet6-address": [
+          "fdfe:dcba:9876::1/126"
+        ],
+        "recvmsgx": true,
+        "sendmsgx": false,
+        "stack": "gVisor"
+      },
+      "properties": {
+        "auto-detect-interface": {
+          "default": true,
+          "type": "boolean",
+          "x-default-behavior": "literal",
+          "x-default-source": "Mihomo v1.19.31 DefaultRawConfig",
+          "x-validation-version": "1.19.31"
+        },
+        "auto-redirect": {
+          "type": "boolean",
+          "x-default-behavior": "native_when_unset",
+          "x-validation-version": "1.19.31"
+        },
+        "auto-redirect-input-mark": {
+          "minimum": 0,
+          "type": "integer",
+          "x-default-behavior": "native_when_unset",
+          "x-validation-version": "1.19.31"
+        },
+        "auto-redirect-iproute2-fallback-rule-index": {
+          "type": "integer",
+          "x-default-behavior": "native_when_unset",
+          "x-validation-version": "1.19.31"
+        },
+        "auto-redirect-output-mark": {
+          "minimum": 0,
+          "type": "integer",
+          "x-default-behavior": "native_when_unset",
+          "x-validation-version": "1.19.31"
+        },
+        "auto-route": {
+          "default": true,
+          "type": "boolean",
+          "x-default-behavior": "literal",
+          "x-default-source": "Mihomo v1.19.31 DefaultRawConfig",
+          "x-validation-version": "1.19.31"
+        },
+        "device": {
+          "default": "",
+          "type": "string",
+          "x-default-behavior": "literal",
+          "x-default-source": "Mihomo v1.19.31 DefaultRawConfig",
+          "x-validation-version": "1.19.31"
+        },
+        "disable-icmp-forwarding": {
+          "type": "boolean",
+          "x-default-behavior": "native_when_unset",
+          "x-validation-version": "1.19.31"
+        },
+        "dns-hijack": {
+          "default": [
+            "0.0.0.0:53"
+          ],
+          "items": {
+            "type": "string",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "type": "array",
+          "x-default-behavior": "literal",
+          "x-default-source": "Mihomo v1.19.31 DefaultRawConfig",
+          "x-validation-version": "1.19.31"
+        },
+        "enable": {
+          "default": false,
+          "type": "boolean",
+          "x-default-behavior": "literal",
+          "x-default-source": "Mihomo v1.19.31 DefaultRawConfig",
+          "x-validation-version": "1.19.31"
+        },
+        "endpoint-independent-nat": {
+          "type": "boolean",
+          "x-default-behavior": "native_when_unset",
+          "x-validation-version": "1.19.31"
+        },
+        "exclude-dst-port": {
+          "items": {
+            "minimum": 0,
+            "type": "integer",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "type": "array",
+          "x-default-behavior": "native_when_unset",
+          "x-validation-version": "1.19.31"
+        },
+        "exclude-dst-port-range": {
+          "items": {
+            "type": "string",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "type": "array",
+          "x-default-behavior": "native_when_unset",
+          "x-validation-version": "1.19.31"
+        },
+        "exclude-interface": {
+          "items": {
+            "type": "string",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "type": "array",
+          "x-default-behavior": "native_when_unset",
+          "x-validation-version": "1.19.31"
+        },
+        "exclude-mac-address": {
+          "items": {
+            "type": "string",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "type": "array",
+          "x-default-behavior": "native_when_unset",
+          "x-validation-version": "1.19.31"
+        },
+        "exclude-package": {
+          "items": {
+            "type": "string",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "type": "array",
+          "x-default-behavior": "native_when_unset",
+          "x-validation-version": "1.19.31"
+        },
+        "exclude-src-port": {
+          "items": {
+            "minimum": 0,
+            "type": "integer",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "type": "array",
+          "x-default-behavior": "native_when_unset",
+          "x-validation-version": "1.19.31"
+        },
+        "exclude-src-port-range": {
+          "items": {
+            "type": "string",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "type": "array",
+          "x-default-behavior": "native_when_unset",
+          "x-validation-version": "1.19.31"
+        },
+        "exclude-uid": {
+          "items": {
+            "minimum": 0,
+            "type": "integer",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "type": "array",
+          "x-default-behavior": "native_when_unset",
+          "x-validation-version": "1.19.31"
+        },
+        "exclude-uid-range": {
+          "items": {
+            "type": "string",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "type": "array",
+          "x-default-behavior": "native_when_unset",
+          "x-validation-version": "1.19.31"
+        },
+        "file-descriptor": {
+          "type": "integer",
+          "x-default-behavior": "native_when_unset",
+          "x-validation-version": "1.19.31"
+        },
+        "gso": {
+          "type": "boolean",
+          "x-default-behavior": "native_when_unset",
+          "x-validation-version": "1.19.31"
+        },
+        "gso-max-size": {
+          "minimum": 0,
+          "type": "integer",
+          "x-default-behavior": "native_when_unset",
+          "x-validation-version": "1.19.31"
+        },
+        "icmp-timeout": {
+          "type": "integer",
+          "x-default-behavior": "native_when_unset",
+          "x-validation-version": "1.19.31"
+        },
+        "include-android-user": {
+          "items": {
+            "type": "integer",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "type": "array",
+          "x-default-behavior": "native_when_unset",
+          "x-validation-version": "1.19.31"
+        },
+        "include-interface": {
+          "items": {
+            "type": "string",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "type": "array",
+          "x-default-behavior": "native_when_unset",
+          "x-validation-version": "1.19.31"
+        },
+        "include-mac-address": {
+          "items": {
+            "type": "string",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "type": "array",
+          "x-default-behavior": "native_when_unset",
+          "x-validation-version": "1.19.31"
+        },
+        "include-package": {
+          "items": {
+            "type": "string",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "type": "array",
+          "x-default-behavior": "native_when_unset",
+          "x-validation-version": "1.19.31"
+        },
+        "include-uid": {
+          "items": {
+            "minimum": 0,
+            "type": "integer",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "type": "array",
+          "x-default-behavior": "native_when_unset",
+          "x-validation-version": "1.19.31"
+        },
+        "include-uid-range": {
+          "items": {
+            "type": "string",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "type": "array",
+          "x-default-behavior": "native_when_unset",
+          "x-validation-version": "1.19.31"
+        },
+        "inet4-route-address": {
+          "items": {
+            "type": "string",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "type": "array",
+          "x-default-behavior": "native_when_unset",
+          "x-validation-version": "1.19.31"
+        },
+        "inet4-route-exclude-address": {
+          "items": {
+            "type": "string",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "type": "array",
+          "x-default-behavior": "native_when_unset",
+          "x-validation-version": "1.19.31"
+        },
+        "inet6-address": {
+          "default": [
+            "fdfe:dcba:9876::1/126"
+          ],
+          "items": {
+            "type": "string",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "type": "array",
+          "x-default-behavior": "literal",
+          "x-default-source": "Mihomo v1.19.31 DefaultRawConfig",
+          "x-validation-version": "1.19.31"
+        },
+        "inet6-route-address": {
+          "items": {
+            "type": "string",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "type": "array",
+          "x-default-behavior": "native_when_unset",
+          "x-validation-version": "1.19.31"
+        },
+        "inet6-route-exclude-address": {
+          "items": {
+            "type": "string",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "type": "array",
+          "x-default-behavior": "native_when_unset",
+          "x-validation-version": "1.19.31"
+        },
+        "iproute2-rule-index": {
+          "type": "integer",
+          "x-default-behavior": "native_when_unset",
+          "x-validation-version": "1.19.31"
+        },
+        "iproute2-table-index": {
+          "type": "integer",
+          "x-default-behavior": "native_when_unset",
+          "x-validation-version": "1.19.31"
+        },
+        "loopback-address": {
+          "items": {
+            "type": "string",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "type": "array",
+          "x-default-behavior": "native_when_unset",
+          "x-validation-version": "1.19.31"
+        },
+        "mtu": {
+          "minimum": 0,
+          "type": "integer",
+          "x-default-behavior": "native_when_unset",
+          "x-validation-version": "1.19.31"
+        },
+        "recvmsgx": {
+          "default": true,
+          "type": "boolean",
+          "x-default-behavior": "literal",
+          "x-default-source": "Mihomo v1.19.31 DefaultRawConfig",
+          "x-validation-version": "1.19.31"
+        },
+        "route-address": {
+          "items": {
+            "type": "string",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "type": "array",
+          "x-default-behavior": "native_when_unset",
+          "x-validation-version": "1.19.31"
+        },
+        "route-address-set": {
+          "items": {
+            "type": "string",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "type": "array",
+          "x-default-behavior": "native_when_unset",
+          "x-validation-version": "1.19.31"
+        },
+        "route-exclude-address": {
+          "items": {
+            "type": "string",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "type": "array",
+          "x-default-behavior": "native_when_unset",
+          "x-validation-version": "1.19.31"
+        },
+        "route-exclude-address-set": {
+          "items": {
+            "type": "string",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "type": "array",
+          "x-default-behavior": "native_when_unset",
+          "x-validation-version": "1.19.31"
+        },
+        "sendmsgx": {
+          "default": false,
+          "type": "boolean",
+          "x-default-behavior": "literal",
+          "x-default-source": "Mihomo v1.19.31 DefaultRawConfig",
+          "x-validation-version": "1.19.31"
+        },
+        "stack": {
+          "default": "gVisor",
+          "pattern": "^(?:[gG][vV][iI][sS][oO][rR]|[mM][iI][pP][sS]|[mM][iI][xX][eE][dD]|[sS][yY][sS][tT][eE][mM])$",
+          "type": "string",
+          "x-default-behavior": "literal",
+          "x-default-source": "Mihomo v1.19.31 DefaultRawConfig",
+          "x-enum-choices": [
+            "gvisor",
+            "mips",
+            "mixed",
+            "system"
+          ],
+          "x-validation-version": "1.19.31"
+        },
+        "strict-route": {
+          "type": "boolean",
+          "x-default-behavior": "native_when_unset",
+          "x-validation-version": "1.19.31"
+        },
+        "udp-timeout": {
+          "type": "integer",
+          "x-default-behavior": "native_when_unset",
+          "x-validation-version": "1.19.31"
+        }
+      },
+      "type": "object",
+      "x-default-behavior": "literal",
+      "x-default-source": "Mihomo v1.19.31 DefaultRawConfig",
+      "x-validation-version": "1.19.31"
+    },
+    "tunnels": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "address": {
+            "type": "string",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "network": {
+            "items": {
+              "type": "string",
+              "x-default-behavior": "native_when_unset",
+              "x-validation-version": "1.19.31"
+            },
+            "type": "array",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "proxy": {
+            "type": "string",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          },
+          "target": {
+            "type": "string",
+            "x-default-behavior": "native_when_unset",
+            "x-validation-version": "1.19.31"
+          }
+        },
+        "type": "object",
+        "x-default-behavior": "native_when_unset",
+        "x-validation-version": "1.19.31"
+      },
+      "type": "array",
+      "x-default-behavior": "native_when_unset",
+      "x-validation-version": "1.19.31"
+    },
+    "unified-delay": {
+      "default": false,
+      "type": "boolean",
+      "x-default-behavior": "literal",
+      "x-default-source": "Mihomo v1.19.31 DefaultRawConfig",
+      "x-validation-version": "1.19.31"
+    },
+    "vmess-config": {
+      "type": "string",
+      "x-default-behavior": "native_when_unset",
+      "x-validation-version": "1.19.31"
+    }
+  },
+  "type": "object",
+  "x-default-behavior": "literal",
+  "x-default-source": "Mihomo v1.19.31 DefaultRawConfig",
+  "x-rule-types": [
+    "AND",
+    "DOMAIN",
+    "DOMAIN-KEYWORD",
+    "DOMAIN-REGEX",
+    "DOMAIN-SUFFIX",
+    "DOMAIN-WILDCARD",
+    "DSCP",
+    "DST-PORT",
+    "GEOIP",
+    "GEOSITE",
+    "IN-NAME",
+    "IN-PORT",
+    "IN-TYPE",
+    "IN-USER",
+    "IP-ASN",
+    "IP-CIDR",
+    "IP-CIDR6",
+    "IP-SUFFIX",
+    "MATCH",
+    "NETWORK",
+    "NOT",
+    "OR",
+    "PROCESS-NAME",
+    "PROCESS-NAME-REGEX",
+    "PROCESS-NAME-WILDCARD",
+    "PROCESS-PATH",
+    "PROCESS-PATH-REGEX",
+    "PROCESS-PATH-WILDCARD",
+    "REMATCH-NAME",
+    "RULE-SET",
+    "SRC-GEOIP",
+    "SRC-IP-ASN",
+    "SRC-IP-CIDR",
+    "SRC-IP-SUFFIX",
+    "SRC-PORT",
+    "SUB-RULE",
+    "UID"
+  ],
+  "x-source": "https://github.com/MetaCubeX/mihomo/tree/v1.19.31",
+  "x-validation-version": "1.19.31"
+}

@@ -7,6 +7,9 @@ async fn state() -> AppState {
     credentials::migration::migrate(&pool, &secrets)
         .await
         .unwrap();
+    crate::api::subscriptions::templates::initialize(&pool, &secrets)
+        .await
+        .unwrap();
     AppState::new(pool, secrets)
 }
 fn actor() -> Extension<AdminActor> {
@@ -776,10 +779,10 @@ async fn subscription_cache_expires_at_certificate_boundary_without_a_write_even
     .await
     .unwrap();
     async fn download(state: &AppState) -> String {
-        let response = crate::api::subscriptions::download(
+        let response = crate::api::subscriptions::download_auto(
             State(state.clone()),
             Path("test-token".into()),
-            axum::extract::RawQuery(None),
+            axum::extract::RawQuery(Some("format=mihomo&platform=linux".into())),
             axum::http::HeaderMap::new(),
         )
         .await;

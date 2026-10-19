@@ -1,0 +1,1139 @@
+{
+  "mihomo": [
+    {
+      "path": "/redir-port",
+      "platforms": [
+        "linux",
+        "macos"
+      ],
+      "message": "redirect listeners require Linux/OpenWrt or macOS",
+      "source": "project platform profile 0004"
+    },
+    {
+      "path": "/tproxy-port",
+      "platforms": [
+        "linux"
+      ],
+      "message": "TProxy requires Linux/OpenWrt",
+      "source": "project platform profile 0004"
+    },
+    {
+      "path": "/tun/recvmsgx",
+      "platforms": [
+        "macos",
+        "ios"
+      ],
+      "message": "Darwin-specific TUN option",
+      "source": "Mihomo v1.19.31; pinned sing-tun v0.4.24 tun_darwin.go and Go ios/darwin build constraints"
+    },
+    {
+      "path": "/tun/sendmsgx",
+      "platforms": [
+        "macos",
+        "ios"
+      ],
+      "message": "Darwin-specific TUN option",
+      "source": "Mihomo v1.19.31; pinned sing-tun v0.4.24 tun_darwin.go and Go ios/darwin build constraints"
+    },
+    {
+      "path": "/listeners/*/type",
+      "platforms": [
+        "linux",
+        "macos"
+      ],
+      "message": "platform-specific transparent listener",
+      "source": "mihomo v1.19.31 listener/inbound",
+      "value": "redir"
+    },
+    {
+      "path": "/listeners/*/type",
+      "platforms": [
+        "linux"
+      ],
+      "message": "platform-specific transparent listener",
+      "source": "mihomo v1.19.31 listener/inbound",
+      "value": "tproxy"
+    },
+    {
+      "path": "/routing-mark",
+      "platforms": [
+        "linux",
+        "android"
+      ],
+      "message": "netfilter socket marks require Linux/Android",
+      "source": "Mihomo v1.19.31 component/dialer/mark_linux.go and mark_nonlinux.go",
+      "client_requirement": "permission to configure socket marks"
+    },
+    {
+      "path": "/external-controller-routing-mark",
+      "platforms": [
+        "linux",
+        "android"
+      ],
+      "message": "netfilter socket marks require Linux/Android",
+      "source": "Mihomo v1.19.31 component/dialer/mark_linux.go and mark_nonlinux.go",
+      "client_requirement": "permission to configure socket marks"
+    },
+    {
+      "path": "/dns/listen-routing-mark",
+      "platforms": [
+        "linux",
+        "android"
+      ],
+      "message": "netfilter socket marks require Linux/Android",
+      "source": "Mihomo v1.19.31 component/dialer/mark_linux.go and mark_nonlinux.go",
+      "client_requirement": "permission to configure socket marks"
+    },
+    {
+      "path": "/listeners/*/routing-mark",
+      "platforms": [
+        "linux",
+        "android"
+      ],
+      "message": "netfilter socket marks require Linux/Android",
+      "source": "Mihomo v1.19.31 component/dialer/mark_linux.go and mark_nonlinux.go",
+      "client_requirement": "permission to configure socket marks"
+    },
+    {
+      "path": "/tun/auto-redirect",
+      "platforms": [
+        "linux",
+        "android"
+      ],
+      "message": "automatic redirect requires Linux/Android",
+      "source": "Mihomo v1.19.31 listener/sing_tun/redirect_linux.go, redirect_stub.go and server.go",
+      "requires": [
+        "auto-route"
+      ]
+    },
+    {
+      "path": "/tun/iproute2-table-index",
+      "platforms": [
+        "linux",
+        "android"
+      ],
+      "message": "Linux/Android route policy option",
+      "source": "Mihomo pinned sing-tun v0.4.24 tun_linux.go",
+      "requires": [
+        "auto-route"
+      ]
+    },
+    {
+      "path": "/tun/iproute2-rule-index",
+      "platforms": [
+        "linux",
+        "android"
+      ],
+      "message": "Linux/Android route policy option",
+      "source": "Mihomo pinned sing-tun v0.4.24 tun_linux.go",
+      "requires": [
+        "auto-route"
+      ]
+    },
+    {
+      "path": "/tun/include-interface",
+      "platforms": [
+        "linux",
+        "android"
+      ],
+      "message": "Linux/Android route policy option",
+      "source": "Mihomo pinned sing-tun v0.4.24 tun_linux.go",
+      "requires": [
+        "auto-route"
+      ]
+    },
+    {
+      "path": "/tun/exclude-interface",
+      "platforms": [
+        "linux",
+        "android"
+      ],
+      "message": "Linux/Android route policy option",
+      "source": "Mihomo pinned sing-tun v0.4.24 tun_linux.go",
+      "requires": [
+        "auto-route"
+      ]
+    },
+    {
+      "path": "/tun/include-uid",
+      "platforms": [
+        "linux",
+        "android"
+      ],
+      "message": "Linux/Android route policy option",
+      "source": "Mihomo pinned sing-tun v0.4.24 tun_linux.go",
+      "requires": [
+        "auto-route"
+      ]
+    },
+    {
+      "path": "/tun/include-uid-range",
+      "platforms": [
+        "linux",
+        "android"
+      ],
+      "message": "Linux/Android route policy option",
+      "source": "Mihomo pinned sing-tun v0.4.24 tun_linux.go",
+      "requires": [
+        "auto-route"
+      ]
+    },
+    {
+      "path": "/tun/exclude-uid",
+      "platforms": [
+        "linux",
+        "android"
+      ],
+      "message": "Linux/Android route policy option",
+      "source": "Mihomo pinned sing-tun v0.4.24 tun_linux.go",
+      "requires": [
+        "auto-route"
+      ]
+    },
+    {
+      "path": "/tun/exclude-uid-range",
+      "platforms": [
+        "linux",
+        "android"
+      ],
+      "message": "Linux/Android route policy option",
+      "source": "Mihomo pinned sing-tun v0.4.24 tun_linux.go",
+      "requires": [
+        "auto-route"
+      ]
+    },
+    {
+      "path": "/tun/gso",
+      "platforms": [
+        "linux",
+        "android"
+      ],
+      "message": "Linux/Android TUN offload option",
+      "source": "Mihomo pinned sing-tun v0.4.24 tun_linux.go and tun_offload_linux.go"
+    },
+    {
+      "path": "/tun/gso-max-size",
+      "platforms": [
+        "linux",
+        "android"
+      ],
+      "message": "Linux/Android TUN offload option",
+      "source": "Mihomo pinned sing-tun v0.4.24 tun_linux.go and tun_offload_linux.go"
+    },
+    {
+      "path": "/tun/auto-redirect-input-mark",
+      "platforms": [
+        "linux",
+        "android"
+      ],
+      "message": "Linux/Android redirect policy option",
+      "source": "Mihomo pinned sing-tun v0.4.24 redirect_nftables_rules.go and tun_linux.go",
+      "requires": [
+        "auto-route",
+        "auto-redirect"
+      ]
+    },
+    {
+      "path": "/tun/auto-redirect-output-mark",
+      "platforms": [
+        "linux",
+        "android"
+      ],
+      "message": "Linux/Android redirect policy option",
+      "source": "Mihomo pinned sing-tun v0.4.24 redirect_nftables_rules.go and tun_linux.go",
+      "requires": [
+        "auto-route",
+        "auto-redirect"
+      ]
+    },
+    {
+      "path": "/tun/auto-redirect-iproute2-fallback-rule-index",
+      "platforms": [
+        "linux",
+        "android"
+      ],
+      "message": "Linux/Android redirect policy option",
+      "source": "Mihomo pinned sing-tun v0.4.24 redirect_nftables_rules.go and tun_linux.go",
+      "requires": [
+        "auto-route",
+        "auto-redirect"
+      ]
+    },
+    {
+      "path": "/tun/include-mac-address",
+      "platforms": [
+        "linux",
+        "android"
+      ],
+      "message": "Linux/Android redirect policy option",
+      "source": "Mihomo pinned sing-tun v0.4.24 redirect_nftables_rules.go and tun_linux.go",
+      "requires": [
+        "auto-route",
+        "auto-redirect"
+      ]
+    },
+    {
+      "path": "/tun/exclude-mac-address",
+      "platforms": [
+        "linux",
+        "android"
+      ],
+      "message": "Linux/Android redirect policy option",
+      "source": "Mihomo pinned sing-tun v0.4.24 redirect_nftables_rules.go and tun_linux.go",
+      "requires": [
+        "auto-route",
+        "auto-redirect"
+      ]
+    },
+    {
+      "path": "/tun/include-android-user",
+      "platforms": [
+        "android"
+      ],
+      "message": "Android package/user policy option",
+      "source": "Mihomo v1.19.31 listener/sing_tun/server_android.go and pinned tun_rules.go",
+      "client_requirement": "Android package manager integration or a compatible graphical client"
+    },
+    {
+      "path": "/tun/include-package",
+      "platforms": [
+        "android"
+      ],
+      "message": "Android package/user policy option",
+      "source": "Mihomo v1.19.31 listener/sing_tun/server_android.go and pinned tun_rules.go",
+      "client_requirement": "Android package manager integration or a compatible graphical client"
+    },
+    {
+      "path": "/tun/exclude-package",
+      "platforms": [
+        "android"
+      ],
+      "message": "Android package/user policy option",
+      "source": "Mihomo v1.19.31 listener/sing_tun/server_android.go and pinned tun_rules.go",
+      "client_requirement": "Android package manager integration or a compatible graphical client"
+    },
+    {
+      "path": "/listeners/*/auto-redirect",
+      "platforms": [
+        "linux",
+        "android"
+      ],
+      "message": "automatic redirect requires Linux/Android",
+      "source": "Mihomo v1.19.31 listener/sing_tun/redirect_linux.go, redirect_stub.go and server.go",
+      "requires": [
+        "auto-route"
+      ]
+    },
+    {
+      "path": "/listeners/*/iproute2-table-index",
+      "platforms": [
+        "linux",
+        "android"
+      ],
+      "message": "Linux/Android route policy option",
+      "source": "Mihomo pinned sing-tun v0.4.24 tun_linux.go",
+      "requires": [
+        "auto-route"
+      ]
+    },
+    {
+      "path": "/listeners/*/iproute2-rule-index",
+      "platforms": [
+        "linux",
+        "android"
+      ],
+      "message": "Linux/Android route policy option",
+      "source": "Mihomo pinned sing-tun v0.4.24 tun_linux.go",
+      "requires": [
+        "auto-route"
+      ]
+    },
+    {
+      "path": "/listeners/*/include-interface",
+      "platforms": [
+        "linux",
+        "android"
+      ],
+      "message": "Linux/Android route policy option",
+      "source": "Mihomo pinned sing-tun v0.4.24 tun_linux.go",
+      "requires": [
+        "auto-route"
+      ]
+    },
+    {
+      "path": "/listeners/*/exclude-interface",
+      "platforms": [
+        "linux",
+        "android"
+      ],
+      "message": "Linux/Android route policy option",
+      "source": "Mihomo pinned sing-tun v0.4.24 tun_linux.go",
+      "requires": [
+        "auto-route"
+      ]
+    },
+    {
+      "path": "/listeners/*/include-uid",
+      "platforms": [
+        "linux",
+        "android"
+      ],
+      "message": "Linux/Android route policy option",
+      "source": "Mihomo pinned sing-tun v0.4.24 tun_linux.go",
+      "requires": [
+        "auto-route"
+      ]
+    },
+    {
+      "path": "/listeners/*/include-uid-range",
+      "platforms": [
+        "linux",
+        "android"
+      ],
+      "message": "Linux/Android route policy option",
+      "source": "Mihomo pinned sing-tun v0.4.24 tun_linux.go",
+      "requires": [
+        "auto-route"
+      ]
+    },
+    {
+      "path": "/listeners/*/exclude-uid",
+      "platforms": [
+        "linux",
+        "android"
+      ],
+      "message": "Linux/Android route policy option",
+      "source": "Mihomo pinned sing-tun v0.4.24 tun_linux.go",
+      "requires": [
+        "auto-route"
+      ]
+    },
+    {
+      "path": "/listeners/*/exclude-uid-range",
+      "platforms": [
+        "linux",
+        "android"
+      ],
+      "message": "Linux/Android route policy option",
+      "source": "Mihomo pinned sing-tun v0.4.24 tun_linux.go",
+      "requires": [
+        "auto-route"
+      ]
+    },
+    {
+      "path": "/listeners/*/gso",
+      "platforms": [
+        "linux",
+        "android"
+      ],
+      "message": "Linux/Android TUN offload option",
+      "source": "Mihomo pinned sing-tun v0.4.24 tun_linux.go and tun_offload_linux.go"
+    },
+    {
+      "path": "/listeners/*/gso-max-size",
+      "platforms": [
+        "linux",
+        "android"
+      ],
+      "message": "Linux/Android TUN offload option",
+      "source": "Mihomo pinned sing-tun v0.4.24 tun_linux.go and tun_offload_linux.go"
+    },
+    {
+      "path": "/listeners/*/auto-redirect-input-mark",
+      "platforms": [
+        "linux",
+        "android"
+      ],
+      "message": "Linux/Android redirect policy option",
+      "source": "Mihomo pinned sing-tun v0.4.24 redirect_nftables_rules.go and tun_linux.go",
+      "requires": [
+        "auto-route",
+        "auto-redirect"
+      ]
+    },
+    {
+      "path": "/listeners/*/auto-redirect-output-mark",
+      "platforms": [
+        "linux",
+        "android"
+      ],
+      "message": "Linux/Android redirect policy option",
+      "source": "Mihomo pinned sing-tun v0.4.24 redirect_nftables_rules.go and tun_linux.go",
+      "requires": [
+        "auto-route",
+        "auto-redirect"
+      ]
+    },
+    {
+      "path": "/listeners/*/auto-redirect-iproute2-fallback-rule-index",
+      "platforms": [
+        "linux",
+        "android"
+      ],
+      "message": "Linux/Android redirect policy option",
+      "source": "Mihomo pinned sing-tun v0.4.24 redirect_nftables_rules.go and tun_linux.go",
+      "requires": [
+        "auto-route",
+        "auto-redirect"
+      ]
+    },
+    {
+      "path": "/listeners/*/include-mac-address",
+      "platforms": [
+        "linux",
+        "android"
+      ],
+      "message": "Linux/Android redirect policy option",
+      "source": "Mihomo pinned sing-tun v0.4.24 redirect_nftables_rules.go and tun_linux.go",
+      "requires": [
+        "auto-route",
+        "auto-redirect"
+      ]
+    },
+    {
+      "path": "/listeners/*/exclude-mac-address",
+      "platforms": [
+        "linux",
+        "android"
+      ],
+      "message": "Linux/Android redirect policy option",
+      "source": "Mihomo pinned sing-tun v0.4.24 redirect_nftables_rules.go and tun_linux.go",
+      "requires": [
+        "auto-route",
+        "auto-redirect"
+      ]
+    },
+    {
+      "path": "/listeners/*/include-android-user",
+      "platforms": [
+        "android"
+      ],
+      "message": "Android package/user policy option",
+      "source": "Mihomo v1.19.31 listener/sing_tun/server_android.go and pinned tun_rules.go",
+      "client_requirement": "Android package manager integration or a compatible graphical client"
+    },
+    {
+      "path": "/listeners/*/include-package",
+      "platforms": [
+        "android"
+      ],
+      "message": "Android package/user policy option",
+      "source": "Mihomo v1.19.31 listener/sing_tun/server_android.go and pinned tun_rules.go",
+      "client_requirement": "Android package manager integration or a compatible graphical client"
+    },
+    {
+      "path": "/listeners/*/exclude-package",
+      "platforms": [
+        "android"
+      ],
+      "message": "Android package/user policy option",
+      "source": "Mihomo v1.19.31 listener/sing_tun/server_android.go and pinned tun_rules.go",
+      "client_requirement": "Android package manager integration or a compatible graphical client"
+    }
+  ],
+  "singbox": [
+    {
+      "path": "/inbounds/*/type",
+      "platforms": [
+        "linux",
+        "macos"
+      ],
+      "message": "platform-specific transparent listener",
+      "source": "sing-box v1.14.2 docs/configuration/inbound/redirect.md",
+      "value": "redirect"
+    },
+    {
+      "path": "/inbounds/*/type",
+      "platforms": [
+        "linux"
+      ],
+      "message": "platform-specific transparent listener",
+      "source": "sing-box v1.14.2 docs/configuration/inbound/tproxy.md",
+      "value": "tproxy"
+    },
+    {
+      "path": "/inbounds/*/auto_redirect",
+      "platforms": [
+        "linux"
+      ],
+      "message": "field is unsupported or managed by the target client",
+      "source": "project client-owned TUN profile 0004"
+    },
+    {
+      "path": "/inbounds/*/interface_name",
+      "platforms": [
+        "linux",
+        "windows"
+      ],
+      "message": "field is unsupported or managed by the target client",
+      "source": "project client-owned TUN profile 0004"
+    },
+    {
+      "path": "/inbounds/*/auto_route",
+      "platforms": [
+        "linux",
+        "macos",
+        "windows"
+      ],
+      "message": "field is unsupported or managed by the target client",
+      "source": "project client-owned TUN profile 0004"
+    },
+    {
+      "path": "/**/routing_mark",
+      "platforms": [
+        "linux"
+      ],
+      "message": "Linux socket or namespace option",
+      "source": "sing-box v1.14.2 docs/configuration/shared/dial.md and listen.md"
+    },
+    {
+      "path": "/**/bind_address_no_port",
+      "platforms": [
+        "linux"
+      ],
+      "message": "Linux socket or namespace option",
+      "source": "sing-box v1.14.2 docs/configuration/shared/dial.md and listen.md"
+    },
+    {
+      "path": "/**/netns",
+      "platforms": [
+        "linux"
+      ],
+      "message": "Linux socket or namespace option",
+      "source": "sing-box v1.14.2 docs/configuration/shared/dial.md and listen.md"
+    },
+    {
+      "path": "/route/default_mark",
+      "platforms": [
+        "linux"
+      ],
+      "message": "Linux routing or namespace option",
+      "source": "sing-box v1.14.2 docs/configuration/network-namespace and route"
+    },
+    {
+      "path": "/network_namespaces",
+      "platforms": [
+        "linux"
+      ],
+      "message": "Linux routing or namespace option",
+      "source": "sing-box v1.14.2 docs/configuration/network-namespace and route"
+    },
+    {
+      "path": "/inbounds/*/iproute2_table_index",
+      "platforms": [
+        "linux"
+      ],
+      "message": "Linux iproute2 option",
+      "source": "sing-box v1.14.2 docs/configuration/inbound/tun.md",
+      "requires": [
+        "auto_route"
+      ]
+    },
+    {
+      "path": "/inbounds/*/iproute2_rule_index",
+      "platforms": [
+        "linux"
+      ],
+      "message": "Linux iproute2 option",
+      "source": "sing-box v1.14.2 docs/configuration/inbound/tun.md",
+      "requires": [
+        "auto_route"
+      ]
+    },
+    {
+      "path": "/inbounds/*/auto_redirect_input_mark",
+      "platforms": [
+        "linux"
+      ],
+      "message": "Linux automatic redirect option",
+      "source": "sing-box v1.14.2 docs/configuration/inbound/tun.md",
+      "requires": [
+        "auto_route",
+        "auto_redirect"
+      ]
+    },
+    {
+      "path": "/inbounds/*/auto_redirect_output_mark",
+      "platforms": [
+        "linux"
+      ],
+      "message": "Linux automatic redirect option",
+      "source": "sing-box v1.14.2 docs/configuration/inbound/tun.md",
+      "requires": [
+        "auto_route",
+        "auto_redirect"
+      ]
+    },
+    {
+      "path": "/inbounds/*/auto_redirect_reset_mark",
+      "platforms": [
+        "linux"
+      ],
+      "message": "Linux automatic redirect option",
+      "source": "sing-box v1.14.2 docs/configuration/inbound/tun.md",
+      "requires": [
+        "auto_route",
+        "auto_redirect"
+      ]
+    },
+    {
+      "path": "/inbounds/*/auto_redirect_nfqueue",
+      "platforms": [
+        "linux"
+      ],
+      "message": "Linux automatic redirect option",
+      "source": "sing-box v1.14.2 docs/configuration/inbound/tun.md",
+      "requires": [
+        "auto_route",
+        "auto_redirect"
+      ]
+    },
+    {
+      "path": "/inbounds/*/auto_redirect_iproute2_fallback_rule_index",
+      "platforms": [
+        "linux"
+      ],
+      "message": "Linux automatic redirect option",
+      "source": "sing-box v1.14.2 docs/configuration/inbound/tun.md",
+      "requires": [
+        "auto_route",
+        "auto_redirect"
+      ]
+    },
+    {
+      "path": "/inbounds/*/exclude_mptcp",
+      "platforms": [
+        "linux"
+      ],
+      "message": "Linux automatic redirect option",
+      "source": "sing-box v1.14.2 docs/configuration/inbound/tun.md",
+      "requires": [
+        "auto_route",
+        "auto_redirect"
+      ]
+    },
+    {
+      "path": "/inbounds/*/include_mac_address",
+      "platforms": [
+        "linux"
+      ],
+      "message": "Linux automatic redirect option",
+      "source": "sing-box v1.14.2 docs/configuration/inbound/tun.md",
+      "requires": [
+        "auto_route",
+        "auto_redirect"
+      ],
+      "conflicts": [
+        "exclude_mac_address"
+      ]
+    },
+    {
+      "path": "/inbounds/*/exclude_mac_address",
+      "platforms": [
+        "linux"
+      ],
+      "message": "Linux automatic redirect option",
+      "source": "sing-box v1.14.2 docs/configuration/inbound/tun.md",
+      "requires": [
+        "auto_route",
+        "auto_redirect"
+      ],
+      "conflicts": [
+        "include_mac_address"
+      ]
+    },
+    {
+      "path": "/inbounds/*/include_interface",
+      "platforms": [
+        "linux"
+      ],
+      "message": "Linux interface/UID routing rule",
+      "source": "sing-box v1.14.2 docs/configuration/inbound/tun.md",
+      "requires": [
+        "auto_route"
+      ],
+      "conflicts": [
+        "exclude_interface"
+      ]
+    },
+    {
+      "path": "/inbounds/*/exclude_interface",
+      "platforms": [
+        "linux"
+      ],
+      "message": "Linux interface/UID routing rule",
+      "source": "sing-box v1.14.2 docs/configuration/inbound/tun.md",
+      "requires": [
+        "auto_route"
+      ],
+      "conflicts": [
+        "include_interface"
+      ]
+    },
+    {
+      "path": "/inbounds/*/include_uid",
+      "platforms": [
+        "linux"
+      ],
+      "message": "Linux interface/UID routing rule",
+      "source": "sing-box v1.14.2 docs/configuration/inbound/tun.md",
+      "requires": [
+        "auto_route"
+      ]
+    },
+    {
+      "path": "/inbounds/*/include_uid_range",
+      "platforms": [
+        "linux"
+      ],
+      "message": "Linux interface/UID routing rule",
+      "source": "sing-box v1.14.2 docs/configuration/inbound/tun.md",
+      "requires": [
+        "auto_route"
+      ]
+    },
+    {
+      "path": "/inbounds/*/exclude_uid",
+      "platforms": [
+        "linux"
+      ],
+      "message": "Linux interface/UID routing rule",
+      "source": "sing-box v1.14.2 docs/configuration/inbound/tun.md",
+      "requires": [
+        "auto_route"
+      ]
+    },
+    {
+      "path": "/inbounds/*/exclude_uid_range",
+      "platforms": [
+        "linux"
+      ],
+      "message": "Linux interface/UID routing rule",
+      "source": "sing-box v1.14.2 docs/configuration/inbound/tun.md",
+      "requires": [
+        "auto_route"
+      ]
+    },
+    {
+      "path": "/inbounds/*/include_android_user",
+      "platforms": [
+        "android"
+      ],
+      "message": "Android VPN routing rule",
+      "source": "sing-box v1.14.2 docs/configuration/inbound/tun.md",
+      "client_requirement": "graphical VPN client supplies routing"
+    },
+    {
+      "path": "/inbounds/*/include_package",
+      "platforms": [
+        "android"
+      ],
+      "message": "Android VPN routing rule",
+      "source": "sing-box v1.14.2 docs/configuration/inbound/tun.md",
+      "client_requirement": "graphical VPN client supplies routing"
+    },
+    {
+      "path": "/inbounds/*/exclude_package",
+      "platforms": [
+        "android"
+      ],
+      "message": "Android VPN routing rule",
+      "source": "sing-box v1.14.2 docs/configuration/inbound/tun.md",
+      "client_requirement": "graphical VPN client supplies routing"
+    },
+    {
+      "path": "/route/rules/**/process_name",
+      "platforms": [
+        "linux",
+        "macos",
+        "windows"
+      ],
+      "message": "desktop process/interface matching",
+      "source": "sing-box v1.14.2 docs/configuration/route/rule.md and dns/rule.md"
+    },
+    {
+      "path": "/route/rules/**/process_path",
+      "platforms": [
+        "linux",
+        "macos",
+        "windows"
+      ],
+      "message": "desktop process/interface matching",
+      "source": "sing-box v1.14.2 docs/configuration/route/rule.md and dns/rule.md"
+    },
+    {
+      "path": "/route/rules/**/process_path_regex",
+      "platforms": [
+        "linux",
+        "macos",
+        "windows"
+      ],
+      "message": "desktop process/interface matching",
+      "source": "sing-box v1.14.2 docs/configuration/route/rule.md and dns/rule.md"
+    },
+    {
+      "path": "/route/rules/**/interface_address",
+      "platforms": [
+        "linux",
+        "macos",
+        "windows"
+      ],
+      "message": "desktop process/interface matching",
+      "source": "sing-box v1.14.2 docs/configuration/route/rule.md and dns/rule.md"
+    },
+    {
+      "path": "/route/rules/**/default_interface_address",
+      "platforms": [
+        "linux",
+        "macos",
+        "windows"
+      ],
+      "message": "desktop process/interface matching",
+      "source": "sing-box v1.14.2 docs/configuration/route/rule.md and dns/rule.md"
+    },
+    {
+      "path": "/route/rules/**/user",
+      "platforms": [
+        "linux"
+      ],
+      "message": "Linux user matching",
+      "source": "sing-box v1.14.2 docs/configuration/route/rule.md and dns/rule.md"
+    },
+    {
+      "path": "/route/rules/**/user_id",
+      "platforms": [
+        "linux"
+      ],
+      "message": "Linux user matching",
+      "source": "sing-box v1.14.2 docs/configuration/route/rule.md and dns/rule.md"
+    },
+    {
+      "path": "/route/rules/**/package_name",
+      "platforms": [
+        "android"
+      ],
+      "message": "Android package matching",
+      "source": "sing-box v1.14.2 docs/configuration/route/rule.md and dns/rule.md"
+    },
+    {
+      "path": "/route/rules/**/package_name_regex",
+      "platforms": [
+        "android"
+      ],
+      "message": "Android package matching",
+      "source": "sing-box v1.14.2 docs/configuration/route/rule.md and dns/rule.md"
+    },
+    {
+      "path": "/route/rules/**/network_type",
+      "platforms": [
+        "android",
+        "macos",
+        "ios"
+      ],
+      "message": "graphical-client network matching",
+      "source": "sing-box v1.14.2 docs/configuration/route/rule.md and dns/rule.md",
+      "client_requirement": "graphical client"
+    },
+    {
+      "path": "/route/rules/**/network_is_expensive",
+      "platforms": [
+        "android",
+        "macos",
+        "ios"
+      ],
+      "message": "graphical-client network matching",
+      "source": "sing-box v1.14.2 docs/configuration/route/rule.md and dns/rule.md",
+      "client_requirement": "graphical client"
+    },
+    {
+      "path": "/route/rules/**/network_interface_address",
+      "platforms": [
+        "android",
+        "macos",
+        "ios"
+      ],
+      "message": "graphical-client network matching",
+      "source": "sing-box v1.14.2 docs/configuration/route/rule.md and dns/rule.md",
+      "client_requirement": "graphical client"
+    },
+    {
+      "path": "/route/rules/**/network_is_constrained",
+      "platforms": [
+        "macos",
+        "ios"
+      ],
+      "message": "Apple graphical-client network matching",
+      "source": "sing-box v1.14.2 docs/configuration/route/rule.md and dns/rule.md",
+      "client_requirement": "graphical client"
+    },
+    {
+      "path": "/dns/rules/**/process_name",
+      "platforms": [
+        "linux",
+        "macos",
+        "windows"
+      ],
+      "message": "desktop process/interface matching",
+      "source": "sing-box v1.14.2 docs/configuration/route/rule.md and dns/rule.md"
+    },
+    {
+      "path": "/dns/rules/**/process_path",
+      "platforms": [
+        "linux",
+        "macos",
+        "windows"
+      ],
+      "message": "desktop process/interface matching",
+      "source": "sing-box v1.14.2 docs/configuration/route/rule.md and dns/rule.md"
+    },
+    {
+      "path": "/dns/rules/**/process_path_regex",
+      "platforms": [
+        "linux",
+        "macos",
+        "windows"
+      ],
+      "message": "desktop process/interface matching",
+      "source": "sing-box v1.14.2 docs/configuration/route/rule.md and dns/rule.md"
+    },
+    {
+      "path": "/dns/rules/**/interface_address",
+      "platforms": [
+        "linux",
+        "macos",
+        "windows"
+      ],
+      "message": "desktop process/interface matching",
+      "source": "sing-box v1.14.2 docs/configuration/route/rule.md and dns/rule.md"
+    },
+    {
+      "path": "/dns/rules/**/default_interface_address",
+      "platforms": [
+        "linux",
+        "macos",
+        "windows"
+      ],
+      "message": "desktop process/interface matching",
+      "source": "sing-box v1.14.2 docs/configuration/route/rule.md and dns/rule.md"
+    },
+    {
+      "path": "/dns/rules/**/user",
+      "platforms": [
+        "linux"
+      ],
+      "message": "Linux user matching",
+      "source": "sing-box v1.14.2 docs/configuration/route/rule.md and dns/rule.md"
+    },
+    {
+      "path": "/dns/rules/**/user_id",
+      "platforms": [
+        "linux"
+      ],
+      "message": "Linux user matching",
+      "source": "sing-box v1.14.2 docs/configuration/route/rule.md and dns/rule.md"
+    },
+    {
+      "path": "/dns/rules/**/package_name",
+      "platforms": [
+        "android"
+      ],
+      "message": "Android package matching",
+      "source": "sing-box v1.14.2 docs/configuration/route/rule.md and dns/rule.md"
+    },
+    {
+      "path": "/dns/rules/**/package_name_regex",
+      "platforms": [
+        "android"
+      ],
+      "message": "Android package matching",
+      "source": "sing-box v1.14.2 docs/configuration/route/rule.md and dns/rule.md"
+    },
+    {
+      "path": "/dns/rules/**/network_type",
+      "platforms": [
+        "android",
+        "macos",
+        "ios"
+      ],
+      "message": "graphical-client network matching",
+      "source": "sing-box v1.14.2 docs/configuration/route/rule.md and dns/rule.md",
+      "client_requirement": "graphical client"
+    },
+    {
+      "path": "/dns/rules/**/network_is_expensive",
+      "platforms": [
+        "android",
+        "macos",
+        "ios"
+      ],
+      "message": "graphical-client network matching",
+      "source": "sing-box v1.14.2 docs/configuration/route/rule.md and dns/rule.md",
+      "client_requirement": "graphical client"
+    },
+    {
+      "path": "/dns/rules/**/network_interface_address",
+      "platforms": [
+        "android",
+        "macos",
+        "ios"
+      ],
+      "message": "graphical-client network matching",
+      "source": "sing-box v1.14.2 docs/configuration/route/rule.md and dns/rule.md",
+      "client_requirement": "graphical client"
+    },
+    {
+      "path": "/dns/rules/**/network_is_constrained",
+      "platforms": [
+        "macos",
+        "ios"
+      ],
+      "message": "Apple graphical-client network matching",
+      "source": "sing-box v1.14.2 docs/configuration/route/rule.md and dns/rule.md",
+      "client_requirement": "graphical client"
+    },
+    {
+      "path": "/**/network_strategy",
+      "platforms": [
+        "android",
+        "macos",
+        "ios"
+      ],
+      "message": "graphical-client network selection",
+      "source": "sing-box v1.14.2 docs/configuration/shared/dial.md",
+      "client_requirement": "graphical client with auto_detect_interface"
+    },
+    {
+      "path": "/**/network_type",
+      "platforms": [
+        "android",
+        "macos",
+        "ios"
+      ],
+      "message": "graphical-client network selection",
+      "source": "sing-box v1.14.2 docs/configuration/shared/dial.md",
+      "client_requirement": "graphical client with auto_detect_interface"
+    },
+    {
+      "path": "/**/fallback_network_type",
+      "platforms": [
+        "android",
+        "macos",
+        "ios"
+      ],
+      "message": "graphical-client network selection",
+      "source": "sing-box v1.14.2 docs/configuration/shared/dial.md",
+      "client_requirement": "graphical client with auto_detect_interface"
+    },
+    {
+      "path": "/**/fallback_delay",
+      "platforms": [
+        "android",
+        "macos",
+        "ios"
+      ],
+      "message": "graphical-client network selection",
+      "source": "sing-box v1.14.2 docs/configuration/shared/dial.md",
+      "client_requirement": "graphical client with auto_detect_interface"
+    }
+  ]
+}

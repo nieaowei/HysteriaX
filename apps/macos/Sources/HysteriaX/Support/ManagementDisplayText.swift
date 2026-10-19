@@ -298,6 +298,20 @@ enum JobDisplayText {
 enum AuditDisplayText {
     private static var actionLabels: [String: String] {
         [
+            "template.created": L10n.text("创建订阅模板"),
+            "template.metadata_updated": L10n.text("修改订阅模板"),
+            "template.default_changed": L10n.text("切换默认订阅模板"),
+            "template.archived": L10n.text("归档订阅模板"),
+            "template.draft_saved": L10n.text("保存模板草稿"),
+            "template.published": L10n.text("发布订阅模板"),
+            "template.rolled_back": L10n.text("回滚订阅模板"),
+            "template.create_failed": L10n.text("创建订阅模板失败"),
+            "template.metadata_update_failed": L10n.text("修改订阅模板失败"),
+            "template.default_change_failed": L10n.text("切换默认模板失败"),
+            "template.archive_failed": L10n.text("归档订阅模板失败"),
+            "template.draft_save_failed": L10n.text("保存模板草稿失败"),
+            "template.publish_failed": L10n.text("发布订阅模板失败"),
+            "template.rollback_failed": L10n.text("回滚订阅模板失败"),
             "node.created": L10n.text("创建节点"),
             "node.updated": L10n.text("更新节点"),
             "node.restricted": L10n.text("限制节点代理"),
@@ -372,7 +386,7 @@ enum AuditDisplayText {
         func joined(_ values: [String]) -> String? { values.isEmpty ? nil : values.sorted().joined(separator: ",") }
         return (
             joined(actionLabels.filter { $0.value.localizedCaseInsensitiveContains(query) }.map(\.key)),
-            joined(["node", "user", "resource", "admin_token", "credential", "dns", "ca_rotation", "migration"].filter { entityType($0).localizedCaseInsensitiveContains(query) }),
+            joined(["node", "user", "resource", "admin_token", "credential", "dns", "ca_rotation", "migration", "subscription_template"].filter { entityType($0).localizedCaseInsensitiveContains(query) }),
             joined(["admin", "system", "system:mtls", "system:mtls-maintenance", "system:upgrade"].filter { actor($0).localizedCaseInsensitiveContains(query) })
         )
     }
@@ -387,6 +401,7 @@ enum AuditDisplayText {
         case "dns": "DNS"
         case "ca_rotation": L10n.text("CA 轮换")
         case "migration": L10n.text("升级迁移")
+        case "subscription_template": L10n.text("订阅模板")
         default: value
         }
     }

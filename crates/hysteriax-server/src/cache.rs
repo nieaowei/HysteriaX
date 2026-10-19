@@ -382,7 +382,8 @@ pub async fn generation(pool: &sqlx::PgPool) -> Result<i64, ApiError> {
     )
 }
 fn ttl(path: &str) -> Option<Duration> {
-    if path.ends_with("/events")
+    if path.starts_with("/api/v1/subscription-templates")
+        || path.ends_with("/events")
         || path == "/api/v1/events"
         || path == "/api/v1/version"
         || path.starts_with("/api/v1/admin/")

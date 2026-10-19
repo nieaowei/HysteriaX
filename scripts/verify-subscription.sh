@@ -230,7 +230,7 @@ def main():
             if status != 200:
                 raise RuntimeError("could not rotate parser fixture subscription")
             subscription = json.loads(body)["token"]
-            status, _ = request(base, f"/sub/{first_subscription}/clash.yaml", admin, method="GET")
+            status, _ = request(base, f"/sub/{first_subscription}?format=mihomo&platform=linux", admin, method="GET")
             if status != 404:
                 raise RuntimeError("rotated subscription token remained valid")
             status, body = request(
@@ -271,7 +271,7 @@ def main():
                 connection.execute("UPDATE mtls_node_trust SET deployed=TRUE WHERE node_id=%s AND ca_id=%s AND ca_version=1",(node_id,fixture_ca))
 
             status, config = request(
-                base, f"/sub/{subscription}/clash.yaml", admin, method="GET"
+                base, f"/sub/{subscription}?format=mihomo&platform=linux", admin, method="GET"
             )
             if status != 200:
                 raise RuntimeError("subscription endpoint did not return a configuration")
@@ -295,7 +295,7 @@ def main():
                 stdout=subprocess.DEVNULL,
             )
             status, empty_config = request(
-                base, f"/sub/{empty_token}/clash.yaml", admin, method="GET"
+                base, f"/sub/{empty_token}?format=mihomo&platform=linux", admin, method="GET"
             )
             if (
                 status != 200

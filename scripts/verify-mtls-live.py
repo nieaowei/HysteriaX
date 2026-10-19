@@ -755,7 +755,7 @@ def main():
                 sub_token = subscription["token"]
                 secrets_to_scrub.append(sub_token)
                 status, subscription_yaml = request(
-                    base, f"/sub/{sub_token}/clash.yaml", method="GET"
+                    base, f"/sub/{sub_token}?format=mihomo&platform=linux", method="GET"
                 )
                 if (
                     status != 200
@@ -1248,7 +1248,7 @@ def main():
                     stop_process_group(process)
                 traffic_generator_processes.clear()
                 subscription_status, _ = request(
-                    base, f"/sub/{sub_token}/clash.yaml", method="GET"
+                    base, f"/sub/{sub_token}?format=mihomo&platform=linux", method="GET"
                 )
                 if subscription_status != 403:
                     raise RuntimeError("disabled user subscription did not return HTTP 403")
@@ -1289,7 +1289,7 @@ def main():
                 if not reenabled_user["enabled"] or not reenabled_user["expires_at"]:
                     raise RuntimeError("could not reactivate the test user with a future expiry")
                 subscription_status, _ = request(
-                    base, f"/sub/{sub_token}/clash.yaml", method="GET"
+                    base, f"/sub/{sub_token}?format=mihomo&platform=linux", method="GET"
                 )
                 if subscription_status != 200:
                     raise RuntimeError("the reactivated user's subscription did not become available")
@@ -1394,7 +1394,7 @@ def main():
                     stop_process_group(process)
                 traffic_generator_processes.clear()
                 subscription_status, _ = request(
-                    base, f"/sub/{sub_token}/clash.yaml", method="GET"
+                    base, f"/sub/{sub_token}?format=mihomo&platform=linux", method="GET"
                 )
                 if subscription_status != 403:
                     raise RuntimeError("an expired user's subscription did not return HTTP 403")
@@ -1435,7 +1435,7 @@ def main():
                 )
                 quota_subscription_token = quota_subscription["token"]
                 secrets_to_scrub.append(quota_subscription_token)
-                status, quota_yaml = request(base, f"/sub/{quota_subscription_token}/clash.yaml")
+                status, quota_yaml = request(base, f"/sub/{quota_subscription_token}?format=mihomo&platform=linux")
                 if status != 200: raise RuntimeError("quota user subscription unavailable")
                 quota_cert, quota_key = temp / "quota-client.pem", temp / "quota-client-key.pem"
                 quota_material = subscription_material(quota_yaml, quota_cert, quota_key)
@@ -1562,7 +1562,7 @@ def main():
                     if denied.returncode == 0:
                         raise RuntimeError("an over-quota client still forwarded proxy traffic")
                 quota_subscription_status, _ = request(
-                    base, f"/sub/{quota_subscription_token}/clash.yaml", method="GET"
+                    base, f"/sub/{quota_subscription_token}?format=mihomo&platform=linux", method="GET"
                 )
                 if quota_subscription_status != 403:
                     raise RuntimeError("over-quota subscription did not return HTTP 403")
@@ -1710,7 +1710,7 @@ def main():
                     if denied.returncode == 0:
                         raise RuntimeError("a rotated-out client still forwarded proxy traffic")
                 rotation_subscription_status, rotation_subscription_body = request(
-                    base, f"/sub/{quota_subscription_token}/clash.yaml", method="GET"
+                    base, f"/sub/{quota_subscription_token}?format=mihomo&platform=linux", method="GET"
                 )
                 if (
                     rotation_subscription_status != 200
@@ -1739,7 +1739,7 @@ def main():
                 fresh_sub = expect(f"/api/v1/users/{fresh_id}/subscription", "POST", {"expected_revision":2})["token"]
                 secrets_to_scrub.append(fresh_sub)
                 def fresh_material(label):
-                    status, body = request(base, f"/sub/{fresh_sub}/clash.yaml")
+                    status, body = request(base, f"/sub/{fresh_sub}?format=mihomo&platform=linux")
                     if status != 200: raise RuntimeError("managed rotation subscription unavailable")
                     cert, key = temp / (label+".pem"), temp / (label+"-key.pem")
                     material = subscription_material(body, cert, key)
@@ -1822,7 +1822,7 @@ def main():
                     node_revision = update["revision"]
                     job = next(j for j in expect("/api/v1/jobs") if j.get("node_id")==node_id and j.get("target_revision")==node_revision and j["kind"]=="sync")
                     if wait_job(job["id"])["job"]["status"]!="succeeded": raise RuntimeError("managed off/on deployment failed")
-                    status, body = request(base,f"/sub/{fresh_sub}/clash.yaml")
+                    status, body = request(base,f"/sub/{fresh_sub}?format=mihomo&platform=linux")
                     proxy = yaml.safe_load(body)["proxies"][0]
                     if mode=="off" and any(k in proxy for k in ("certificate","private-key")): raise RuntimeError("off mode retained client material")
                     if mode=="managed" and proxy.get("certificate")!=current[0]: raise RuntimeError("same-CA restoration did not reuse healthy shared material")

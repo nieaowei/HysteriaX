@@ -94,9 +94,9 @@ impl Platform {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub(super) struct Version(u32, u32, u32);
+pub(super) struct Version(pub(super) u32, pub(super) u32, pub(super) u32);
 
-#[derive(Default)]
+#[derive(Default, Clone, Copy)]
 pub(super) struct ClientInfo {
     pub name: &'static str,
     pub format: Option<SubscriptionFormat>,
@@ -181,6 +181,7 @@ fn parse_version(value: &str) -> Option<Version> {
     Some(Version(major, minor, patch))
 }
 
+#[derive(Clone)]
 pub(super) struct SubscriptionRealm {
     pub server_url: String,
     pub token: String,
@@ -204,7 +205,10 @@ impl SubscriptionRealm {
 
 /// Protocol-neutral connection data, loaded from the deployed configuration and assignment.
 /// Deliberately does not implement Debug or Serialize.
+#[derive(Clone)]
 pub(super) struct SubscriptionNode {
+    pub id: String,
+    pub display_name: String,
     pub name: String,
     pub server: String,
     pub port: u16,
@@ -255,7 +259,7 @@ impl SubscriptionNode {
         }
     }
 
-    fn incompatible(
+    pub(super) fn incompatible(
         &self,
         format: SubscriptionFormat,
         client: &ClientInfo,
@@ -330,7 +334,7 @@ impl SubscriptionNode {
         None
     }
 
-    fn singbox(&self) -> Value {
+    pub(super) fn singbox(&self) -> Value {
         let mut tls = json!({"enabled": true, "insecure": self.skip_cert_verify});
         if let Some(sni) = &self.sni {
             tls["server_name"] = json!(sni);
@@ -498,14 +502,11 @@ pub(super) fn render_subscription(
         ));
     }
     let (body, content_type) = match format {
-        SubscriptionFormat::Mihomo => (
-            render_mihomo_template(&compatible, client.platform)?,
-            "application/yaml; charset=utf-8",
-        ),
-        SubscriptionFormat::Singbox => (
-            render_singbox_template(&compatible, client)?,
-            "application/json; charset=utf-8",
-        ),
+        SubscriptionFormat::Mihomo | SubscriptionFormat::Singbox => {
+            return Err(ApiError::bad_request(
+                "native subscriptions require a published template and explicit platform",
+            ));
+        }
         SubscriptionFormat::Uri | SubscriptionFormat::Base64 => {
             let mut body = compatible
                 .iter()
@@ -532,161 +533,72 @@ pub(super) fn render_subscription(
     Ok(response)
 }
 
-/// Keep connection credentials dynamic; the template contains only shared policy.
-fn render_singbox_template(
-    nodes: &[&SubscriptionNode],
-    client: &ClientInfo,
-) -> Result<String, ApiError> {
-    let mut config: Value = serde_json::from_str(include_str!("singbox-template.json"))
-        .map_err(|_| ApiError::internal())?;
-    filter_singbox_platform(&mut config, client.platform);
-    let groups = config["outbounds"]
-        .as_array_mut()
-        .ok_or_else(ApiError::internal)?;
-    // The supplied policy keeps Singapore out of the general selection groups.
-    let mut selectable: Vec<_> = nodes
-        .iter()
-        .copied()
-        .filter(|node| !node.name.contains("新加坡"))
-        .collect();
-    if selectable.is_empty() {
-        selectable.extend_from_slice(nodes);
-    }
-    for group in groups.iter_mut() {
-        if let Some(entries) = group["outbounds"].as_array() {
-            let mut names = Vec::new();
-            for entry in entries {
-                let tag = entry.as_str().ok_or_else(ApiError::internal)?;
-                if let Some(region) = tag.strip_prefix("{{").and_then(|s| s.strip_suffix("}}")) {
-                    let matches: Vec<_> = selectable
-                        .iter()
-                        .filter(|node| region == "nodes" || node.name.contains(region))
-                        .map(|node| json!(node.name))
-                        .collect();
-                    // Missing regions still have a usable proxy; empty subscriptions use direct.
-                    if matches.is_empty() {
-                        names.extend(selectable.iter().map(|node| json!(node.name)));
-                    } else {
-                        names.extend(matches);
-                    }
-                } else {
-                    names.push(entry.clone());
-                }
-            }
-            if names.is_empty() {
-                names.push(json!("直连"));
-            }
-            if let Some(preferred) = group["default"]
-                .as_str()
-                .and_then(|s| s.strip_prefix("{{"))
-                .and_then(|s| s.strip_suffix("}}"))
-            {
-                group["default"] = names
-                    .iter()
-                    .find(|name| {
-                        name.as_str()
-                            .is_some_and(|name| name.starts_with(preferred))
-                    })
-                    .unwrap_or(&names[0])
-                    .clone();
-            }
-            group["outbounds"] = json!(names);
-        }
-    }
-    let mut outbounds: Vec<_> = nodes.iter().map(|node| node.singbox()).collect();
-    outbounds.append(groups);
-    config["outbounds"] = json!(outbounds);
-    serde_json::to_string_pretty(&config).map_err(|_| ApiError::internal())
-}
-
-/// Filter host-specific listeners while keeping node credentials and routing policy intact.
-fn filter_singbox_platform(config: &mut Value, platform: Platform) {
-    if matches!(platform, Platform::Unknown | Platform::Linux) {
-        return;
-    }
-    if let Some(inbounds) = config["inbounds"].as_array_mut() {
-        inbounds.retain(|inbound| match inbound["type"].as_str() {
-            Some("tproxy") => false,
-            Some("redirect") => platform == Platform::Macos,
-            _ => true,
-        });
-        for inbound in inbounds {
-            if inbound["type"] == "tun"
-                && let Some(options) = inbound.as_object_mut()
-            {
-                options.remove("auto_redirect"); // Linux-only firewall integration.
-                if matches!(
-                    platform,
-                    Platform::Macos | Platform::Android | Platform::Ios
-                ) {
-                    options.remove("interface_name"); // OS / VPN service owns the name.
-                }
-                if matches!(platform, Platform::Android | Platform::Ios) {
-                    options.remove("auto_route"); // Routing is managed by the VPN service.
-                }
-            }
-        }
-    }
-}
-
-fn render_mihomo_template(
-    nodes: &[&SubscriptionNode],
-    platform: Platform,
-) -> Result<String, ApiError> {
-    let mut config: serde_yaml::Value = serde_yaml::from_str(include_str!("mihomo-template.yaml"))
-        .map_err(|_| ApiError::internal())?;
-    if matches!(
-        platform,
-        Platform::Windows | Platform::Android | Platform::Ios
-    ) {
-        config
-            .as_mapping_mut()
-            .ok_or_else(ApiError::internal)?
-            .remove(serde_yaml::Value::from("redir-port"));
-    }
-    let proxies = nodes
-        .iter()
-        .map(|node| node.to_mihomo())
-        .collect::<Vec<_>>();
-    config["proxies"] = serde_yaml::to_value(proxies).map_err(|_| ApiError::internal())?;
-
-    let mut names = nodes
-        .iter()
-        .map(|node| node.name.clone())
-        .collect::<Vec<_>>();
-    if names.is_empty() {
-        // Keep the fixed rule chain valid when a user has no deployed node assignments.
-        names.push("DIRECT".into());
-    }
-    config["proxy-groups"][0]["proxies"] =
-        serde_yaml::to_value(names).map_err(|_| ApiError::internal())?;
-    serde_yaml::to_string(&config).map_err(|_| ApiError::internal())
-}
-
-fn html_escape(value: &str) -> String {
-    value
-        .replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&#39;")
-}
-
-pub(super) fn selection_page(auto_url: &str) -> Response {
-    let html = include_str!("selection.html").replace("{{AUTO_URL}}", &html_escape(auto_url));
-    let mut response = Response::new(Body::from(html));
-    response.headers_mut().insert(
-        header::CONTENT_TYPE,
-        HeaderValue::from_static("text/html; charset=utf-8"),
-    );
-    response
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::api::subscriptions::build_node;
 
+    fn render_singbox_template(
+        nodes: &[&SubscriptionNode],
+        client: &ClientInfo,
+    ) -> Result<String, ApiError> {
+        let client = ClientInfo {
+            platform: if client.platform == Platform::Unknown {
+                Platform::Linux
+            } else {
+                client.platform
+            },
+            ..*client
+        };
+        let output = super::super::templates::render_nodes_for_test(
+            "singbox",
+            &nodes.iter().map(|n| (*n).clone()).collect::<Vec<_>>(),
+            &client,
+        )?;
+        super::super::templates::document::serialize("singbox", &output["config"])
+    }
+    fn render_mihomo_template(
+        nodes: &[&SubscriptionNode],
+        platform: Platform,
+    ) -> Result<String, ApiError> {
+        let client = ClientInfo {
+            platform: if platform == Platform::Unknown {
+                Platform::Linux
+            } else {
+                platform
+            },
+            ..ClientInfo::default()
+        };
+        let output = super::super::templates::render_nodes_for_test(
+            "mihomo",
+            &nodes.iter().map(|n| (*n).clone()).collect::<Vec<_>>(),
+            &client,
+        )?;
+        super::super::templates::document::serialize("mihomo", &output["config"])
+    }
+    fn render_subscription(
+        nodes: &[SubscriptionNode],
+        format: SubscriptionFormat,
+        client: &ClientInfo,
+    ) -> Result<Response, ApiError> {
+        if matches!(format, SubscriptionFormat::Uri | SubscriptionFormat::Base64) {
+            return super::render_subscription(nodes, format, client);
+        }
+        let format = if format == SubscriptionFormat::Mihomo {
+            "mihomo"
+        } else {
+            "singbox"
+        };
+        let client = ClientInfo {
+            platform: if client.platform == Platform::Unknown {
+                Platform::Linux
+            } else {
+                client.platform
+            },
+            ..*client
+        };
+        super::super::templates::response_from_seed_for_test(format, nodes, &client)
+    }
     fn node() -> SubscriptionNode {
         build_node(
             "東京: #&",
@@ -809,7 +721,12 @@ mod tests {
                 .await
                 .unwrap();
             let json: Value = serde_json::from_slice(&bytes).unwrap();
-            let outbound = &json["outbounds"][0];
+            let outbound = json["outbounds"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|o| o["type"] == "hysteria2")
+                .unwrap();
             assert_eq!(outbound["tls"]["client_certificate"], json!(["cert"]));
             assert_eq!(outbound["tls"]["client_key"], json!(["key"]));
             assert_eq!(outbound["obfs"]["type"], "gecko");
@@ -1022,7 +939,15 @@ mod tests {
             let body = render_singbox_template(&[&n], &ClientInfo::detect(ua)).unwrap();
             let config: Value = serde_json::from_str(&body).unwrap();
             assert!(config["dns"].get("optimistic").is_some());
-            assert_eq!(config["outbounds"][0]["disable_chrome_parrot"], true);
+            assert_eq!(
+                config["outbounds"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|o| o["type"] == "hysteria2")
+                    .unwrap()["disable_chrome_parrot"],
+                true
+            );
         }
     }
 
@@ -1111,7 +1036,12 @@ mod tests {
                     Some(true)
                 }
             );
-            assert_eq!(config["outbounds"][0], n.singbox());
+            assert!(
+                config["outbounds"]
+                    .as_array()
+                    .unwrap()
+                    .contains(&n.singbox())
+            );
             assert_eq!(config["route"]["final"], "默认代理");
             assert!(
                 config["route"]["rules"]
@@ -1224,6 +1154,8 @@ mod tests {
         ] {
             let mut n = node();
             n.name = name.into();
+            n.display_name = name.into();
+            n.id = name.into();
             nodes.push(n);
         }
         for assigned in [nodes.iter().collect::<Vec<_>>(), vec![&nodes[0]], vec![]] {
@@ -1269,7 +1201,7 @@ mod tests {
                         .unwrap()
                         .contains(&json!("新加坡-new"))
                 );
-                assert_eq!(group("日本节点")["outbounds"].as_array().unwrap().len(), 4);
+                assert_eq!(group("日本节点")["outbounds"].as_array().unwrap().len(), 1);
             }
         }
     }
@@ -1282,25 +1214,5 @@ mod tests {
         for value in ["700 kbps", "1.5 Mbps", "", "18446744073709551615 Tbps"] {
             assert_eq!(bandwidth_mbps(value), None);
         }
-    }
-
-    #[tokio::test]
-    async fn page_escapes_urls_and_has_all_explicit_format_links() {
-        let response = selection_page("https://example/sub/token?x=\"<&");
-        assert_eq!(
-            response.headers()[header::CONTENT_TYPE],
-            "text/html; charset=utf-8"
-        );
-        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let html = String::from_utf8(bytes.to_vec()).unwrap();
-        for format in ["mihomo", "singbox", "base64", "uri"] {
-            assert!(html.contains(&format!("format={format}")));
-        }
-        assert!(html.contains("&quot;&lt;&amp;"));
-        assert!(html.contains("input.select()"));
-        assert!(!html.contains("{{AUTO_URL}}"));
-        assert!(!html.contains("src=\"http"));
     }
 }

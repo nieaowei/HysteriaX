@@ -2,11 +2,13 @@ import SwiftUI
 
 @main
 struct HysteriaXApp: App {
+    @NSApplicationDelegateAdaptor(TemplateDraftTerminationGuard.self) private var terminationGuard
     @State private var store = ManagementStore()
 
     var body: some Scene {
         WindowGroup("HysteriaX", id: "main") {
             ContentView(store: store)
+                .onAppear { terminationGuard.store = store }
                 .frame(minWidth: 920, maxWidth: .infinity, minHeight: 600, maxHeight: .infinity)
                 .environment(\.locale, L10n.locale)
                 .onReceive(NotificationCenter.default.publisher(for: NSLocale.currentLocaleDidChangeNotification)) { _ in

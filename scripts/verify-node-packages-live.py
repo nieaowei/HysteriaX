@@ -177,7 +177,7 @@ def main():
                     api(path + "/usage", "PUT", {"expected_revision": detail()["revision"], "usage_bytes": 1_000_000_000})
                     assert not auth()
                     wait_for(lambda: online() == 0, "active proxy disconnect", 45)
-                    status, body = matrix.request(base, f"/sub/{sub}/clash.yaml")
+                    status, body = matrix.request(base, f"/sub/{sub}?format=mihomo&platform=linux")
                     assert status == 200 and b"Package live node" not in body
                     assert matrix.run(["docker", "exec", name, "systemctl", "is-active", "hysteriax.service"]).stdout.strip() == "active"
                     api(path + "/usage", "PUT", {"expected_revision": detail()["revision"], "usage_bytes": 0, "reset": True})

@@ -284,7 +284,7 @@ def main():
         token = current["active"]["token"]
 
     def proxy():
-        content = api.get("/sub/" + token + "/clash.yaml", raw=True)
+        content = api.get("/sub/" + token + "?format=mihomo&platform=linux", raw=True)
         return yaml.safe_load(content)["proxies"][0]
 
     with tempfile.TemporaryDirectory(prefix="hysteriax-dns-client-") as folder:

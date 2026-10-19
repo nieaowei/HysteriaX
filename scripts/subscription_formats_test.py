@@ -3,6 +3,7 @@ import base64
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import pathlib
+import re
 import socket
 import subprocess
 import threading
@@ -45,6 +46,9 @@ def run(base, admin, database, temp, advanced_token, revoked_token, advanced_use
         return json.loads(body) if body else None
 
     def expect(token, query="", ua=None, status=200, mime=None):
+        # Native downloads require a target device; unknown-client page cases remain automatic.
+        if "platform=" not in query and not re.search(r"\((linux|windows|macos|android|ios)\)", ua or "", re.I) and (mime in ["application/yaml", "application/json"] or "format=mihomo" in query or "format=singbox" in query or (status == 422 and ua and "sing" in ua)):
+            query += ("&" if "?" in query else "?") + "platform=linux"
         code, body, headers = fetch(base, f"/sub/{token}" + query, ua)
         if code != status:
             raise RuntimeError(f"subscription case {query!r}, UA {ua!r}: expected {status}, got {code}")
@@ -57,14 +61,14 @@ def run(base, admin, database, temp, advanced_token, revoked_token, advanced_use
         return body, headers
 
     active = api(f"/api/v1/users/{advanced_user_id}/subscription")["active"]
-    if not active.get("auto_url", "").endswith(f"/sub/{advanced_token}") or not active["url"].endswith("/clash.yaml"):
+    if "auto_url" in active or not active["url"].endswith(f"/sub/{advanced_token}"):
         raise RuntimeError("management subscription URL compatibility failed")
     for ua in [None, "", "curl/8.0", "Mozilla/5.0", "Clash/1.0", "unrecognized/1.0"]:
         page, _ = expect(advanced_token, ua=ua, mime="text/html")
-        for format_ in ["mihomo", "singbox", "base64", "uri"]:
-            if f"?format={format_}".encode() not in page:
+        for format_ in ["mihomo", "singbox"]:
+            if f"default-{format_}".encode() not in page:
                 raise RuntimeError("selection page is missing a format link")
-        if b"input.select()" not in page or b"navigator.clipboard" not in page or b"{{AUTO_URL}}" in page:
+        if b"readonly" not in page or b"platform=linux" not in page or b"{{AUTO_URL}}" in page:
             raise RuntimeError("selection page copy/manual fallback failed")
     expect(advanced_token, "?format=invalid", status=400)
     expect(advanced_token, "?format=uri&format=singbox", status=400)
@@ -111,8 +115,8 @@ def run(base, admin, database, temp, advanced_token, revoked_token, advanced_use
     credential = grant_group(group_request,user,[node])["created_credentials"][0]["hy2_credential"]
     receipt = api(f"/api/v1/users/{user}/subscription", {"expected_revision": 2})
     token = receipt["token"]
-    if not receipt.get("auto_url", "").endswith(f"/sub/{token}"):
-        raise RuntimeError("rotation response did not expose auto_url")
+    if "auto_url" in receipt or not receipt["url"].endswith(f"/sub/{token}"):
+        raise RuntimeError("rotation response did not expose the canonical URL")
     with database.connect() as connection:
         connection.execute("UPDATE nodes SET deployed_revision = desired_revision, deployed_config_enc = desired_config_enc, state = 'deployed' WHERE id = %s", (node,))
     assert api(f"/api/v1/users/{advanced_user_id}")["revision"]==5
@@ -153,11 +157,9 @@ def run(base, admin, database, temp, advanced_token, revoked_token, advanced_use
         yaml_body, _ = expect(token, f"?format=mihomo&platform={platform_}", mime="application/yaml")
         if ("redir-port" in yaml.safe_load(yaml_body)) != (platform_ in ["linux", "openwrt", "macos"]):
             raise RuntimeError("Mihomo platform filtering failed")
-        legacy_status, legacy, legacy_headers = fetch(base, f"/sub/{token}/clash.yaml?platform={platform_}", "mihomo/1.19.31")
-        if legacy_status != 200 or legacy_headers.get("Vary") != "User-Agent":
-            raise RuntimeError("fixed YAML platform response headers failed")
-        if ("redir-port" in yaml.safe_load(legacy)) != (platform_ in ["linux", "openwrt", "macos"]):
-            raise RuntimeError("fixed YAML platform filtering failed")
+        legacy_status, _, _ = fetch(base, f"/sub/{token}/clash.yaml?platform={platform_}")
+        if legacy_status != 404:
+            raise RuntimeError("retired YAML route is still active")
     for os_ in ["linux", "windows", "macos", "android", "ios", "linux"]:
         body, _ = expect(token, "?format=singbox", ua=f"sing-box/1.14.2 ({os_})", mime="application/json")
         types = {i["type"] for i in json.loads(body)["inbounds"]}
@@ -165,8 +167,8 @@ def run(base, admin, database, temp, advanced_token, revoked_token, advanced_use
             raise RuntimeError("UA platform detection/cache isolation failed")
     expect(token, ua="sing-box/1.10.0", status=422)
     code, body, headers = fetch(base, f"/sub/{token}/clash.yaml?format=uri", "sing-box/1.14.2")
-    if code != 200 or headers.get_content_type() != "application/yaml":
-        raise RuntimeError("legacy route negotiated another format")
+    if code != 404:
+        raise RuntimeError("retired route is still active")
     uri, _ = expect(token, "?format=uri", mime="text/plain")
     encoded, _ = expect(token, "?format=base64", mime="text/plain")
     if base64.b64decode(encoded) != uri:
@@ -192,8 +194,8 @@ def run(base, admin, database, temp, advanced_token, revoked_token, advanced_use
         for query in ["", "?format=auto", "?format=mihomo", "?format=singbox", "?format=base64", "?format=uri"]:
             expect(token, query, status=403)
         code, _, headers = fetch(base, f"/sub/{token}/clash.yaml")
-        if code != 403 or headers.get("Cache-Control") != "private, no-store":
-            raise RuntimeError("legacy subscription eligibility/caching regression")
+        if code != 404:
+            raise RuntimeError("retired subscription endpoint regression")
         with database.connect() as connection:
             connection.execute(f"UPDATE users SET {restore} WHERE id = %s", (user,))
 

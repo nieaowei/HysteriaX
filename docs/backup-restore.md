@@ -51,3 +51,5 @@ explicit off/managed configuration has been deployed successfully.
 管理数据库备份包含 ACME 策略和凭据引用，**不包含节点上生成的 ACME 账户私钥、EAB、服务端私钥和证书版本**。每个节点须单独以加密方式备份 `/etc/hysteriax/acme.json`、`/var/lib/hysteriax-acme/`、`/var/lib/hysteriax/certificates/` 及实际 `acme.dir`（默认 `/var/lib/hysteriax/acme`）。备份前停止证书组件或持有节点本地写锁，保留属主、权限与 `current` 符号链接，避免混合不同版本的证书和私钥。
 
 恢复后先检查目录所有权与有效期，再执行显式同步。不要将私钥、DNS 秘密或 EAB 附在诊断日志中。仅恢复管理数据库不会自动修改既有节点，也不会自动迁移内置 ACME。
+
+Subscription templates, encrypted drafts, immutable publication history, default pointers, and the initialization marker are included in the whole-database backup (migration 0037). Preserve the same master key when restoring. A restart must restore existing publication state rather than re-seed or publish drafts. See [subscription upgrade](subscriptions.md).

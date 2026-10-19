@@ -44,6 +44,7 @@ x509-parser = { version = "0.18", features = ["verify"] }
 rcgen = { version = "=0.14.5", features = ["x509-parser"] }
 time = "=0.3.44"
 redis = { version = "1", features = ["tokio-comp", "connection-manager"] }
+hysteriax-template-validator = { path = "../hysteriax-template-validator" }
 
 [dev-dependencies]
 reqwest = { workspace = true, features = ["json"] }

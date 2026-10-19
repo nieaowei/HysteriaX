@@ -19,33 +19,24 @@ final class SubscriptionURLProtocol: URLProtocol, @unchecked Sendable {
 @main struct SubscriptionClientTests {
     static func main() async throws {
         let decoder = JSONDecoder()
-        let old = Data(#"{"id":"id","token":"token","url":"https://example.test/sub/token/clash.yaml","created_at":"2026-10-02T00:00:00Z"}"#.utf8)
-        let active = try decoder.decode(ActiveSubscription.self, from: old)
-        precondition(active.autoUrl == nil)
-        precondition((active.autoUrl ?? active.url).hasSuffix("/clash.yaml"))
-        let modern = Data(#"{"id":"id","token":"token","url":"https://example.test/sub/token/clash.yaml","auto_url":"https://example.test/sub/token","created_at":"2026-10-02T00:00:00Z"}"#.utf8)
-        let current = try decoder.decode(ActiveSubscription.self, from: modern)
-        precondition((current.autoUrl ?? current.url) == "https://example.test/sub/token")
-        let receipt = try decoder.decode(SubscriptionReceipt.self, from: Data(#"{"user_id":"id","revision":2,"token":"token","url":"https://example.test/sub/token/clash.yaml","note":"rotated"}"#.utf8))
-        precondition(receipt.autoUrl == nil)
+        let current = try decoder.decode(ActiveSubscription.self, from: Data(#"{"id":"id","token":"token","url":"https://example.test/sub/token","created_at":"2026-10-18T00:00:00Z"}"#.utf8))
+        precondition(current.url == "https://example.test/sub/token")
         for format in SubscriptionFileFormat.allCases {
-            let url = try format.subscriptionURL(autoURL: current.autoUrl, legacyURL: current.url)
-            let components = URLComponents(string: url)!
-            if format == .mihomo { precondition(url == current.url) }
-            else { precondition(components.queryItems == [URLQueryItem(name: "format", value: format.rawValue)]) }
-            precondition(["yaml", "json", "txt"].contains(format.fileExtension))
+            let native = format == .mihomo || format == .singbox
+            let url = try format.subscriptionURL(baseURL: current.url, template: native ? "chosen" : nil, platform: native ? "windows" : nil)
+            let query = Dictionary(uniqueKeysWithValues: URLComponents(string: url)!.queryItems!.map { ($0.name, $0.value!) })
+            precondition(query["format"] == format.rawValue)
+            precondition(query["template"] == (native ? "chosen" : nil))
+            precondition(query["platform"] == (native ? "windows" : nil))
         }
         do {
-            _ = try SubscriptionFileFormat.singbox.subscriptionURL(autoURL: nil, legacyURL: active.url)
-            preconditionFailure("old servers must not expose unsupported format URLs")
+            _ = try SubscriptionFileFormat.mihomo.subscriptionURL(baseURL: current.url)
+            preconditionFailure("native URLs must require an explicit target platform")
         } catch APIClientError.server { }
-        let legacyURL = try SubscriptionFileFormat.mihomo.subscriptionURL(autoURL: nil, legacyURL: active.url)
-        precondition(legacyURL == active.url)
-        let operation = APIEndpoints.downloadAutomaticSubscription(token: "token", format: "singbox")
+        let operation = APIEndpoints.downloadAutomaticSubscription(token: "token", template: "chosen", format: "singbox", platform: "ios")
         precondition(operation.path == "sub/token")
-        precondition(operation.queryParameters == ["format": "singbox"])
+        precondition(operation.queryParameters == ["template":"chosen", "format":"singbox", "platform":"ios"])
         precondition(APIEndpoints.downloadAutomaticSubscription(token: "token").queryParameters.isEmpty)
-        precondition(APIEndpoints.downloadSubscription(token: "token").path == "sub/token/clash.yaml")
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [SubscriptionURLProtocol.self]
         let client = APIClient(baseURL: URL(string: "https://example.test")!, token: "fixture", session: URLSession(configuration: configuration))
@@ -59,6 +50,6 @@ final class SubscriptionURLProtocol: URLProtocol, @unchecked Sendable {
                 preconditionFailure("HTML must not be exported as configuration")
             } catch APIClientError.server { }
         }
-        print("Swift subscription DTO compatibility, explicit URLs, extensions, and HTML export guard passed.")
+        print("Swift canonical subscription URLs, template/platform selection, and HTML export guard passed.")
     }
 }

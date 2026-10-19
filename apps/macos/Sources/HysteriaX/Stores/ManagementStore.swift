@@ -16,6 +16,11 @@ private struct ClientDisplaySnapshot: Codable {
 @MainActor
 @Observable
 final class ManagementStore {
+    var subscriptionTemplateEditors: [String: SubscriptionTemplateStore] = [:]
+    func subscriptionTemplateEditor() -> SubscriptionTemplateStore {
+        if let editor = subscriptionTemplateEditors[serviceAddress] { return editor }
+        let editor = SubscriptionTemplateStore(); subscriptionTemplateEditors[serviceAddress] = editor; return editor
+    }
     var serviceAddress = UserDefaults.standard.string(forKey: "serviceAddress") ?? ""
     var requestedSection: String?
     var supportsDNSManagement = false
@@ -554,36 +559,29 @@ final class ManagementStore {
             body: RevisionRequest(expectedRevision: user.revision)
         )
         await refresh()
-        return response.autoUrl ?? response.url
+        return response.url
     }
 
-    func currentSubscriptionURL(for user: UserSummary, format: SubscriptionFileFormat? = nil) async throws -> String {
+    func currentSubscriptionURL(for user: UserSummary, format: SubscriptionFileFormat? = nil, template: String? = nil, platform: String? = nil) async throws -> String {
         let api = try requireConnectedAPI()
         let subscription: SubscriptionStatus = try await api.get(APIEndpoints.getSubscription(id: user.id))
         guard let active = subscription.active else {
             throw APIClientError.server(L10n.text("此用户尚未生成订阅地址，请先生成订阅。"))
         }
         if let format {
-            return try format.subscriptionURL(autoURL: active.autoUrl, legacyURL: active.url)
+            return try format.subscriptionURL(baseURL: active.url, template: template, platform: platform)
         }
-        return active.autoUrl ?? active.url
+        return active.url
     }
 
-    func subscriptionFile(for user: UserSummary, format: SubscriptionFileFormat) async throws -> Data {
+    func subscriptionFile(for user: UserSummary, format: SubscriptionFileFormat, template: String? = nil, platform: String? = nil) async throws -> Data {
         let api = try requireConnectedAPI()
         let subscription: SubscriptionStatus = try await api.get(APIEndpoints.getSubscription(id: user.id))
         guard let active = subscription.active else {
             throw APIClientError.server(L10n.text("此用户尚未生成订阅地址，请先生成订阅再导出。"))
         }
-        let operation: APIOperation<NoRequest, NoResponse>
-        if format == .mihomo {
-            operation = APIEndpoints.downloadSubscription(token: active.token)
-        } else {
-            guard active.autoUrl != nil else {
-                throw APIClientError.server(L10n.text("此服务端尚未提供多格式订阅，请先升级服务端。"))
-            }
-            operation = APIEndpoints.downloadAutomaticSubscription(token: active.token, format: format.rawValue)
-        }
+        _ = try format.subscriptionURL(baseURL: active.url, template: template, platform: platform)
+        let operation = APIEndpoints.downloadAutomaticSubscription(token: active.token, template: template, format: format.rawValue, platform: platform)
         return try await api.download(operation, accept: format.accept)
     }
 

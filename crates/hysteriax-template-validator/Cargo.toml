@@ -1,0 +1,15 @@
+[package]
+name = "hysteriax-template-validator"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+jsonschema = { version = "=0.59.0", default-features = false, features = ["macros"] }
+serde_json.workspace = true
+
+[build-dependencies]
+jsonschema = { version = "=0.59.0", default-features = false }
+serde_json.workspace = true

@@ -1,0 +1,7098 @@
+{
+  "mihomo": [
+    {
+      "name": "template-linux",
+      "paths": [],
+      "valid": true
+    },
+    {
+      "name": "template-macos",
+      "paths": [],
+      "valid": true
+    },
+    {
+      "name": "template-windows",
+      "paths": [],
+      "valid": true
+    },
+    {
+      "name": "template-android",
+      "paths": [],
+      "valid": true
+    },
+    {
+      "name": "template-ios",
+      "paths": [],
+      "valid": true
+    },
+    {
+      "name": "unknown-extensions",
+      "paths": [],
+      "valid": true
+    },
+    {
+      "name": "port-valid-0",
+      "paths": [],
+      "valid": true
+    },
+    {
+      "name": "port-valid-65535",
+      "paths": [],
+      "valid": true
+    },
+    {
+      "name": "port-valid-7890.0",
+      "paths": [],
+      "valid": true
+    },
+    {
+      "name": "port-invalid--1",
+      "paths": [
+        "/mixed-port"
+      ],
+      "valid": false
+    },
+    {
+      "name": "port-invalid-65536",
+      "paths": [
+        "/mixed-port"
+      ],
+      "valid": false
+    },
+    {
+      "name": "port-invalid-1.5",
+      "paths": [
+        "/mixed-port"
+      ],
+      "valid": false
+    },
+    {
+      "name": "port-invalid-7890",
+      "paths": [
+        "/mixed-port"
+      ],
+      "valid": false
+    },
+    {
+      "name": "port-invalid-None",
+      "paths": [
+        "/mixed-port"
+      ],
+      "valid": false
+    },
+    {
+      "name": "port-invalid-True",
+      "paths": [
+        "/mixed-port"
+      ],
+      "valid": false
+    },
+    {
+      "name": "required-name",
+      "paths": [
+        "/proxies/0"
+      ],
+      "valid": false
+    },
+    {
+      "name": "required-type",
+      "paths": [
+        "/proxies/0"
+      ],
+      "valid": false
+    },
+    {
+      "name": "required-server",
+      "paths": [
+        "/proxies/0"
+      ],
+      "valid": false
+    },
+    {
+      "name": "required-password",
+      "paths": [
+        "/proxies/0"
+      ],
+      "valid": false
+    },
+    {
+      "name": "log-level-INFO",
+      "paths": [],
+      "valid": true
+    },
+    {
+      "name": "log-level-silent",
+      "paths": [],
+      "valid": true
+    },
+    {
+      "name": "log-level-invalid",
+      "paths": [
+        "/log-level"
+      ],
+      "valid": false
+    },
+    {
+      "name": "nodes-10",
+      "paths": [],
+      "valid": true
+    },
+    {
+      "name": "nodes-100",
+      "paths": [],
+      "valid": true
+    },
+    {
+      "name": "nodes-500",
+      "paths": [],
+      "valid": true
+    },
+    {
+      "name": "mutate-rules/3-0",
+      "paths": [
+        "/rules/3"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rules/3-1",
+      "paths": [
+        "/rules/3"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rules/3-2",
+      "paths": [
+        "/rules/3"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rules/3-3",
+      "paths": [
+        "/rules/3"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rules/29-0",
+      "paths": [
+        "/rules/29"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rules/29-1",
+      "paths": [
+        "/rules/29"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rules/29-2",
+      "paths": [
+        "/rules/29"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rules/29-3",
+      "paths": [
+        "/rules/29"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/default-nameserver/3-0",
+      "paths": [
+        "/dns/default-nameserver/3"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/default-nameserver/3-1",
+      "paths": [
+        "/dns/default-nameserver/3"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/default-nameserver/3-2",
+      "paths": [
+        "/dns/default-nameserver/3"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/default-nameserver/3-3",
+      "paths": [
+        "/dns/default-nameserver/3"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rules/2-0",
+      "paths": [
+        "/rules/2"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rules/2-1",
+      "paths": [
+        "/rules/2"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rules/2-2",
+      "paths": [
+        "/rules/2"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rules/2-3",
+      "paths": [
+        "/rules/2"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/fallback-filter/ipcidr-0",
+      "paths": [
+        "/dns/fallback-filter/ipcidr"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/fallback-filter/ipcidr-1",
+      "paths": [
+        "/dns/fallback-filter/ipcidr"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/fallback-filter/ipcidr-2",
+      "paths": [],
+      "valid": true
+    },
+    {
+      "name": "mutate-dns/fallback-filter/ipcidr-3",
+      "paths": [
+        "/dns/fallback-filter/ipcidr"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rules/13-0",
+      "paths": [
+        "/rules/13"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rules/13-1",
+      "paths": [
+        "/rules/13"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rules/13-2",
+      "paths": [
+        "/rules/13"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rules/13-3",
+      "paths": [
+        "/rules/13"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-mixed-port-0",
+      "paths": [
+        "/mixed-port"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-mixed-port-1",
+      "paths": [
+        "/mixed-port"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-mixed-port-2",
+      "paths": [
+        "/mixed-port"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-mixed-port-3",
+      "paths": [
+        "/mixed-port"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-log-level-0",
+      "paths": [
+        "/log-level"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-log-level-1",
+      "paths": [
+        "/log-level"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-log-level-2",
+      "paths": [
+        "/log-level"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-log-level-3",
+      "paths": [
+        "/log-level"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/fallback-filter/geoip-0",
+      "paths": [
+        "/dns/fallback-filter/geoip"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/fallback-filter/geoip-1",
+      "paths": [
+        "/dns/fallback-filter/geoip"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/fallback-filter/geoip-2",
+      "paths": [
+        "/dns/fallback-filter/geoip"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/fallback-filter/geoip-3",
+      "paths": [
+        "/dns/fallback-filter/geoip"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/apple/type-0",
+      "paths": [
+        "/rule-providers/apple/type"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/apple/type-1",
+      "paths": [
+        "/rule-providers/apple/type"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/apple/type-2",
+      "paths": [
+        "/rule-providers/apple/type"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/apple/type-3",
+      "paths": [
+        "/rule-providers/apple/type"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxy-groups/2-0",
+      "paths": [
+        "/proxy-groups/2"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxy-groups/2-1",
+      "paths": [],
+      "valid": true
+    },
+    {
+      "name": "mutate-proxy-groups/2-2",
+      "paths": [
+        "/proxy-groups/2"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxy-groups/2-3",
+      "paths": [
+        "/proxy-groups/2"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/default-nameserver/0-0",
+      "paths": [
+        "/dns/default-nameserver/0"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/default-nameserver/0-1",
+      "paths": [
+        "/dns/default-nameserver/0"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/default-nameserver/0-2",
+      "paths": [
+        "/dns/default-nameserver/0"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/default-nameserver/0-3",
+      "paths": [
+        "/dns/default-nameserver/0"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns-0",
+      "paths": [
+        "/dns"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns-1",
+      "paths": [],
+      "valid": true
+    },
+    {
+      "name": "mutate-dns-2",
+      "paths": [
+        "/dns"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns-3",
+      "paths": [
+        "/dns"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-ipv6-0",
+      "paths": [
+        "/ipv6"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-ipv6-1",
+      "paths": [
+        "/ipv6"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-ipv6-2",
+      "paths": [
+        "/ipv6"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-ipv6-3",
+      "paths": [
+        "/ipv6"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/tld-not-cn/path-0",
+      "paths": [
+        "/rule-providers/tld-not-cn/path"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/tld-not-cn/path-1",
+      "paths": [
+        "/rule-providers/tld-not-cn/path"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/tld-not-cn/path-2",
+      "paths": [
+        "/rule-providers/tld-not-cn/path"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/tld-not-cn/path-3",
+      "paths": [
+        "/rule-providers/tld-not-cn/path"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/applications/type-0",
+      "paths": [
+        "/rule-providers/applications/type"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/applications/type-1",
+      "paths": [
+        "/rule-providers/applications/type"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/applications/type-2",
+      "paths": [
+        "/rule-providers/applications/type"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/applications/type-3",
+      "paths": [
+        "/rule-providers/applications/type"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/telegramcidr/type-0",
+      "paths": [
+        "/rule-providers/telegramcidr/type"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/telegramcidr/type-1",
+      "paths": [
+        "/rule-providers/telegramcidr/type"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/telegramcidr/type-2",
+      "paths": [
+        "/rule-providers/telegramcidr/type"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/telegramcidr/type-3",
+      "paths": [
+        "/rule-providers/telegramcidr/type"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/fallback-filter/geoip-code-0",
+      "paths": [
+        "/dns/fallback-filter/geoip-code"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/fallback-filter/geoip-code-1",
+      "paths": [
+        "/dns/fallback-filter/geoip-code"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/fallback-filter/geoip-code-2",
+      "paths": [
+        "/dns/fallback-filter/geoip-code"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/fallback-filter/geoip-code-3",
+      "paths": [
+        "/dns/fallback-filter/geoip-code"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/google/behavior-0",
+      "paths": [
+        "/rule-providers/google/behavior"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/google/behavior-1",
+      "paths": [
+        "/rule-providers/google/behavior"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/google/behavior-2",
+      "paths": [
+        "/rule-providers/google/behavior"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/google/behavior-3",
+      "paths": [
+        "/rule-providers/google/behavior"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/icloud/type-0",
+      "paths": [
+        "/rule-providers/icloud/type"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/icloud/type-1",
+      "paths": [
+        "/rule-providers/icloud/type"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/icloud/type-2",
+      "paths": [
+        "/rule-providers/icloud/type"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/icloud/type-3",
+      "paths": [
+        "/rule-providers/icloud/type"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/proxy-0",
+      "paths": [
+        "/rule-providers/proxy"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/proxy-1",
+      "paths": [],
+      "valid": true
+    },
+    {
+      "name": "mutate-rule-providers/proxy-2",
+      "paths": [
+        "/rule-providers/proxy"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/proxy-3",
+      "paths": [
+        "/rule-providers/proxy"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxy-groups/1-0",
+      "paths": [
+        "/proxy-groups/1"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxy-groups/1-1",
+      "paths": [],
+      "valid": true
+    },
+    {
+      "name": "mutate-proxy-groups/1-2",
+      "paths": [
+        "/proxy-groups/1"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxy-groups/1-3",
+      "paths": [
+        "/proxy-groups/1"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/enable-0",
+      "paths": [
+        "/dns/enable"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/enable-1",
+      "paths": [
+        "/dns/enable"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/enable-2",
+      "paths": [
+        "/dns/enable"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/enable-3",
+      "paths": [
+        "/dns/enable"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxies/0/obfs-max-packet-size-0",
+      "paths": [
+        "/proxies/0/obfs-max-packet-size"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxies/0/obfs-max-packet-size-1",
+      "paths": [
+        "/proxies/0/obfs-max-packet-size"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxies/0/obfs-max-packet-size-2",
+      "paths": [
+        "/proxies/0/obfs-max-packet-size"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxies/0/obfs-max-packet-size-3",
+      "paths": [
+        "/proxies/0/obfs-max-packet-size"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rules/27-0",
+      "paths": [
+        "/rules/27"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rules/27-1",
+      "paths": [
+        "/rules/27"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rules/27-2",
+      "paths": [
+        "/rules/27"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rules/27-3",
+      "paths": [
+        "/rules/27"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rules/0-0",
+      "paths": [
+        "/rules/0"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rules/0-1",
+      "paths": [
+        "/rules/0"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rules/0-2",
+      "paths": [
+        "/rules/0"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rules/0-3",
+      "paths": [
+        "/rules/0"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rules/15-0",
+      "paths": [
+        "/rules/15"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rules/15-1",
+      "paths": [
+        "/rules/15"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rules/15-2",
+      "paths": [
+        "/rules/15"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rules/15-3",
+      "paths": [
+        "/rules/15"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/google/type-0",
+      "paths": [
+        "/rule-providers/google/type"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/google/type-1",
+      "paths": [
+        "/rule-providers/google/type"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/google/type-2",
+      "paths": [
+        "/rule-providers/google/type"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/google/type-3",
+      "paths": [
+        "/rule-providers/google/type"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/proxy/behavior-0",
+      "paths": [
+        "/rule-providers/proxy/behavior"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/proxy/behavior-1",
+      "paths": [
+        "/rule-providers/proxy/behavior"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/proxy/behavior-2",
+      "paths": [
+        "/rule-providers/proxy/behavior"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/proxy/behavior-3",
+      "paths": [
+        "/rule-providers/proxy/behavior"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rules/8-0",
+      "paths": [
+        "/rules/8"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rules/8-1",
+      "paths": [
+        "/rules/8"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rules/8-2",
+      "paths": [
+        "/rules/8"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rules/8-3",
+      "paths": [
+        "/rules/8"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/google/interval-0",
+      "paths": [
+        "/rule-providers/google/interval"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/google/interval-1",
+      "paths": [
+        "/rule-providers/google/interval"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/google/interval-2",
+      "paths": [
+        "/rule-providers/google/interval"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/google/interval-3",
+      "paths": [
+        "/rule-providers/google/interval"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/google-0",
+      "paths": [
+        "/rule-providers/google"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/google-1",
+      "paths": [],
+      "valid": true
+    },
+    {
+      "name": "mutate-rule-providers/google-2",
+      "paths": [
+        "/rule-providers/google"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/google-3",
+      "paths": [
+        "/rule-providers/google"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/applications/path-0",
+      "paths": [
+        "/rule-providers/applications/path"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/applications/path-1",
+      "paths": [
+        "/rule-providers/applications/path"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/applications/path-2",
+      "paths": [
+        "/rule-providers/applications/path"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/applications/path-3",
+      "paths": [
+        "/rule-providers/applications/path"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/lancidr/path-0",
+      "paths": [
+        "/rule-providers/lancidr/path"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/lancidr/path-1",
+      "paths": [
+        "/rule-providers/lancidr/path"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/lancidr/path-2",
+      "paths": [
+        "/rule-providers/lancidr/path"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/lancidr/path-3",
+      "paths": [
+        "/rule-providers/lancidr/path"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/ipv6-0",
+      "paths": [
+        "/dns/ipv6"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/ipv6-1",
+      "paths": [
+        "/dns/ipv6"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/ipv6-2",
+      "paths": [
+        "/dns/ipv6"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/ipv6-3",
+      "paths": [
+        "/dns/ipv6"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxies/0/down-0",
+      "paths": [
+        "/proxies/0/down"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxies/0/down-1",
+      "paths": [
+        "/proxies/0/down"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxies/0/down-2",
+      "paths": [
+        "/proxies/0/down"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxies/0/down-3",
+      "paths": [
+        "/proxies/0/down"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/nameserver-0",
+      "paths": [
+        "/dns/nameserver"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/nameserver-1",
+      "paths": [
+        "/dns/nameserver"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/nameserver-2",
+      "paths": [],
+      "valid": true
+    },
+    {
+      "name": "mutate-dns/nameserver-3",
+      "paths": [
+        "/dns/nameserver"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxy-groups/2/type-0",
+      "paths": [
+        "/proxy-groups/2/type"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxy-groups/2/type-1",
+      "paths": [
+        "/proxy-groups/2/type"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxy-groups/2/type-2",
+      "paths": [
+        "/proxy-groups/2/type"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxy-groups/2/type-3",
+      "paths": [
+        "/proxy-groups/2/type"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxies/0/port-0",
+      "paths": [
+        "/proxies/0/port"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxies/0/port-1",
+      "paths": [
+        "/proxies/0/port"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxies/0/port-2",
+      "paths": [
+        "/proxies/0/port"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxies/0/port-3",
+      "paths": [
+        "/proxies/0/port"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/apple/url-0",
+      "paths": [
+        "/rule-providers/apple/url"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/apple/url-1",
+      "paths": [
+        "/rule-providers/apple/url"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/apple/url-2",
+      "paths": [
+        "/rule-providers/apple/url"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/apple/url-3",
+      "paths": [
+        "/rule-providers/apple/url"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-find-process-mode-0",
+      "paths": [
+        "/find-process-mode"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-find-process-mode-1",
+      "paths": [
+        "/find-process-mode"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-find-process-mode-2",
+      "paths": [
+        "/find-process-mode"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-find-process-mode-3",
+      "paths": [
+        "/find-process-mode"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/applications/behavior-0",
+      "paths": [
+        "/rule-providers/applications/behavior"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/applications/behavior-1",
+      "paths": [
+        "/rule-providers/applications/behavior"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/applications/behavior-2",
+      "paths": [
+        "/rule-providers/applications/behavior"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/applications/behavior-3",
+      "paths": [
+        "/rule-providers/applications/behavior"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/nameserver/1-0",
+      "paths": [
+        "/dns/nameserver/1"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/nameserver/1-1",
+      "paths": [
+        "/dns/nameserver/1"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/nameserver/1-2",
+      "paths": [
+        "/dns/nameserver/1"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/nameserver/1-3",
+      "paths": [
+        "/dns/nameserver/1"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rules/19-0",
+      "paths": [
+        "/rules/19"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rules/19-1",
+      "paths": [
+        "/rules/19"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rules/19-2",
+      "paths": [
+        "/rules/19"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rules/19-3",
+      "paths": [
+        "/rules/19"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/google/path-0",
+      "paths": [
+        "/rule-providers/google/path"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/google/path-1",
+      "paths": [
+        "/rule-providers/google/path"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/google/path-2",
+      "paths": [
+        "/rule-providers/google/path"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/google/path-3",
+      "paths": [
+        "/rule-providers/google/path"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxies/0/realm-opts/token-0",
+      "paths": [
+        "/proxies/0/realm-opts/token"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxies/0/realm-opts/token-1",
+      "paths": [
+        "/proxies/0/realm-opts/token"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxies/0/realm-opts/token-2",
+      "paths": [
+        "/proxies/0/realm-opts/token"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxies/0/realm-opts/token-3",
+      "paths": [
+        "/proxies/0/realm-opts/token"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-global-client-fingerprint-0",
+      "paths": [
+        "/global-client-fingerprint"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-global-client-fingerprint-1",
+      "paths": [
+        "/global-client-fingerprint"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-global-client-fingerprint-2",
+      "paths": [
+        "/global-client-fingerprint"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-global-client-fingerprint-3",
+      "paths": [
+        "/global-client-fingerprint"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/icloud/interval-0",
+      "paths": [
+        "/rule-providers/icloud/interval"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/icloud/interval-1",
+      "paths": [
+        "/rule-providers/icloud/interval"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/icloud/interval-2",
+      "paths": [
+        "/rule-providers/icloud/interval"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/icloud/interval-3",
+      "paths": [
+        "/rule-providers/icloud/interval"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/tld-not-cn/interval-0",
+      "paths": [
+        "/rule-providers/tld-not-cn/interval"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/tld-not-cn/interval-1",
+      "paths": [
+        "/rule-providers/tld-not-cn/interval"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/tld-not-cn/interval-2",
+      "paths": [
+        "/rule-providers/tld-not-cn/interval"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/tld-not-cn/interval-3",
+      "paths": [
+        "/rule-providers/tld-not-cn/interval"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/cncidr-0",
+      "paths": [
+        "/rule-providers/cncidr"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/cncidr-1",
+      "paths": [],
+      "valid": true
+    },
+    {
+      "name": "mutate-rule-providers/cncidr-2",
+      "paths": [
+        "/rule-providers/cncidr"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/cncidr-3",
+      "paths": [
+        "/rule-providers/cncidr"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/lancidr/type-0",
+      "paths": [
+        "/rule-providers/lancidr/type"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/lancidr/type-1",
+      "paths": [
+        "/rule-providers/lancidr/type"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/lancidr/type-2",
+      "paths": [
+        "/rule-providers/lancidr/type"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/lancidr/type-3",
+      "paths": [
+        "/rule-providers/lancidr/type"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/telegramcidr-0",
+      "paths": [
+        "/rule-providers/telegramcidr"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/telegramcidr-1",
+      "paths": [],
+      "valid": true
+    },
+    {
+      "name": "mutate-rule-providers/telegramcidr-2",
+      "paths": [
+        "/rule-providers/telegramcidr"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/telegramcidr-3",
+      "paths": [
+        "/rule-providers/telegramcidr"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/apple/path-0",
+      "paths": [
+        "/rule-providers/apple/path"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/apple/path-1",
+      "paths": [
+        "/rule-providers/apple/path"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/apple/path-2",
+      "paths": [
+        "/rule-providers/apple/path"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/apple/path-3",
+      "paths": [
+        "/rule-providers/apple/path"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/private-0",
+      "paths": [
+        "/rule-providers/private"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/private-1",
+      "paths": [],
+      "valid": true
+    },
+    {
+      "name": "mutate-rule-providers/private-2",
+      "paths": [
+        "/rule-providers/private"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/private-3",
+      "paths": [
+        "/rule-providers/private"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/icloud-0",
+      "paths": [
+        "/rule-providers/icloud"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/icloud-1",
+      "paths": [],
+      "valid": true
+    },
+    {
+      "name": "mutate-rule-providers/icloud-2",
+      "paths": [
+        "/rule-providers/icloud"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/icloud-3",
+      "paths": [
+        "/rule-providers/icloud"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxy-groups/0/type-0",
+      "paths": [
+        "/proxy-groups/0/type"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxy-groups/0/type-1",
+      "paths": [
+        "/proxy-groups/0/type"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxy-groups/0/type-2",
+      "paths": [
+        "/proxy-groups/0/type"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxy-groups/0/type-3",
+      "paths": [
+        "/proxy-groups/0/type"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/listen-0",
+      "paths": [
+        "/dns/listen"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/listen-1",
+      "paths": [
+        "/dns/listen"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/listen-2",
+      "paths": [
+        "/dns/listen"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/listen-3",
+      "paths": [
+        "/dns/listen"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rules/28-0",
+      "paths": [
+        "/rules/28"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rules/28-1",
+      "paths": [
+        "/rules/28"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rules/28-2",
+      "paths": [
+        "/rules/28"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rules/28-3",
+      "paths": [
+        "/rules/28"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rules/26-0",
+      "paths": [
+        "/rules/26"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rules/26-1",
+      "paths": [
+        "/rules/26"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rules/26-2",
+      "paths": [
+        "/rules/26"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rules/26-3",
+      "paths": [
+        "/rules/26"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/telegramcidr/path-0",
+      "paths": [
+        "/rule-providers/telegramcidr/path"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/telegramcidr/path-1",
+      "paths": [
+        "/rule-providers/telegramcidr/path"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/telegramcidr/path-2",
+      "paths": [
+        "/rule-providers/telegramcidr/path"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/telegramcidr/path-3",
+      "paths": [
+        "/rule-providers/telegramcidr/path"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/default-nameserver/1-0",
+      "paths": [
+        "/dns/default-nameserver/1"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/default-nameserver/1-1",
+      "paths": [
+        "/dns/default-nameserver/1"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/default-nameserver/1-2",
+      "paths": [
+        "/dns/default-nameserver/1"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/default-nameserver/1-3",
+      "paths": [
+        "/dns/default-nameserver/1"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxies/0/password-0",
+      "paths": [
+        "/proxies/0/password"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxies/0/password-1",
+      "paths": [
+        "/proxies/0/password"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxies/0/password-2",
+      "paths": [
+        "/proxies/0/password"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxies/0/password-3",
+      "paths": [
+        "/proxies/0/password"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxy-groups/2/proxies/0-0",
+      "paths": [
+        "/proxy-groups/2/proxies/0"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxy-groups/2/proxies/0-1",
+      "paths": [
+        "/proxy-groups/2/proxies/0"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxy-groups/2/proxies/0-2",
+      "paths": [
+        "/proxy-groups/2/proxies/0"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxy-groups/2/proxies/0-3",
+      "paths": [
+        "/proxy-groups/2/proxies/0"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxy-groups-0",
+      "paths": [
+        "/proxy-groups"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxy-groups-1",
+      "paths": [
+        "/proxy-groups"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxy-groups-2",
+      "paths": [
+        "/proxy-groups/0"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxy-groups-3",
+      "paths": [
+        "/proxy-groups"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxies/0/realm-opts/stun-servers-0",
+      "paths": [
+        "/proxies/0/realm-opts/stun-servers"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxies/0/realm-opts/stun-servers-1",
+      "paths": [
+        "/proxies/0/realm-opts/stun-servers"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxies/0/realm-opts/stun-servers-2",
+      "paths": [],
+      "valid": true
+    },
+    {
+      "name": "mutate-proxies/0/realm-opts/stun-servers-3",
+      "paths": [
+        "/proxies/0/realm-opts/stun-servers"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/direct/interval-0",
+      "paths": [
+        "/rule-providers/direct/interval"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/direct/interval-1",
+      "paths": [
+        "/rule-providers/direct/interval"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/direct/interval-2",
+      "paths": [
+        "/rule-providers/direct/interval"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/direct/interval-3",
+      "paths": [
+        "/rule-providers/direct/interval"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxies/0/realm-opts/stun-servers/0-0",
+      "paths": [
+        "/proxies/0/realm-opts/stun-servers/0"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxies/0/realm-opts/stun-servers/0-1",
+      "paths": [
+        "/proxies/0/realm-opts/stun-servers/0"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxies/0/realm-opts/stun-servers/0-2",
+      "paths": [
+        "/proxies/0/realm-opts/stun-servers/0"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxies/0/realm-opts/stun-servers/0-3",
+      "paths": [
+        "/proxies/0/realm-opts/stun-servers/0"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/lancidr/interval-0",
+      "paths": [
+        "/rule-providers/lancidr/interval"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/lancidr/interval-1",
+      "paths": [
+        "/rule-providers/lancidr/interval"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/lancidr/interval-2",
+      "paths": [
+        "/rule-providers/lancidr/interval"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/lancidr/interval-3",
+      "paths": [
+        "/rule-providers/lancidr/interval"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/fallback-0",
+      "paths": [
+        "/dns/fallback"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/fallback-1",
+      "paths": [
+        "/dns/fallback"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/fallback-2",
+      "paths": [],
+      "valid": true
+    },
+    {
+      "name": "mutate-dns/fallback-3",
+      "paths": [
+        "/dns/fallback"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxy-groups/1/type-0",
+      "paths": [
+        "/proxy-groups/1/type"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxy-groups/1/type-1",
+      "paths": [
+        "/proxy-groups/1/type"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxy-groups/1/type-2",
+      "paths": [
+        "/proxy-groups/1/type"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxy-groups/1/type-3",
+      "paths": [
+        "/proxy-groups/1/type"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/direct/behavior-0",
+      "paths": [
+        "/rule-providers/direct/behavior"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/direct/behavior-1",
+      "paths": [
+        "/rule-providers/direct/behavior"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/direct/behavior-2",
+      "paths": [
+        "/rule-providers/direct/behavior"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/direct/behavior-3",
+      "paths": [
+        "/rule-providers/direct/behavior"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/google/url-0",
+      "paths": [
+        "/rule-providers/google/url"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/google/url-1",
+      "paths": [
+        "/rule-providers/google/url"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/google/url-2",
+      "paths": [
+        "/rule-providers/google/url"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/google/url-3",
+      "paths": [
+        "/rule-providers/google/url"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/reject/url-0",
+      "paths": [
+        "/rule-providers/reject/url"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/reject/url-1",
+      "paths": [
+        "/rule-providers/reject/url"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/reject/url-2",
+      "paths": [
+        "/rule-providers/reject/url"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/reject/url-3",
+      "paths": [
+        "/rule-providers/reject/url"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/cncidr/behavior-0",
+      "paths": [
+        "/rule-providers/cncidr/behavior"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/cncidr/behavior-1",
+      "paths": [
+        "/rule-providers/cncidr/behavior"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/cncidr/behavior-2",
+      "paths": [
+        "/rule-providers/cncidr/behavior"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/cncidr/behavior-3",
+      "paths": [
+        "/rule-providers/cncidr/behavior"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/cncidr/type-0",
+      "paths": [
+        "/rule-providers/cncidr/type"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/cncidr/type-1",
+      "paths": [
+        "/rule-providers/cncidr/type"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/cncidr/type-2",
+      "paths": [
+        "/rule-providers/cncidr/type"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/cncidr/type-3",
+      "paths": [
+        "/rule-providers/cncidr/type"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rules/16-0",
+      "paths": [
+        "/rules/16"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rules/16-1",
+      "paths": [
+        "/rules/16"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rules/16-2",
+      "paths": [
+        "/rules/16"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rules/16-3",
+      "paths": [
+        "/rules/16"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxy-groups/1/proxies-0",
+      "paths": [
+        "/proxy-groups/1/proxies"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxy-groups/1/proxies-1",
+      "paths": [
+        "/proxy-groups/1/proxies"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxy-groups/1/proxies-2",
+      "paths": [],
+      "valid": true
+    },
+    {
+      "name": "mutate-proxy-groups/1/proxies-3",
+      "paths": [
+        "/proxy-groups/1/proxies"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/private/interval-0",
+      "paths": [
+        "/rule-providers/private/interval"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/private/interval-1",
+      "paths": [
+        "/rule-providers/private/interval"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/private/interval-2",
+      "paths": [
+        "/rule-providers/private/interval"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/private/interval-3",
+      "paths": [
+        "/rule-providers/private/interval"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/proxy/interval-0",
+      "paths": [
+        "/rule-providers/proxy/interval"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/proxy/interval-1",
+      "paths": [
+        "/rule-providers/proxy/interval"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/proxy/interval-2",
+      "paths": [
+        "/rule-providers/proxy/interval"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/proxy/interval-3",
+      "paths": [
+        "/rule-providers/proxy/interval"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/IPfake-0",
+      "paths": [
+        "/rule-providers/IPfake"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/IPfake-1",
+      "paths": [],
+      "valid": true
+    },
+    {
+      "name": "mutate-rule-providers/IPfake-2",
+      "paths": [
+        "/rule-providers/IPfake"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/IPfake-3",
+      "paths": [
+        "/rule-providers/IPfake"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxies/0/ech-opts/enable-0",
+      "paths": [
+        "/proxies/0/ech-opts/enable"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxies/0/ech-opts/enable-1",
+      "paths": [
+        "/proxies/0/ech-opts/enable"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxies/0/ech-opts/enable-2",
+      "paths": [
+        "/proxies/0/ech-opts/enable"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxies/0/ech-opts/enable-3",
+      "paths": [
+        "/proxies/0/ech-opts/enable"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-allow-lan-0",
+      "paths": [
+        "/allow-lan"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-allow-lan-1",
+      "paths": [
+        "/allow-lan"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-allow-lan-2",
+      "paths": [
+        "/allow-lan"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-allow-lan-3",
+      "paths": [
+        "/allow-lan"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/default-nameserver/2-0",
+      "paths": [
+        "/dns/default-nameserver/2"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/default-nameserver/2-1",
+      "paths": [
+        "/dns/default-nameserver/2"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/default-nameserver/2-2",
+      "paths": [
+        "/dns/default-nameserver/2"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/default-nameserver/2-3",
+      "paths": [
+        "/dns/default-nameserver/2"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rules/30-0",
+      "paths": [
+        "/rules/30"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rules/30-1",
+      "paths": [
+        "/rules/30"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rules/30-2",
+      "paths": [
+        "/rules/30"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rules/30-3",
+      "paths": [
+        "/rules/30"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rules/20-0",
+      "paths": [
+        "/rules/20"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rules/20-1",
+      "paths": [
+        "/rules/20"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rules/20-2",
+      "paths": [
+        "/rules/20"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rules/20-3",
+      "paths": [
+        "/rules/20"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rules/6-0",
+      "paths": [
+        "/rules/6"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rules/6-1",
+      "paths": [
+        "/rules/6"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rules/6-2",
+      "paths": [
+        "/rules/6"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rules/6-3",
+      "paths": [
+        "/rules/6"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxies/0-0",
+      "paths": [
+        "/proxies/0"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxies/0-1",
+      "paths": [
+        "/proxies/0"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxies/0-2",
+      "paths": [
+        "/proxies/0"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxies/0-3",
+      "paths": [
+        "/proxies/0"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxies/0/hop-interval-0",
+      "paths": [
+        "/proxies/0/hop-interval"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxies/0/hop-interval-1",
+      "paths": [
+        "/proxies/0/hop-interval"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxies/0/hop-interval-2",
+      "paths": [
+        "/proxies/0/hop-interval"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxies/0/hop-interval-3",
+      "paths": [],
+      "valid": true
+    },
+    {
+      "name": "mutate-dns/fallback/1-0",
+      "paths": [
+        "/dns/fallback/1"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/fallback/1-1",
+      "paths": [
+        "/dns/fallback/1"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/fallback/1-2",
+      "paths": [
+        "/dns/fallback/1"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/fallback/1-3",
+      "paths": [
+        "/dns/fallback/1"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/reject/type-0",
+      "paths": [
+        "/rule-providers/reject/type"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/reject/type-1",
+      "paths": [
+        "/rule-providers/reject/type"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/reject/type-2",
+      "paths": [
+        "/rule-providers/reject/type"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/reject/type-3",
+      "paths": [
+        "/rule-providers/reject/type"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rules/4-0",
+      "paths": [
+        "/rules/4"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rules/4-1",
+      "paths": [
+        "/rules/4"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rules/4-2",
+      "paths": [
+        "/rules/4"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rules/4-3",
+      "paths": [
+        "/rules/4"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rules/23-0",
+      "paths": [
+        "/rules/23"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rules/23-1",
+      "paths": [
+        "/rules/23"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rules/23-2",
+      "paths": [
+        "/rules/23"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rules/23-3",
+      "paths": [
+        "/rules/23"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rules/9-0",
+      "paths": [
+        "/rules/9"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rules/9-1",
+      "paths": [
+        "/rules/9"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rules/9-2",
+      "paths": [
+        "/rules/9"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rules/9-3",
+      "paths": [
+        "/rules/9"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/gfw/type-0",
+      "paths": [
+        "/rule-providers/gfw/type"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/gfw/type-1",
+      "paths": [
+        "/rule-providers/gfw/type"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/gfw/type-2",
+      "paths": [
+        "/rule-providers/gfw/type"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/gfw/type-3",
+      "paths": [
+        "/rule-providers/gfw/type"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-mode-0",
+      "paths": [
+        "/mode"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-mode-1",
+      "paths": [
+        "/mode"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-mode-2",
+      "paths": [
+        "/mode"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-mode-3",
+      "paths": [
+        "/mode"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/apple/behavior-0",
+      "paths": [
+        "/rule-providers/apple/behavior"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/apple/behavior-1",
+      "paths": [
+        "/rule-providers/apple/behavior"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/apple/behavior-2",
+      "paths": [
+        "/rule-providers/apple/behavior"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/apple/behavior-3",
+      "paths": [
+        "/rule-providers/apple/behavior"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/applications/interval-0",
+      "paths": [
+        "/rule-providers/applications/interval"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/applications/interval-1",
+      "paths": [
+        "/rule-providers/applications/interval"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/applications/interval-2",
+      "paths": [
+        "/rule-providers/applications/interval"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/applications/interval-3",
+      "paths": [
+        "/rule-providers/applications/interval"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxies/0/server-0",
+      "paths": [
+        "/proxies/0/server"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxies/0/server-1",
+      "paths": [
+        "/proxies/0/server"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxies/0/server-2",
+      "paths": [
+        "/proxies/0/server"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxies/0/server-3",
+      "paths": [
+        "/proxies/0/server"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxy-groups/1/name-0",
+      "paths": [
+        "/proxy-groups/1/name"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxy-groups/1/name-1",
+      "paths": [
+        "/proxy-groups/1/name"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxy-groups/1/name-2",
+      "paths": [
+        "/proxy-groups/1/name"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxy-groups/1/name-3",
+      "paths": [
+        "/proxy-groups/1/name"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxies/0/ports-0",
+      "paths": [
+        "/proxies/0/ports"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxies/0/ports-1",
+      "paths": [
+        "/proxies/0/ports"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxies/0/ports-2",
+      "paths": [
+        "/proxies/0/ports"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxies/0/ports-3",
+      "paths": [
+        "/proxies/0/ports"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxy-groups/0/name-0",
+      "paths": [
+        "/proxy-groups/0/name"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxy-groups/0/name-1",
+      "paths": [
+        "/proxy-groups/0/name"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxy-groups/0/name-2",
+      "paths": [
+        "/proxy-groups/0/name"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxy-groups/0/name-3",
+      "paths": [
+        "/proxy-groups/0/name"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/IPfake/behavior-0",
+      "paths": [
+        "/rule-providers/IPfake/behavior"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/IPfake/behavior-1",
+      "paths": [
+        "/rule-providers/IPfake/behavior"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/IPfake/behavior-2",
+      "paths": [
+        "/rule-providers/IPfake/behavior"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/IPfake/behavior-3",
+      "paths": [
+        "/rule-providers/IPfake/behavior"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/apple-0",
+      "paths": [
+        "/rule-providers/apple"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/apple-1",
+      "paths": [],
+      "valid": true
+    },
+    {
+      "name": "mutate-rule-providers/apple-2",
+      "paths": [
+        "/rule-providers/apple"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/apple-3",
+      "paths": [
+        "/rule-providers/apple"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/tld-not-cn/behavior-0",
+      "paths": [
+        "/rule-providers/tld-not-cn/behavior"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/tld-not-cn/behavior-1",
+      "paths": [
+        "/rule-providers/tld-not-cn/behavior"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/tld-not-cn/behavior-2",
+      "paths": [
+        "/rule-providers/tld-not-cn/behavior"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/tld-not-cn/behavior-3",
+      "paths": [
+        "/rule-providers/tld-not-cn/behavior"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rules/17-0",
+      "paths": [
+        "/rules/17"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rules/17-1",
+      "paths": [
+        "/rules/17"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rules/17-2",
+      "paths": [
+        "/rules/17"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rules/17-3",
+      "paths": [
+        "/rules/17"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rules-0",
+      "paths": [
+        "/rules"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rules-1",
+      "paths": [
+        "/rules"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rules-2",
+      "paths": [],
+      "valid": true
+    },
+    {
+      "name": "mutate-rules-3",
+      "paths": [
+        "/rules"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxies/0/obfs-min-packet-size-0",
+      "paths": [
+        "/proxies/0/obfs-min-packet-size"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxies/0/obfs-min-packet-size-1",
+      "paths": [
+        "/proxies/0/obfs-min-packet-size"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxies/0/obfs-min-packet-size-2",
+      "paths": [
+        "/proxies/0/obfs-min-packet-size"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxies/0/obfs-min-packet-size-3",
+      "paths": [
+        "/proxies/0/obfs-min-packet-size"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/apple/interval-0",
+      "paths": [
+        "/rule-providers/apple/interval"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/apple/interval-1",
+      "paths": [
+        "/rule-providers/apple/interval"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/apple/interval-2",
+      "paths": [
+        "/rule-providers/apple/interval"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/apple/interval-3",
+      "paths": [
+        "/rule-providers/apple/interval"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxies/0/type-0",
+      "paths": [
+        "/proxies/0/type"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxies/0/type-1",
+      "paths": [
+        "/proxies/0/type"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxies/0/type-2",
+      "paths": [
+        "/proxies/0/type"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxies/0/type-3",
+      "paths": [
+        "/proxies/0/type"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/icloud/path-0",
+      "paths": [
+        "/rule-providers/icloud/path"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/icloud/path-1",
+      "paths": [
+        "/rule-providers/icloud/path"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/icloud/path-2",
+      "paths": [
+        "/rule-providers/icloud/path"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/icloud/path-3",
+      "paths": [
+        "/rule-providers/icloud/path"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/gfw/path-0",
+      "paths": [
+        "/rule-providers/gfw/path"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/gfw/path-1",
+      "paths": [
+        "/rule-providers/gfw/path"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/gfw/path-2",
+      "paths": [
+        "/rule-providers/gfw/path"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/gfw/path-3",
+      "paths": [
+        "/rule-providers/gfw/path"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxies/0/handshake-timeout-0",
+      "paths": [
+        "/proxies/0/handshake-timeout"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxies/0/handshake-timeout-1",
+      "paths": [
+        "/proxies/0/handshake-timeout"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxies/0/handshake-timeout-2",
+      "paths": [
+        "/proxies/0/handshake-timeout"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxies/0/handshake-timeout-3",
+      "paths": [
+        "/proxies/0/handshake-timeout"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/gfw/behavior-0",
+      "paths": [
+        "/rule-providers/gfw/behavior"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/gfw/behavior-1",
+      "paths": [
+        "/rule-providers/gfw/behavior"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/gfw/behavior-2",
+      "paths": [
+        "/rule-providers/gfw/behavior"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/gfw/behavior-3",
+      "paths": [
+        "/rule-providers/gfw/behavior"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/direct-0",
+      "paths": [
+        "/rule-providers/direct"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/direct-1",
+      "paths": [],
+      "valid": true
+    },
+    {
+      "name": "mutate-rule-providers/direct-2",
+      "paths": [
+        "/rule-providers/direct"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/direct-3",
+      "paths": [
+        "/rule-providers/direct"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/applications/url-0",
+      "paths": [
+        "/rule-providers/applications/url"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/applications/url-1",
+      "paths": [
+        "/rule-providers/applications/url"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/applications/url-2",
+      "paths": [
+        "/rule-providers/applications/url"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/applications/url-3",
+      "paths": [
+        "/rule-providers/applications/url"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/reject/path-0",
+      "paths": [
+        "/rule-providers/reject/path"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/reject/path-1",
+      "paths": [
+        "/rule-providers/reject/path"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/reject/path-2",
+      "paths": [
+        "/rule-providers/reject/path"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/reject/path-3",
+      "paths": [
+        "/rule-providers/reject/path"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxies/0/sni-0",
+      "paths": [
+        "/proxies/0/sni"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxies/0/sni-1",
+      "paths": [
+        "/proxies/0/sni"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxies/0/sni-2",
+      "paths": [
+        "/proxies/0/sni"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxies/0/sni-3",
+      "paths": [
+        "/proxies/0/sni"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxy-groups/2/name-0",
+      "paths": [
+        "/proxy-groups/2/name"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxy-groups/2/name-1",
+      "paths": [
+        "/proxy-groups/2/name"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxy-groups/2/name-2",
+      "paths": [
+        "/proxy-groups/2/name"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxy-groups/2/name-3",
+      "paths": [
+        "/proxy-groups/2/name"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/cncidr/url-0",
+      "paths": [
+        "/rule-providers/cncidr/url"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/cncidr/url-1",
+      "paths": [
+        "/rule-providers/cncidr/url"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/cncidr/url-2",
+      "paths": [
+        "/rule-providers/cncidr/url"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers/cncidr/url-3",
+      "paths": [
+        "/rule-providers/cncidr/url"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxy-groups/2/proxies-0",
+      "paths": [
+        "/proxy-groups/2/proxies"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxy-groups/2/proxies-1",
+      "paths": [
+        "/proxy-groups/2/proxies"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxy-groups/2/proxies-2",
+      "paths": [],
+      "valid": true
+    },
+    {
+      "name": "mutate-proxy-groups/2/proxies-3",
+      "paths": [
+        "/proxy-groups/2/proxies"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxy-groups/0/proxies/0-0",
+      "paths": [
+        "/proxy-groups/0/proxies/0"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxy-groups/0/proxies/0-1",
+      "paths": [
+        "/proxy-groups/0/proxies/0"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxy-groups/0/proxies/0-2",
+      "paths": [
+        "/proxy-groups/0/proxies/0"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxy-groups/0/proxies/0-3",
+      "paths": [
+        "/proxy-groups/0/proxies/0"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers-0",
+      "paths": [
+        "/rule-providers"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers-1",
+      "paths": [
+        "/rule-providers/bad"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers-2",
+      "paths": [
+        "/rule-providers"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-rule-providers-3",
+      "paths": [
+        "/rule-providers"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxy-groups/0/proxies-0",
+      "paths": [
+        "/proxy-groups/0/proxies"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxy-groups/0/proxies-1",
+      "paths": [
+        "/proxy-groups/0/proxies"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxy-groups/0/proxies-2",
+      "paths": [],
+      "valid": true
+    },
+    {
+      "name": "mutate-proxy-groups/0/proxies-3",
+      "paths": [
+        "/proxy-groups/0/proxies"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxies/0/ech-opts/config-0",
+      "paths": [
+        "/proxies/0/ech-opts/config"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxies/0/ech-opts/config-1",
+      "paths": [
+        "/proxies/0/ech-opts/config"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxies/0/ech-opts/config-2",
+      "paths": [
+        "/proxies/0/ech-opts/config"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-proxies/0/ech-opts/config-3",
+      "paths": [
+        "/proxies/0/ech-opts/config"
+      ],
+      "valid": false
+    }
+  ],
+  "singbox": [
+    {
+      "name": "template-linux",
+      "paths": [],
+      "valid": true
+    },
+    {
+      "name": "template-macos",
+      "paths": [],
+      "valid": true
+    },
+    {
+      "name": "template-windows",
+      "paths": [],
+      "valid": true
+    },
+    {
+      "name": "template-android",
+      "paths": [],
+      "valid": true
+    },
+    {
+      "name": "template-ios",
+      "paths": [],
+      "valid": true
+    },
+    {
+      "name": "unknown-extensions",
+      "paths": [],
+      "valid": true
+    },
+    {
+      "name": "log-invalid-type",
+      "paths": [
+        "/log/level"
+      ],
+      "valid": false
+    },
+    {
+      "name": "log-level-info",
+      "paths": [],
+      "valid": true
+    },
+    {
+      "name": "log-level-invalid",
+      "paths": [
+        "/log/level"
+      ],
+      "valid": false
+    },
+    {
+      "name": "log-level-None",
+      "paths": [
+        "/log/level"
+      ],
+      "valid": false
+    },
+    {
+      "name": "wrong-union-member",
+      "paths": [
+        "/outbounds/13"
+      ],
+      "valid": false
+    },
+    {
+      "name": "missing-outbound-type",
+      "paths": [
+        "/outbounds/12"
+      ],
+      "valid": false
+    },
+    {
+      "name": "nested-route-1",
+      "paths": [],
+      "valid": true
+    },
+    {
+      "name": "nested-route-4",
+      "paths": [],
+      "valid": true
+    },
+    {
+      "name": "nested-route-16",
+      "paths": [],
+      "valid": true
+    },
+    {
+      "name": "nested-route-32",
+      "paths": [],
+      "valid": true
+    },
+    {
+      "name": "nodes-10",
+      "paths": [],
+      "valid": true
+    },
+    {
+      "name": "nodes-100",
+      "paths": [],
+      "valid": true
+    },
+    {
+      "name": "nodes-500",
+      "paths": [],
+      "valid": true
+    },
+    {
+      "name": "mutate-route/rules/2-0",
+      "paths": [
+        "/route/rules/2"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/2-1",
+      "paths": [],
+      "valid": true
+    },
+    {
+      "name": "mutate-route/rules/2-2",
+      "paths": [
+        "/route/rules/2"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/2-3",
+      "paths": [
+        "/route/rules/2"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rule_set/1/tag/5-0",
+      "paths": [
+        "/route/rule_set/1"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rule_set/1/tag/5-1",
+      "paths": [
+        "/route/rule_set/1"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rule_set/1/tag/5-2",
+      "paths": [
+        "/route/rule_set/1"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rule_set/1/tag/5-3",
+      "paths": [
+        "/route/rule_set/1"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/16/outbound-0",
+      "paths": [
+        "/route/rules/16"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/16/outbound-1",
+      "paths": [
+        "/route/rules/16"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/16/outbound-2",
+      "paths": [
+        "/route/rules/16"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/16/outbound-3",
+      "paths": [
+        "/route/rules/16"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/servers/5/predefined/doh.pub/1-0",
+      "paths": [
+        "/dns/servers/5"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/servers/5/predefined/doh.pub/1-1",
+      "paths": [
+        "/dns/servers/5"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/servers/5/predefined/doh.pub/1-2",
+      "paths": [
+        "/dns/servers/5"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/servers/5/predefined/doh.pub/1-3",
+      "paths": [
+        "/dns/servers/5"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/3/outbounds-0",
+      "paths": [
+        "/outbounds/3"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/3/outbounds-1",
+      "paths": [
+        "/outbounds/3"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/3/outbounds-2",
+      "paths": [],
+      "valid": true
+    },
+    {
+      "name": "mutate-outbounds/3/outbounds-3",
+      "paths": [
+        "/outbounds/3"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/servers/0-0",
+      "paths": [
+        "/dns/servers/0"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/servers/0-1",
+      "paths": [
+        "/dns/servers/0"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/servers/0-2",
+      "paths": [
+        "/dns/servers/0"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/servers/0-3",
+      "paths": [
+        "/dns/servers/0"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/0/sniffer/1-0",
+      "paths": [
+        "/route/rules/0"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/0/sniffer/1-1",
+      "paths": [
+        "/route/rules/0"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/0/sniffer/1-2",
+      "paths": [
+        "/route/rules/0"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/0/sniffer/1-3",
+      "paths": [
+        "/route/rules/0"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-inbounds/4/listen-0",
+      "paths": [
+        "/inbounds/4"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-inbounds/4/listen-1",
+      "paths": [
+        "/inbounds/4"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-inbounds/4/listen-2",
+      "paths": [
+        "/inbounds/4"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-inbounds/4/listen-3",
+      "paths": [
+        "/inbounds/4"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/3-0",
+      "paths": [
+        "/route/rules/3"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/3-1",
+      "paths": [],
+      "valid": true
+    },
+    {
+      "name": "mutate-route/rules/3-2",
+      "paths": [
+        "/route/rules/3"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/3-3",
+      "paths": [
+        "/route/rules/3"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-services/0-0",
+      "paths": [
+        "/services/0"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-services/0-1",
+      "paths": [
+        "/services/0"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-services/0-2",
+      "paths": [
+        "/services/0"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-services/0-3",
+      "paths": [
+        "/services/0"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/9/tolerance-0",
+      "paths": [
+        "/outbounds/9"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/9/tolerance-1",
+      "paths": [
+        "/outbounds/9"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/9/tolerance-2",
+      "paths": [
+        "/outbounds/9"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/9/tolerance-3",
+      "paths": [
+        "/outbounds/9"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/11/domain_resolver-0",
+      "paths": [
+        "/outbounds/11"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/11/domain_resolver-1",
+      "paths": [
+        "/outbounds/11"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/11/domain_resolver-2",
+      "paths": [
+        "/outbounds/11"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/11/domain_resolver-3",
+      "paths": [
+        "/outbounds/11"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/5/type-0",
+      "paths": [
+        "/outbounds/5"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/5/type-1",
+      "paths": [
+        "/outbounds/5"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/5/type-2",
+      "paths": [
+        "/outbounds/5"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/5/type-3",
+      "paths": [
+        "/outbounds/5"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/5/default-0",
+      "paths": [
+        "/outbounds/5"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/5/default-1",
+      "paths": [
+        "/outbounds/5"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/5/default-2",
+      "paths": [
+        "/outbounds/5"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/5/default-3",
+      "paths": [
+        "/outbounds/5"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/rules/5/rules/0/query_type/0-0",
+      "paths": [
+        "/dns/rules/5"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/rules/5/rules/0/query_type/0-1",
+      "paths": [
+        "/dns/rules/5"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/rules/5/rules/0/query_type/0-2",
+      "paths": [
+        "/dns/rules/5"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/rules/5/rules/0/query_type/0-3",
+      "paths": [],
+      "valid": true
+    },
+    {
+      "name": "mutate-dns/rules/6-0",
+      "paths": [
+        "/dns/rules/6"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/rules/6-1",
+      "paths": [],
+      "valid": true
+    },
+    {
+      "name": "mutate-dns/rules/6-2",
+      "paths": [
+        "/dns/rules/6"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/rules/6-3",
+      "paths": [
+        "/dns/rules/6"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/12/down_mbps-0",
+      "paths": [
+        "/outbounds/12"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/12/down_mbps-1",
+      "paths": [
+        "/outbounds/12"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/12/down_mbps-2",
+      "paths": [
+        "/outbounds/12"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/12/down_mbps-3",
+      "paths": [
+        "/outbounds/12"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/12/up_mbps-0",
+      "paths": [
+        "/outbounds/12"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/12/up_mbps-1",
+      "paths": [
+        "/outbounds/12"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/12/up_mbps-2",
+      "paths": [
+        "/outbounds/12"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/12/up_mbps-3",
+      "paths": [
+        "/outbounds/12"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-inbounds/2/listen_port-0",
+      "paths": [
+        "/inbounds/2"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-inbounds/2/listen_port-1",
+      "paths": [
+        "/inbounds/2"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-inbounds/2/listen_port-2",
+      "paths": [
+        "/inbounds/2"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-inbounds/2/listen_port-3",
+      "paths": [
+        "/inbounds/2"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-experimental/clash_api/default_mode-0",
+      "paths": [
+        "/experimental/clash_api/default_mode"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-experimental/clash_api/default_mode-1",
+      "paths": [
+        "/experimental/clash_api/default_mode"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-experimental/clash_api/default_mode-2",
+      "paths": [
+        "/experimental/clash_api/default_mode"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-experimental/clash_api/default_mode-3",
+      "paths": [
+        "/experimental/clash_api/default_mode"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-experimental/clash_api/external_ui-0",
+      "paths": [
+        "/experimental/clash_api/external_ui"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-experimental/clash_api/external_ui-1",
+      "paths": [
+        "/experimental/clash_api/external_ui"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-experimental/clash_api/external_ui-2",
+      "paths": [
+        "/experimental/clash_api/external_ui"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-experimental/clash_api/external_ui-3",
+      "paths": [
+        "/experimental/clash_api/external_ui"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/17/action-0",
+      "paths": [
+        "/route/rules/17"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/17/action-1",
+      "paths": [
+        "/route/rules/17"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/17/action-2",
+      "paths": [
+        "/route/rules/17"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/17/action-3",
+      "paths": [
+        "/route/rules/17"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/4/outbounds/1-0",
+      "paths": [
+        "/outbounds/4"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/4/outbounds/1-1",
+      "paths": [
+        "/outbounds/4"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/4/outbounds/1-2",
+      "paths": [
+        "/outbounds/4"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/4/outbounds/1-3",
+      "paths": [
+        "/outbounds/4"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/servers/4-0",
+      "paths": [
+        "/dns/servers/4"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/servers/4-1",
+      "paths": [
+        "/dns/servers/4"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/servers/4-2",
+      "paths": [
+        "/dns/servers/4"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/servers/4-3",
+      "paths": [
+        "/dns/servers/4"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/rules/7/query_type/0-0",
+      "paths": [
+        "/dns/rules/7"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/rules/7/query_type/0-1",
+      "paths": [
+        "/dns/rules/7"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/rules/7/query_type/0-2",
+      "paths": [
+        "/dns/rules/7"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/rules/7/query_type/0-3",
+      "paths": [],
+      "valid": true
+    },
+    {
+      "name": "mutate-route/rules/3/rules/1/protocol-0",
+      "paths": [
+        "/route/rules/3"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/3/rules/1/protocol-1",
+      "paths": [
+        "/route/rules/3"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/3/rules/1/protocol-2",
+      "paths": [
+        "/route/rules/3"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/3/rules/1/protocol-3",
+      "paths": [
+        "/route/rules/3"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/3/no_drop-0",
+      "paths": [
+        "/route/rules/3"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/3/no_drop-1",
+      "paths": [
+        "/route/rules/3"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/3/no_drop-2",
+      "paths": [
+        "/route/rules/3"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/3/no_drop-3",
+      "paths": [
+        "/route/rules/3"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/3-0",
+      "paths": [
+        "/outbounds/3"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/3-1",
+      "paths": [
+        "/outbounds/3"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/3-2",
+      "paths": [
+        "/outbounds/3"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/3-3",
+      "paths": [
+        "/outbounds/3"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-inbounds/3/listen_port-0",
+      "paths": [
+        "/inbounds/3"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-inbounds/3/listen_port-1",
+      "paths": [
+        "/inbounds/3"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-inbounds/3/listen_port-2",
+      "paths": [
+        "/inbounds/3"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-inbounds/3/listen_port-3",
+      "paths": [
+        "/inbounds/3"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/12/obfs-0",
+      "paths": [
+        "/outbounds/12"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/12/obfs-1",
+      "paths": [
+        "/outbounds/12"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/12/obfs-2",
+      "paths": [
+        "/outbounds/12"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/12/obfs-3",
+      "paths": [
+        "/outbounds/12"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/rules/5/rules/0/query_type/1-0",
+      "paths": [
+        "/dns/rules/5"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/rules/5/rules/0/query_type/1-1",
+      "paths": [
+        "/dns/rules/5"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/rules/5/rules/0/query_type/1-2",
+      "paths": [
+        "/dns/rules/5"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/rules/5/rules/0/query_type/1-3",
+      "paths": [],
+      "valid": true
+    },
+    {
+      "name": "mutate-dns/optimistic-0",
+      "paths": [
+        "/dns/optimistic"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/optimistic-1",
+      "paths": [],
+      "valid": true
+    },
+    {
+      "name": "mutate-dns/optimistic-2",
+      "paths": [
+        "/dns/optimistic"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/optimistic-3",
+      "paths": [
+        "/dns/optimistic"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/0/rules/0/domain_suffix-0",
+      "paths": [
+        "/route/rules/0"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/0/rules/0/domain_suffix-1",
+      "paths": [
+        "/route/rules/0"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/0/rules/0/domain_suffix-2",
+      "paths": [],
+      "valid": true
+    },
+    {
+      "name": "mutate-route/rules/0/rules/0/domain_suffix-3",
+      "paths": [
+        "/route/rules/0"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-inbounds/3-0",
+      "paths": [
+        "/inbounds/3"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-inbounds/3-1",
+      "paths": [
+        "/inbounds/3"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-inbounds/3-2",
+      "paths": [
+        "/inbounds/3"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-inbounds/3-3",
+      "paths": [
+        "/inbounds/3"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/rules/2-0",
+      "paths": [
+        "/dns/rules/2"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/rules/2-1",
+      "paths": [],
+      "valid": true
+    },
+    {
+      "name": "mutate-dns/rules/2-2",
+      "paths": [
+        "/dns/rules/2"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/rules/2-3",
+      "paths": [
+        "/dns/rules/2"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/rules/1/server-0",
+      "paths": [
+        "/dns/rules/1"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/rules/1/server-1",
+      "paths": [
+        "/dns/rules/1"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/rules/1/server-2",
+      "paths": [
+        "/dns/rules/1"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/rules/1/server-3",
+      "paths": [
+        "/dns/rules/1"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/rules/2/clash_mode-0",
+      "paths": [
+        "/dns/rules/2"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/rules/2/clash_mode-1",
+      "paths": [
+        "/dns/rules/2"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/rules/2/clash_mode-2",
+      "paths": [
+        "/dns/rules/2"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/rules/2/clash_mode-3",
+      "paths": [
+        "/dns/rules/2"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rule_set/2/tag-0",
+      "paths": [
+        "/route/rule_set/2"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rule_set/2/tag-1",
+      "paths": [
+        "/route/rule_set/2"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rule_set/2/tag-2",
+      "paths": [],
+      "valid": true
+    },
+    {
+      "name": "mutate-route/rule_set/2/tag-3",
+      "paths": [
+        "/route/rule_set/2"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/3/rules/0-0",
+      "paths": [
+        "/route/rules/3"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/3/rules/0-1",
+      "paths": [],
+      "valid": true
+    },
+    {
+      "name": "mutate-route/rules/3/rules/0-2",
+      "paths": [
+        "/route/rules/3"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/3/rules/0-3",
+      "paths": [
+        "/route/rules/3"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/rules/0-0",
+      "paths": [
+        "/dns/rules/0"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/rules/0-1",
+      "paths": [],
+      "valid": true
+    },
+    {
+      "name": "mutate-dns/rules/0-2",
+      "paths": [
+        "/dns/rules/0"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/rules/0-3",
+      "paths": [
+        "/dns/rules/0"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/8/outbound-0",
+      "paths": [
+        "/route/rules/8"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/8/outbound-1",
+      "paths": [
+        "/route/rules/8"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/8/outbound-2",
+      "paths": [
+        "/route/rules/8"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/8/outbound-3",
+      "paths": [
+        "/route/rules/8"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-inbounds/5/type-0",
+      "paths": [
+        "/inbounds/5"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-inbounds/5/type-1",
+      "paths": [
+        "/inbounds/5"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-inbounds/5/type-2",
+      "paths": [
+        "/inbounds/5"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-inbounds/5/type-3",
+      "paths": [
+        "/inbounds/5"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-experimental/clash_api/secret-0",
+      "paths": [
+        "/experimental/clash_api/secret"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-experimental/clash_api/secret-1",
+      "paths": [
+        "/experimental/clash_api/secret"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-experimental/clash_api/secret-2",
+      "paths": [
+        "/experimental/clash_api/secret"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-experimental/clash_api/secret-3",
+      "paths": [
+        "/experimental/clash_api/secret"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/7/tag-0",
+      "paths": [
+        "/outbounds/7"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/7/tag-1",
+      "paths": [
+        "/outbounds/7"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/7/tag-2",
+      "paths": [
+        "/outbounds/7"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/7/tag-3",
+      "paths": [
+        "/outbounds/7"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/12/rule_set-0",
+      "paths": [
+        "/route/rules/12"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/12/rule_set-1",
+      "paths": [
+        "/route/rules/12"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/12/rule_set-2",
+      "paths": [],
+      "valid": true
+    },
+    {
+      "name": "mutate-route/rules/12/rule_set-3",
+      "paths": [
+        "/route/rules/12"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/rules/0/query_type-0",
+      "paths": [
+        "/dns/rules/0"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/rules/0/query_type-1",
+      "paths": [
+        "/dns/rules/0"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/rules/0/query_type-2",
+      "paths": [
+        "/dns/rules/0"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/rules/0/query_type-3",
+      "paths": [
+        "/dns/rules/0"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/12/type-0",
+      "paths": [
+        "/outbounds/12"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/12/type-1",
+      "paths": [
+        "/outbounds/12"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/12/type-2",
+      "paths": [
+        "/outbounds/12"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/12/type-3",
+      "paths": [
+        "/outbounds/12"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-inbounds/2-0",
+      "paths": [
+        "/inbounds/2"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-inbounds/2-1",
+      "paths": [
+        "/inbounds/2"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-inbounds/2-2",
+      "paths": [
+        "/inbounds/2"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-inbounds/2-3",
+      "paths": [
+        "/inbounds/2"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-inbounds/5-0",
+      "paths": [
+        "/inbounds/5"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-inbounds/5-1",
+      "paths": [
+        "/inbounds/5"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-inbounds/5-2",
+      "paths": [
+        "/inbounds/5"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-inbounds/5-3",
+      "paths": [
+        "/inbounds/5"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/5/outbound-0",
+      "paths": [
+        "/route/rules/5"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/5/outbound-1",
+      "paths": [
+        "/route/rules/5"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/5/outbound-2",
+      "paths": [
+        "/route/rules/5"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/5/outbound-3",
+      "paths": [
+        "/route/rules/5"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/6/type-0",
+      "paths": [
+        "/outbounds/6"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/6/type-1",
+      "paths": [
+        "/outbounds/6"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/6/type-2",
+      "paths": [
+        "/outbounds/6"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/6/type-3",
+      "paths": [
+        "/outbounds/6"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/rules/0/query_type/0-0",
+      "paths": [
+        "/dns/rules/0"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/rules/0/query_type/0-1",
+      "paths": [
+        "/dns/rules/0"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/rules/0/query_type/0-2",
+      "paths": [
+        "/dns/rules/0"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/rules/0/query_type/0-3",
+      "paths": [],
+      "valid": true
+    },
+    {
+      "name": "mutate-route/rule_set/1/tag/1-0",
+      "paths": [
+        "/route/rule_set/1"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rule_set/1/tag/1-1",
+      "paths": [
+        "/route/rule_set/1"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rule_set/1/tag/1-2",
+      "paths": [
+        "/route/rule_set/1"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rule_set/1/tag/1-3",
+      "paths": [
+        "/route/rule_set/1"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/rules/3/rule_set/0-0",
+      "paths": [
+        "/dns/rules/3"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/rules/3/rule_set/0-1",
+      "paths": [
+        "/dns/rules/3"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/rules/3/rule_set/0-2",
+      "paths": [
+        "/dns/rules/3"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/rules/3/rule_set/0-3",
+      "paths": [
+        "/dns/rules/3"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/10/type-0",
+      "paths": [
+        "/outbounds/10"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/10/type-1",
+      "paths": [
+        "/outbounds/10"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/10/type-2",
+      "paths": [
+        "/outbounds/10"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/10/type-3",
+      "paths": [
+        "/outbounds/10"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/6/default-0",
+      "paths": [
+        "/outbounds/6"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/6/default-1",
+      "paths": [
+        "/outbounds/6"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/6/default-2",
+      "paths": [
+        "/outbounds/6"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/6/default-3",
+      "paths": [
+        "/outbounds/6"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-inbounds/1/type-0",
+      "paths": [
+        "/inbounds/1"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-inbounds/1/type-1",
+      "paths": [
+        "/inbounds/1"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-inbounds/1/type-2",
+      "paths": [
+        "/inbounds/1"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-inbounds/1/type-3",
+      "paths": [
+        "/inbounds/1"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/10/rule_set-0",
+      "paths": [
+        "/route/rules/10"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/10/rule_set-1",
+      "paths": [
+        "/route/rules/10"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/10/rule_set-2",
+      "paths": [],
+      "valid": true
+    },
+    {
+      "name": "mutate-route/rules/10/rule_set-3",
+      "paths": [
+        "/route/rules/10"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/3/action-0",
+      "paths": [
+        "/route/rules/3"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/3/action-1",
+      "paths": [
+        "/route/rules/3"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/3/action-2",
+      "paths": [
+        "/route/rules/3"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/3/action-3",
+      "paths": [
+        "/route/rules/3"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/12/obfs/password-0",
+      "paths": [
+        "/outbounds/12"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/12/obfs/password-1",
+      "paths": [
+        "/outbounds/12"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/12/obfs/password-2",
+      "paths": [
+        "/outbounds/12"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/12/obfs/password-3",
+      "paths": [
+        "/outbounds/12"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/servers/0/tag-0",
+      "paths": [
+        "/dns/servers/0"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/servers/0/tag-1",
+      "paths": [
+        "/dns/servers/0"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/servers/0/tag-2",
+      "paths": [
+        "/dns/servers/0"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/servers/0/tag-3",
+      "paths": [
+        "/dns/servers/0"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/8/domain_suffix-0",
+      "paths": [
+        "/route/rules/8"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/8/domain_suffix-1",
+      "paths": [
+        "/route/rules/8"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/8/domain_suffix-2",
+      "paths": [],
+      "valid": true
+    },
+    {
+      "name": "mutate-route/rules/8/domain_suffix-3",
+      "paths": [],
+      "valid": true
+    },
+    {
+      "name": "mutate-route/rules/11-0",
+      "paths": [
+        "/route/rules/11"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/11-1",
+      "paths": [],
+      "valid": true
+    },
+    {
+      "name": "mutate-route/rules/11-2",
+      "paths": [
+        "/route/rules/11"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/11-3",
+      "paths": [
+        "/route/rules/11"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/1/action-0",
+      "paths": [
+        "/route/rules/1"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/1/action-1",
+      "paths": [
+        "/route/rules/1"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/1/action-2",
+      "paths": [
+        "/route/rules/1"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/1/action-3",
+      "paths": [
+        "/route/rules/1"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-log-0",
+      "paths": [
+        "/log"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-log-1",
+      "paths": [],
+      "valid": true
+    },
+    {
+      "name": "mutate-log-2",
+      "paths": [
+        "/log"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-log-3",
+      "paths": [
+        "/log"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/servers/0/type-0",
+      "paths": [
+        "/dns/servers/0"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/servers/0/type-1",
+      "paths": [
+        "/dns/servers/0"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/servers/0/type-2",
+      "paths": [
+        "/dns/servers/0"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/servers/0/type-3",
+      "paths": [
+        "/dns/servers/0"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-$schema-0",
+      "paths": [
+        "/$schema"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-$schema-1",
+      "paths": [
+        "/$schema"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-$schema-2",
+      "paths": [
+        "/$schema"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-$schema-3",
+      "paths": [
+        "/$schema"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/9/domain_suffix/0-0",
+      "paths": [
+        "/route/rules/9"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/9/domain_suffix/0-1",
+      "paths": [
+        "/route/rules/9"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/9/domain_suffix/0-2",
+      "paths": [
+        "/route/rules/9"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/9/domain_suffix/0-3",
+      "paths": [
+        "/route/rules/9"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-inbounds/5/auto_redirect-0",
+      "paths": [
+        "/inbounds/5"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-inbounds/5/auto_redirect-1",
+      "paths": [
+        "/inbounds/5"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-inbounds/5/auto_redirect-2",
+      "paths": [
+        "/inbounds/5"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-inbounds/5/auto_redirect-3",
+      "paths": [
+        "/inbounds/5"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/18/rule_set-0",
+      "paths": [
+        "/route/rules/18"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/18/rule_set-1",
+      "paths": [
+        "/route/rules/18"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/18/rule_set-2",
+      "paths": [],
+      "valid": true
+    },
+    {
+      "name": "mutate-route/rules/18/rule_set-3",
+      "paths": [
+        "/route/rules/18"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/rules/7/rewrite_ttl-0",
+      "paths": [
+        "/dns/rules/7"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/rules/7/rewrite_ttl-1",
+      "paths": [
+        "/dns/rules/7"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/rules/7/rewrite_ttl-2",
+      "paths": [
+        "/dns/rules/7"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/rules/7/rewrite_ttl-3",
+      "paths": [
+        "/dns/rules/7"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/3/mode-0",
+      "paths": [
+        "/route/rules/3"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/3/mode-1",
+      "paths": [
+        "/route/rules/3"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/3/mode-2",
+      "paths": [
+        "/route/rules/3"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/3/mode-3",
+      "paths": [
+        "/route/rules/3"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/9/domain_suffix/1-0",
+      "paths": [
+        "/route/rules/9"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/9/domain_suffix/1-1",
+      "paths": [
+        "/route/rules/9"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/9/domain_suffix/1-2",
+      "paths": [
+        "/route/rules/9"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/9/domain_suffix/1-3",
+      "paths": [
+        "/route/rules/9"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/0/type-0",
+      "paths": [
+        "/route/rules/0"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/0/type-1",
+      "paths": [
+        "/route/rules/0"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/0/type-2",
+      "paths": [
+        "/route/rules/0"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/0/type-3",
+      "paths": [
+        "/route/rules/0"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/0/default-0",
+      "paths": [
+        "/outbounds/0"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/0/default-1",
+      "paths": [
+        "/outbounds/0"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/0/default-2",
+      "paths": [
+        "/outbounds/0"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/0/default-3",
+      "paths": [
+        "/outbounds/0"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-ntp/enabled-0",
+      "paths": [
+        "/ntp/enabled"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-ntp/enabled-1",
+      "paths": [
+        "/ntp/enabled"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-ntp/enabled-2",
+      "paths": [
+        "/ntp/enabled"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-ntp/enabled-3",
+      "paths": [
+        "/ntp/enabled"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/servers/1/server-0",
+      "paths": [
+        "/dns/servers/1"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/servers/1/server-1",
+      "paths": [
+        "/dns/servers/1"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/servers/1/server-2",
+      "paths": [
+        "/dns/servers/1"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/servers/1/server-3",
+      "paths": [
+        "/dns/servers/1"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rule_set/2/format-0",
+      "paths": [
+        "/route/rule_set/2"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rule_set/2/format-1",
+      "paths": [
+        "/route/rule_set/2"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rule_set/2/format-2",
+      "paths": [
+        "/route/rule_set/2"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rule_set/2/format-3",
+      "paths": [
+        "/route/rule_set/2"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/rules/7/query_type/1-0",
+      "paths": [
+        "/dns/rules/7"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/rules/7/query_type/1-1",
+      "paths": [
+        "/dns/rules/7"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/rules/7/query_type/1-2",
+      "paths": [
+        "/dns/rules/7"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/rules/7/query_type/1-3",
+      "paths": [],
+      "valid": true
+    },
+    {
+      "name": "mutate-dns/servers/4/type-0",
+      "paths": [
+        "/dns/servers/4"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/servers/4/type-1",
+      "paths": [
+        "/dns/servers/4"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/servers/4/type-2",
+      "paths": [
+        "/dns/servers/4"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/servers/4/type-3",
+      "paths": [
+        "/dns/servers/4"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/11/tag-0",
+      "paths": [
+        "/outbounds/11"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/11/tag-1",
+      "paths": [
+        "/outbounds/11"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/11/tag-2",
+      "paths": [
+        "/outbounds/11"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/11/tag-3",
+      "paths": [
+        "/outbounds/11"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/rules/0/query_type/1-0",
+      "paths": [
+        "/dns/rules/0"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/rules/0/query_type/1-1",
+      "paths": [
+        "/dns/rules/0"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/rules/0/query_type/1-2",
+      "paths": [
+        "/dns/rules/0"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/rules/0/query_type/1-3",
+      "paths": [],
+      "valid": true
+    },
+    {
+      "name": "mutate-outbounds/5/outbounds-0",
+      "paths": [
+        "/outbounds/5"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/5/outbounds-1",
+      "paths": [
+        "/outbounds/5"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/5/outbounds-2",
+      "paths": [],
+      "valid": true
+    },
+    {
+      "name": "mutate-outbounds/5/outbounds-3",
+      "paths": [
+        "/outbounds/5"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rule_set/0-0",
+      "paths": [
+        "/route/rule_set/0"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rule_set/0-1",
+      "paths": [
+        "/route/rule_set/0"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rule_set/0-2",
+      "paths": [
+        "/route/rule_set/0"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rule_set/0-3",
+      "paths": [
+        "/route/rule_set/0"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rule_set/1/type-0",
+      "paths": [
+        "/route/rule_set/1"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rule_set/1/type-1",
+      "paths": [
+        "/route/rule_set/1"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rule_set/1/type-2",
+      "paths": [
+        "/route/rule_set/1"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rule_set/1/type-3",
+      "paths": [
+        "/route/rule_set/1"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rule_set/2/type-0",
+      "paths": [
+        "/route/rule_set/2"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rule_set/2/type-1",
+      "paths": [
+        "/route/rule_set/2"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rule_set/2/type-2",
+      "paths": [
+        "/route/rule_set/2"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rule_set/2/type-3",
+      "paths": [
+        "/route/rule_set/2"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/servers-0",
+      "paths": [
+        "/dns/servers"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/servers-1",
+      "paths": [
+        "/dns/servers"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/servers-2",
+      "paths": [
+        "/dns/servers/0"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/servers-3",
+      "paths": [
+        "/dns/servers"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/4-0",
+      "paths": [
+        "/outbounds/4"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/4-1",
+      "paths": [
+        "/outbounds/4"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/4-2",
+      "paths": [
+        "/outbounds/4"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/4-3",
+      "paths": [
+        "/outbounds/4"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/rules/7-0",
+      "paths": [
+        "/dns/rules/7"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/rules/7-1",
+      "paths": [],
+      "valid": true
+    },
+    {
+      "name": "mutate-dns/rules/7-2",
+      "paths": [
+        "/dns/rules/7"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/rules/7-3",
+      "paths": [
+        "/dns/rules/7"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/rules/5/type-0",
+      "paths": [
+        "/dns/rules/5"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/rules/5/type-1",
+      "paths": [
+        "/dns/rules/5"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/rules/5/type-2",
+      "paths": [
+        "/dns/rules/5"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/rules/5/type-3",
+      "paths": [
+        "/dns/rules/5"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/servers/2/tag-0",
+      "paths": [
+        "/dns/servers/2"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/servers/2/tag-1",
+      "paths": [
+        "/dns/servers/2"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/servers/2/tag-2",
+      "paths": [
+        "/dns/servers/2"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/servers/2/tag-3",
+      "paths": [
+        "/dns/servers/2"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rule_set/2-0",
+      "paths": [
+        "/route/rule_set/2"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rule_set/2-1",
+      "paths": [
+        "/route/rule_set/2"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rule_set/2-2",
+      "paths": [
+        "/route/rule_set/2"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rule_set/2-3",
+      "paths": [
+        "/route/rule_set/2"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/17-0",
+      "paths": [
+        "/route/rules/17"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/17-1",
+      "paths": [],
+      "valid": true
+    },
+    {
+      "name": "mutate-route/rules/17-2",
+      "paths": [
+        "/route/rules/17"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/17-3",
+      "paths": [
+        "/route/rules/17"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/rules/6/server-0",
+      "paths": [
+        "/dns/rules/6"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/rules/6/server-1",
+      "paths": [
+        "/dns/rules/6"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/rules/6/server-2",
+      "paths": [
+        "/dns/rules/6"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/rules/6/server-3",
+      "paths": [
+        "/dns/rules/6"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/1/outbounds/1-0",
+      "paths": [
+        "/outbounds/1"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/1/outbounds/1-1",
+      "paths": [
+        "/outbounds/1"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/1/outbounds/1-2",
+      "paths": [
+        "/outbounds/1"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/1/outbounds/1-3",
+      "paths": [
+        "/outbounds/1"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/servers/5/predefined/doh.pub/0-0",
+      "paths": [
+        "/dns/servers/5"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/servers/5/predefined/doh.pub/0-1",
+      "paths": [
+        "/dns/servers/5"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/servers/5/predefined/doh.pub/0-2",
+      "paths": [
+        "/dns/servers/5"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/servers/5/predefined/doh.pub/0-3",
+      "paths": [
+        "/dns/servers/5"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/1-0",
+      "paths": [
+        "/route/rules/1"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/1-1",
+      "paths": [],
+      "valid": true
+    },
+    {
+      "name": "mutate-route/rules/1-2",
+      "paths": [
+        "/route/rules/1"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/1-3",
+      "paths": [
+        "/route/rules/1"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/12/tls/server_name-0",
+      "paths": [
+        "/outbounds/12"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/12/tls/server_name-1",
+      "paths": [
+        "/outbounds/12"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/12/tls/server_name-2",
+      "paths": [
+        "/outbounds/12"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/12/tls/server_name-3",
+      "paths": [
+        "/outbounds/12"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-services/0/dashboard/enabled-0",
+      "paths": [
+        "/services/0"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-services/0/dashboard/enabled-1",
+      "paths": [
+        "/services/0"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-services/0/dashboard/enabled-2",
+      "paths": [
+        "/services/0"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-services/0/dashboard/enabled-3",
+      "paths": [
+        "/services/0"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/rules/5/action-0",
+      "paths": [
+        "/dns/rules/5"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/rules/5/action-1",
+      "paths": [
+        "/dns/rules/5"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/rules/5/action-2",
+      "paths": [
+        "/dns/rules/5"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/rules/5/action-3",
+      "paths": [
+        "/dns/rules/5"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rule_set/3-0",
+      "paths": [
+        "/route/rule_set/3"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rule_set/3-1",
+      "paths": [
+        "/route/rule_set/3"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rule_set/3-2",
+      "paths": [
+        "/route/rule_set/3"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rule_set/3-3",
+      "paths": [
+        "/route/rule_set/3"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-inbounds/5/interface_name-0",
+      "paths": [
+        "/inbounds/5"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-inbounds/5/interface_name-1",
+      "paths": [
+        "/inbounds/5"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-inbounds/5/interface_name-2",
+      "paths": [
+        "/inbounds/5"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-inbounds/5/interface_name-3",
+      "paths": [
+        "/inbounds/5"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/rules/1-0",
+      "paths": [
+        "/dns/rules/1"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/rules/1-1",
+      "paths": [],
+      "valid": true
+    },
+    {
+      "name": "mutate-dns/rules/1-2",
+      "paths": [
+        "/dns/rules/1"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/rules/1-3",
+      "paths": [
+        "/dns/rules/1"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/12/tls/enabled-0",
+      "paths": [
+        "/outbounds/12"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/12/tls/enabled-1",
+      "paths": [
+        "/outbounds/12"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/12/tls/enabled-2",
+      "paths": [
+        "/outbounds/12"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/12/tls/enabled-3",
+      "paths": [
+        "/outbounds/12"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/6/outbounds/0-0",
+      "paths": [
+        "/outbounds/6"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/6/outbounds/0-1",
+      "paths": [
+        "/outbounds/6"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/6/outbounds/0-2",
+      "paths": [
+        "/outbounds/6"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/6/outbounds/0-3",
+      "paths": [
+        "/outbounds/6"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/5-0",
+      "paths": [
+        "/route/rules/5"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/5-1",
+      "paths": [],
+      "valid": true
+    },
+    {
+      "name": "mutate-route/rules/5-2",
+      "paths": [
+        "/route/rules/5"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/5-3",
+      "paths": [
+        "/route/rules/5"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/18-0",
+      "paths": [
+        "/route/rules/18"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/18-1",
+      "paths": [],
+      "valid": true
+    },
+    {
+      "name": "mutate-route/rules/18-2",
+      "paths": [
+        "/route/rules/18"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/18-3",
+      "paths": [
+        "/route/rules/18"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/rules/2/server-0",
+      "paths": [
+        "/dns/rules/2"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/rules/2/server-1",
+      "paths": [
+        "/dns/rules/2"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/rules/2/server-2",
+      "paths": [
+        "/dns/rules/2"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/rules/2/server-3",
+      "paths": [
+        "/dns/rules/2"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-inbounds/4/tag-0",
+      "paths": [
+        "/inbounds/4"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-inbounds/4/tag-1",
+      "paths": [
+        "/inbounds/4"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-inbounds/4/tag-2",
+      "paths": [
+        "/inbounds/4"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-inbounds/4/tag-3",
+      "paths": [
+        "/inbounds/4"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/servers/3/type-0",
+      "paths": [
+        "/dns/servers/3"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/servers/3/type-1",
+      "paths": [
+        "/dns/servers/3"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/servers/3/type-2",
+      "paths": [
+        "/dns/servers/3"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns/servers/3/type-3",
+      "paths": [
+        "/dns/servers/3"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/1/tag-0",
+      "paths": [
+        "/outbounds/1"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/1/tag-1",
+      "paths": [
+        "/outbounds/1"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/1/tag-2",
+      "paths": [
+        "/outbounds/1"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/1/tag-3",
+      "paths": [
+        "/outbounds/1"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/12/tls/insecure-0",
+      "paths": [
+        "/outbounds/12"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/12/tls/insecure-1",
+      "paths": [
+        "/outbounds/12"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/12/tls/insecure-2",
+      "paths": [
+        "/outbounds/12"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/12/tls/insecure-3",
+      "paths": [
+        "/outbounds/12"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/14/outbound-0",
+      "paths": [
+        "/route/rules/14"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/14/outbound-1",
+      "paths": [
+        "/route/rules/14"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/14/outbound-2",
+      "paths": [
+        "/route/rules/14"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/14/outbound-3",
+      "paths": [
+        "/route/rules/14"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns-0",
+      "paths": [
+        "/dns"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns-1",
+      "paths": [],
+      "valid": true
+    },
+    {
+      "name": "mutate-dns-2",
+      "paths": [
+        "/dns"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-dns-3",
+      "paths": [
+        "/dns"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/12/tls/ech/config/0-0",
+      "paths": [
+        "/outbounds/12"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/12/tls/ech/config/0-1",
+      "paths": [
+        "/outbounds/12"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/12/tls/ech/config/0-2",
+      "paths": [
+        "/outbounds/12"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/12/tls/ech/config/0-3",
+      "paths": [
+        "/outbounds/12"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/4/type-0",
+      "paths": [
+        "/outbounds/4"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/4/type-1",
+      "paths": [
+        "/outbounds/4"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/4/type-2",
+      "paths": [
+        "/outbounds/4"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/4/type-3",
+      "paths": [
+        "/outbounds/4"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/1-0",
+      "paths": [
+        "/outbounds/1"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/1-1",
+      "paths": [
+        "/outbounds/1"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/1-2",
+      "paths": [
+        "/outbounds/1"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/1-3",
+      "paths": [
+        "/outbounds/1"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/4/default-0",
+      "paths": [
+        "/outbounds/4"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/4/default-1",
+      "paths": [
+        "/outbounds/4"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/4/default-2",
+      "paths": [
+        "/outbounds/4"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/4/default-3",
+      "paths": [
+        "/outbounds/4"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/11/outbound-0",
+      "paths": [
+        "/route/rules/11"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/11/outbound-1",
+      "paths": [
+        "/route/rules/11"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/11/outbound-2",
+      "paths": [
+        "/route/rules/11"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/11/outbound-3",
+      "paths": [
+        "/route/rules/11"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-experimental/clash_api/external_controller-0",
+      "paths": [
+        "/experimental/clash_api/external_controller"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-experimental/clash_api/external_controller-1",
+      "paths": [
+        "/experimental/clash_api/external_controller"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-experimental/clash_api/external_controller-2",
+      "paths": [
+        "/experimental/clash_api/external_controller"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-experimental/clash_api/external_controller-3",
+      "paths": [
+        "/experimental/clash_api/external_controller"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/12/server-0",
+      "paths": [
+        "/outbounds/12"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/12/server-1",
+      "paths": [
+        "/outbounds/12"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/12/server-2",
+      "paths": [
+        "/outbounds/12"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/12/server-3",
+      "paths": [
+        "/outbounds/12"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rule_set/3/type-0",
+      "paths": [
+        "/route/rule_set/3"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rule_set/3/type-1",
+      "paths": [
+        "/route/rule_set/3"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rule_set/3/type-2",
+      "paths": [
+        "/route/rule_set/3"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rule_set/3/type-3",
+      "paths": [
+        "/route/rule_set/3"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/1/outbounds/3-0",
+      "paths": [
+        "/outbounds/1"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/1/outbounds/3-1",
+      "paths": [
+        "/outbounds/1"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/1/outbounds/3-2",
+      "paths": [
+        "/outbounds/1"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-outbounds/1/outbounds/3-3",
+      "paths": [
+        "/outbounds/1"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/4/action-0",
+      "paths": [
+        "/route/rules/4"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/4/action-1",
+      "paths": [
+        "/route/rules/4"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/4/action-2",
+      "paths": [
+        "/route/rules/4"
+      ],
+      "valid": false
+    },
+    {
+      "name": "mutate-route/rules/4/action-3",
+      "paths": [
+        "/route/rules/4"
+      ],
+      "valid": false
+    }
+  ]
+}

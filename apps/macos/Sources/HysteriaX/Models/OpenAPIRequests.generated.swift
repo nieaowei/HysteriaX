@@ -847,6 +847,234 @@ struct RevisionRequest: Encodable, Sendable {
     }
 }
 
+struct RefactorSubscriptionTemplateRequest: Encodable, Sendable {
+    let expectedRevision: Int
+    let document: [String: JSONValue]
+    let kind: String
+    let oldName: String
+    let newName: String
+
+    init(
+        expectedRevision: Int,
+        document: [String: JSONValue],
+        kind: String,
+        oldName: String,
+        newName: String
+    ) {
+        self.expectedRevision = expectedRevision
+        self.document = document
+        self.kind = kind
+        self.oldName = oldName
+        self.newName = newName
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case expectedRevision = "expected_revision"
+        case document
+        case kind
+        case oldName = "old_name"
+        case newName = "new_name"
+    }
+}
+
+struct CreateSubscriptionTemplateRequest: Encodable, Sendable {
+    let expectedRevision: Int
+    let name: String
+    let format: String
+    let document: [String: JSONValue]?
+
+    init(
+        expectedRevision: Int,
+        name: String,
+        format: String,
+        document: [String: JSONValue]? = nil
+    ) {
+        self.expectedRevision = expectedRevision
+        self.name = name
+        self.format = format
+        self.document = document
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case expectedRevision = "expected_revision"
+        case name
+        case format
+        case document
+    }
+}
+
+struct SubscriptionTemplateSourceRequest: Encodable, Sendable {
+    let format: String
+    let source: String?
+    let config: [String: JSONValue]?
+
+    init(
+        format: String,
+        source: String? = nil,
+        config: [String: JSONValue]? = nil
+    ) {
+        self.format = format
+        self.source = source
+        self.config = config
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case format
+        case source
+        case config
+    }
+}
+
+struct ImportSubscriptionTemplateRequest: Encodable, Sendable {
+    let format: String
+    let source: String?
+    let package: [String: JSONValue]?
+
+    init(
+        format: String,
+        source: String? = nil,
+        package: [String: JSONValue]? = nil
+    ) {
+        self.format = format
+        self.source = source
+        self.package = package
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case format
+        case source
+        case package
+    }
+}
+
+struct UpdateSubscriptionTemplateRequest: Encodable, Sendable {
+    let expectedRevision: Int
+    let name: String?
+    let isDefault: Bool?
+    let archived: Bool?
+    let replacementId: String?
+    let replacementRevision: Int?
+
+    init(
+        expectedRevision: Int,
+        name: String? = nil,
+        isDefault: Bool? = nil,
+        archived: Bool? = nil,
+        replacementId: String? = nil,
+        replacementRevision: Int? = nil
+    ) {
+        self.expectedRevision = expectedRevision
+        self.name = name
+        self.isDefault = isDefault
+        self.archived = archived
+        self.replacementId = replacementId
+        self.replacementRevision = replacementRevision
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case expectedRevision = "expected_revision"
+        case name
+        case isDefault = "is_default"
+        case archived
+        case replacementId = "replacement_id"
+        case replacementRevision = "replacement_revision"
+    }
+}
+
+struct SaveSubscriptionTemplateDraftRequest: Encodable, Sendable {
+    let expectedRevision: Int
+    let document: [String: JSONValue]
+
+    init(
+        expectedRevision: Int,
+        document: [String: JSONValue]
+    ) {
+        self.expectedRevision = expectedRevision
+        self.document = document
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case expectedRevision = "expected_revision"
+        case document
+    }
+}
+
+struct ValidateSubscriptionTemplateRequest: Encodable, Sendable {
+    let document: [String: JSONValue]?
+
+    init(
+        document: [String: JSONValue]? = nil
+    ) {
+        self.document = document
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case document
+    }
+}
+
+struct PreviewSubscriptionTemplateRequest: Encodable, Sendable {
+    let userId: String
+    let platform: String
+    let kernelVersion: String?
+    let revealSecrets: Bool?
+    let document: [String: JSONValue]?
+
+    init(
+        userId: String,
+        platform: String,
+        kernelVersion: String? = nil,
+        revealSecrets: Bool? = nil,
+        document: [String: JSONValue]? = nil
+    ) {
+        self.userId = userId
+        self.platform = platform
+        self.kernelVersion = kernelVersion
+        self.revealSecrets = revealSecrets
+        self.document = document
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case userId = "user_id"
+        case platform
+        case kernelVersion = "kernel_version"
+        case revealSecrets = "reveal_secrets"
+        case document
+    }
+}
+
+struct PublishSubscriptionTemplateRequest: Encodable, Sendable {
+    let expectedRevision: Int
+
+    init(
+        expectedRevision: Int
+    ) {
+        self.expectedRevision = expectedRevision
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case expectedRevision = "expected_revision"
+    }
+}
+
+struct RollbackSubscriptionTemplateRequest: Encodable, Sendable {
+    let expectedRevision: Int
+    let version: Int
+
+    init(
+        expectedRevision: Int,
+        version: Int
+    ) {
+        self.expectedRevision = expectedRevision
+        self.version = version
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case expectedRevision = "expected_revision"
+        case version
+    }
+}
+
 struct CreateAdminTokenRequest: Encodable, Sendable {
     let label: String
 
@@ -893,6 +1121,51 @@ struct APIOperation<Request: Sendable, Response: Sendable>: Sendable {
 }
 
 enum APIEndpoints {
+    static func refactorSubscriptionTemplate(id: String) -> APIOperation<RefactorSubscriptionTemplateRequest, [String: JSONValue]> {
+        APIOperation(method: "POST", path: "api/v1/subscription-templates/\(id)/refactor", queryParameters: [:])
+    }
+    static func getSubscriptionTemplateVersion(id: String, version: String) -> APIOperation<NoRequest, SubscriptionTemplateDraft> {
+        APIOperation(method: "GET", path: "api/v1/subscription-templates/\(id)/versions/\(version)", queryParameters: [:])
+    }
+    static func listSubscriptionTemplates(page: Int? = nil, pageSize: Int? = nil, format: String? = nil, archived: Bool? = nil) -> APIOperation<NoRequest, SubscriptionTemplatesPage> {
+        APIOperation(method: "GET", path: "api/v1/subscription-templates", queryParameters: ["page": page.map { String($0) }, "page_size": pageSize.map { String($0) }, "format": format.map { String($0) }, "archived": archived.map { String($0) }].compactMapValues { $0 })
+    }
+    static let createSubscriptionTemplate: APIOperation<CreateSubscriptionTemplateRequest, SubscriptionTemplate> = APIOperation<CreateSubscriptionTemplateRequest, SubscriptionTemplate>(method: "POST", path: "api/v1/subscription-templates", queryParameters: [:])
+    static func subscriptionTemplateFields(format: String) -> APIOperation<NoRequest, [String: JSONValue]> {
+        APIOperation(method: "GET", path: "api/v1/subscription-templates/fields", queryParameters: ["format": format])
+    }
+    static let subscriptionTemplateSource: APIOperation<SubscriptionTemplateSourceRequest, [String: JSONValue]> = APIOperation<SubscriptionTemplateSourceRequest, [String: JSONValue]>(method: "POST", path: "api/v1/subscription-templates/source", queryParameters: [:])
+    static let importSubscriptionTemplate: APIOperation<ImportSubscriptionTemplateRequest, [String: JSONValue]> = APIOperation<ImportSubscriptionTemplateRequest, [String: JSONValue]>(method: "POST", path: "api/v1/subscription-templates/import", queryParameters: [:])
+    static func getSubscriptionTemplate(id: String) -> APIOperation<NoRequest, SubscriptionTemplate> {
+        APIOperation(method: "GET", path: "api/v1/subscription-templates/\(id)", queryParameters: [:])
+    }
+    static func updateSubscriptionTemplate(id: String) -> APIOperation<UpdateSubscriptionTemplateRequest, SubscriptionTemplate> {
+        APIOperation(method: "PATCH", path: "api/v1/subscription-templates/\(id)", queryParameters: [:])
+    }
+    static func getSubscriptionTemplateDraft(id: String) -> APIOperation<NoRequest, SubscriptionTemplateDraft> {
+        APIOperation(method: "GET", path: "api/v1/subscription-templates/\(id)/draft", queryParameters: [:])
+    }
+    static func saveSubscriptionTemplateDraft(id: String) -> APIOperation<SaveSubscriptionTemplateDraftRequest, SubscriptionTemplate> {
+        APIOperation(method: "PUT", path: "api/v1/subscription-templates/\(id)/draft", queryParameters: [:])
+    }
+    static func validateSubscriptionTemplate(id: String) -> APIOperation<ValidateSubscriptionTemplateRequest, [String: JSONValue]> {
+        APIOperation(method: "POST", path: "api/v1/subscription-templates/\(id)/validate", queryParameters: [:])
+    }
+    static func previewSubscriptionTemplate(id: String) -> APIOperation<PreviewSubscriptionTemplateRequest, [String: JSONValue]> {
+        APIOperation(method: "POST", path: "api/v1/subscription-templates/\(id)/preview", queryParameters: [:])
+    }
+    static func publishSubscriptionTemplate(id: String) -> APIOperation<PublishSubscriptionTemplateRequest, SubscriptionTemplate> {
+        APIOperation(method: "POST", path: "api/v1/subscription-templates/\(id)/publish", queryParameters: [:])
+    }
+    static func rollbackSubscriptionTemplate(id: String) -> APIOperation<RollbackSubscriptionTemplateRequest, SubscriptionTemplate> {
+        APIOperation(method: "POST", path: "api/v1/subscription-templates/\(id)/rollback", queryParameters: [:])
+    }
+    static func listSubscriptionTemplateVersions(id: String, page: Int? = nil, pageSize: Int? = nil) -> APIOperation<NoRequest, [String: JSONValue]> {
+        APIOperation(method: "GET", path: "api/v1/subscription-templates/\(id)/versions", queryParameters: ["page": page.map { String($0) }, "page_size": pageSize.map { String($0) }].compactMapValues { $0 })
+    }
+    static func exportSubscriptionTemplate(id: String) -> APIOperation<NoRequest, [String: JSONValue]> {
+        APIOperation(method: "GET", path: "api/v1/subscription-templates/\(id)/export", queryParameters: [:])
+    }
     static let createCAIdentity: APIOperation<CAIdentityCreateRequest, CAIdentityReceipt> = APIOperation<CAIdentityCreateRequest, CAIdentityReceipt>(method: "POST", path: "api/v1/credentials/ca-identities", queryParameters: [:])
     static func updateCAPolicy(id: String) -> APIOperation<CAPolicyUpdateRequest, CAPolicyReceipt> {
         APIOperation(method: "PATCH", path: "api/v1/credentials/\(id)/ca-policy", queryParameters: [:])
@@ -1055,11 +1328,8 @@ enum APIEndpoints {
     static let healthCheck: APIOperation<NoRequest, APIHealth> = APIOperation<NoRequest, APIHealth>(method: "GET", path: "healthz", queryParameters: [:])
     static let readinessCheck: APIOperation<NoRequest, APIHealth> = APIOperation<NoRequest, APIHealth>(method: "GET", path: "readyz", queryParameters: [:])
     static let getOpenAPISpec: APIOperation<NoRequest, NoResponse> = APIOperation<NoRequest, NoResponse>(method: "GET", path: "openapi.yaml", queryParameters: [:])
-    static func downloadAutomaticSubscription(token: String, format: String? = nil, platform: String? = nil) -> APIOperation<NoRequest, NoResponse> {
-        APIOperation(method: "GET", path: "sub/\(token)", queryParameters: ["format": format.map { String($0) }, "platform": platform.map { String($0) }].compactMapValues { $0 })
-    }
-    static func downloadSubscription(token: String, platform: String? = nil) -> APIOperation<NoRequest, NoResponse> {
-        APIOperation(method: "GET", path: "sub/\(token)/clash.yaml", queryParameters: ["platform": platform.map { String($0) }].compactMapValues { $0 })
+    static func downloadAutomaticSubscription(token: String, template: String? = nil, format: String? = nil, platform: String? = nil) -> APIOperation<NoRequest, NoResponse> {
+        APIOperation(method: "GET", path: "sub/\(token)", queryParameters: ["template": template.map { String($0) }, "format": format.map { String($0) }, "platform": platform.map { String($0) }].compactMapValues { $0 })
     }
     static func authenticateHysteriaUser(nodeID: String, nodeToken: String) -> APIOperation<AuthenticateHysteriaUserRequest, HysteriaAuthResponse> {
         APIOperation(method: "POST", path: "hy2/auth/\(nodeID)/\(nodeToken)", queryParameters: [:])

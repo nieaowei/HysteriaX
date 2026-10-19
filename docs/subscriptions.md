@@ -1,151 +1,69 @@
-# Subscription formats
+# Subscription templates and formats
 
-## Addresses and authentication
+## Upgrade contract
 
-`GET /sub/{token}` selects the format from User-Agent. `format=auto` has the same
-behavior. An explicit `format=mihomo|singbox|base64|uri` overrides format detection;
-it does not override the capability check. Invalid or repeated format values return 400.
-The existing `/sub/{token}/clash.yaml` always returns the established Mihomo YAML,
-including its current advanced fields, regardless of UA or format query parameters.
-Platform filtering also applies to this fixed YAML endpoint.
+Server and Mac client must upgrade together. Migration **0037** creates encrypted drafts and immutable published versions, then initializes one published default template per native format using the master key. Existing users, node assignments, and subscription tokens are retained.
 
-Management subscription responses retain `url` (the fixed YAML address) and add
-optional `auto_url`. Both addresses share the existing token and revocation rules.
-The default macOS copy/rotation action uses `auto_url`, falling back to `url` with
-an older server. No token rotation or database migration is needed for this feature.
+The only public subscription route is `GET /sub/{token}`. The old `/sub/{token}/clash.yaml` route returns **404**. Management responses return one canonical `url`; `auto_url` and Mac legacy fallbacks are removed. Replace saved legacy links with a template/platform link from the upgraded Mac app or selection page. This feature does not deploy a server or change deployed nodes.
 
-All public subscription requests, including the selection page, check token
-revocation, account enabled state, expiration, and quota. Missing/revoked tokens
-return 404 and inactive accounts return 403. Responses include
-`Cache-Control: private, no-store`; automatic responses also use `Vary: User-Agent`.
-Logs omit tokens and node credentials. Avoid placing subscription addresses in
-public logs or screenshots.
+## Addresses and qualification
 
-## Detection and outputs
+Example: `/sub/{token}?template=default-mihomo&platform=windows`.
 
-| UA token (case insensitive) | Output |
-| --- | --- |
-| mihomo, clash.meta, clashmeta | Mihomo YAML |
-| sing-box, singbox | sing-box JSON |
-| shadowrocket, v2rayn, v2rayng | Base64 node links |
-| Browser, curl, empty/unknown UA, ordinary Clash | Static selection page |
+- `template` selects a global published template. Every new request reads its current published version. A draft save never changes subscribers. Archived or unpublished explicit templates return 404.
+- Explicit `format=mihomo|singbox` must match a selected template. Without a template, explicit format or recognized UA selects that format's current default.
+- `platform=linux|openwrt|macos|windows|android|ios` selects an overlay; OpenWrt aliases Linux. Explicit platform wins over UA. Omitted or `auto` uses OS detection; unknown OS shows the platform selection page. It never silently assumes Linux.
+- Unknown client families show all active published templates and explicit platform URLs. Links retain the selected template and determine the format from that template.
+- `format=uri|base64` produces authorized node links directly and needs no platform. Combining these formats with `template` returns 400.
+- Invalid/repeated template, format, or platform parameters return 400.
 
-UA tokens use word boundaries and extract versions immediately after `/` or
-whitespace. A wrapper application's version is never used as the sing-box kernel
-version. Prerelease/malformed versions are treated as unknown; sing-box JSON then preserves advanced nodes and their required fields.
+Token revocation, user enablement/expiry/quota, effective authorization groups, deployed-node state, node package eligibility, and deployed mTLS trust continue to apply on every request. Templates cannot grant node access. Missing/revoked tokens return 404; inactive users return 403. Cache keys include user/node/credential state, template ID, published version, platform, and client capability. Default switches, publication, rollback, and archive are visible to new requests immediately.
 
-The selection page presents explicit-format links, clipboard copying, and a
-manual selection fallback. It loads no external assets, disables indexing, and
-sends no referrer. Copy the chosen link into your client; opening it in a browser
-uses an unknown kernel version; sing-box JSON preserves all representable nodes.
+Public responses use `Cache-Control: private, no-store`, `Vary: User-Agent`, `Referrer-Policy: no-referrer`, and `X-Robots-Tag: noindex, nofollow`. The selection page loads no external assets. Keep token-bearing addresses private.
 
-Mihomo uses the fixed configuration in `src/api/subscriptions/mihomo-template.yaml`:
-local mixed and redirect ports, LAN access, DNS-over-HTTPS/TLS with fake-IP,
-the `SELECT`, `PROXY`, and `IPFake` groups, the configured rule providers, and
-the template's ordered rules. The assigned nodes and their connection credentials
-are generated dynamically into `SELECT`; an empty assignment uses `DIRECT` there.
-`allow-lan: true` and `bind-address: '*'` expose the local proxy listeners to
-devices that can reach the client machine's network interfaces.
-The template deliberately omits the sample's external controller and shared secret.
-sing-box uses the policy in `singbox-template.json`, with HTTP port 8080, SOCKS
-port 1080, DNS port 1053, Redirect/TProxy listeners and a TUN interface where
-supported by the target platform. Its TUN enables automatic routing by default
-(`auto_route: true`); Android/iOS omit this option because the VPN service manages routing.
-URI output contains one `hysteria2://` link per
-line; Base64 encodes exactly that UTF-8 list, including the trailing newline. An empty
-URI/Base64 subscription is empty. URI lists carry connection parameters rather than
-client routing or bandwidth tuning.
+## Configuration document
 
-## Capability checks
+A version 1 document contains `common` (native configuration object), `platforms` (platform overlays), and independent `injections`. Each overlay has an object `set` and JSON-pointer `remove` array.
 
-Only successfully deployed node configuration is rendered; pending desired
-configuration never changes subscriptions until deployed. Node ordering and names
-are the same as the original YAML renderer.
+Objects merge recursively. Arrays replace as complete values. `false`, `0`, `null`, and empty arrays are values, never deletion markers. Removing an array item requires replacing the whole array. Set/remove conflicts are rejected. Common settings must be portable across the target set; baseline platform-specific listeners/TUN settings belong in explicit overlays. Runtime generation never filters invalid settings away.
 
-| Feature | Mihomo | sing-box | URI/Base64 |
-| --- | --- | --- | --- |
-| Basic Hysteria2, SNI, TLS verify flag, Salamander | Existing renderer | 1.14+ baseline | Supported |
-| Port hopping | Existing renderer | 1.14+ baseline, including unknown version | Filtered pending client validation |
-| mTLS certificate/key | Existing renderer | Unknown version or sing-box 1.14+ | Cannot embed; filtered |
-| ECH config list | Existing renderer | Unknown version or sing-box 1.14.2+ validation profile | Filtered pending client validation |
-| Gecko | Existing renderer | Unknown version or sing-box 1.14+ | Filtered pending client validation |
-| Realm and STUN/insecure settings | Existing renderer | Unknown version or sing-box 1.14+ | Filtered pending client validation |
+The versioned field catalogs derive from Mihomo **v1.19.31** and sing-box **v1.14.2**. Rust validates types, enumerations, ranges, required properties, applicable baseline platform constraints, policy references, and outbound cycles. The same catalogs drive typed Mac controls for scalars, enums, nested objects, maps, unions, and ordered arrays. Connection fields are injected read-only. Unknown native fields survive roundtrips and generate warnings; their platform compatibility is unverified. YAML anchors/merge keys and JSON comments/trailing commas are normalized on the server. Original comments and whitespace are not retained. Native documents require finite JSON-compatible numeric values and string mapping keys; unsupported custom YAML tags are diagnosed rather than silently converted.
 
-sing-box 1.14 enables ChromeParrot (a Chrome-like QUIC ClientHello) for Hysteria2 by
-default, and that path of its QUIC stack refuses a TLS configuration carrying a client
-certificate (`quic: server-side tls.Config fields are not supported with ChromeParrot`).
-Hysteria2 outbounds that carry a client certificate are therefore emitted with
-`disable_chrome_parrot: true`; nodes without one keep the default ChromeParrot handshake.
+The shared `platform-capabilities.json` records explicit upstream documentation and the project's client-owned field profile. It includes process/interface/user matching, Linux socket and namespace options, Android package matching, graphical-client requirements, TUN routing dependencies, and the established adaptation: Mihomo redirect on Linux/macOS and TProxy on Linux; sing-box TProxy on Linux, redirect on Linux/macOS, TUN auto-redirect on Linux, fixed TUN interface names on Linux/Windows, and client-owned TUN routing on Android/iOS. This is a structural and baseline capability profile, not proof of runtime behavior on every OS or wrapper client. Unknown fields do not acquire compatibility guarantees from the catalog.
 
-The complete sing-box template requires 1.14.0 or newer. Known sing-box kernels
-below 1.14.0 receive HTTP 422 (`subscription_incompatible`) even when the user has
-no nodes. There is no legacy template or older-version field downgrade. ECH nodes
-still require the independently validated 1.14.2 profile for known kernels.
+## Draft, publication, and rollback
 
-## Target platform
+The Mac editor offers format filtering, create/duplicate/rename/default/archive, common/platform selection, field search, typed controls, inheritance/set/removal, ordered arrays, source editing, undo/redo, and independent dynamic node selection rules. Source parsing/serialization runs on the server. Invalid source stays in the local buffer and blocks replacing parsed form state. Navigation retains each service's editor in memory; quitting prompts to save or discard unsaved drafts.
 
-Both automatic subscriptions and `/sub/{token}/clash.yaml` accept
-`platform=auto|linux|openwrt|windows|macos|android|ios` (`openwrt` aliases Linux).
-Invalid or repeated platform parameters return 400. Explicit platform overrides UA
-platform detection; omitted/auto uses OS tokens from the UA. Android and iOS take
-precedence over Linux/macOS tokens in mobile UAs. Downloaders without OS tokens
-retain the original template. Platform and kernel version are independent: setting
-`platform` never bypasses the kernel version check.
+Every persistent write uses `expected_revision`; stale requests return 409. The editor retains local changes, fetches a comparison copy, and offers an explicit choice to adopt the latest revision. It never silently retries an overwrite.
 
-Examples: `/sub/{token}?format=singbox&platform=windows` and
-`/sub/{token}/clash.yaml?platform=android`. Browser UAs describe the downloading
-machine, which may differ from the destination; use an explicit platform when
-exporting for another device. A bare `sing-box` UA has no platform information.
+Publication validates all five merged target configurations and exercises the production renderer with empty and representative node sets. Publication atomically inserts a new encrypted version and changes the active pointer. Rollback revalidates historical content and publishes it as a **new** version. History is not rewritten. Default template archive requires an active published replacement of the same format and its revision. Archive retains drafts/history.
 
-| Target | sing-box filtering | Mihomo filtering |
-| --- | --- | --- |
-| Unknown / Linux / OpenWrt | Original listeners and TUN options | Original template |
-| macOS | Remove TProxy, TUN `auto_redirect` and fixed `interface_name` | Keep Redirect |
-| Windows | Remove TProxy, Redirect and TUN `auto_redirect` | Remove `redir-port` |
-| Android / iOS | Remove TProxy, Redirect and TUN `interface_name`, `auto_redirect`, `auto_route` (managed by VPN service) | Remove `redir-port` |
+Preview selects a real user, explicit platform, and optional stable kernel version. It shares the download renderer, is `no-store`, and redacts credentials by default; an administrator may explicitly reveal them. Results include origins, overlay differences, filtered-node reasons, selection results, and layer/path diagnostics. Final native exports use the same pipeline. Redacted preview exports retain their redaction; choose full credentials explicitly when an operational file is required.
 
-Node credentials, DNS rules, routing policy, and proxy selection groups are
-preserved. The DNS listener remains present, so `dns-in` route references remain
-valid. Filtering preserves the template
-settings; it does not configure external Redirect/TProxy firewall rules.
-Platform-specific output is isolated in the response cache, and both subscription
-endpoints include `Vary: User-Agent`. This is configuration filtering, not a claim
-of runtime validation on every OS or GUI client.
+## Dynamic nodes and import/export
 
-Mihomo output is validated with v1.19.31. Auto requests identifying an older Mihomo
-version conservatively filter mTLS/ECH/Gecko/Realm nodes; the fixed legacy YAML
-endpoint preserves its original contract. A known sing-box version older than 1.14
-is rejected, including empty subscriptions. For explicit sing-box exports from the management
-app or a browser, no kernel version is available. Unknown sing-box kernel versions retain all representable nodes, including complete mTLS,
-ECH, Gecko and Realm settings. Recognized older kernels continue to apply their known
-compatibility limits. No extra version parameter is required.
+Injection rules select only currently authorized, eligible, compatible nodes by IDs, display-name substring/prefix, exclusions, name sorting, and preferred prefix. A rule targets a final group name, independently of array position. Missing targets fail validation. Group membership may mix policy groups, built-in actions, and injected nodes. Output names include the complete stable node ID in the reserved `hx:` namespace. Duplicate display names cannot collide with groups or each other. Empty selection falls back to direct or deliberately returns 422 according to the rule. If authorized nodes exist but all are incompatible, the established 422 behavior remains.
 
-sing-box only represents integral Mbps bandwidth limits. Limits that cannot be
-converted exactly to its integer fields cause the node to be filtered rather than
-rounded or silently dropped. Realm output omits the incompatible direct server and
-port fields, and keeps its HTTP-client TLS policy separate from the Hysteria TLS policy.
+Import analysis removes manual proxy nodes (including other protocols), reports names/types and removed external proxy providers without credentials, maps group member references to authorized dynamic injection, and moves known platform-specific fields into explicit overlays. Rule arrays are replaced as complete units on each platform; a rule containing an unsupported OS predicate moves as a whole rather than having its matching conditions weakened. All relocations appear in the import diff. Review the mapping/diagnostics before accepting the local draft. Unresolved references and illegal fields block publication. A complete JSON template package contains format, document version, common configuration, every overlay, removals, and injection rules; importing the package preserves all of them. Native source edits affect only their selected layer.
 
-Partially incompatible subscriptions return compatible nodes with the count in
-`X-HysteriaX-Filtered-Nodes`. No synthetic warning nodes are added. When there are
-nodes but all are incompatible, the response is 422 with error code
-`subscription_incompatible`. A genuinely unassigned user receives the normal empty
-subscription instead. Closed-source clients' advanced URI extensions remain disabled
-until validated on actual clients.
+## Client compatibility
 
-## Validation and rollout
+UA families recognized: `mihomo`, `clash.meta`, `clashmeta`; `sing-box`, `singbox`; `shadowrocket`, `v2rayn`, `v2rayng` (Base64). Token boundaries prevent accidental name matches. A wrapper app's version is not a kernel version. Unknown/prerelease kernel versions retain representable advanced nodes; known versions apply the existing capability ceilings.
 
-`verify-subscription.sh` uses an isolated PostgreSQL schema and checks old addresses,
-automatic detection, pages, explicit formats, filtering, revoked/inactive accounts,
-Unicode link encoding, and empty subscriptions. It parses YAML with digest-pinned
-Mihomo v1.19.31 and advanced JSON with digest-pinned sing-box v1.14.2. A temporary
-local Hysteria2 server and HTTP target verify real SOCKS5 traffic through the generated
-sing-box configuration. `verify-subscription-client.sh` checks Swift DTO fallback,
-format URLs/extensions, and rejecting HTML during export.
+Known sing-box kernels below 1.14.0 return 422, including empty subscriptions. Known ECH support uses the 1.14.2 validation profile. Older known Mihomo versions filter advanced mTLS/ECH/Gecko/Realm nodes. URI/Base64 omit advanced features not validated for their clients; Base64 is exactly the UTF-8 URI list, including its trailing newline. Partially compatible output reports `X-HysteriaX-Filtered-Nodes`; all-incompatible output returns `subscription_incompatible`.
 
-Publish the server first, then the macOS app. No migration is necessary, and old
-subscription addresses continue to work. Requests log the selected client, version,
-format, and filtering reason, without including tokens or connection secrets.
+mTLS sing-box nodes retain `disable_chrome_parrot: true`. Realm retains its independent HTTP/TLS settings and Mihomo `handshake-timeout: 30`. Bandwidth conversion to sing-box integral Mbps remains exact rather than rounded. Connection material always comes from successful deployed configuration, not pending desired changes.
 
-References: [sing-box Hysteria2](https://sing-box.sagernet.org/configuration/outbound/hysteria2/),
-[sing-box TLS](https://sing-box.sagernet.org/configuration/shared/tls/),
-[Hysteria URI scheme](https://v2.hysteria.network/docs/developers/URI-Scheme/).
+## API and validation
+
+Fixed native schemas are checked against their meta-schemas during every relevant Cargo build, including container builds. The independent `hysteriax-template-validator` crate checks original files and actual prepared rules, then uses jsonschema 0.59.0's compile-time macro to generate validators. Ordinary server-code changes reuse that crate's compiled artifact; Schema, preparation, compiler, feature or dependency changes can correctly invalidate it. The server passes borrowed JSON values and receives field paths without constructing a runtime Schema validator. All user-configuration, reference, platform and final-render checks remain active. No endpoint accepts a replacement Schema. The former 0.33.0 patch has been removed; there is no active production patch.
+
+`python3 scripts/verify-subscription-schema-build-gate.py` proves corrupted raw and prepared rules fail the build without modifying repository sources, application-only edits reuse the same rlib, and valid Schema changes rebuild and change verdicts. `python3 scripts/verify-subscription-validator-compatibility.py` compares the actual internal crate with the frozen 1,046-case verdict/path baseline in `tests/fixtures/template-validator`. `python3 scripts/verify-subscription-schema-runtime.py --image <locally-built-image>` checks fresh Linux processes, both formats and five platforms, invalid configurations, repeated validation and four-worker concurrency. It enforces a 96 MiB process peak and at most 16 MiB growth after warming the same workload. The offline `hysteriax-server --check-template-runtime` diagnostic needs no database or secrets; it reports Linux RSS/peak/Swap without starting service workers.
+
+Under `/api/v1/subscription-templates`: paginated list/create; `/{id}` metadata/patch; `/{id}/draft` read/save; `/{id}/validate`, `/preview`, `/publish`, `/rollback`; `/{id}/versions` and `/versions/{version}`; `/fields`, `/source`, `/import`, `/{id}/export`, and `/{id}/refactor` (cross-layer group/rule-set rename of a local document). See the OpenAPI specification for request/response DTOs. Body-bearing reads/previews are not cached. Audit events include successful and failed operation results, revisions, publication/source versions, and error codes; they never include document bodies or error messages containing configuration text.
+
+Runtime and publication do not spawn real kernels or fetch remote rule files. CI retains digest-pinned Mihomo/sing-box checks and a real local SOCKS forwarding fixture in `scripts/verify-subscription.sh`. These checks validate supported-platform examples and transport behavior; they do not prove every target's runtime compatibility. Rust tests exercise storage/publication/authorization/cache behavior; `scripts/verify-subscription-client.sh` checks explicit URL selection, HTML-export rejection, overlay semantics, and typed catalog coverage.
+
+
+The Mac regression script `scripts/verify-subscription-template-ui.py` runs a uniquely identified temporary app against an isolated local service/database schema. It verifies native JSON/YAML file saves, complete-package reimport, explicit copy/download addresses, editing, platform overrides, publication and rollback. `scripts/verify-subscription-template-lifecycle.py --container <disposable-postgres-container>` verifies actual process restart and full pg_dump/pg_restore in dedicated temporary databases; it is also run in Linux CI.

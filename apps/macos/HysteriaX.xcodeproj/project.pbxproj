@@ -91,6 +91,17 @@
 		F11E0000000000000000000B /* Views/AuthorizationGroupMembersEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = F11F0000000000000000000B /* Views/AuthorizationGroupMembersEditor.swift */; };
 		F11E0000000000000000000C /* Views/AuthorizationGroupMembersView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F11F0000000000000000000C /* Views/AuthorizationGroupMembersView.swift */; };
 		F11E0000000000000000000D /* Views/AuthorizationUserImpactList.swift in Sources */ = {isa = PBXBuildFile; fileRef = F11F0000000000000000000D /* Views/AuthorizationUserImpactList.swift */; };
+		A3207EBD4510F5B6947AF01F /* Models/MihomoTemplateRule.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00DD25B4749AA5E518D61257 /* Models/MihomoTemplateRule.swift */; };
+		46DB2436058952FC9DF38DD7 /* Models/SubscriptionTemplateDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = E6A1671076FE13DA6D3DCACD /* Models/SubscriptionTemplateDocument.swift */; };
+		C79E97CF9911DC42FC56D3D2 /* Models/TemplateReferenceIndex.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6246DA6592F98787FB4A049 /* Models/TemplateReferenceIndex.swift */; };
+		36287CB0FD100230AE49BE8C /* Stores/SubscriptionTemplateStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC715A6BD03A44C4379A9216 /* Stores/SubscriptionTemplateStore.swift */; };
+		B4F06970C2627D34C29D3CA4 /* Support/TemplateDraftTerminationGuard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07F1B566787E6704BE1606FE /* Support/TemplateDraftTerminationGuard.swift */; };
+		CA699B251F11CFFEEE980B48 /* Views/MihomoTemplateRules.swift in Sources */ = {isa = PBXBuildFile; fileRef = 21297E67B1EA692775D99DA9 /* Views/MihomoTemplateRules.swift */; };
+		FEC0246850F64C6B950156A4 /* Views/SubscriptionTemplateFields.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE89E1125F2159C73A114493 /* Views/SubscriptionTemplateFields.swift */; };
+		2F6DB788359D03ADC57FAFA8 /* Views/SubscriptionTemplateInjections.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9502A3457A136DBB0184AAAE /* Views/SubscriptionTemplateInjections.swift */; };
+		CB06AE2BDD79E7A743329A33 /* Views/SubscriptionTemplateInspector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C80F67DD01CE36593896306 /* Views/SubscriptionTemplateInspector.swift */; };
+		0AAE3CC5A453ACD1553C6CD4 /* Views/SubscriptionTemplatesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02E1E44D6831091AD609F728 /* Views/SubscriptionTemplatesView.swift */; };
+		228C02CD9BAC1F58B9F00CEA /* Views/UserSubscriptionTemplateSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3B22EB1C8F5AB3BA94E41B2B /* Views/UserSubscriptionTemplateSheet.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -180,6 +191,17 @@
 		F11F0000000000000000000B /* Views/AuthorizationGroupMembersEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/AuthorizationGroupMembersEditor.swift; sourceTree = "<group>"; };
 		F11F0000000000000000000C /* Views/AuthorizationGroupMembersView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/AuthorizationGroupMembersView.swift; sourceTree = "<group>"; };
 		F11F0000000000000000000D /* Views/AuthorizationUserImpactList.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/AuthorizationUserImpactList.swift; sourceTree = "<group>"; };
+		00DD25B4749AA5E518D61257 /* Models/MihomoTemplateRule.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models/MihomoTemplateRule.swift; sourceTree = "<group>"; };
+		E6A1671076FE13DA6D3DCACD /* Models/SubscriptionTemplateDocument.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models/SubscriptionTemplateDocument.swift; sourceTree = "<group>"; };
+		F6246DA6592F98787FB4A049 /* Models/TemplateReferenceIndex.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models/TemplateReferenceIndex.swift; sourceTree = "<group>"; };
+		EC715A6BD03A44C4379A9216 /* Stores/SubscriptionTemplateStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Stores/SubscriptionTemplateStore.swift; sourceTree = "<group>"; };
+		07F1B566787E6704BE1606FE /* Support/TemplateDraftTerminationGuard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Support/TemplateDraftTerminationGuard.swift; sourceTree = "<group>"; };
+		21297E67B1EA692775D99DA9 /* Views/MihomoTemplateRules.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/MihomoTemplateRules.swift; sourceTree = "<group>"; };
+		AE89E1125F2159C73A114493 /* Views/SubscriptionTemplateFields.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/SubscriptionTemplateFields.swift; sourceTree = "<group>"; };
+		9502A3457A136DBB0184AAAE /* Views/SubscriptionTemplateInjections.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/SubscriptionTemplateInjections.swift; sourceTree = "<group>"; };
+		1C80F67DD01CE36593896306 /* Views/SubscriptionTemplateInspector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/SubscriptionTemplateInspector.swift; sourceTree = "<group>"; };
+		02E1E44D6831091AD609F728 /* Views/SubscriptionTemplatesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/SubscriptionTemplatesView.swift; sourceTree = "<group>"; };
+		3B22EB1C8F5AB3BA94E41B2B /* Views/UserSubscriptionTemplateSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/UserSubscriptionTemplateSheet.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -200,6 +222,17 @@
 		000000000000000000003001 /* Sources/HysteriaX */ = {
 			isa = PBXGroup;
 			children = (
+				00DD25B4749AA5E518D61257 /* Models/MihomoTemplateRule.swift */,
+				E6A1671076FE13DA6D3DCACD /* Models/SubscriptionTemplateDocument.swift */,
+				F6246DA6592F98787FB4A049 /* Models/TemplateReferenceIndex.swift */,
+				EC715A6BD03A44C4379A9216 /* Stores/SubscriptionTemplateStore.swift */,
+				07F1B566787E6704BE1606FE /* Support/TemplateDraftTerminationGuard.swift */,
+				21297E67B1EA692775D99DA9 /* Views/MihomoTemplateRules.swift */,
+				AE89E1125F2159C73A114493 /* Views/SubscriptionTemplateFields.swift */,
+				9502A3457A136DBB0184AAAE /* Views/SubscriptionTemplateInjections.swift */,
+				1C80F67DD01CE36593896306 /* Views/SubscriptionTemplateInspector.swift */,
+				02E1E44D6831091AD609F728 /* Views/SubscriptionTemplatesView.swift */,
+				3B22EB1C8F5AB3BA94E41B2B /* Views/UserSubscriptionTemplateSheet.swift */,
 				4EBBB5776954E60EFE01E62E /* Models/ManagedMTLSDraft.swift */,
 				0E3ACF8B090BFAB20AEF5E02 /* Views/CAIdentityEditorView.swift */,
 				C5FE7ED9BD01433C63BF2082 /* Views/CAIdentityStatusView.swift */,
@@ -373,6 +406,17 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A3207EBD4510F5B6947AF01F /* Models/MihomoTemplateRule.swift in Sources */,
+				46DB2436058952FC9DF38DD7 /* Models/SubscriptionTemplateDocument.swift in Sources */,
+				C79E97CF9911DC42FC56D3D2 /* Models/TemplateReferenceIndex.swift in Sources */,
+				36287CB0FD100230AE49BE8C /* Stores/SubscriptionTemplateStore.swift in Sources */,
+				B4F06970C2627D34C29D3CA4 /* Support/TemplateDraftTerminationGuard.swift in Sources */,
+				CA699B251F11CFFEEE980B48 /* Views/MihomoTemplateRules.swift in Sources */,
+				FEC0246850F64C6B950156A4 /* Views/SubscriptionTemplateFields.swift in Sources */,
+				2F6DB788359D03ADC57FAFA8 /* Views/SubscriptionTemplateInjections.swift in Sources */,
+				CB06AE2BDD79E7A743329A33 /* Views/SubscriptionTemplateInspector.swift in Sources */,
+				0AAE3CC5A453ACD1553C6CD4 /* Views/SubscriptionTemplatesView.swift in Sources */,
+				228C02CD9BAC1F58B9F00CEA /* Views/UserSubscriptionTemplateSheet.swift in Sources */,
 				C4829BECEC587DD940B8388B /* Models/ManagedMTLSDraft.swift in Sources */,
 				B82491C664254D0C4C791CDD /* Views/CAIdentityEditorView.swift in Sources */,
 				5304768297D21D1864A6316E /* Views/CAIdentityStatusView.swift in Sources */,

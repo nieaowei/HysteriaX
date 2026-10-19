@@ -485,7 +485,7 @@ def main():
                     raise RuntimeError("expired user was accepted by the Hysteria callback")
                 expired_status, _ = request(
                     base,
-                    f"/sub/{user2_subscription['token']}/clash.yaml",
+                    f"/sub/{user2_subscription['token']}?format=mihomo&platform=linux",
                     method="GET",
                 )
                 if expired_status != 403:
@@ -504,7 +504,7 @@ def main():
                     raise RuntimeError("over-quota user was accepted by the Hysteria callback")
                 over_quota_status, _ = request(
                     base,
-                    f"/sub/{user2_subscription['token']}/clash.yaml",
+                    f"/sub/{user2_subscription['token']}?format=mihomo&platform=linux",
                     method="GET",
                 )
                 if over_quota_status != 403:
