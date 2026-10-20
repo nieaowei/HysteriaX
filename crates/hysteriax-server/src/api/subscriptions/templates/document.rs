@@ -106,9 +106,14 @@ pub fn remove(config: &mut Value, path: &str) -> Result<(), ApiError> {
 }
 impl Document {
     pub fn shape(&self) -> Result<(), ApiError> {
-        if self.schema_version != 1 || !self.common.is_object() {
+        if ![1, 2].contains(&self.schema_version) || !self.common.is_object() {
             return Err(ApiError::bad_request(
-                "schema_version must be 1; common must be an object",
+                "schema_version must be 1 or 2; common must be an object",
+            ));
+        }
+        if self.schema_version == 2 && !self.platforms.is_empty() {
+            return Err(ApiError::bad_request(
+                "single-configuration templates cannot contain platform overlays",
             ));
         }
         for (platform, overlay) in &self.platforms {
@@ -147,6 +152,18 @@ impl Document {
             }
         }
         Ok(())
+    }
+    pub fn configuration(
+        &self,
+        format: &str,
+        platform: &str,
+    ) -> Result<(Value, Vec<Value>), ApiError> {
+        let config = self.effective(platform)?;
+        if self.schema_version == 2 {
+            project_configuration(format, &config, platform)
+        } else {
+            Ok((config, vec![]))
+        }
     }
     pub fn effective(&self, platform: &str) -> Result<Value, ApiError> {
         self.shape()?;
@@ -191,21 +208,38 @@ pub fn platform_diagnostics(format: &str, config: &Value, platform: &str) -> Vec
 pub fn validate(format: &str, document: &Document) -> Result<Vec<Diagnostic>, ApiError> {
     document.shape()?;
     let mut diagnostics = Vec::new();
-    // The common layer must itself be portable; overlays cannot hide invalid common settings.
+    if document.schema_version == 2 {
+        diagnostics.extend(super::catalog::validate(format, &document.common, "common"));
+        diagnostics.extend(super::catalog::references(
+            format,
+            &document.common,
+            "common",
+        ));
+        diagnostics.extend(references(
+            format,
+            &document.common,
+            "common",
+            &document.injections,
+            false,
+        ));
+    }
+    // Legacy documents retain their original overlay validation semantics.
     for platform in PLATFORMS {
-        diagnostics.extend(
-            platform_diagnostics(format, &document.common, platform)
-                .into_iter()
-                .map(|mut d| {
-                    d.message = format!(
-                        "{}: move this field to an appropriate platform overlay",
-                        d.message
-                    );
-                    d.layer = "common".into();
-                    d
-                }),
-        );
-        let config = document.effective(platform)?;
+        if document.schema_version == 1 {
+            diagnostics.extend(
+                platform_diagnostics(format, &document.common, platform)
+                    .into_iter()
+                    .map(|mut d| {
+                        d.message = format!(
+                            "{}: move this field to an appropriate platform overlay",
+                            d.message
+                        );
+                        d.layer = "common".into();
+                        d
+                    }),
+            );
+        }
+        let (config, _) = document.configuration(format, platform)?;
         diagnostics.extend(platform_diagnostics(format, &config, platform));
         diagnostics.extend(super::catalog::validate(format, &config, platform));
         diagnostics.extend(super::catalog::references(format, &config, platform));
@@ -620,66 +654,79 @@ pub fn rename(
     document.shape()
 }
 
-/// Import is the only place that relocates platform-specific fields. The complete diff
-/// is returned for review before the administrator accepts the resulting local draft.
+/// Produce a target configuration without changing the single editable source.
+/// Platform-specific listener types and match conditions remove their complete unit.
+pub fn project_configuration(
+    format: &str,
+    source: &Value,
+    platform: &str,
+) -> Result<(Value, Vec<Value>), ApiError> {
+    let mut moves = Vec::new();
+    let mut config = source.clone();
+    let mut removals = BTreeSet::new();
+    for d in platform_diagnostics(format, &config, platform) {
+        if d.severity != "error"
+            || (d.message.starts_with("requires ") || d.message.starts_with("conflicts with "))
+        {
+            continue;
+        }
+        let mut path = d.path.clone();
+        let parts: Vec<_> = path.split('/').collect();
+        if parts.len() >= 5 && ["route", "dns"].contains(&parts[1]) && parts[2] == "rules" {
+            path = format!("/{}/rules/{}", parts[1], parts[3]);
+        } else if parts.len() == 4 && parts[1] == "inbounds" && parts[3] == "type" {
+            path = format!("/inbounds/{}", parts[2]);
+        } else if parts.len() == 4 && parts[1] == "listeners" && parts[3] == "type" {
+            path = format!("/listeners/{}", parts[2]);
+        }
+        moves.push(
+            json!({"platform":platform,"path":d.path,"relocated_unit":path,"reason":d.message}),
+        );
+        removals.insert(path);
+    }
+    let mut removals: Vec<_> = removals.into_iter().collect();
+    removals.sort_by(|a, b| {
+        let aa: Vec<_> = a.split('/').collect();
+        let bb: Vec<_> = b.split('/').collect();
+        for (a, b) in aa.iter().zip(&bb) {
+            let order = match (a.parse::<usize>(), b.parse::<usize>()) {
+                (Ok(a), Ok(b)) => a.cmp(&b),
+                _ => a.cmp(b),
+            };
+            if !order.is_eq() {
+                return order;
+            }
+        }
+        aa.len().cmp(&bb.len())
+    });
+    for path in removals.into_iter().rev() {
+        let (parent, key) = path
+            .rsplit_once('/')
+            .ok_or_else(|| ApiError::bad_request("invalid import relocation"))?;
+        if let Some(target) = config.pointer_mut(parent) {
+            if let Some(items) = target.as_array_mut() {
+                if let Ok(i) = key.parse::<usize>()
+                    && i < items.len()
+                {
+                    items.remove(i);
+                }
+            } else if let Some(map) = target.as_object_mut() {
+                map.remove(&key.replace("~1", "/").replace("~0", "~"));
+            }
+        }
+    }
+    Ok((config, moves))
+}
+
+/// Legacy partitioning retained to exercise version 1 compatibility in tests.
+#[cfg(test)]
 pub fn partition_import(format: &str, document: &mut Document) -> Result<Vec<Value>, ApiError> {
     let mut configs = BTreeMap::new();
     let mut moves = Vec::new();
     for platform in PLATFORMS {
-        let mut config = document.common.clone();
-        let mut removals = BTreeSet::new();
-        for d in platform_diagnostics(format, &config, platform) {
-            if d.severity != "error"
-                || (d.message.starts_with("requires ") || d.message.starts_with("conflicts with "))
-            {
-                continue;
-            }
-            let mut path = d.path.clone();
-            let parts: Vec<_> = path.split('/').collect();
-            if parts.len() >= 5 && ["route", "dns"].contains(&parts[1]) && parts[2] == "rules" {
-                path = format!("/{}/rules/{}", parts[1], parts[3]);
-            } else if parts.len() == 4 && parts[1] == "inbounds" && parts[3] == "type" {
-                path = format!("/inbounds/{}", parts[2]);
-            } else if parts.len() == 4 && parts[1] == "listeners" && parts[3] == "type" {
-                path = format!("/listeners/{}", parts[2]);
-            }
-            moves.push(
-                json!({"platform":platform,"path":d.path,"relocated_unit":path,"reason":d.message}),
-            );
-            removals.insert(path);
-        }
-        let mut removals: Vec<_> = removals.into_iter().collect();
-        removals.sort_by(|a, b| {
-            let aa: Vec<_> = a.split('/').collect();
-            let bb: Vec<_> = b.split('/').collect();
-            for (a, b) in aa.iter().zip(&bb) {
-                let order = match (a.parse::<usize>(), b.parse::<usize>()) {
-                    (Ok(a), Ok(b)) => a.cmp(&b),
-                    _ => a.cmp(b),
-                };
-                if !order.is_eq() {
-                    return order;
-                }
-            }
-            aa.len().cmp(&bb.len())
-        });
-        for path in removals.into_iter().rev() {
-            let (parent, key) = path
-                .rsplit_once('/')
-                .ok_or_else(|| ApiError::bad_request("invalid import relocation"))?;
-            if let Some(target) = config.pointer_mut(parent) {
-                if let Some(items) = target.as_array_mut() {
-                    if let Ok(i) = key.parse::<usize>()
-                        && i < items.len()
-                    {
-                        items.remove(i);
-                    }
-                } else if let Some(map) = target.as_object_mut() {
-                    map.remove(&key.replace("~1", "/").replace("~0", "~"));
-                }
-            }
-        }
+        let (config, omitted) = project_configuration(format, &document.common, platform)?;
         configs.insert(platform.to_owned(), config);
+        moves.extend(omitted);
     }
     fn common(values: &[Option<&Value>]) -> Option<Value> {
         let first = values.first().copied().flatten()?;

@@ -19,7 +19,7 @@ pub async fn initialize(pool: &sqlx::PgPool, secrets: &SecretBox) -> Result<(), 
             .await?;
     if !initialized {
         for format in ["mihomo", "singbox"] {
-            let document = render::seed(format);
+            let document = render::single_seed(format);
             ensure_valid(&validate(format, &document)?)?;
             let encrypted = secrets
                 .encrypt(&serde_json::to_string(&document).map_err(|_| ApiError::internal())?)?;
@@ -141,7 +141,7 @@ async fn create_inner(
     let name = name(&input.name)?;
     let document = input
         .document
-        .unwrap_or_else(|| render::seed(&input.format));
+        .unwrap_or_else(|| render::single_seed(&input.format));
     document.shape()?;
     let mut tx = db::begin_write(&state.pool).await?;
     let id = Uuid::new_v4().to_string();
@@ -690,13 +690,13 @@ pub async fn import(Json(input): Json<Import>) -> Result<Response, ApiError> {
             }
         }
     }
-    let mut document = Document {
-        schema_version: 1,
+    let document = Document {
+        schema_version: 2,
         common,
         platforms: Default::default(),
         injections,
     };
-    let platform_moves = partition_import(&input.format, &mut document)?;
+    let platform_moves: Vec<Value> = vec![];
     // Do not return credentials from removed nodes in import analysis.
     let removed: Vec<_> = removed
         .iter()

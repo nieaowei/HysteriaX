@@ -89,7 +89,7 @@ struct ContentView: View {
         case .users:
             L10n.text("管理启停、到期、流量额度和节点分配。")
         case .templates:
-            L10n.text("管理全局订阅模板、平台覆盖、草稿与发布版本。")
+            L10n.text("管理订阅配置、节点注入、草稿与发布版本。")
         case .credentials:
             L10n.text("集中管理凭据、引用、到期时间和更新结果。")
         case .jobs:

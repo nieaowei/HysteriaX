@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Run template UI regression against an isolated local service and PostgreSQL schema.
+"""Run template workbench regressions against an isolated service and PostgreSQL schema.
 
-Requires TEST_DATABASE_URL, Xcode, xcodegen, and scripts/requirements-test.txt.
+Requires TEST_DATABASE_URL, Xcode, and scripts/requirements-test.txt.
+xcodegen is required for UI and manual modes; --client runs without screen capture.
 App sources and preferences are isolated in a temporary, uniquely identified test application.
 """
 import argparse
@@ -24,17 +25,20 @@ from postgres_test import PostgresTestSchema
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def request(base, token, path, payload=None):
+def request(base, token, path, payload=None, method=None):
     data = None if payload is None else json.dumps(payload).encode()
-    call = urllib.request.Request(base + path, data=data, headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"})
+    call = urllib.request.Request(base + path, data=data, headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"}, method=method)
     with urllib.request.urlopen(call, timeout=20) as response:
         return json.load(response)
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__); parser.add_argument("--test", help="Run one named SubscriptionTemplateUITests method")
+    parser = argparse.ArgumentParser(description=__doc__); parser.add_argument("--test", action="append", help="Run a named SubscriptionTemplateUITests method; repeat to select multiple")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--manual", action="store_true", help="Build and open the same isolated app for manual verification; press Enter to clean up")
+    mode.add_argument("--client", action="store_true", help="Run the production editor model against the isolated real service without screen capture")
     args = parser.parse_args()
-    if not shutil.which("xcodegen"):
+    if not args.client and not shutil.which("xcodegen"):
         raise SystemExit("xcodegen is required for the isolated UI test project")
     subprocess.run(["cargo", "build", "-q"], cwd=ROOT, check=True)
     with PostgresTestSchema() as database, tempfile.TemporaryDirectory(prefix="hysteriax-template-ui-") as folder:
@@ -57,18 +61,31 @@ def main():
                             if response.status == 200: break
                     except (OSError, urllib.error.URLError): time.sleep(0.2)
                 else: raise TimeoutError("isolated UI service did not become ready")
+                layout_draft = request(base, token, "/api/v1/subscription-templates/default-singbox/draft")
+                request(base, token, "/api/v1/subscription-templates/default-singbox", {"expected_revision": layout_draft["template"]["revision"], "name": "0008 Layout - " + "Long template name " * 5}, method="PATCH")
                 user = request(base, token, "/api/v1/users", {"name": "0005 UI User"})
                 subscription = request(base, token, f"/api/v1/users/{user['id']}/subscription", {"expected_revision": 1})
-                document = {"schema_version": 1, "common": {"mixed-port": 7888, "log-level": "silent", "proxies": [], "proxy-groups": [{"name": "Select", "type": "select", "proxies": []}], "rules": ["MATCH,Select"]}, "platforms": {"linux": {"set": {"tproxy-port": 7893}, "remove": []}}, "injections": [{"group": "Select"}]}
+                document = {"schema_version": 2, "common": {"tproxy-port": 7893, "mixed-port": 7888, "log-level": "silent", "proxies": [], "proxy-groups": [{"name": "Select", "type": "select", "proxies": []}], "rules": ["MATCH,Select"]}, "platforms": {}, "injections": [{"group": "Select"}]}
                 template = request(base, token, "/api/v1/subscription-templates", {"expected_revision": 0, "name": "0005 UI Template", "format": "mihomo", "document": document})
+                quit_first = request(base, token, "/api/v1/subscription-templates", {"expected_revision": 0, "name": "0008 Quit A", "format": "mihomo", "document": document})
+                quit_second = request(base, token, "/api/v1/subscription-templates", {"expected_revision": 0, "name": "0008 Quit B", "format": "mihomo", "document": document})
                 exports = work / "Exports"; exports.mkdir()
                 export_document = json.loads(json.dumps(document)); export_document["common"]["future-field"] = {"counter": 18446744073709551615}
                 export_template = request(base, token, "/api/v1/subscription-templates", {"expected_revision": 0, "name": "0005 UI Export Template", "format": "mihomo", "document": export_document})
                 export_template = request(base, token, f"/api/v1/subscription-templates/{export_template['id']}/publish", {"expected_revision": export_template["revision"]})
+                if args.client:
+                    fixture = work / "ClientFixture.json"
+                    fixture.write_text(json.dumps({"base": base, "token": token, "template_id": template["id"], "user_id": user["id"], "subscription_token": subscription["token"]}))
+                    source = ROOT / "apps/macos/Sources/HysteriaX"
+                    files = ["Support/Localization.swift", "Models/APIModels.swift", "Models/OpenAPIRequests.generated.swift", "Models/OpenAPIResponses.generated.swift", "Models/SubscriptionTemplateDocument.swift", "Models/MihomoTemplateRule.swift", "Models/TemplateReferenceIndex.swift", "Stores/SubscriptionTemplateStore.swift", "Services/APIClient.swift"]
+                    binary = work / "workbench-client-tests"
+                    subprocess.run(["swiftc", "-swift-version", "6", "-parse-as-library", *[str(source / file) for file in files], str(ROOT / "tests/subscription-template-workbench-live.swift"), "-o", str(binary)], check=True)
+                    return subprocess.run([str(binary), str(fixture)]).returncode
                 sources = work / "AppSources"; shutil.copytree(ROOT / "apps/macos/Sources/HysteriaX", sources)
-                replacements = {"__EXPORT_DIR__": str(exports), "__EXPORT_TEMPLATE_ID__": export_template["id"], "__BASE_URL__": base, "__ADMIN_TOKEN__": token, "__TEMPLATE_ID__": template["id"], "__USER_ID__": user["id"], "__SUBSCRIPTION_TOKEN__": subscription["token"]}
+                replacements = {"__QUIT_TEMPLATE_ID__": quit_first["id"], "__QUIT_SECOND_TEMPLATE_ID__": quit_second["id"], "__EXPORT_DIR__": str(exports), "__EXPORT_TEMPLATE_ID__": export_template["id"], "__BASE_URL__": base, "__ADMIN_TOKEN__": token, "__TEMPLATE_ID__": template["id"], "__USER_ID__": user["id"], "__SUBSCRIPTION_TOKEN__": subscription["token"]}
                 main_source = '''import SwiftUI
 @main struct TemplateUITestApp: App {
+    @NSApplicationDelegateAdaptor(TemplateDraftTerminationGuard.self) private var terminationGuard
     @State private var store: ManagementStore = {
         AppLanguage.shared.selection = "zh-Hans"
         let api = APIClient(baseURL: URL(string: "__BASE_URL__")!, token: "__ADMIN_TOKEN__")
@@ -82,7 +99,7 @@ def main():
         return 1350
     }
     var body: some Scene { WindowGroup("Subscription Template UI Test") { ContentView(store: store).frame(width: layoutWidth, height: 780).environment(\\.locale, L10n.locale)
-        .onAppear { DispatchQueue.main.async { NSApp.windows.first { $0.canBecomeMain }?.center() } } }.defaultPosition(.center) }
+        .onAppear { terminationGuard.store = store; DispatchQueue.main.async { NSApp.windows.first { $0.canBecomeMain }?.center() } } }.defaultPosition(.center).commands { TemplateEditorCommands() } }
 }
 '''
                 test_source = (ROOT / "apps/macos/UITests/SubscriptionTemplateUITests.swift").read_text()
@@ -132,9 +149,23 @@ schemes:
 ''')
                 subprocess.run(["xcodegen", "generate", "--spec", "project.yml"], cwd=work, check=True, stdout=subprocess.DEVNULL)
                 log = results.with_suffix(".log")
-                selection = [] if not args.test else ["-only-testing:TemplateUITests/SubscriptionTemplateUITests/" + args.test]
+                selection = [] if not args.test else ["-only-testing:TemplateUITests/SubscriptionTemplateUITests/" + name for name in args.test]
+                if args.manual:
+                    with log.open("w") as output:
+                        subprocess.run(["xcodebuild", "build", "-project", str(work / "TemplateUITestHarness.xcodeproj"), "-scheme", "HysteriaX", "-destination", "platform=macOS,arch=arm64", "-derivedDataPath", str(work / "DerivedData"), "CODE_SIGNING_ALLOWED=YES", "CODE_SIGN_IDENTITY=-"], stdout=output, stderr=subprocess.STDOUT, check=True)
+                    app = work / "DerivedData/Build/Products/Debug/HysteriaX.app"
+                    fixture = work / "ManualFixture.json"
+                    fixture.write_text(json.dumps({"base": base, "token": token, "template_id": template["id"], "export_template_id": export_template["id"], "user_id": user["id"], "subscription_token": subscription["token"]}))
+                    print("Manual app:", app, flush=True)
+                    print("Manual fixture:", fixture, flush=True)
+                    subprocess.run(["open", "-n", str(app)], check=True)
+                    try:
+                        input("Press Enter after verification to close the isolated app and clean up: ")
+                    finally:
+                        subprocess.run(["pkill", "-f", str(app / "Contents/MacOS/HysteriaX")], check=False)
+                    return 0
                 with log.open("w") as output:
-                    run = subprocess.run(["xcodebuild", "test", "-project", str(work / "TemplateUITestHarness.xcodeproj"), "-scheme", "HysteriaX", "-destination", "platform=macOS,arch=arm64", "-parallel-testing-enabled", "NO", "-derivedDataPath", str(work / "DerivedData"), "-resultBundlePath", str(results), "CODE_SIGNING_ALLOWED=YES", "CODE_SIGN_IDENTITY=-", "-test-timeouts-enabled", "YES", "-default-test-execution-time-allowance", "300", "-maximum-test-execution-time-allowance", "300", *selection], stdout=output, stderr=subprocess.STDOUT, timeout=420)
+                    run = subprocess.run(["xcodebuild", "test", "-project", str(work / "TemplateUITestHarness.xcodeproj"), "-scheme", "HysteriaX", "-destination", "platform=macOS,arch=arm64", "-parallel-testing-enabled", "NO", "-derivedDataPath", str(work / "DerivedData"), "-resultBundlePath", str(results), "CODE_SIGNING_ALLOWED=YES", "CODE_SIGN_IDENTITY=-", "-test-timeouts-enabled", "YES", "-default-test-execution-time-allowance", "600", "-maximum-test-execution-time-allowance", "600", *selection], stdout=output, stderr=subprocess.STDOUT, timeout=1000)
                 print("Template UI results:", results); print("Template UI log:", log)
                 return run.returncode
             finally:

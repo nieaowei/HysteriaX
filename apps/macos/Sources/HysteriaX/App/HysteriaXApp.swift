@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 @main
 struct HysteriaXApp: App {
@@ -16,6 +17,7 @@ struct HysteriaXApp: App {
                 }
         }
         .commands {
+            TemplateEditorCommands()
             CommandGroup(after: .appInfo) {
                 SettingsLink()
             }

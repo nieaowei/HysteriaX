@@ -70,7 +70,7 @@ pub(super) fn render(
             "all authorized nodes are incompatible",
         ));
     }
-    let mut config = document.effective(platform)?;
+    let (mut config, omitted_fields) = document.configuration(format, platform)?;
     let direct_name = config["outbounds"]
         .as_array()
         .into_iter()
@@ -221,8 +221,13 @@ pub(super) fn render(
         format,
         &mut origins,
     );
+    let differences = if document.schema_version == 2 {
+        json!({"omitted_fields":omitted_fields})
+    } else {
+        json!(document.platforms.get(platform))
+    };
     Ok(
-        json!({"config":config,"diagnostics":diagnostics,"origins":origins,"differences":document.platforms.get(platform),"node_selection":selections,"filtered_nodes":filtered}),
+        json!({"config":config,"diagnostics":diagnostics,"origins":origins,"differences":differences,"node_selection":selections,"filtered_nodes":filtered}),
     )
 }
 
@@ -344,4 +349,13 @@ pub fn seed(format: &str) -> Document {
         platforms,
         injections,
     }
+}
+
+/// New templates use one editable configuration; legacy seeds remain readable.
+pub fn single_seed(format: &str) -> Document {
+    let mut document = seed(format);
+    document.common = document.effective("linux").expect("valid built-in seed");
+    document.platforms.clear();
+    document.schema_version = 2;
+    document
 }

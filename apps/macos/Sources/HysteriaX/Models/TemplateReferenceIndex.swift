@@ -47,7 +47,7 @@ struct TemplateReferenceIndex {
                 func walk(_ value: JSONValue, definition: JSONValue, path: [String], depth: Int) {
                     guard depth < 70 else { return }
                     let resolved = schema.resolve(definition, value: value)
-                    if resolved["x-tag-reference"].stringValue == kind {
+                    if TemplateSchema.referenceKind(resolved, path: path) == kind {
                         let references = value.arrayValue?.compactMap(\.stringValue) ?? [value.stringValue].compactMap { $0 }
                         if references.contains(name) { result.insert(address(path)) }
                     }

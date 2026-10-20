@@ -5,7 +5,7 @@ import AppKit
 final class TemplateDraftTerminationGuard: NSObject, NSApplicationDelegate {
     weak var store: ManagementStore?
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        let editors = store?.subscriptionTemplateEditors.values.filter(\.dirty) ?? []
+        let editors = store?.templateWindows.sessions.values.filter(\.dirty) ?? []
         guard !editors.isEmpty else { return .terminateNow }
         let alert = NSAlert()
         alert.messageText = L10n.text("存在未保存的订阅模板修改")
@@ -17,9 +17,15 @@ final class TemplateDraftTerminationGuard: NSObject, NSApplicationDelegate {
         case .alertFirstButtonReturn:
             Task {
                 do {
+                    guard editors.allSatisfy({ !$0.busy }) else { throw APIClientError.server("请等待当前模板操作完成后再退出。") }
+                    editors.forEach { $0.busy = true }
+                    defer { editors.forEach { $0.busy = false } }
                     for editor in editors {
-                        guard !editor.busy, let api = editor.connectedAPI else { throw APIClientError.invalidResponse }
+                        guard let api = editor.connectedAPI else { throw APIClientError.invalidResponse }
                         try await editor.save(api)
+                    }
+                    guard self.store?.templateWindows.sessions.values.contains(where: { $0.dirty }) != true else {
+                        throw APIClientError.server("仍有未保存的模板修改，已取消退出。")
                     }
                     sender.reply(toApplicationShouldTerminate: true)
                 } catch {

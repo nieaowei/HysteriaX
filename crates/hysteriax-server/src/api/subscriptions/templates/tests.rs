@@ -261,7 +261,7 @@ async fn default_archival_requires_published_replacement_and_preserves_history()
 #[tokio::test]
 async fn import_export_preserves_layers_unknown_fields_and_reports_node_removal() {
     let state = fixture().await;
-    let document = seed("singbox");
+    let document = render::single_seed("singbox");
     let exported = body(
         export(State(state.clone()), Path("default-singbox".into()))
             .await
@@ -282,13 +282,25 @@ async fn import_export_preserves_layers_unknown_fields_and_reports_node_removal(
         imported["document"],
         serde_json::to_value(document).unwrap()
     );
+    let legacy = seed("singbox");
+    let legacy_imported = body(
+        import(Json(Import {
+            format: "singbox".into(),
+            source: None,
+            package: Some(json!({"package_version":1,"format":"singbox","document":legacy})),
+        }))
+        .await
+        .unwrap(),
+    )
+    .await;
+    assert_eq!(
+        legacy_imported["document"],
+        serde_json::to_value(legacy).unwrap()
+    );
     let imported=body(import(Json(Import{format:"mihomo".into(),source:Some("proxies:\n - {name: imported-node, type: ss, password: secret}\nproxy-groups:\n - {name: Select, type: select, proxies: [imported-node]}\nrules: [MATCH,Select]\ntproxy-port: 8000\nfuture: {a: [false, null, 0]}".into()),package:None})).await.unwrap()).await;
     assert_eq!(imported["removed_nodes"][0]["name"], "imported-node");
     assert!(!imported.to_string().contains("secret"));
-    assert_eq!(
-        imported["document"]["platforms"]["linux"]["set"]["tproxy-port"],
-        8000
-    );
+    assert_eq!(imported["document"]["common"]["tproxy-port"], 8000);
     assert_eq!(
         imported["document"]["common"]["future"],
         json!({"a":[false,null,0]})
@@ -538,7 +550,7 @@ fn known_fields_from_a_different_union_variant_are_errors_not_unknown_warnings()
 }
 
 #[tokio::test]
-async fn import_relocates_platform_rules_and_removes_external_node_providers() {
+async fn import_keeps_one_configuration_and_removes_external_node_providers() {
     let analyzed=body(import(Json(Import{format:"singbox".into(),source:Some(json!({"outbounds":[{"type":"direct","tag":"Direct"}],"route":{"rules":[{"process_name":["example"],"action":"route","outbound":"Direct"}],"final":"Direct"}}).to_string()),package:None})).await.unwrap()).await;
     let document: Document = serde_json::from_value(analyzed["document"].clone()).unwrap();
     assert_eq!(
@@ -549,11 +561,17 @@ async fn import_relocates_platform_rules_and_removes_external_node_providers() {
         1
     );
     assert_eq!(
-        document.effective("android").unwrap()["route"]["rules"],
+        document.configuration("singbox", "android").unwrap().0["route"]["rules"],
         json!([])
     );
     ensure_valid(&validate("singbox", &document).unwrap()).unwrap();
-    assert!(!analyzed["platform_moves"].as_array().unwrap().is_empty());
+    assert!(analyzed["platform_moves"].as_array().unwrap().is_empty());
+    assert_eq!(document.schema_version, 2);
+    assert!(document.platforms.is_empty());
+    assert_eq!(
+        document.common["route"]["rules"].as_array().unwrap().len(),
+        1
+    );
     let source = "proxy-providers:\n  External: {type: http, url: 'https://secret.invalid/token'}\nproxy-groups:\n - {name: Select, type: select, use: [External]}\nrules: ['MATCH,Select']\n";
     let analyzed = body(
         import(Json(Import {
@@ -1064,4 +1082,84 @@ fn generated_mihomo_nodes_are_typed_without_unknown_field_warnings() {
             .iter()
             .any(|d| d.path == "/proxies/0/port" && d.severity == "error")
     );
+}
+
+#[test]
+fn single_configuration_seeds_validate_and_render_without_overlays() {
+    for format in ["mihomo", "singbox"] {
+        let document = render::single_seed(format);
+        assert_eq!(document.schema_version, 2);
+        assert!(document.platforms.is_empty());
+        let original = document.common.clone();
+        let diagnostics = validate(format, &document).unwrap();
+        let errors: Vec<_> = diagnostics
+            .iter()
+            .filter(|d| d.severity == "error")
+            .map(|d| format!("{} {} {}", d.layer, d.path, d.message))
+            .collect();
+        assert!(errors.is_empty(), "{format}: {errors:?}");
+        verify_rendering(format, &document).unwrap();
+        assert_eq!(document.common, original);
+    }
+}
+
+#[test]
+fn single_configuration_projects_platform_fields_but_keeps_dependencies_and_types_strict() {
+    let mut document = render::single_seed("mihomo");
+    document.common["tproxy-port"] = json!(7893);
+    let (windows, omitted) = document.configuration("mihomo", "windows").unwrap();
+    assert!(windows.get("tproxy-port").is_none());
+    assert!(windows.get("redir-port").is_none());
+    assert!(omitted.iter().any(|item| item["path"] == "/tproxy-port"));
+    assert_eq!(
+        document.configuration("mihomo", "linux").unwrap().0["tproxy-port"],
+        7893
+    );
+    assert_eq!(document.common["tproxy-port"], 7893);
+    document.common["tproxy-port"] = json!("invalid");
+    assert!(
+        validate("mihomo", &document)
+            .unwrap()
+            .iter()
+            .any(|d| d.severity == "error" && d.path == "/tproxy-port")
+    );
+    document
+        .platforms
+        .insert("windows".into(), Overlay::default());
+    assert!(document.shape().is_err());
+    let mut document = render::single_seed("singbox");
+    let inbound = document.common["inbounds"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|item| item["type"] == "tun")
+        .unwrap();
+    inbound["auto_redirect"] = json!(true);
+    inbound["auto_route"] = json!(false);
+    inbound["iproute2_table_index"] = json!(1000);
+    assert!(
+        validate("singbox", &document)
+            .unwrap()
+            .iter()
+            .any(|d| d.severity == "error" && d.message.starts_with("requires "))
+    );
+}
+
+#[test]
+fn platform_projection_removes_complete_array_units_in_numeric_order() {
+    let source = json!({"inbounds": (0..13).map(|i| json!({"type":if i == 2 || i == 10 {"tproxy"} else {"mixed"}, "tag":format!("in-{i}")})).collect::<Vec<_>>(),
+        "dns":{"rules":[{"process_name":["only-desktop"],"action":"route","server":"dns"},{"domain":["example.com"],"action":"route","server":"dns"}]}});
+    let (config, _) = project_configuration("singbox", &source, "ios").unwrap();
+    let tags: Vec<_> = config["inbounds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["tag"].as_str().unwrap())
+        .collect();
+    assert_eq!(tags.len(), 11);
+    assert!(!tags.contains(&"in-2"));
+    assert!(!tags.contains(&"in-10"));
+    assert_eq!(config["dns"]["rules"].as_array().unwrap().len(), 1);
+    assert_eq!(config["dns"]["rules"][0]["domain"], json!(["example.com"]));
+    assert_eq!(source["inbounds"].as_array().unwrap().len(), 13);
 }

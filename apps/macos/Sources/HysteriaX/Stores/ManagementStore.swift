@@ -16,10 +16,18 @@ private struct ClientDisplaySnapshot: Codable {
 @MainActor
 @Observable
 final class ManagementStore {
-    var subscriptionTemplateEditors: [String: SubscriptionTemplateStore] = [:]
-    func subscriptionTemplateEditor() -> SubscriptionTemplateStore {
-        if let editor = subscriptionTemplateEditors[serviceAddress] { return editor }
-        let editor = SubscriptionTemplateStore(); subscriptionTemplateEditors[serviceAddress] = editor; return editor
+    var templateWindows = TemplateEditorWindows()
+    private var subscriptionTemplateLists: [String: SubscriptionTemplateListStore] = [:]
+    func subscriptionTemplateList() -> SubscriptionTemplateListStore {
+        let service = TemplateEditorID(service: serviceAddress, template: "").service
+        if let list = subscriptionTemplateLists[service] { return list }
+        let list = SubscriptionTemplateListStore()
+        list.sessionAvailable = { [weak self] api in
+            guard let self else { return false }
+            return TemplateEditorID(service: self.serviceAddress, template: "").service == service && (try? self.requireConnectedAPI()) === api
+        }
+        subscriptionTemplateLists[service] = list
+        return list
     }
     var serviceAddress = UserDefaults.standard.string(forKey: "serviceAddress") ?? ""
     var requestedSection: String?
@@ -170,6 +178,7 @@ final class ManagementStore {
         self.serviceAddress = normalizedAddress
         UserDefaults.standard.set(self.serviceAddress, forKey: "serviceAddress")
         api = client
+        templateWindows.connectionChanged()
         isConnected = false
         restoreDisplaySnapshot()
         restoreDNSSnapshot()
@@ -178,6 +187,7 @@ final class ManagementStore {
             try await loadData(using: client)
             guard connectionGeneration == serviceGeneration else { throw CancellationError() }
             isConnected = true
+            await templateWindows.reconcile(store: self)
             errorMessage = nil
             await (nodeNotifications ?? .shared).deliver(nodes: clientSummary?.notificationNodes ?? nodes, service: serviceAddress)
             await (nodeNotifications ?? .shared).deliver(credentials: clientSummary?.notificationCredentials ?? credentials, service: serviceAddress)

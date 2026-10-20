@@ -7,182 +7,364 @@ struct SubscriptionTemplateFields: View {
     let definition: JSONValue
     let path: [String]
     var depth = 0
-    @State private var newKey = ""
-    @State private var expanded = false
-    private var expansion: Binding<Bool> { Binding(get: { expanded || !store.search.isEmpty || store.focusedPath.hasPrefix(SubscriptionTemplateStore.pointer(path) + "/") }, set: { expanded = $0 }) }
-    private var value: JSONValue { store.effective.at(path) ?? .null }
-    private var schema: JSONValue { store.schema.resolve(definition, value: value) }
+    var isEditorRoot = false
+    var showsFieldHeader = true
+    var expandsObjectInline = false
+    @State private var editingObject = false
+    private var selectedItem: Int? {
+        get { store.collectionSelections[SubscriptionTemplateStore.pointer(path)].flatMap(Int.init) }
+        nonmutating set { store.collectionSelections[SubscriptionTemplateStore.pointer(path)] = newValue.map(String.init) }
+    }
+    private var selectedKey: String? {
+        get { store.collectionSelections[SubscriptionTemplateStore.pointer(path)] }
+        nonmutating set { store.collectionSelections[SubscriptionTemplateStore.pointer(path)] = newValue }
+    }
+    // Preview an unset field without materializing it in the document.
+    // The control's setter creates an explicit value only when the user edits it.
+    private var editingDefinition: JSONValue { store.schema.editorDefinition(definition, path: path) }
+    private var value: JSONValue { store.editorValue(editingDefinition, path: path) }
+    private var schema: JSONValue { store.schema.resolve(editingDefinition, value: value) }
     private var properties: [String: JSONValue] { schema["properties"].objectValue ?? [:] }
     private var title: String { path.last ?? "" }
-    private var withinArray: Bool { path.indices.contains { store.effective.at(Array(path.prefix($0)))?.arrayValue != nil } }
+    private var displaysObjectInline: Bool { expandsObjectInline || title == "default_domain_resolver" }
+    private var usesCollectionOverview: Bool {
+        title == "domain_resolver" || (path.first == "dns" && title == "predefined")
+    }
+    private var scalarListItemDefinition: JSONValue? {
+        store.schema.scalarListItemDefinition(editingDefinition)
+    }
+    @ViewBuilder private var fieldActionItems: some View {
+        Button(L10n.text("恢复默认")) { store.restoreDefault(path: path, definition: definition) }
+        Button(L10n.text("显式 null")) { store.set(path, .null) }
+    }
     private var enumChoices: [JSONValue]? {
         guard var values = schema["enum"].arrayValue ?? schema["x-enum-choices"].arrayValue else { return nil }
         if store.effective.at(path) != nil, !values.contains(value) { values.append(value) }
-        return values
+        return values.reduce(into: []) { result, choice in
+            if !result.contains(where: { $0.pretty == choice.pretty }) { result.append(choice) }
+        }
+    }
+    private var usesNativeControl: Bool {
+        let variants = store.schema.variants(editingDefinition)
+        return schema["x-unverified"].boolValue != true
+            && schema.objectValue?["const"] == nil
+            && variants.count <= 1
+            && (["boolean", "string", "integer", "number"].contains(schema["type"].stringValue ?? "") || enumChoices?.isEmpty == false)
+    }
+    private var nativeControl: some View {
+        LabeledContent {
+            nativeValueControl.labelsHidden()
+                .accessibilityIdentifier("templates.value.\(SubscriptionTemplateStore.pointer(path))")
+        } label: {
+            TemplateFieldLabel(store: store, path: path, title: schema["title"].stringValue ?? title, value: value)
+        }
+    }
+    @ViewBuilder private var nativeValueControl: some View {
+        let label = schema["title"].stringValue ?? title
+        if let values = enumChoices, !values.isEmpty {
+            enumPicker(label, values: values)
+        } else {
+            switch schema["type"].stringValue {
+            case "boolean":
+                Toggle(label, isOn: Binding(get: { value.boolValue ?? false }, set: { store.set(path, .bool($0)) }))
+                    .toggleStyle(.switch)
+            case "integer":
+                TextField(label, text: Binding(get: { value.stringValue ?? value.pretty }, set: { text in
+                    if let number = Int(text) { store.set(path, .integer(number)) }
+                    else if let number = UInt64(text) { store.set(path, .unsignedInteger(number)) }
+                    else { store.set(path, .string(text)) }
+                })).textFieldStyle(.roundedBorder)
+            case "number":
+                TextField(label, value: Binding(get: {
+                    if case .decimal(let number) = value { return number }
+                    return Double(value.integerValue ?? 0)
+                }, set: { store.set(path, .decimal($0)) }), format: .number).textFieldStyle(.roundedBorder)
+            default:
+                let reference = TemplateSchema.referenceKind(schema, path: path)
+                if let reference, reference != "network_namespace" {
+                    referencePicker(label, kind: reference)
+                } else if reference == "network_namespace" {
+                    HStack {
+                        stringInput(label)
+                        Menu(L10n.text("选择命名空间引用")) {
+                            ForEach(store.referenceNames("network_namespace"), id: \.self) { name in
+                                Button(name) { store.set(path, .string(name)) }
+                            }
+                        }
+                    }
+                } else {
+                    stringInput(label)
+                }
+            }
+        }
+    }
+    private func stringInput(_ label: String) -> some View {
+        let isMark = ["routing_mark", "default_mark"].contains(title)
+        return TextField(label, text: Binding(get: {
+            value.stringValue ?? (isMark && value != .null ? value.pretty : "")
+        }, set: { store.set(path, .string($0)) }), prompt: isMark ? Text(verbatim: "0x1234") : nil, axis: .vertical)
+            .textFieldStyle(.roundedBorder)
+            .frame(minWidth: 0, idealWidth: 200, maxWidth: .infinity)
+    }
+    private func enumPicker(_ label: String, values: [JSONValue]) -> some View {
+        Picker(label, selection: Binding(get: { value.pretty }, set: { token in
+            guard let choice = values.first(where: { $0.pretty == token }) else { return }
+            store.set(path, choice)
+        })) {
+            if values.isEmpty { Text(L10n.text("未设置")).tag(value.pretty) }
+            ForEach(values, id: \.pretty) { choice in
+                Text(TemplateSchema.pickerTitle(choice)).tag(choice.pretty)
+            }
+        }.disabled(values.isEmpty)
+    }
+    /// Unset removes the key instead of storing an empty string, and an unknown existing tag
+    /// stays visible without adding a second blank choice next to "未设置".
+    @ViewBuilder private func referencePicker(_ label: String, kind: String) -> some View {
+        let names = store.referenceNames(kind)
+        Picker(label, selection: Binding(get: { value.stringValue ?? "" }, set: { next in
+            if next.isEmpty {
+                store.setState(store.layer == "common" ? "inherit" : "remove", path: path, schema: definition)
+            } else {
+                store.set(path, .string(next))
+            }
+        })) {
+            Text(L10n.text("未设置")).tag("")
+            ForEach(names, id: \.self) { Text(TemplateSchema.pickerTitle(.string($0))).tag($0) }
+            if let current = value.stringValue, !current.isEmpty, !names.contains(current) { Text(TemplateSchema.pickerTitle(.string(current))).tag(current) }
+        }
+    }
+    private var isCacheFile: Bool { path == ["experimental", "cache_file"] }
+    private var showsObjectDetails: Bool {
+        !isCacheFile || (store.effective.at(path + ["enabled"]) ?? store.initialValue(properties["enabled"] ?? .null, path: path + ["enabled"])).boolValue == true
     }
     private var members: [String] {
-        properties.keys.filter { key in
-            store.schema.contains(store.search, in: properties[key]!, path: path + [key])
-        }.sorted()
+        let keys = properties.keys.sorted()
+        guard isCacheFile, properties["enabled"] != nil else { return keys }
+        return ["enabled"] + (showsObjectDetails ? keys.filter { $0 != "enabled" } : [])
+    }
+    private var optimisticEnabled: Bool {
+        value["enabled"].boolValue ?? value.boolValue ?? false
+    }
+    private func setOptimistic(_ key: String, _ next: JSONValue) {
+        var object = value.objectValue ?? ["enabled": .bool(optimisticEnabled)]
+        if object["timeout"] == nil { object["timeout"] = .string("3d") }
+        object[key] = next
+        store.set(path, .object(object))
+    }
+    @ViewBuilder private var optimisticFields: some View {
+        Toggle("optimistic_enable", isOn: Binding(get: { optimisticEnabled }, set: { setOptimistic("enabled", .bool($0)) }))
+            .toggleStyle(.switch)
+            .accessibilityIdentifier("templates.value.\(SubscriptionTemplateStore.pointer(path + ["enabled"]))")
+        if optimisticEnabled {
+            TextField("optimistic_timeout", text: Binding(get: { value["timeout"].stringValue ?? "3d" }, set: { setOptimistic("timeout", .string($0)) }))
+                .textFieldStyle(.roundedBorder)
+                .accessibilityIdentifier("templates.value.\(SubscriptionTemplateStore.pointer(path + ["timeout"]))")
+        }
     }
     var body: AnyView {
-        AnyView(VStack(alignment: .leading, spacing: 8) {
+        if path == ["dns", "optimistic"] {
+            return AnyView(optimisticFields
+                .disabled(!store.allowed(path, value: value))
+                .contextMenu { fieldActionItems.disabled(!store.allowed(path, value: value)) }
+                .id(SubscriptionTemplateStore.pointer(path)))
+        }
+        return AnyView(VStack(alignment: .leading, spacing: 8) {
             if depth < 24 {
                 if path.isEmpty { objectFields }
+                else if usesNativeControl {
+                    nativeControl
+                        .disabled(!store.allowed(path, value: value))
+                        .help(schema["description"].stringValue ?? title)
+                }
+                else if isEditorRoot { control }
                 else {
-                    HStack {
-                        Text(title).font(.system(.body, design: .monospaced)).textSelection(.enabled)
-                        Spacer()
-                        Text(store.layer == "common" ? L10n.text("通用配置") : (store.state(path) == "inherit" ? L10n.text("继承通用配置") : TemplatePlatform.title(store.layer)))
-                            .font(.caption).foregroundStyle(.secondary)
-                        if !withinArray { Picker(L10n.text("字段状态"), selection: Binding(get: { store.state(path) }, set: { store.setState($0, path: path, schema: definition) })) {
-                            Text(store.layer == "common" ? L10n.text("未设置") : L10n.text("继承")).tag("inherit")
-                            Text(L10n.text("设置")).tag("set")
-                            if store.layer != "common" { Text(L10n.text("移除")).tag("remove") }
-                        }.labelsHidden().frame(width: 108)
-                        .disabled(!store.allowed(path) && store.state(path) != "set")
-                        .accessibilityIdentifier("templates.state.\(SubscriptionTemplateStore.pointer(path))") }
+                    if showsFieldHeader {
+                        HStack {
+                            TemplateFieldLabel(store: store, path: path, title: schema["title"].stringValue ?? title, value: value)
+                            if schema["title"].stringValue != nil { Text(title).font(.caption.monospaced()).foregroundStyle(.secondary) }
+                        }
                     }
+                    if let description = schema["description"].stringValue { Text(description).font(.caption).foregroundStyle(.secondary) }
                     if !store.allowed(path, value: value) {
-                        Text(L10n.text("此字段由目标客户端管理，或只能在支持的平台覆盖层设置。"))
+                        Text(L10n.text("此字段由目标客户端管理。"))
                             .font(.caption).foregroundStyle(.orange)
                     }
-                    if store.state(path) != "remove", store.effective.at(path) != nil {
-                        control.disabled(!store.allowed(path, value: value))
-                    }
+                    control.disabled(!store.allowed(path, value: value))
                 }
             } else { Text(L10n.text("嵌套层级过深，请在源码中编辑。")) }
-        }.accessibilityElement(children: .contain))
+        }.accessibilityElement(children: .contain)
+        .contextMenu {
+            fieldActionItems.disabled(schema["x-unverified"].boolValue == true || !store.allowed(path, value: value))
+        }
+        .onAppear { selectFocused(store.focusedPath) }
+        .id(SubscriptionTemplateStore.pointer(path))
+        .onChange(of: store.focusGeneration) { _, _ in
+            selectFocused(store.focusedPath)
+        }
+        .sheet(isPresented: $editingObject) {
+            TemplateStructuredFieldEditor(store: store, definition: editingDefinition, path: path, depth: depth, title: schema["title"].stringValue ?? title)
+        })
+    }
+    private func selectFocused(_ pointer: String) {
+        let target = SubscriptionTemplateStore.path(pointer)
+        if target.starts(with: path), target.count > path.count {
+            if let index = Int(target[path.count]) { selectedItem = index } else { selectedKey = target[path.count] }
+            if schema["type"].stringValue == "object", !isEditorRoot, !displaysObjectInline, !usesCollectionOverview, path != ["dns", "optimistic"] {
+                editingObject = true
+            }
+        }
     }
     @ViewBuilder private var control: some View {
-        let variants = definition["oneOf"].arrayValue ?? definition["anyOf"].arrayValue ?? []
-        if variants.count > 1 {
+        let variants = store.schema.variants(editingDefinition)
+        if variants.count > 1, scalarListItemDefinition == nil {
             Picker(L10n.text("配置类型"), selection: Binding(get: { variantIndex(variants) }, set: { index in
-                let initial = store.initialValue(variants[index], path: path)
-                if let props = store.schema.resolve(variants[index])["properties"].objectValue {
-                    var next = value
-                    for (key, field) in props { if let constant = field.objectValue?["const"] { next[key] = constant } }
-                    store.set(path, next)
-                } else { store.set(path, initial) }
+                guard variants.indices.contains(index) else { return }
+                store.set(path, store.schema.selecting(variants[index], from: definition, value: value))
             })) {
-                ForEach(variants.indices, id: \.self) { index in
-                    Text(variantName(variants[index], index: index)).tag(index)
+                ForEach(Array(variants.enumerated()), id: \.offset) { index, variant in
+                    Text(store.schema.variantTitle(variant, index: index)).tag(index)
                 }
             }
         }
         if schema["x-unverified"].boolValue == true {
             Text(L10n.text("未验证字段：保留原值，可通过源码编辑。"))
                 .foregroundStyle(.orange).font(.caption)
+        } else if let itemDefinition = scalarListItemDefinition {
+            TemplateScalarListEditor(store: store, path: path, itemDefinition: itemDefinition, allowsScalar: true)
         } else if let values = enumChoices {
-            Picker(title, selection: Binding(get: { values.firstIndex(of: value) ?? 0 }, set: { store.set(path, values[$0]) })) {
-                ForEach(values.indices, id: \.self) { i in Text(values[i].stringValue ?? values[i].pretty).tag(i) }
-            }
+            enumPicker(title, values: values)
         } else if let constant = schema.objectValue?["const"] {
-            Text(constant.stringValue ?? constant.pretty).foregroundStyle(.secondary)
+            Text(TemplateSchema.pickerTitle(constant)).foregroundStyle(.secondary)
         } else {
             switch schema["type"].stringValue ?? value.schemaType {
-            case "boolean": Toggle(title, isOn: Binding(get: { value.boolValue ?? false }, set: { store.set(path, .bool($0)) })).labelsHidden()
+            case "boolean": Toggle(title, isOn: Binding(get: { value.boolValue ?? false }, set: { store.set(path, .bool($0)) })).toggleStyle(.switch).labelsHidden()
             case "integer": TextField(title, text: Binding(get: { value.stringValue ?? value.pretty }, set: { text in
                 if let number = Int(text) { store.set(path, .integer(number)) }
                 else if let number = UInt64(text) { store.set(path, .unsignedInteger(number)) }
                 else { store.set(path, .string(text)) }
             })).textFieldStyle(.roundedBorder).accessibilityIdentifier("templates.value.\(SubscriptionTemplateStore.pointer(path))")
             case "number": TextField(title, value: Binding(get: { if case .decimal(let n) = value { return n }; return Double(value.integerValue ?? 0) }, set: { store.set(path, .decimal($0)) }), format: .number).textFieldStyle(.roundedBorder).accessibilityIdentifier("templates.value.\(SubscriptionTemplateStore.pointer(path))")
-            case "object": DisclosureGroup(isExpanded: expansion) { objectFields.padding(.leading, 10) } label: { Text(L10n.text("编辑对象字段")) }
+            case "object":
+                if isEditorRoot || displaysObjectInline { objectFields }
+                else if TemplateSchema.isObjectResolver(path) {
+                    TemplateCollectionFields(store: store, definition: editingDefinition, path: path, depth: depth, isSingleObject: true)
+                } else if path.first == "dns", title == "predefined" {
+                    TemplateMapFields(store: store, definition: schema["additionalProperties"], path: path, depth: depth)
+                }
+                else {
+                    HStack {
+                        Text(L10n.text("共 {0} 个字段", String(value.objectValue?.count ?? 0))).foregroundStyle(.secondary)
+                        Spacer()
+                        Button(L10n.text("编辑…"), systemImage: "pencil") { editingObject = true }
+                            .accessibilityIdentifier("templates.object.edit.\(SubscriptionTemplateStore.pointer(path))")
+                    }
+                }
             case "array":
                 if store.selected?.format == "mihomo", path == ["rules"] || (path.first == "sub-rules" && path.count == 2) {
-                    DisclosureGroup(L10n.text("分流规则"), isExpanded: expansion) { MihomoTemplateRules(store: store, path: path) }
+                    MihomoTemplateRules(store: store, path: path)
+                        .accessibilityIdentifier("templates.collection.\(SubscriptionTemplateStore.pointer(path))")
                 } else { arrayFields }
             default:
-                if schema["x-tag-reference"].stringValue == "network_namespace" {
+                let reference = TemplateSchema.referenceKind(schema, path: path)
+                if reference == "network_namespace" {
                     HStack {
                         TextField(title, text: Binding(get: { value.stringValue ?? "" }, set: { store.set(path, .string($0)) })).textFieldStyle(.roundedBorder)
                         Menu(L10n.text("选择命名空间引用")) { ForEach(store.referenceNames("network_namespace"), id: \.self) { name in Button(name) { store.set(path, .string(name)) } } }
                     }
-                } else if let reference = schema["x-tag-reference"].stringValue {
-                    Picker(title, selection: Binding(get: { value.stringValue ?? "" }, set: { store.set(path, .string($0)) })) {
-                        Text(L10n.text("未设置")).tag("")
-                        ForEach(store.referenceNames(reference), id: \.self) { Text($0).tag($0) }
-                        if let current = value.stringValue, !store.referenceNames(reference).contains(current) { Text(current).tag(current) }
-                    }
+                } else if let reference {
+                    referencePicker(title, kind: reference)
                 } else {
                     TextField(title, text: Binding(get: { value.stringValue ?? "" }, set: { store.set(path, .string($0)) }), axis: .vertical)
                         .textFieldStyle(.roundedBorder)
                 }
             }
         }
+        if schema["x-unverified"].boolValue != true, !isEditorRoot, scalarListItemDefinition == nil, !["object", "array"].contains(schema["type"].stringValue ?? value.schemaType) {
         HStack {
-            Button(L10n.text("恢复默认")) { store.restoreDefault(path: path, definition: definition) }.buttonStyle(.borderless)
-            Button("null") { store.set(path, .null) }.buttonStyle(.borderless).help(L10n.text("显式空值；不代表移除字段。"))
             if value == .null { Text("null").foregroundStyle(.secondary) }
             if let nativeDefault = schema.objectValue?["default"], nativeDefault.objectValue == nil, nativeDefault.arrayValue == nil {
                 Text(L10n.text("默认：{0}", nativeDefault.stringValue ?? nativeDefault.pretty)).foregroundStyle(.secondary)
             } else { Text(L10n.text("未设置时由内核采用默认值")).foregroundStyle(.secondary) }
         }.font(.caption)
+        }
     }
     @ViewBuilder private var objectFields: some View {
-        ForEach(members, id: \.self) { key in
+        let properties = self.properties
+        let dialerKeys = TemplateFieldLayout.dialerFields(in: members)
+        ForEach(members.filter { !dialerKeys.contains($0) }, id: \.self) { key in
             if path.isEmpty && key == "proxies" {
                 LabeledContent(key, value: L10n.text("动态注入，只读"))
-            } else {
-                SubscriptionTemplateFields(store: store, definition: properties[key]!, path: path + [key], depth: depth + 1).padding(.vertical, 4)
+            } else if let field = properties[key] {
+                SubscriptionTemplateFields(store: store, definition: field, path: path + [key], depth: depth + 1).padding(.vertical, 4)
             }
         }
-        if let additional = schema.objectValue?["additionalProperties"], additional.objectValue != nil {
-            ForEach((value.objectValue ?? [:]).keys.filter { properties[$0] == nil }.sorted(), id: \.self) { key in
-                HStack(alignment: .top) {
-                    SubscriptionTemplateFields(store: store, definition: additional, path: path + [key], depth: depth + 1)
-                    Button(role: .destructive) {
-                        store.deleteField(parent: path, key: key)
-                    } label: { Image(systemName: "minus.circle") }.accessibilityLabel(L10n.text("删除字段"))
+        if !dialerKeys.isEmpty {
+            TemplateDialerSettings(store: store, path: path, title: schema["title"].stringValue ?? title) {
+                ForEach(dialerKeys, id: \.self) { key in
+                    if let field = properties[key] {
+                        SubscriptionTemplateFields(store: store, definition: field, path: path + [key], depth: depth + 1).padding(.vertical, 4)
+                    }
                 }
             }
-            HStack {
-                TextField(L10n.text("新字段名称"), text: $newKey)
-                Button(L10n.text("添加字段")) {
-                    guard !newKey.isEmpty else { return }
-                    store.set(path + [newKey], store.initialValue(additional, path: path + [newKey])); newKey = ""
-                }.disabled(newKey.isEmpty)
-            }
-        } else {
-            let unknown = (value.objectValue ?? [:]).keys.filter { properties[$0] == nil }.sorted()
-            if !unknown.isEmpty {
-                DisclosureGroup(L10n.text("未验证字段")) {
-                    ForEach(unknown, id: \.self) { key in Text(key).textSelection(.enabled).foregroundStyle(.orange) }
-                    Text(L10n.text("未验证字段：保留原值，可通过源码编辑。"))
+        }
+        if showsObjectDetails {
+            if let additional = schema.objectValue?["additionalProperties"], additional.objectValue != nil {
+                TemplateMapFields(store: store, definition: additional, path: path, knownKeys: Set(properties.keys), depth: depth)
+            } else {
+                let unknown = (value.objectValue ?? [:]).keys.filter { properties[$0] == nil }.sorted()
+                if !unknown.isEmpty {
+                    DisclosureGroup(L10n.text("未验证字段")) {
+                        ForEach(unknown, id: \.self) { key in Text(key).textSelection(.enabled).foregroundStyle(.orange) }
+                        Text(L10n.text("未验证字段：保留原值，可通过源码编辑。"))
+                    }
                 }
             }
         }
     }
     @ViewBuilder private var arrayFields: some View {
-        let items = value.arrayValue ?? []
-        DisclosureGroup("\(L10n.text("数组项目")) (\(items.count))", isExpanded: expansion) {
-            ForEach(items.indices, id: \.self) { i in
-                VStack(alignment: .leading) {
-                    HStack {
-                        Text("\(i + 1)").foregroundStyle(.secondary)
-                        Spacer()
-                        Button { move(i, by: -1) } label: { Image(systemName: "arrow.up") }.disabled(i == 0).accessibilityLabel(L10n.text("上移"))
-                        Button { move(i, by: 1) } label: { Image(systemName: "arrow.down") }.disabled(i + 1 == items.count).accessibilityLabel(L10n.text("下移"))
-                        Button(role: .destructive) { store.deleteItem(path: path, index: i) } label: { Image(systemName: "minus.circle") }.accessibilityLabel(L10n.text("删除项目"))
-                    }
-                    SubscriptionTemplateFields(store: store, definition: schema["items"], path: path + [String(i)], depth: depth + 1)
-                }.padding(8)
-                Divider()
-            }
-            Button(L10n.text("添加项目")) { store.set(path, .array(items + [store.initialValue(schema["items"], path: path + [String(items.count)])])) }
+        let itemSchema = store.schema.resolve(schema["items"])
+        let itemVariants = store.schema.variants(schema["items"])
+        if ["string", "integer"].contains(itemSchema["type"].stringValue ?? ""), itemVariants.count <= 1,
+           itemSchema["x-unverified"].boolValue != true,
+           (value.arrayValue ?? []).allSatisfy({ $0.schemaType == itemSchema["type"].stringValue }) {
+            TemplateScalarListEditor(store: store, path: path, itemDefinition: schema["items"])
+        } else {
+            TemplateCollectionFields(store: store, definition: schema["items"], path: path, depth: depth)
         }
-    }
-    private func move(_ index: Int, by offset: Int) {
-        var items = value.arrayValue ?? []; let target = index + offset
-        guard items.indices.contains(target) else { return }; items.swapAt(index, target); store.set(path, .array(items))
     }
     private func variantIndex(_ variants: [JSONValue]) -> Int {
         variants.firstIndex { candidate in store.schema.resolve(candidate, value: value) == schema } ?? 0
     }
-    private func variantName(_ candidate: JSONValue, index: Int) -> String {
-        let resolved = store.schema.resolve(candidate)
-        let constants = resolved["properties"].objectValue?.values.compactMap { $0["const"].stringValue } ?? []
-        return constants.first ?? resolved["title"].stringValue ?? resolved["type"].stringValue ?? "\(index + 1)"
+}
+
+struct TemplateFieldLabel: View {
+    @Bindable var store: SubscriptionTemplateStore
+    let path: [String]
+    let title: String
+    var value: JSONValue? = nil
+    private var platforms: [String] { store.supportedPlatforms(path, value: value ?? store.effective.at(path)) }
+    var body: some View {
+        HStack(spacing: 6) {
+            Text(title).textSelection(.enabled)
+            if store.schema.isRequired(path, value: store.effective) {
+                Text(verbatim: "*").foregroundStyle(.red)
+                    .accessibilityLabel(L10n.text("必填"))
+                    .accessibilityIdentifier("templates.required.\(SubscriptionTemplateStore.pointer(path))")
+            }
+            if platforms.count < TemplatePlatform.all.count {
+                if platforms.isEmpty {
+                    tag(L10n.text("客户端管理"))
+                } else {
+                    ForEach(platforms, id: \.self) { platform in tag(TemplatePlatform.title(platform)) }
+                }
+            }
+        }
+    }
+    private func tag(_ title: String) -> some View {
+        Text(title).font(.caption2).foregroundStyle(.secondary)
+            .padding(.horizontal, 6).padding(.vertical, 2)
+            .background(.quaternary, in: Capsule())
+            .fixedSize()
+            .accessibilityIdentifier("templates.platformTag.\(SubscriptionTemplateStore.pointer(path))")
     }
 }
