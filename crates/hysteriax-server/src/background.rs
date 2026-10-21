@@ -142,7 +142,7 @@ pub async fn finish(pool: &PgPool, work: &Work, success: bool) -> Result<()> {
 
 pub async fn expire(pool: &PgPool) -> Result<usize> {
     db::write(pool,|tx|Box::pin(async move {
-        let rows=sqlx::query("SELECT w.id,w.cycle_id,w.node_id,w.kind FROM background_work w WHERE w.state IN ('queued','running') AND (w.deadline_at<=clock_timestamp() OR NOT EXISTS(SELECT 1 FROM nodes n WHERE n.id=w.node_id AND n.state NOT IN ('deleting','delete_failed'))) AND NOT EXISTS(SELECT 1 FROM resource_leases l WHERE l.resource_key='work:'||w.id AND l.owner IS NOT NULL AND l.expires_at>clock_timestamp()) AND NOT (w.kind='traffic' AND EXISTS(SELECT 1 FROM traffic_sample_batches b WHERE b.sample_id=w.id AND b.payload_digest IS NOT NULL)) ORDER BY w.deadline_at,w.id LIMIT 256 FOR UPDATE OF w SKIP LOCKED").fetch_all(&mut **tx).await?;
+        let rows=sqlx::query("SELECT w.id,w.cycle_id,w.node_id,w.kind FROM background_work w WHERE w.cycle_id IS NOT NULL AND w.state IN ('queued','running') AND (w.deadline_at<=clock_timestamp() OR NOT EXISTS(SELECT 1 FROM nodes n WHERE n.id=w.node_id AND n.state NOT IN ('deleting','delete_failed'))) AND NOT EXISTS(SELECT 1 FROM resource_leases l WHERE l.resource_key='work:'||w.id AND l.owner IS NOT NULL AND l.expires_at>clock_timestamp()) AND NOT (w.kind='traffic' AND EXISTS(SELECT 1 FROM traffic_sample_batches b WHERE b.sample_id=w.id AND b.payload_digest IS NOT NULL)) ORDER BY w.deadline_at,w.id LIMIT 256 FOR UPDATE OF w SKIP LOCKED").fetch_all(&mut **tx).await?;
         for row in &rows {
             sqlx::query("UPDATE background_work SET state='expired',owner=NULL,finished_at=clock_timestamp(),error_code='sampling_slot_expired' WHERE id=$1").bind(row.get::<String,_>("id")).execute(&mut **tx).await?;
             if row.get::<String,_>("kind")=="traffic" {
@@ -185,3 +185,5 @@ pub async fn run_sampling(state: AppState, kind: &'static str) {
 }
 #[cfg(test)]
 mod tests;
+
+pub mod maintenance;

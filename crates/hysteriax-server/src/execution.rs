@@ -272,7 +272,7 @@ pub async fn guard_current(connection: &mut PgConnection) -> Result<(), sqlx::Er
         .iter()
         .find(|lease| lease.resource.starts_with("work:"))
     {
-        let running:Option<bool>=sqlx::query_scalar("SELECT true FROM background_work w WHERE w.id=$1 AND w.owner=$2 AND w.generation=$3 AND w.state='running' AND EXISTS(SELECT 1 FROM nodes n WHERE n.id=w.node_id AND n.state NOT IN ('deleting','delete_failed')) FOR UPDATE OF w")
+        let running:Option<bool>=sqlx::query_scalar("SELECT true FROM background_work w WHERE w.id=$1 AND w.owner=$2 AND w.generation=$3 AND w.state='running' AND (w.node_id IS NULL OR EXISTS(SELECT 1 FROM nodes n WHERE n.id=w.node_id AND n.state NOT IN ('deleting','delete_failed'))) FOR UPDATE OF w")
             .bind(&work.work).bind(&work.owner).bind(work.generation).fetch_optional(&mut *connection).await?;
         if running.is_none() {
             return Err(sqlx::Error::Protocol(

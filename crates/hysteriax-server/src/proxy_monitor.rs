@@ -152,30 +152,94 @@ pub async fn run(state: AppState) {
         retention_loop(state)
     );
 }
+const RETENTION_TABLES: [&str; 3] = [
+    "online_samples",
+    "proxy_probe_samples",
+    "monitoring_probe_tokens",
+];
 async fn retention_loop(state: AppState) {
-    let mut timer = tokio::time::interval(Duration::from_secs(86400));
+    let mut timer = tokio::time::interval(Duration::from_secs(1));
     timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
         timer.tick().await;
-        if let Err(error) = cleanup(&state).await {
-            tracing::warn!(%error,"monitoring retention cleanup failed");
+        if let Err(error) = retention_pass(&state).await {
+            tracing::warn!(%error,"monitoring retention cleanup deferred");
         }
     }
 }
-async fn cleanup(state: &AppState) -> Result<()> {
-    for table in ["online_samples", "proxy_probe_samples"] {
-        loop {
-            let affected=sqlx::query(&format!("DELETE FROM {table} WHERE id IN (SELECT id FROM {table} WHERE sampled_at < now()-interval '31 days' LIMIT 1000)" )).execute(&state.pool).await?.rows_affected();
-            if affected < 1000 {
-                break;
-            }
-            tokio::task::yield_now().await;
-        }
-    }
-    sqlx::query("DELETE FROM monitoring_probe_tokens WHERE expires_at < now()")
-        .execute(&state.pool)
+async fn retention_pass(state: &AppState) -> Result<()> {
+    use crate::background::maintenance;
+    for table in RETENTION_TABLES {
+        maintenance::ensure(
+            &state.pool,
+            &format!("monitoring-retention:{table}"),
+            "monitoring-retention",
+            json!({"table":table}),
+        )
         .await?;
+    }
+    // Three independent categories, one bounded transaction for each pass.
+    for _ in 0..3 {
+        let Some(work) =
+            maintenance::claim(&state.pool, "monitoring-retention", &state.instance_id).await?
+        else {
+            break;
+        };
+        crate::execution::supervise(state.pool.clone(), work.leases.clone(), async {
+            if let Err(error) = cleanup_work(state, &work).await {
+                tracing::warn!(%error,"monitoring cleanup batch deferred");
+                work.retry(&state.pool).await?;
+            }
+            Ok::<_, anyhow::Error>(())
+        })
+        .await
+        .transpose()?;
+    }
     Ok(())
+}
+async fn cleanup_work(state: &AppState, work: &crate::background::maintenance::Work) -> Result<()> {
+    let work = work.clone();
+    let table = work.payload["table"]
+        .as_str()
+        .context("missing retention table")?;
+    anyhow::ensure!(
+        RETENTION_TABLES.contains(&table),
+        "unsupported retention table"
+    );
+    let (key, at, age_days, interval) = if table == "monitoring_probe_tokens" {
+        ("node_id", "expires_at", 0_i32, 60)
+    } else {
+        ("id", "sampled_at", 31_i32, 86400)
+    };
+    let delete = format!(
+        "DELETE FROM {table} WHERE {key} IN (SELECT {key} FROM {table} WHERE {at}<$1 ORDER BY {at},{key} LIMIT 256 FOR UPDATE SKIP LOCKED)"
+    );
+    let remaining = format!("SELECT EXISTS(SELECT 1 FROM {table} WHERE {at}<$1)");
+    crate::db::write(&state.pool, move |tx| {
+        let (work, delete, remaining) = (work.clone(), delete.clone(), remaining.clone());
+        Box::pin(async move {
+            work.guard_on(tx).await?;
+            // Bind one DB-time cutoff so empty and nonempty scans can use
+            // range indexes instead of filtering with a volatile expression.
+            let cutoff: DateTime<Utc> =
+                sqlx::query_scalar("SELECT clock_timestamp()-make_interval(days=>$1)")
+                    .bind(age_days)
+                    .fetch_one(&mut **tx)
+                    .await?;
+            sqlx::query(&delete).bind(cutoff).execute(&mut **tx).await?;
+            let more: bool = sqlx::query_scalar(&remaining)
+                .bind(cutoff)
+                .fetch_one(&mut **tx)
+                .await?;
+            work.finish_on(tx, more, if more { 1 } else { interval }, None)
+                .await
+        })
+    })
+    .await
+}
+#[cfg(test)]
+async fn cleanup(state: &AppState) -> Result<()> {
+    retention_pass(state).await
 }
 pub(crate) async fn sample_work(state: &AppState, work: &crate::background::Work) -> Result<()> {
     let revision = work.payload["deployed_revision"]
@@ -555,6 +619,167 @@ mod tests {
             assert_eq!(count, 1);
         }
     }
+    #[tokio::test]
+    async fn monitoring_retention_is_bounded_skips_claimed_rows_and_recovers_its_remaining_work() {
+        use crate::background::maintenance;
+        let (state, node) = fixture().await;
+        sqlx::query("INSERT INTO proxy_probe_samples(node_id,revision,sampled_at,status) SELECT $1,1,clock_timestamp()-interval '32 days'-make_interval(secs=>i::double precision),'ok' FROM generate_series(1,301)i").bind(&node).execute(&state.pool).await.unwrap();
+        let mut held = state.pool.begin().await.unwrap();
+        sqlx::query("SELECT id FROM proxy_probe_samples ORDER BY sampled_at,id LIMIT 1 FOR UPDATE")
+            .fetch_one(&mut *held)
+            .await
+            .unwrap();
+        maintenance::ensure(
+            &state.pool,
+            "retention-test",
+            "monitoring-retention",
+            json!({"table":"proxy_probe_samples"}),
+        )
+        .await
+        .unwrap();
+        let old = maintenance::claim(&state.pool, "monitoring-retention", "old")
+            .await
+            .unwrap()
+            .unwrap();
+        cleanup_work(&state, &old).await.unwrap();
+        assert_eq!(
+            number(&state, "SELECT count(*) FROM proxy_probe_samples").await,
+            45
+        );
+        assert_eq!(
+            number(
+                &state,
+                "SELECT count(*) FROM background_work WHERE state='queued'"
+            )
+            .await,
+            1
+        );
+        assert!(cleanup_work(&state, &old).await.is_err());
+        sqlx::query(
+            "UPDATE background_work SET available_at=clock_timestamp()-interval '1 second'",
+        )
+        .execute(&state.pool)
+        .await
+        .unwrap();
+        let next = maintenance::claim(&state.pool, "monitoring-retention", "next")
+            .await
+            .unwrap()
+            .unwrap();
+        cleanup_work(&state, &next).await.unwrap();
+        assert_eq!(
+            number(&state, "SELECT count(*) FROM proxy_probe_samples").await,
+            1
+        );
+        assert_eq!(
+            number(
+                &state,
+                "SELECT count(*) FROM background_work WHERE state='queued'"
+            )
+            .await,
+            1,
+            "a skipped old row must keep the next batch scheduled"
+        );
+        held.rollback().await.unwrap();
+        sqlx::query(
+            "UPDATE background_work SET available_at=clock_timestamp()-interval '1 second'",
+        )
+        .execute(&state.pool)
+        .await
+        .unwrap();
+        let last = maintenance::claim(&state.pool, "monitoring-retention", "last")
+            .await
+            .unwrap()
+            .unwrap();
+        cleanup_work(&state, &last).await.unwrap();
+        assert_eq!(
+            number(&state, "SELECT count(*) FROM proxy_probe_samples").await,
+            0
+        );
+        assert_eq!(number(&state,"SELECT count(*) FROM background_work WHERE state='complete' AND available_at>clock_timestamp()+interval '23 hours'").await,1);
+    }
+
+    #[tokio::test]
+    async fn failed_retention_ack_rolls_back_deleted_rows_and_expired_token_cleanup_preserves_live_tokens()
+     {
+        use crate::background::maintenance;
+        let (state, node) = fixture().await;
+        maintenance::ensure(
+            &state.pool,
+            "token-retention",
+            "monitoring-retention",
+            json!({"table":"monitoring_probe_tokens"}),
+        )
+        .await
+        .unwrap();
+        let work = maintenance::claim(&state.pool, "monitoring-retention", "owner")
+            .await
+            .unwrap()
+            .unwrap();
+        sqlx::query("INSERT INTO monitoring_probe_tokens(node_id,token_hash,expires_at) VALUES($1,'expired',clock_timestamp()-interval '1 second')").bind(&node).execute(&state.pool).await.unwrap();
+        sqlx::raw_sql("CREATE FUNCTION reject_retention_ack() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF OLD.state='running' AND NEW.state<>'running' THEN RAISE EXCEPTION 'reject acknowledgement'; END IF; RETURN NEW; END $$; CREATE TRIGGER reject_retention_ack BEFORE UPDATE ON background_work FOR EACH ROW EXECUTE FUNCTION reject_retention_ack();").execute(&state.pool).await.unwrap();
+        assert!(cleanup_work(&state, &work).await.is_err());
+        assert_eq!(
+            number(
+                &state,
+                "SELECT count(*) FROM monitoring_probe_tokens WHERE token_hash='expired'"
+            )
+            .await,
+            1
+        );
+        assert_eq!(
+            number(
+                &state,
+                "SELECT count(*) FROM background_work WHERE state='running'"
+            )
+            .await,
+            1
+        );
+        sqlx::query("DROP TRIGGER reject_retention_ack ON background_work")
+            .execute(&state.pool)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE monitoring_probe_tokens SET token_hash='live',expires_at=clock_timestamp()+interval '30 seconds'").execute(&state.pool).await.unwrap();
+        cleanup_work(&state, &work).await.unwrap();
+        assert_eq!(
+            number(
+                &state,
+                "SELECT count(*) FROM monitoring_probe_tokens WHERE token_hash='live'"
+            )
+            .await,
+            1
+        );
+        assert_eq!(number(&state,"SELECT count(*) FROM background_work WHERE state='complete' AND available_at>clock_timestamp()+interval '50 seconds'").await,1);
+        sqlx::query(
+            "UPDATE monitoring_probe_tokens SET expires_at=clock_timestamp()-interval '1 second'",
+        )
+        .execute(&state.pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "UPDATE background_work SET available_at=clock_timestamp()-interval '1 second'",
+        )
+        .execute(&state.pool)
+        .await
+        .unwrap();
+        maintenance::ensure(
+            &state.pool,
+            "token-retention",
+            "monitoring-retention",
+            json!({"table":"monitoring_probe_tokens"}),
+        )
+        .await
+        .unwrap();
+        let next = maintenance::claim(&state.pool, "monitoring-retention", "next")
+            .await
+            .unwrap()
+            .unwrap();
+        cleanup_work(&state, &next).await.unwrap();
+        assert_eq!(
+            number(&state, "SELECT count(*) FROM monitoring_probe_tokens").await,
+            0
+        );
+    }
+
     #[tokio::test]
     async fn missing_mtls_certificate_is_unconfigured_not_an_outage() {
         let (state, node) = fixture().await;
