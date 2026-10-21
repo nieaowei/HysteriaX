@@ -75,6 +75,15 @@ impl IntoResponse for ApiError {
 
 impl From<sqlx::Error> for ApiError {
     fn from(error: sqlx::Error) -> Self {
+        if error.as_database_error().is_some_and(|e| {
+            e.code().as_deref() == Some("23503")
+                && e.constraint()
+                    .is_some_and(|name| name.starts_with("reference_edge_"))
+        }) {
+            return Self::conflict(
+                "credential version is referenced or no longer available; reload before retrying",
+            );
+        }
         tracing::error!(error = %error, "database operation failed");
         if crate::db::RetryableTransactionError::retryable_transaction(&error) {
             return Self::new(

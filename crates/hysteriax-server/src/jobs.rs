@@ -306,7 +306,7 @@ async fn execute_one(state: AppState, job: JobInput) {
     match result {
         Ok(output) => {
             let removed = output.delete_node;
-            retry_persistence(|| succeed(&state.pool, &job, output.clone())).await;
+            retry_persistence(|| succeed(&state, &job, output.clone())).await;
             if removed && let Some(node) = &job.node_id {
                 let absent = sqlx::query_scalar::<_, bool>(
                     "SELECT NOT EXISTS(SELECT 1 FROM nodes WHERE id=$1)",
@@ -374,7 +374,8 @@ where
     }
 }
 
-async fn succeed(pool: &PgPool, job: &JobInput, mut output: JobOutput) -> Result<(), sqlx::Error> {
+async fn succeed(app: &AppState, job: &JobInput, mut output: JobOutput) -> Result<(), sqlx::Error> {
+    let pool = &app.pool;
     if output.delete_node && output.result["history_cleaned"] != true {
         let removed = crate::node_cleanup::purge_history(pool, job).await?;
         output.result["removed_history_rows"] = json!(removed);
@@ -490,6 +491,8 @@ async fn succeed(pool: &PgPool, job: &JobInput, mut output: JobOutput) -> Result
             }
             sqlx::query("UPDATE config_versions SET deployed_success = TRUE WHERE node_id = $1 AND revision = $2")
                 .bind(node_id).bind(revision).execute(&mut *tx).await?;
+            crate::credentials::reference_index::flush_node_on(&mut tx, &app.secrets, node_id)
+                .await?;
             crate::credentials::rotations::operation_completed(&mut tx, job)
                 .await
                 .map_err(|e| sqlx::Error::Protocol(e.to_string()))?;
@@ -1030,6 +1033,11 @@ mod tests {
     #[tokio::test]
     async fn completion_retries_transaction_failure_without_duplicate_events() {
         let pool = test_pool().await;
+        let state = crate::state::AppState::new(
+            pool.clone(),
+            crate::security::SecretBox::from_base64("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+                .unwrap(),
+        );
         insert_running_job(&pool).await;
         sqlx::raw_sql("CREATE SEQUENCE completion_attempt; CREATE FUNCTION reject_first_completion() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF nextval('completion_attempt') = 1 THEN RAISE EXCEPTION 'injected failure'; END IF; RETURN NEW; END $$; CREATE TRIGGER reject_completion BEFORE INSERT ON job_events FOR EACH ROW EXECUTE FUNCTION reject_first_completion();").execute(&pool).await.unwrap();
         let job = JobInput {
@@ -1050,9 +1058,9 @@ mod tests {
             published_connection: None,
             delete_node: false,
         };
-        super::retry_persistence(|| super::succeed(&pool, &job, output.clone())).await;
+        super::retry_persistence(|| super::succeed(&state, &job, output.clone())).await;
         // Retrying an uncertain commit is also idempotent.
-        super::succeed(&pool, &job, output).await.unwrap();
+        super::succeed(&state, &job, output).await.unwrap();
         let status: String = sqlx::query_scalar("SELECT status FROM jobs WHERE id='job-running'")
             .fetch_one(&pool)
             .await
@@ -1121,7 +1129,7 @@ mod tests {
             published_connection: None,
             delete_node: false,
         };
-        super::succeed(&state.pool, &job, output).await.unwrap();
+        super::succeed(&state, &job, output).await.unwrap();
         let result: (String, serde_json::Value) =
             sqlx::query_as("SELECT status,result_json FROM jobs WHERE id=$1")
                 .bind(&id)
@@ -1518,7 +1526,7 @@ mod dns_job_tests {
             published_connection: Some(connection.clone()),
             delete_node: false,
         };
-        succeed(&state.pool, &job, output()).await.unwrap();
+        succeed(&state, &job, output()).await.unwrap();
         assert_eq!(
             sqlx::query_scalar::<_, Option<serde_json::Value>>(
                 "SELECT published_connection FROM nodes WHERE id=$1"
@@ -1531,7 +1539,7 @@ mod dns_job_tests {
         );
         let mut stale = output();
         stale.published_connection = Some(json!({"public_host":"stale.example.test"}));
-        succeed(&state.pool, &job, stale).await.unwrap();
+        succeed(&state, &job, stale).await.unwrap();
         assert_eq!(
             sqlx::query_scalar::<_, Option<serde_json::Value>>(
                 "SELECT published_connection FROM nodes WHERE id=$1"
@@ -1562,7 +1570,7 @@ mod dns_job_tests {
         assert_eq!(job.kind, "uninstall");
         for _ in 0..2 {
             succeed(
-                &state.pool,
+                &state,
                 &job,
                 JobOutput {
                     stage: "uninstalled".into(),

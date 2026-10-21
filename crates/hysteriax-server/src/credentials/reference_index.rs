@@ -1,157 +1,245 @@
-//! Encrypted configurations are indexed once per change, under the existing write lock.
-//! Every authoritative reference check drains committed dirty sources in its transaction.
+//! Configuration references are committed with their encrypted source.
+//! Only explicit maintenance imports may leave a dirty source between commits.
 use crate::{db, error::ApiError, security::SecretBox};
-use serde_json::Value;
+use serde_json::{Value, json};
 use sqlx::{PgConnection, PgPool, Postgres, Row, Transaction};
 
-/// Return one consistent snapshot with up-to-date reference edges. Readers never
-/// wait for the write lock when the snapshot contains no dirty sources.
 pub async fn begin_read(
     pool: &PgPool,
-    secrets: &SecretBox,
+    _secrets: &SecretBox,
 ) -> Result<crate::read_snapshot::Reader, ApiError> {
     if let Some(reader) = crate::read_snapshot::current().await {
         return Ok(reader);
     }
     Ok(crate::read_snapshot::Reader::owned(
-        begin_read_transaction(pool, secrets).await?,
+        begin_read_transaction(pool, _secrets).await?,
     ))
 }
 pub(crate) async fn begin_read_transaction(
     pool: &PgPool,
-    secrets: &SecretBox,
+    _secrets: &SecretBox,
 ) -> Result<Transaction<'static, Postgres>, ApiError> {
-    begin_read_with_retries(pool, secrets, 2).await
-}
-
-async fn begin_read_with_retries(
-    pool: &PgPool,
-    secrets: &SecretBox,
-    retries: usize,
-) -> Result<Transaction<'static, Postgres>, ApiError> {
-    for _ in 0..retries {
-        let mut tx = pool.begin().await?;
-        sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
-            .execute(&mut *tx)
-            .await?;
-        let dirty: bool =
-            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM credential_reference_dirty)")
-                .fetch_one(&mut *tx)
-                .await?;
-        if !dirty {
-            return Ok(tx);
-        }
-        tx.rollback().await?;
-        initialize(pool, secrets).await?;
-    }
-    // A busy writer can invalidate each new snapshot. Preserve the original
-    // authoritative path after a bounded number of maintenance attempts.
-    let mut tx = db::begin_write(pool).await?;
-    ensure_on(&mut tx, secrets).await?;
+    let mut tx = crate::read_snapshot::transaction(pool).await?;
+    assert_clean_on(&mut tx).await?;
     Ok(tx)
 }
-
-pub async fn ensure_on(connection: &mut PgConnection, secrets: &SecretBox) -> Result<(), ApiError> {
-    sqlx::query("SELECT pg_advisory_xact_lock(62177345902811)")
-        .execute(&mut *connection)
+pub async fn assert_clean_on(connection: &mut PgConnection) -> Result<(), ApiError> {
+    let dirty: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM credential_reference_dirty)")
+        .fetch_one(connection)
         .await?;
-    let dirty = sqlx::query(
-        "SELECT kind,source_id,generation FROM credential_reference_dirty ORDER BY kind,source_id FOR UPDATE",
-    )
-    .fetch_all(&mut *connection)
-    .await?;
-    for source in dirty {
-        let kind: String = source.get("kind");
-        let id: String = source.get("source_id");
-        let generation: i64 = source.get("generation");
-        sqlx::query("DELETE FROM credential_reference_edges WHERE kind=$1 AND source_id=$2")
-            .bind(&kind)
-            .bind(&id)
-            .execute(&mut *connection)
-            .await?;
-        if kind == "node" {
-            if let Some(row) = sqlx::query(
-                "SELECT id,desired_config_enc,deployed_config_enc FROM nodes WHERE id=$1",
-            )
-            .bind(&id)
-            .fetch_optional(&mut *connection)
-            .await?
-            {
-                for (column, source) in [
-                    ("desired_config_enc", "desired"),
-                    ("deployed_config_enc", "deployed"),
-                ] {
-                    if let Some(cipher) = row.get::<Option<String>, _>(column) {
-                        insert(
-                            connection, secrets, &kind, &id, &id, None, None, source, &cipher,
-                        )
-                        .await?;
-                    }
-                }
-            }
-        } else if let Some(row) =
-            sqlx::query("SELECT node_id,revision,config_enc FROM config_versions WHERE id=$1")
-                .bind(&id)
-                .fetch_optional(&mut *connection)
-                .await?
-        {
-            insert(
-                connection,
-                secrets,
-                &kind,
-                &id,
-                &row.get::<String, _>("node_id"),
-                Some(&id),
-                Some(row.get("revision")),
-                "history",
-                &row.get::<String, _>("config_enc"),
-            )
-            .await?;
-        }
-        sqlx::query("DELETE FROM credential_reference_dirty WHERE kind=$1 AND source_id=$2 AND generation=$3")
-            .bind(&kind)
-            .bind(&id).bind(generation)
-            .execute(&mut *connection)
-            .await?;
+    if dirty {
+        return Err(ApiError::new(
+            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            "reference_initialization_required",
+            "configuration reference initialization is incomplete; run maintenance migration",
+        ));
     }
     Ok(())
 }
-#[allow(clippy::too_many_arguments)]
-async fn insert(
+pub async fn assert_ready(pool: &PgPool) -> Result<(), ApiError> {
+    let mut connection = pool.acquire().await?;
+    assert_clean_on(&mut connection).await?;
+    let validated:i64=sqlx::query_scalar("SELECT count(*) FROM pg_constraint WHERE conrelid='credential_reference_edges'::regclass AND conname IN ('reference_edge_shape','reference_edge_version','reference_edge_history') AND convalidated").fetch_one(&mut *connection).await?;
+    if validated != 3 {
+        return Err(ApiError::new(
+            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            "reference_initialization_required",
+            "configuration reference constraints are not validated; run maintenance migration",
+        ));
+    }
+    Ok(())
+}
+
+/// Flush exactly the changed node and history sources owned by this mutation.
+/// The caller owns the node row before changing its configurations.
+pub async fn flush_node_on(
+    connection: &mut PgConnection,
+    secrets: &SecretBox,
+    node: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("SELECT id FROM nodes WHERE id=$1 FOR NO KEY UPDATE")
+        .bind(node)
+        .fetch_optional(&mut *connection)
+        .await?;
+    let sources:Vec<(String,String,i64)>=sqlx::query_as("SELECT d.kind,d.source_id,d.generation FROM credential_reference_dirty d LEFT JOIN config_versions v ON d.kind='history' AND v.id=d.source_id WHERE (d.kind='node' AND d.source_id=$1) OR (d.kind='history' AND v.node_id=$1) ORDER BY d.kind,d.source_id FOR UPDATE OF d")
+        .bind(node).fetch_all(&mut *connection).await?;
+    for (kind, id, generation) in sources {
+        sync_source_on(connection, secrets, &kind, &id, generation).await?;
+    }
+    Ok(())
+}
+
+async fn sync_source_on(
     connection: &mut PgConnection,
     secrets: &SecretBox,
     kind: &str,
     id: &str,
-    node: &str,
-    version_id: Option<&str>,
-    revision: Option<i64>,
-    source: &str,
-    cipher: &str,
-) -> Result<(), ApiError> {
-    let config: Value =
-        serde_json::from_str(&secrets.decrypt(cipher)?).map_err(|_| ApiError::internal())?;
-    let references = super::references(&config).map_err(|_| ApiError::internal())?;
-    if references.is_empty() {
-        return Ok(());
+    generation: i64,
+) -> Result<(), sqlx::Error> {
+    let mut edges = Vec::<Value>::new();
+    let mut parents = std::collections::BTreeSet::<String>::new();
+    let source = if kind == "node" {
+        sqlx::query("SELECT id AS node_id,NULL::text AS config_version_id,NULL::bigint AS revision,desired_config_enc,deployed_config_enc,ssh_credential_id FROM nodes WHERE id=$1 FOR NO KEY UPDATE")
+            .bind(id).fetch_optional(&mut *connection).await?
+    } else {
+        sqlx::query("SELECT node_id,id AS config_version_id,revision,config_enc AS desired_config_enc,NULL::text AS deployed_config_enc,NULL::text AS ssh_credential_id FROM config_versions WHERE id=$1 FOR UPDATE")
+            .bind(id).fetch_optional(&mut *connection).await?
+    };
+    if let Some(row) = &source {
+        if let Some(ssh) = row.get::<Option<String>, _>("ssh_credential_id") {
+            parents.insert(ssh);
+        }
+        for (column, scope) in [
+            (
+                "desired_config_enc",
+                if kind == "node" { "desired" } else { "history" },
+            ),
+            ("deployed_config_enc", "deployed"),
+        ] {
+            if let Some(cipher) = row.get::<Option<String>, _>(column) {
+                let value: Value =
+                    serde_json::from_str(&secrets.decrypt(&cipher).map_err(|_| {
+                        sqlx::Error::Protocol(
+                            "cannot decrypt configuration reference source".into(),
+                        )
+                    })?)
+                    .map_err(|_| {
+                        sqlx::Error::Protocol("invalid configuration reference source".into())
+                    })?;
+                for (field, reference) in super::references(&value).map_err(|_| {
+                    sqlx::Error::Protocol("invalid configuration reference source".into())
+                })? {
+                    parents.insert(reference.id.clone());
+                    edges.push(json!({"source":scope,"field":field,"credential_id":reference.id,"version":reference.version}));
+                }
+            }
+        }
     }
-    let fields: Vec<_> = references.iter().map(|(field, _)| field.clone()).collect();
-    let ids: Vec<_> = references
-        .iter()
-        .map(|(_, reference)| reference.id.clone())
-        .collect();
-    let versions: Vec<_> = references
-        .iter()
-        .map(|(_, reference)| reference.version)
-        .collect();
-    sqlx::query("INSERT INTO credential_reference_edges(kind,source_id,node_id,config_version_id,config_revision,source,field,credential_id,version) SELECT $1,$2,$3,$4,$5,$6,field,credential_id,version FROM unnest($7::text[],$8::text[],$9::bigint[]) AS refs(field,credential_id,version)")
-        .bind(kind).bind(id).bind(node).bind(version_id).bind(revision).bind(source).bind(fields).bind(ids).bind(versions).execute(connection).await?;
+    let parents: Vec<_> = parents.into_iter().collect();
+    sqlx::query("SELECT id FROM credentials WHERE id=ANY($1::text[]) ORDER BY id FOR KEY SHARE")
+        .bind(&parents)
+        .fetch_all(&mut *connection)
+        .await?;
+    let edges = Value::Array(edges);
+    sqlx::query("SELECT v.credential_id,v.version FROM credential_versions v JOIN (SELECT DISTINCT credential_id,version FROM jsonb_to_recordset($1::jsonb) r(credential_id text,version bigint)) r ON r.credential_id=v.credential_id AND r.version=v.version ORDER BY v.credential_id,v.version FOR KEY SHARE OF v")
+        .bind(&edges).fetch_all(&mut *connection).await?;
+    sqlx::query("DELETE FROM credential_reference_edges WHERE kind=$1 AND source_id=$2")
+        .bind(kind)
+        .bind(id)
+        .execute(&mut *connection)
+        .await?;
+    if let Some(row) = source {
+        sqlx::query("INSERT INTO credential_reference_edges(kind,source_id,node_id,config_version_id,config_revision,source,field,credential_id,version) SELECT $1,$2,$3,$4,$5,source,field,credential_id,version FROM jsonb_to_recordset($6::jsonb) r(source text,field text,credential_id text,version bigint) ORDER BY credential_id,version,source,field")
+            .bind(kind).bind(id).bind(row.get::<String,_>("node_id")).bind(row.get::<Option<String>,_>("config_version_id")).bind(row.get::<Option<i64>,_>("revision")).bind(&edges).execute(&mut *connection).await?;
+    }
+    sqlx::query(
+        "DELETE FROM credential_reference_dirty WHERE kind=$1 AND source_id=$2 AND generation=$3",
+    )
+    .bind(kind)
+    .bind(id)
+    .bind(generation)
+    .execute(connection)
+    .await?;
     Ok(())
 }
+
+/// A bounded maintenance batch. Parent rows precede source and queue rows.
+async fn refresh_batch_on(
+    connection: &mut PgConnection,
+    secrets: &SecretBox,
+) -> Result<usize, ApiError> {
+    let candidates=sqlx::query("SELECT d.kind,d.source_id,CASE WHEN d.kind='node' THEN n.id ELSE v.node_id END AS node_id FROM credential_reference_dirty d LEFT JOIN nodes n ON d.kind='node' AND n.id=d.source_id LEFT JOIN config_versions v ON d.kind='history' AND v.id=d.source_id ORDER BY d.kind,d.source_id LIMIT 256")
+        .fetch_all(&mut *connection).await?;
+    let parents: std::collections::BTreeSet<String> = candidates
+        .iter()
+        .filter_map(|r| r.get::<Option<String>, _>("node_id"))
+        .collect();
+    let parents: Vec<_> = parents.into_iter().collect();
+    let locked: Vec<String> = sqlx::query_scalar(
+        "SELECT id FROM nodes WHERE id=ANY($1::text[]) ORDER BY id FOR NO KEY UPDATE SKIP LOCKED",
+    )
+    .bind(parents)
+    .fetch_all(&mut *connection)
+    .await?;
+    let selected:Vec<Value>=candidates.into_iter().filter(|r|r.get::<Option<String>,_>("node_id").is_none_or(|id|locked.contains(&id)))
+        .map(|r|json!({"kind":r.get::<String,_>("kind"),"source_id":r.get::<String,_>("source_id")})).collect();
+    let selected = Value::Array(selected);
+    let sources:Vec<(String,String,i64)>=sqlx::query_as("SELECT d.kind,d.source_id,d.generation FROM credential_reference_dirty d JOIN jsonb_to_recordset($1::jsonb) c(kind text,source_id text) ON (c.kind,c.source_id)=(d.kind,d.source_id) ORDER BY d.kind,d.source_id FOR UPDATE OF d SKIP LOCKED")
+        .bind(selected).fetch_all(&mut *connection).await?;
+    let count = sources.len();
+    for (kind, id, generation) in sources {
+        sync_source_on(connection, secrets, &kind, &id, generation).await?;
+    }
+    Ok(count)
+}
+pub(crate) async fn flush_pending_on(
+    connection: &mut PgConnection,
+    secrets: &SecretBox,
+) -> Result<(), ApiError> {
+    let maintenance: bool = sqlx::query_scalar(
+        "SELECT coalesce(current_setting('hysteriax.reference_maintenance',true),'off')='on'",
+    )
+    .fetch_one(&mut *connection)
+    .await?;
+    if !maintenance {
+        return Err(ApiError::new(
+            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            "reference_maintenance_required",
+            "legacy reference conversion requires explicit maintenance",
+        ));
+    }
+    while refresh_batch_on(connection, secrets).await? > 0 {}
+    assert_clean_on(connection).await
+}
+
 pub async fn initialize(pool: &PgPool, secrets: &SecretBox) -> Result<(), ApiError> {
-    let mut tx = db::begin_write(pool).await?;
-    ensure_on(&mut tx, secrets).await?;
-    tx.commit().await?;
-    Ok(())
+    let maintenance: bool = sqlx::query_scalar(
+        "SELECT coalesce(current_setting('hysteriax.reference_maintenance',true),'off')='on'",
+    )
+    .fetch_one(pool)
+    .await?;
+    if !maintenance {
+        return Err(ApiError::new(
+            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            "reference_maintenance_required",
+            "reference initialization requires explicit maintenance",
+        ));
+    }
+    loop {
+        let secrets = secrets.clone();
+        let count = db::write(pool, move |tx| {
+            let secrets = secrets.clone();
+            Box::pin(async move { refresh_batch_on(tx, &secrets).await })
+        })
+        .await?;
+        let dirty: bool =
+            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM credential_reference_dirty)")
+                .fetch_one(pool)
+                .await?;
+        if !dirty {
+            break;
+        }
+        if count == 0 {
+            return Err(ApiError::new(
+                axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                "reference_sources_busy",
+                "configuration reference sources are busy; retry maintenance",
+            ));
+        }
+    }
+    // Initialization is an explicit maintenance operation, never an API read.
+    for name in [
+        "reference_edge_shape",
+        "reference_edge_version",
+        "reference_edge_history",
+    ] {
+        sqlx::query(&format!(
+            "ALTER TABLE credential_reference_edges VALIDATE CONSTRAINT {name}"
+        ))
+        .execute(pool)
+        .await?;
+    }
+    assert_ready(pool).await
 }
 
 #[cfg(test)]
@@ -163,49 +251,120 @@ mod tests {
     };
     use serde_json::json;
     #[tokio::test]
-    async fn continually_dirtied_sources_use_bounded_write_fallback() {
+    async fn maintenance_upgrade_backfills_bounded_batches_without_changing_ciphertext() {
+        let pool = crate::db::test_pool_through_version(2, 46).await;
+        let secrets =
+            SecretBox::from_base64("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA").unwrap();
+        super::super::migration::migrate(&pool, &secrets)
+            .await
+            .unwrap();
+        let state = crate::state::AppState::new(pool.clone(), secrets.clone());
+        let request = crate::credentials::test_node_request(&state, json!({"name":"Upgrade","ssh_host":"127.0.0.1","ssh_port":22,"ssh_username":"root","ssh_auth_type":"password","ssh_secret":"test","public_host":"example.test","public_port":443,"listen_addr":":443"})).await;
+        let (_, Json(created)) = crate::api::nodes::create(State(state.clone()), Json(request))
+            .await
+            .unwrap();
+        let node = created["node"]["id"].as_str().unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        let credential = super::super::insert(
+            &mut tx,
+            &secrets,
+            "Retained",
+            "ssh_password",
+            None,
+            &json!({"secret":"preserved"}),
+            &json!({}),
+            &json!({}),
+        )
+        .await
+        .unwrap();
+        let cipher = secrets
+            .encrypt(
+                &json!({"reference":format!("credential://{credential}/1/secret")}).to_string(),
+            )
+            .unwrap();
+        sqlx::query("UPDATE nodes SET desired_config_enc=$1 WHERE id=$2")
+            .bind(&cipher)
+            .bind(node)
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO config_versions(id,node_id,revision,config_enc,content_sha256,created_at) SELECT 'upgrade-'||n,$1,n,$2,'retained-hash',now() FROM generate_series(2,301) n").bind(node).bind(&cipher).execute(&mut *tx).await.unwrap();
+        tx.commit().await.unwrap();
+        let snapshot = "SELECT jsonb_build_object('nodes',(SELECT jsonb_agg(to_jsonb(n) ORDER BY id) FROM nodes n),'history',(SELECT jsonb_agg(to_jsonb(v) ORDER BY id) FROM config_versions v),'credentials',(SELECT jsonb_agg(to_jsonb(c) ORDER BY id) FROM credentials c),'versions',(SELECT jsonb_agg(to_jsonb(v) ORDER BY credential_id,version) FROM credential_versions v))";
+        let before: Value = sqlx::query_scalar(snapshot).fetch_one(&pool).await.unwrap();
+        crate::db::run_migrations(&pool).await.unwrap();
+        assert!(assert_ready(&pool).await.is_err());
+        let mut tx = pool.begin().await.unwrap();
+        assert_eq!(refresh_batch_on(&mut tx, &secrets).await.unwrap(), 256);
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM credential_reference_dirty")
+                .fetch_one(&mut *tx)
+                .await
+                .unwrap(),
+            45
+        );
+        tx.rollback().await.unwrap();
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM credential_reference_dirty")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            301
+        );
+        initialize(&pool, &secrets).await.unwrap();
+        assert_ready(&pool).await.unwrap();
+        let after: Value = sqlx::query_scalar(snapshot).fetch_one(&pool).await.unwrap();
+        assert_eq!(
+            before, after,
+            "maintenance must preserve every source row and encrypted byte"
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT count(*) FROM credential_reference_edges WHERE credential_id=$1"
+            )
+            .bind(&credential)
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+            301
+        );
+        initialize(&pool, &secrets).await.unwrap();
+        assert_eq!(
+            sqlx::query_scalar::<_, Value>(snapshot)
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            before
+        );
+    }
+    #[tokio::test]
+    async fn runtime_reads_reject_uninitialized_sources_without_writing() {
         let pool = crate::db::test_pool().await;
         let secrets =
             SecretBox::from_base64("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA").unwrap();
-        // Simulate a committed change immediately after each of the first two
-        // maintenance passes, without scheduler-dependent racing in the test.
-        sqlx::raw_sql("CREATE TABLE maintenance_passes(n integer); INSERT INTO maintenance_passes VALUES(0);
-            CREATE FUNCTION dirty_again() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
-              UPDATE maintenance_passes SET n=n+1;
-              IF (SELECT n FROM maintenance_passes)<=2 THEN
-                INSERT INTO credential_reference_dirty(kind,source_id) VALUES(OLD.kind,OLD.source_id) ON CONFLICT DO NOTHING;
-              END IF;
-              RETURN NULL;
-            END $$;
-            CREATE TRIGGER dirty_again AFTER DELETE ON credential_reference_dirty FOR EACH ROW EXECUTE FUNCTION dirty_again();
-            INSERT INTO credential_reference_dirty(kind,source_id) VALUES('node','missing');")
-            .execute(&pool).await.unwrap();
-        let mut tx = tokio::time::timeout(
-            std::time::Duration::from_secs(2),
-            begin_read(&pool, &secrets),
+        sqlx::query(
+            "INSERT INTO credential_reference_dirty(kind,source_id) VALUES('node','missing')",
         )
+        .execute(&pool)
         .await
-        .unwrap()
         .unwrap();
-        let passes: i32 = sqlx::query_scalar("SELECT n FROM maintenance_passes")
-            .fetch_one(&mut *tx)
+        let result = begin_read(&pool, &secrets).await;
+        assert!(result.is_err());
+        let pending: i64 = sqlx::query_scalar("SELECT count(*) FROM credential_reference_dirty")
+            .fetch_one(&pool)
             .await
             .unwrap();
         assert_eq!(
-            passes, 3,
-            "two read retries followed by one authoritative write pass"
+            pending, 1,
+            "ordinary reads must not rebuild or acknowledge sources"
         );
-        let read_only: String = sqlx::query_scalar("SHOW transaction_read_only")
+        initialize(&pool, &secrets).await.unwrap();
+        let mut tx = begin_read(&pool, &secrets).await.unwrap();
+        let readonly: String = sqlx::query_scalar("SHOW transaction_read_only")
             .fetch_one(&mut *tx)
             .await
             .unwrap();
-        assert_eq!(read_only, "off");
-        let dirty: bool =
-            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM credential_reference_dirty)")
-                .fetch_one(&mut *tx)
-                .await
-                .unwrap();
-        assert!(!dirty);
+        assert_eq!(readonly, "on");
         tx.commit().await.unwrap();
     }
     #[tokio::test]
@@ -244,12 +403,17 @@ mod tests {
                     &json!({"test_reference":format!("credential://{id}/1/secret")}).to_string(),
                 )
                 .unwrap();
+            let mut source_tx = state.pool.begin().await.unwrap();
             sqlx::query("UPDATE nodes SET desired_config_enc=$1 WHERE id=$2")
                 .bind(&cipher)
                 .bind(node)
-                .execute(&state.pool)
+                .execute(&mut *source_tx)
                 .await
                 .unwrap();
+            flush_node_on(&mut source_tx, &state.secrets, node)
+                .await
+                .unwrap();
+            source_tx.commit().await.unwrap();
             let error = crate::api::credentials::delete(
                 State(state.clone()),
                 Extension(crate::api::AdminActor { id: "test".into() }),
@@ -272,7 +436,12 @@ mod tests {
                 &json!({"old_reference":format!("credential://{}/1/secret",ids[0])}).to_string(),
             )
             .unwrap();
-        sqlx::query("INSERT INTO config_versions(id,node_id,revision,config_enc,content_sha256,created_at) VALUES('history-test',$1,2,$2,'hash',now())").bind(node).bind(history).execute(&state.pool).await.unwrap();
+        let mut source_tx = state.pool.begin().await.unwrap();
+        sqlx::query("INSERT INTO config_versions(id,node_id,revision,config_enc,content_sha256,created_at) VALUES('history-test',$1,2,$2,'hash',now())").bind(node).bind(history).execute(&mut *source_tx).await.unwrap();
+        flush_node_on(&mut source_tx, &state.secrets, node)
+            .await
+            .unwrap();
+        source_tx.commit().await.unwrap();
         let references = crate::api::credentials::find_references(&state, &ids[0])
             .await
             .unwrap();

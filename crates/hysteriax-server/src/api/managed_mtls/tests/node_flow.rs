@@ -190,13 +190,18 @@ async fn activation_blocks_user_and_subscription_but_only_bound_live_job_probe_b
     node_mtls::prepare_users(&state.pool, &state.secrets, id, &policy, &trust, false)
         .await
         .unwrap();
+    let mut source_tx = state.pool.begin().await.unwrap();
     sqlx::query(
         "UPDATE nodes SET deployed_revision=1,deployed_config_enc=desired_config_enc WHERE id=$1",
     )
     .bind(id)
-    .execute(&state.pool)
+    .execute(&mut *source_tx)
     .await
     .unwrap();
+    credentials::reference_index::flush_node_on(&mut source_tx, &state.secrets, id)
+        .await
+        .unwrap();
+    source_tx.commit().await.unwrap();
     sqlx::query("UPDATE mtls_node_trust SET deployed=TRUE WHERE node_id=$1")
         .bind(id)
         .execute(&state.pool)
@@ -464,6 +469,7 @@ async fn legacy_mtls_snapshot_is_rejected_before_ssh_or_signing() {
     let job_id = job(&state, id).await;
     let mut options = node["config"].clone();
     options["tls"]["clientCA"] = json!("/legacy/ca.pem");
+    let mut source_tx = state.pool.begin().await.unwrap();
     sqlx::query("UPDATE config_versions SET config_enc=$2 WHERE node_id=$1 AND revision=1")
         .bind(id)
         .bind(
@@ -472,9 +478,13 @@ async fn legacy_mtls_snapshot_is_rejected_before_ssh_or_signing() {
                 .encrypt(&json!({"server_config":options,"listen_addr":":443"}).to_string())
                 .unwrap(),
         )
-        .execute(&state.pool)
+        .execute(&mut *source_tx)
         .await
         .unwrap();
+    credentials::reference_index::flush_node_on(&mut source_tx, &state.secrets, id)
+        .await
+        .unwrap();
+    source_tx.commit().await.unwrap();
     let job = crate::deployment::JobInput {
         id: job_id,
         kind: "deploy".into(),

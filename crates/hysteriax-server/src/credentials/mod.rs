@@ -533,3 +533,6 @@ pub async fn test_node_request(
     object.insert("ssh_credential_version".into(), json!(1));
     serde_json::from_value(input).unwrap()
 }
+
+#[cfg(test)]
+mod reference_transaction_tests;

@@ -61,7 +61,7 @@ async fn main() -> Result<()> {
         bail!("DATABASE_URL must use the PostgreSQL scheme");
     }
     let options = db::connect_options(&database_url)?;
-    let pool = db::pool_options()
+    let pool = db::pool_options_for_maintenance(migrate_only)
         .connect_with(options)
         .await
         .context("connect to PostgreSQL database")?;

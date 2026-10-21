@@ -85,6 +85,7 @@ pub async fn confirm(
     if copied.rows_affected() != 1 {
         return Err(ApiError::internal());
     }
+    crate::credentials::reference_index::flush_node_on(&mut tx, &state.secrets, &node_id).await?;
     let original_target: Option<i64> = job.get("target_revision");
     // Deploy/sync keep the same snapshot content when advancing over this trust-only
     // revision. Rollback must keep its explicitly selected historical revision.

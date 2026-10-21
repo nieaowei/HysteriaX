@@ -100,6 +100,9 @@ async fn finish(
     .execute(&mut *tx)
     .await
     .unwrap();
+    credentials::reference_index::flush_node_on(&mut tx, &state.secrets, node)
+        .await
+        .unwrap();
     tx.commit().await.unwrap();
 }
 async fn complete_operation(state: &AppState, job: &str) {

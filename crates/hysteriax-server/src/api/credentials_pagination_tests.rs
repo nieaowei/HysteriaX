@@ -22,6 +22,9 @@ async fn fixture_with_connections(connections: u32) -> AppState {
     sqlx::query("INSERT INTO nodes(id,name,ssh_host,ssh_port,ssh_username,ssh_auth_type,ssh_secret_enc,public_host,public_port,listen_addr,node_token_hash,node_token_enc,traffic_stats_secret_enc,desired_config_enc,deployed_config_enc,ssh_credential_id,ssh_credential_version,created_at,updated_at) VALUES('node','Node','127.0.0.1',22,'root','private_key','unused','example.test',443,':443','hash','unused','unused',$1,$1,'00000000-0000-4000-8000-000000000001',1,now(),now())")
         .bind(cipher).execute(&state.pool).await.unwrap();
     sqlx::query("INSERT INTO node_assignments(user_id,node_id,credential_hash,credential_enc,created_at) VALUES('user','node','PRIVATE-USER-HASH','PRIVATE-USER-MUST-NOT-LEAK',now())").execute(&state.pool).await.unwrap();
+    crate::credentials::reference_index::initialize(&state.pool, &state.secrets)
+        .await
+        .unwrap();
     state
 }
 
@@ -57,7 +60,7 @@ async fn clean_credential_reads_do_not_wait_for_the_global_write_lock() {
 }
 
 #[tokio::test]
-async fn dirty_credential_reads_rebuild_edges_and_keep_a_consistent_snapshot() {
+async fn transactional_reference_updates_keep_read_snapshots_consistent() {
     let state = fixture_with_connections(3).await;
     let id = "00000000-0000-4000-8000-000000000001";
     let detail = get(State(state.clone()), Path(id.to_owned()))
@@ -75,11 +78,16 @@ async fn dirty_credential_reads_rebuild_edges_and_keep_a_consistent_snapshot() {
         .await
         .unwrap();
     let cipher = state.secrets.encrypt("{}").unwrap();
+    let mut source_tx = state.pool.begin().await.unwrap();
     sqlx::query("UPDATE nodes SET desired_config_enc=$1,deployed_config_enc=$1 WHERE id='node'")
         .bind(cipher)
-        .execute(&state.pool)
+        .execute(&mut *source_tx)
         .await
         .unwrap();
+    crate::credentials::reference_index::flush_node_on(&mut source_tx, &state.secrets, "node")
+        .await
+        .unwrap();
+    source_tx.commit().await.unwrap();
     let old = read_references_on(&mut snapshot, id).await.unwrap();
     assert!(old.iter().any(|r| r["source"] == "desired"));
     snapshot.commit().await.unwrap();

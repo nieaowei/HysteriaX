@@ -394,6 +394,7 @@ pub async fn change_hostname_in_tx(
         .await?;
     sqlx::query("INSERT INTO config_versions(id,node_id,revision,config_enc,content_sha256,created_at) VALUES($1,$2,$3,$4,$5,now())")
         .bind(Uuid::new_v4().to_string()).bind(node).bind(next).bind(state.secrets.encrypt(&snapshot.to_string())?).bind(super::request_hash(&snapshot)).execute(&mut **tx).await?;
+    crate::credentials::reference_index::flush_node_on(tx, &state.secrets, node).await?;
     Ok(())
 }
 

@@ -48,6 +48,7 @@ pub async fn check_runtime(pool: &PgPool, secrets: &SecretBox) -> Result<()> {
         fingerprint == secrets.fingerprint(),
         "HYSTERIAX_MASTER_KEY differs from the initialized database"
     );
+    crate::credentials::reference_index::assert_ready(pool).await?;
     Ok(())
 }
 
@@ -81,6 +82,7 @@ pub async fn check_migration_key(pool: &PgPool, secrets: &SecretBox) -> Result<(
 pub async fn finalize(pool: &PgPool, secrets: &SecretBox) -> Result<()> {
     check_schema(pool).await?;
     check_migration_key(pool, secrets).await?;
+    crate::credentials::reference_index::assert_ready(pool).await?;
     let mut tx = pool.begin().await?;
     sqlx::query("UPDATE cache_version_epoch SET epoch=gen_random_uuid()::text WHERE id")
         .execute(&mut *tx)
@@ -102,6 +104,9 @@ mod tests {
             SecretBox::from_base64("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA").unwrap();
         let other = SecretBox::from_base64("AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE").unwrap();
         assert!(check_runtime(&pool, &secrets).await.is_err());
+        crate::credentials::reference_index::initialize(&pool, &secrets)
+            .await
+            .unwrap();
         finalize(&pool, &secrets).await.unwrap();
         let epoch: String = sqlx::query_scalar("SELECT epoch FROM cache_version_epoch WHERE id")
             .fetch_one(&pool)

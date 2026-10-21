@@ -18,15 +18,22 @@ pub fn connect_options(database_url: &str) -> Result<PgConnectOptions> {
     Ok(options)
 }
 
+#[cfg(test)]
 pub fn pool_options() -> PgPoolOptions {
+    pool_options_for_maintenance(false)
+}
+pub fn pool_options_for_maintenance(maintenance: bool) -> PgPoolOptions {
     PgPoolOptions::new()
         .max_connections(10)
         .acquire_timeout(Duration::from_secs(5))
-        .after_connect(|connection, _| {
+        .after_connect(move |connection, _| {
             Box::pin(async move {
-                // Collectors also issue writes outside begin_write. Bound their
-                // row/trigger lock waits so they cannot consume the whole pool.
-                sqlx::query("SET lock_timeout = '1s'")
+                // Bound resource waits and make runtime source checks explicit.
+                sqlx::query("SET lock_timeout='1s'")
+                    .execute(&mut *connection)
+                    .await?;
+                sqlx::query("SELECT set_config('hysteriax.reference_maintenance',$1,false)")
+                    .bind(if maintenance { "on" } else { "off" })
                     .execute(connection)
                     .await?;
                 Ok(())
@@ -283,6 +290,11 @@ pub async fn test_pool_through_version(max_connections: u32, through_version: i6
                     .execute(&mut *connection)
                     .await?;
                 sqlx::query("SET lock_timeout = '1s'")
+                    .execute(&mut *connection)
+                    .await?;
+                // Unit fixtures intentionally import legacy encrypted snapshots.
+                // Production-mode reference tests reconnect without this flag.
+                sqlx::query("SET hysteriax.reference_maintenance='on'")
                     .execute(connection)
                     .await?;
                 Ok(())

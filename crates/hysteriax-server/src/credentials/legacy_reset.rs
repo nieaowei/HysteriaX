@@ -152,6 +152,9 @@ pub async fn reset(tx: &mut Transaction<'_, Postgres>, secrets: &SecretBox) -> R
         .bind(&discarded)
         .execute(&mut **tx)
         .await?;
+    if !discarded.is_empty() {
+        super::reference_index::flush_pending_on(tx, secrets).await?;
+    }
     sqlx::query("DELETE FROM credentials WHERE id=ANY($1)")
         .bind(&discarded)
         .execute(&mut **tx)

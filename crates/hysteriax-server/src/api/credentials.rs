@@ -547,10 +547,10 @@ pub(crate) async fn find_references(state: &AppState, id: &str) -> Result<Vec<Va
 
 async fn find_references_on(
     connection: &mut sqlx::PgConnection,
-    secrets: &crate::security::SecretBox,
+    _secrets: &crate::security::SecretBox,
     id: &str,
 ) -> Result<Vec<Value>, ApiError> {
-    crate::credentials::reference_index::ensure_on(connection, secrets).await?;
+    crate::credentials::reference_index::assert_clean_on(connection).await?;
     read_references_on(connection, id).await
 }
 
@@ -632,53 +632,64 @@ pub async fn delete(
     Path(id): Path<String>,
     axum::extract::Query(query): axum::extract::Query<super::nodes::RevisionQuery>,
 ) -> Result<StatusCode, ApiError> {
-    // Check references on the same write-locked connection as deletion.
-    let mut tx = db::begin_write(&state.pool).await?;
-    if !find_references_on(&mut tx, &state.secrets, &id)
-        .await?
-        .is_empty()
-    {
-        return Err(ApiError::conflict(
-            "credential is referenced; archive it instead",
-        ));
-    }
-    // Terminal batch metadata can be removed once no business/history or active
-    // task references remain; the jobs and audit log still retain their IDs.
-    sqlx::query("DELETE FROM mtls_rotations WHERE ca_id=$1 AND phase='complete'")
-        .bind(&id)
-        .execute(&mut *tx)
-        .await?;
-    sqlx::query("DELETE FROM mtls_trust_cleanup WHERE ca_id=$1 AND completed_at IS NOT NULL")
-        .bind(&id)
-        .execute(&mut *tx)
-        .await?;
-    sqlx::query("DELETE FROM credential_batches WHERE credential_id=$1")
-        .bind(&id)
-        .execute(&mut *tx)
-        .await?;
-    sqlx::query("DELETE FROM mtls_ca_generations WHERE ca_id=$1")
-        .bind(&id)
-        .execute(&mut *tx)
-        .await?;
-    sqlx::query("DELETE FROM mtls_authorities WHERE credential_id=$1")
-        .bind(&id)
-        .execute(&mut *tx)
-        .await?;
-    let result = sqlx::query("DELETE FROM credentials WHERE id=$1 AND revision=$2")
-        .bind(&id)
-        .bind(
-            query
-                .expected_revision
-                .ok_or_else(|| ApiError::bad_request("expected_revision is required"))?,
-        )
-        .execute(&mut *tx)
-        .await?;
-    if result.rows_affected() != 1 {
-        return Err(ApiError::conflict("credential changed or was deleted"));
-    }
-    record(&mut tx, &actor, "credential.deleted", &id, json!({})).await?;
-    tx.commit().await?;
-    Ok(StatusCode::NO_CONTENT)
+    let expected = query
+        .expected_revision
+        .ok_or_else(|| ApiError::bad_request("expected_revision is required"))?;
+    let secrets = state.secrets.clone();
+    db::serializable(&state.pool, move |tx| {
+        let (id, actor, secrets) = (id.clone(), actor.clone(), secrets.clone());
+        Box::pin(async move {
+            // Parent first: block new foreign-key pins before inspecting children.
+            let revision: Option<i64> =
+                sqlx::query_scalar("SELECT revision FROM credentials WHERE id=$1 FOR UPDATE")
+                    .bind(&id)
+                    .fetch_optional(&mut **tx)
+                    .await?;
+            if revision != Some(expected) {
+                return Err(ApiError::conflict("credential changed or was deleted"));
+            }
+            if !find_references_on(tx, &secrets, &id).await?.is_empty() {
+                return Err(ApiError::conflict(
+                    "credential is referenced; archive it instead",
+                ));
+            }
+            // Terminal batch metadata can be removed once no business/history or active
+            // task references remain; the jobs and audit log still retain their IDs.
+            sqlx::query("DELETE FROM mtls_rotations WHERE ca_id=$1 AND phase='complete'")
+                .bind(&id)
+                .execute(&mut **tx)
+                .await?;
+            sqlx::query(
+                "DELETE FROM mtls_trust_cleanup WHERE ca_id=$1 AND completed_at IS NOT NULL",
+            )
+            .bind(&id)
+            .execute(&mut **tx)
+            .await?;
+            sqlx::query("DELETE FROM credential_batches WHERE credential_id=$1")
+                .bind(&id)
+                .execute(&mut **tx)
+                .await?;
+            sqlx::query("DELETE FROM mtls_ca_generations WHERE ca_id=$1")
+                .bind(&id)
+                .execute(&mut **tx)
+                .await?;
+            sqlx::query("DELETE FROM mtls_authorities WHERE credential_id=$1")
+                .bind(&id)
+                .execute(&mut **tx)
+                .await?;
+            let result = sqlx::query("DELETE FROM credentials WHERE id=$1 AND revision=$2")
+                .bind(&id)
+                .bind(expected)
+                .execute(&mut **tx)
+                .await?;
+            if result.rows_affected() != 1 {
+                return Err(ApiError::conflict("credential changed or was deleted"));
+            }
+            record(tx, &actor, "credential.deleted", &id, json!({})).await?;
+            Ok(StatusCode::NO_CONTENT)
+        })
+    })
+    .await
 }
 
 async fn batch_values_on(

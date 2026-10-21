@@ -382,7 +382,7 @@ async fn ssh_confirmation_late_worker_cannot_overwrite_an_edited_node() {
     )
     .await
     .unwrap();
-    succeed(&state.pool, &job, output).await.unwrap();
+    succeed(&state, &job, output).await.unwrap();
     assert_eq!(
         row(&state, &id).await.get::<String, _>("status"),
         "cancelled"
@@ -653,7 +653,7 @@ async fn deletion_start_during_ssh_diagnosis_cannot_be_overwritten_by_completion
     )
     .await
     .unwrap();
-    succeed(&state.pool, &job, output).await.unwrap();
+    succeed(&state, &job, output).await.unwrap();
     assert_eq!(
         row(&state, id).await.get::<String, _>("status"),
         "cancelled"

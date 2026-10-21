@@ -507,6 +507,9 @@ async fn node(state: &AppState, id: &str) {
     .unwrap();
     sqlx::query("INSERT INTO nodes(id,name,ssh_host,ssh_port,ssh_username,ssh_credential_id,ssh_credential_version,public_host,public_port,listen_addr,node_token_hash,node_token_enc,traffic_stats_secret_enc,desired_config_enc,created_at,updated_at) VALUES($1,$1,'127.0.0.1',22,'root',$2,1,'example.test',443,':443',$1,$3,$3,$4,now(),now())")
         .bind(id).bind(ssh).bind(state.secrets.encrypt("test-only").unwrap()).bind(state.secrets.encrypt("{}").unwrap()).execute(&mut *tx).await.unwrap();
+    credentials::reference_index::flush_node_on(&mut tx, &state.secrets, id)
+        .await
+        .unwrap();
     tx.commit().await.unwrap();
 }
 async fn trust(state: &AppState, node: &str, ca: &str, version: i64) {
@@ -768,7 +771,12 @@ async fn subscription_cache_expires_at_certificate_boundary_without_a_write_even
                 .to_string(),
         )
         .unwrap();
-    sqlx::query("UPDATE nodes SET deployed_revision=1,deployed_config_enc=$1,state='deployed' WHERE id='n1'").bind(config).execute(&state.pool).await.unwrap();
+    let mut source_tx = state.pool.begin().await.unwrap();
+    sqlx::query("UPDATE nodes SET deployed_revision=1,deployed_config_enc=$1,state='deployed' WHERE id='n1'").bind(config).execute(&mut *source_tx).await.unwrap();
+    credentials::reference_index::flush_node_on(&mut source_tx, &state.secrets, "n1")
+        .await
+        .unwrap();
+    source_tx.commit().await.unwrap();
     sqlx::query("INSERT INTO node_assignments(user_id,node_id,credential_hash,credential_enc,created_at) VALUES('alice','n1','password-hash',$1,now())").bind(state.secrets.encrypt("node-password").unwrap()).execute(&state.pool).await.unwrap();
     sqlx::query("INSERT INTO subscription_credentials(id,user_id,token_hash,token_enc,created_at) VALUES('sub','alice',$1,$2,now())").bind(crate::security::token_digest("test-token")).bind(state.secrets.encrypt("test-token").unwrap()).execute(&state.pool).await.unwrap();
     sqlx::query(

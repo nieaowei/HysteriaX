@@ -405,8 +405,10 @@ pub async fn update_usage(
     if input.usage_bytes < 0 || input.expected_revision < 1 {
         return Err(ApiError::bad_request("usage and revision must be valid"));
     }
+    let secrets = state.secrets.clone();
     let response=db::serializable::<_,ApiError,_>(&state.pool,move |tx| {
         let id=id.clone();
+        let secrets=secrets.clone();
         Box::pin(async move {
     let revision: Option<(i64, String)> =
         sqlx::query_as("SELECT desired_revision, state FROM nodes WHERE id = $1 FOR NO KEY UPDATE")
@@ -436,6 +438,7 @@ pub async fn update_usage(
     .await?;
     sqlx::query("INSERT INTO config_versions(id,node_id,revision,config_enc,content_sha256,created_at) SELECT $1,node_id,$2,config_enc,content_sha256,$3 FROM config_versions WHERE node_id=$4 AND revision=$5")
         .bind(Uuid::new_v4().to_string()).bind(revision+1).bind(Utc::now()).bind(&id).bind(revision).execute(&mut **tx).await?;
+    crate::credentials::reference_index::flush_node_on(tx,&secrets,&id).await?;
     audit(
         tx,
         "admin",

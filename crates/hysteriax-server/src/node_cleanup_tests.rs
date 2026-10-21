@@ -639,7 +639,7 @@ async fn final_fk_preparation_does_not_hold_the_global_write_lock() {
     writer.rollback().await.unwrap();
     blocker.rollback().await.unwrap();
     preparation.await.unwrap().unwrap();
-    succeed(&state.pool, &job, output).await.unwrap();
+    succeed(&state, &job, output).await.unwrap();
     assert_eq!(
         sqlx::query_scalar::<_, i64>("SELECT count(*) FROM nodes WHERE id='n1'")
             .fetch_one(&state.pool)

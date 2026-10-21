@@ -645,6 +645,7 @@ async fn update_node_metadata(
             )
             .await?;
         }
+        super::reference_index::flush_node_on(tx, secrets, &node).await?;
     }
     Ok(())
 }

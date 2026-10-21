@@ -361,6 +361,7 @@ async fn migrate_tls_pairs_on(
         }
     }
     sqlx::query("DELETE FROM credential_batches WHERE credential_id IN (SELECT id FROM credentials WHERE kind IN ('certificate','private_key'))").execute(&mut **tx).await?;
+    super::reference_index::flush_pending_on(tx, secrets).await?;
     sqlx::query("DELETE FROM credentials WHERE kind IN ('certificate','private_key')")
         .execute(&mut **tx)
         .await?;

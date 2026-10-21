@@ -218,6 +218,7 @@ async fn save_snapshot(
 ) -> Result<()> {
     let plain = snapshot.to_string();
     sqlx::query("INSERT INTO config_versions(id,node_id,revision,config_enc,content_sha256,created_at) VALUES($1,$2,$3,$4,$5,$6)").bind(Uuid::new_v4().to_string()).bind(node).bind(revision).bind(secrets.encrypt(&plain)?).bind(hex::encode(Sha256::digest(plain.as_bytes()))).bind(Utc::now()).execute(&mut **tx).await?;
+    super::reference_index::flush_node_on(tx, secrets, node).await?;
     Ok(())
 }
 fn output(stage: &str, result: Value) -> JobOutput {

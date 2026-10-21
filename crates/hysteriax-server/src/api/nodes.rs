@@ -408,6 +408,7 @@ pub async fn create(
     sqlx::query("INSERT INTO audit_records (id, actor, action, entity_type, entity_id, detail_json, created_at) VALUES ($1, 'admin', 'node.created', 'node', $2, $3, $4)")
         .bind(Uuid::new_v4().to_string()).bind(&id).bind(json!({"name": input.name.trim(), "package": input.package, "initial_usage_bytes": input.initial_usage_bytes.unwrap_or(0)})).bind(now)
         .execute(&mut *tx).await?;
+    crate::credentials::reference_index::flush_node_on(&mut tx, &state.secrets, &id).await?;
     tx.commit().await?;
 
     Ok((
@@ -695,6 +696,7 @@ pub async fn patch(
     sqlx::query("INSERT INTO audit_records (id, actor, action, entity_type, entity_id, detail_json, created_at) VALUES ($1, 'admin', 'node.updated', 'node', $2, $3, $4)")
         .bind(Uuid::new_v4().to_string()).bind(&id).bind(json!({"revision": next_revision, "config_changed": config_changed, "proxy_probe_url_changed": proxy_probe_url_changed, "traffic_stats_port_changed": traffic_stats_port_changed, "package_changed": input.package.is_some(), "package": input.package, "dns_job_ids": dns_job_ids})).bind(updated_at)
         .execute(&mut *tx).await?;
+    crate::credentials::reference_index::flush_node_on(&mut tx, &state.secrets, &id).await?;
     tx.commit().await?;
     Ok(Json(
         json!({"id": id, "name": name.trim(), "revision": next_revision, "state": current.get::<String, _>("state"), "traffic_stats_port": traffic_stats_port, "proxy_probe_url": proxy_probe_url, "sync_job_queued": sync_required, "dns_job_ids": dns_job_ids}),
