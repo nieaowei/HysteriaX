@@ -70,7 +70,7 @@ async fn admit_work(pool: &PgPool, work: &Work) -> Result<()> {
             for row in due.iter().chain(pending.iter()) {
                 let id:String=row.get("id");
                 sqlx::query("INSERT INTO background_work(id,kind,payload) VALUES('mtls-identity:'||$1,$2,$3) ON CONFLICT(id) DO UPDATE SET state='queued',owner=NULL,started_at=NULL,finished_at=NULL,error_code=NULL,available_at=clock_timestamp() WHERE background_work.kind=excluded.kind AND background_work.state IN ('complete','failed')")
-                    .bind(&id).bind(KIND).bind(json!({"identity_id":id,"user_id":row.get::<String,_>("user_id"),"ca_id":row.get::<String,_>("ca_id")})).execute(&mut **tx).await?;
+                    .bind(&id).bind(KIND).bind(json!({"identity_id":id,"user_id":row.get::<String,_>("user_id"),"ca_id":row.get::<String,_>("ca_id"),"lease_resources":[format!("identity:{id}")]})).execute(&mut **tx).await?;
             }
             work.finish_on(tx,false,if due.len()==PAGE as usize || pending.len()==PAGE as usize {1}else{10},None).await
         })
