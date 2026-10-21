@@ -9,8 +9,51 @@ use tokio::sync::Mutex;
 use crate::{error::ApiError, redis_cache::RedisCache, state::AppState};
 
 const ROWS: &str = "SELECT n.id,n.name,lower(n.name) AS sort_name,p.usage_bytes,(p.config->>'quota_bytes')::bigint AS quota,p.next_reset_at FROM nodes n JOIN node_packages p ON n.id=p.node_id WHERE (p.config->>'quota_bytes')::bigint>0";
-const VERSION: &str =
-    "SELECT generation,current_schema() FROM cache_domain_versions WHERE domain='quota_rank'";
+const VERSION: &str = "SELECT array_agg(v.generation ORDER BY v.bucket),current_schema(),(SELECT epoch FROM cache_version_epoch WHERE id) FROM cache_bucket_versions v WHERE v.domain='quota_rank'";
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct RankVersion {
+    generations: Vec<i64>,
+    epoch: String,
+}
+impl RankVersion {
+    async fn read(connection: &mut PgConnection) -> Result<(Self, String), ApiError> {
+        let (generations, schema, epoch): (Vec<i64>, String, String) =
+            sqlx::query_as(VERSION).fetch_one(connection).await?;
+        if generations.len() != 64 {
+            return Err(ApiError::internal());
+        }
+        Ok((Self { generations, epoch }, schema))
+    }
+    fn frontier(&self) -> String {
+        self.generations
+            .iter()
+            .map(|value| format!("{value:020}"))
+            .collect::<Vec<_>>()
+            .join(",")
+    }
+    fn stamp(&self) -> String {
+        format!(
+            "{}:{}",
+            self.epoch,
+            crate::security::token_digest(&self.frontier())
+        )
+    }
+    fn parse_frontier(value: &str) -> Option<Vec<i64>> {
+        let result: Vec<i64> = value
+            .split(',')
+            .map(str::parse)
+            .collect::<Result<_, _>>()
+            .ok()?;
+        (result.len() == 64 && result.iter().all(|value| *value >= 0)).then_some(result)
+    }
+    fn dominates(&self, other: &[i64]) -> bool {
+        self.generations
+            .iter()
+            .zip(other)
+            .all(|(new, old)| new >= old)
+    }
+}
 
 #[derive(sqlx::FromRow)]
 struct Entry {
@@ -50,13 +93,17 @@ impl Entry {
         }
         member
     }
-    fn args(&self, command: &mut redis::Cmd, now: DateTime<Utc>) {
+    fn args(&self, command: &mut redis::Cmd, now: DateTime<Utc>, generation: i64) {
         let deadline = self
             .next_reset_at
             .filter(|at| *at > now)
             .map(|at| at.timestamp_micros().to_string())
             .unwrap_or_default();
-        command.arg(&self.id).arg(self.member(now)).arg(deadline);
+        command
+            .arg(&self.id)
+            .arg(format!("{generation:020}"))
+            .arg(self.member(now))
+            .arg(deadline);
     }
 }
 
@@ -71,100 +118,139 @@ impl QuotaRank {
             gate: Mutex::new(()),
         }
     }
+    fn base(redis: &RedisCache, schema: &str, version: &RankVersion) -> String {
+        redis.key(
+            "quota_rank",
+            &format!("exact-v2:{schema}:{}", version.epoch),
+        )
+    }
     fn command(
         redis: &RedisCache,
         schema: &str,
         mode: &str,
-        version: i64,
+        version: &RankVersion,
         now: DateTime<Utc>,
     ) -> redis::Cmd {
-        let base = redis.key("quota_rank", &format!("exact-v1:{schema}"));
+        let base = Self::base(redis, schema, version);
         let mut command = redis::cmd("EVAL");
-        command.arg(include_str!("quota_rank.lua")).arg(4);
-        for suffix in ["meta", "rank", "members", "deadlines"] {
+        command.arg(include_str!("quota_rank.lua")).arg(5);
+        for suffix in ["meta", "rank", "members", "deadlines", "versions"] {
             command.arg(format!("{base}:{suffix}"));
         }
         command
             .arg(mode)
-            .arg(format!("{version:020}"))
-            .arg(now.timestamp_micros());
+            .arg(version.stamp())
+            .arg(now.timestamp_micros())
+            .arg(version.frontier());
         command
     }
+    fn decode(members: Vec<Vec<u8>>) -> Vec<String> {
+        members
+            .into_iter()
+            .filter_map(|member| {
+                member
+                    .rsplit(|byte| *byte == 0)
+                    .next()
+                    .and_then(|id| String::from_utf8(id.to_vec()).ok())
+            })
+            .collect()
+    }
+    /// The caller owns a read snapshot. Version metadata, changed entities and
+    /// values all come from that same snapshot; Redis is only an exact mirror.
     pub async fn ids_on(
         &self,
         connection: &mut PgConnection,
         now: DateTime<Utc>,
     ) -> Result<Vec<String>, ApiError> {
         let Some(redis) = &self.redis else {
-            return Ok(
-                sqlx::query_scalar(include_str!("overview/summary_quota.sql"))
-                    .bind(now)
-                    .fetch_all(connection)
-                    .await?,
-            );
+            return Self::database_ids(connection, now).await;
         };
+        if !redis.available() {
+            return Self::database_ids(connection, now).await;
+        }
         let _guard = self.gate.lock().await;
-        let (version, schema): (i64, String) =
-            sqlx::query_as(VERSION).fetch_one(&mut *connection).await?;
+        let (version, schema) = RankVersion::read(connection).await?;
         if let Some(Some(members)) = redis
-            .command::<Option<Vec<Vec<u8>>>>(Self::command(redis, &schema, "read", version, now))
+            .command::<Option<Vec<Vec<u8>>>>(Self::command(redis, &schema, "read", &version, now))
             .await
         {
-            return Ok(members
-                .into_iter()
-                .filter_map(|member| {
-                    member
-                        .rsplit(|byte| *byte == 0)
-                        .next()
-                        .and_then(|id| String::from_utf8(id.to_vec()).ok())
-                })
-                .collect());
+            return Ok(Self::decode(members));
         }
-        // Initial population, eviction, Redis outage or a missed notification.
-        // Never trust an incomplete mirror; this scan is recovery-only.
-        let rows: Vec<Entry> = sqlx::query_as(ROWS).fetch_all(connection).await?;
-        let mut command = Self::command(redis, &schema, "rebuild", version, now);
-        for row in &rows {
-            row.args(&mut command, now);
+        let basis = redis
+            .command::<Option<String>>(Self::command(redis, &schema, "basis", &version, now))
+            .await
+            .flatten();
+        let frontier = basis.as_deref().and_then(RankVersion::parse_frontier);
+        if frontier
+            .as_ref()
+            .is_some_and(|previous| !version.dominates(previous))
+        {
+            return Self::database_ids(connection, now).await;
         }
-        let _: Option<i64> = redis.command(command).await;
-        let mut members: Vec<_> = rows
-            .iter()
-            .map(|row| (row.member(now), row.id.clone()))
-            .collect();
-        members.sort_unstable_by(|a, b| a.0.cmp(&b.0));
-        Ok(members.into_iter().take(10).map(|(_, id)| id).collect())
-    }
-    async fn update(&self, pool: &PgPool, id: &str, version: i64) -> Result<(), ApiError> {
-        let Some(redis) = &self.redis else {
-            return Ok(());
-        };
-        // Acquire the pool slot before the gate: readers already holding a
-        // transaction must never exhaust the pool while waiting on this gate.
-        let mut tx = pool.begin().await?;
-        sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
-            .execute(&mut *tx)
-            .await?;
-        let _guard = self.gate.lock().await;
-        let (current, schema): (i64, String) = sqlx::query_as(VERSION).fetch_one(&mut *tx).await?;
-        if current != version {
-            return Ok(());
-        }
-        let now = Utc::now();
-        let row: Option<Entry> = sqlx::query_as(&format!("{ROWS} AND n.id=$1"))
-            .bind(id)
-            .fetch_optional(&mut *tx)
-            .await?;
-        let mut command = Self::command(redis, &schema, "update", version, now);
-        command.arg(format!("{:020}", version - 1));
-        if let Some(row) = row {
-            row.args(&mut command, now);
+        let changes: Vec<(String, i64)> = if let Some(previous) = &frontier {
+            sqlx::query_as("SELECT v.entity_id,v.generation FROM cache_entity_versions v JOIN unnest($1::bigint[]) WITH ORDINALITY f(generation,bucket) ON v.bucket=f.bucket-1 WHERE v.kind='quota_rank' AND v.bucket_generation>f.generation ORDER BY v.entity_id")
+                .bind(previous).fetch_all(&mut *connection).await?
         } else {
-            command.arg(id).arg("").arg("");
+            sqlx::query_as("SELECT entity_id,generation FROM cache_entity_versions WHERE kind='quota_rank' ORDER BY entity_id")
+                .fetch_all(&mut *connection).await?
+        };
+        let ids: Vec<String> = changes.iter().map(|(id, _)| id.clone()).collect();
+        let rows: Vec<Entry> = if frontier.is_some() {
+            sqlx::query_as(&format!("{ROWS} AND n.id=ANY($1::text[])"))
+                .bind(&ids)
+                .fetch_all(&mut *connection)
+                .await?
+        } else {
+            sqlx::query_as(ROWS).fetch_all(&mut *connection).await?
+        };
+        let entries: std::collections::BTreeMap<_, _> =
+            rows.iter().map(|row| (row.id.as_str(), row)).collect();
+        let mode = if frontier.is_some() {
+            "apply"
+        } else {
+            "rebuild"
+        };
+        let mut command = Self::command(redis, &schema, mode, &version, now);
+        if let Some(basis) = basis {
+            if frontier.is_some() {
+                command.arg(basis);
+            }
+        }
+        for (id, generation) in changes {
+            if let Some(entry) = entries.get(id.as_str()) {
+                entry.args(&mut command, now, generation);
+            } else {
+                command
+                    .arg(id)
+                    .arg(format!("{generation:020}"))
+                    .arg("")
+                    .arg("");
+            }
         }
         let _: Option<i64> = redis.command(command).await;
-        tx.commit().await?;
-        Ok(())
+        if let Some(Some(members)) = redis
+            .command::<Option<Vec<Vec<u8>>>>(Self::command(redis, &schema, "read", &version, now))
+            .await
+        {
+            return Ok(Self::decode(members));
+        }
+        Self::database_ids(connection, now).await
+    }
+    async fn database_ids(
+        connection: &mut PgConnection,
+        now: DateTime<Utc>,
+    ) -> Result<Vec<String>, ApiError> {
+        Ok(
+            sqlx::query_scalar(include_str!("overview/summary_quota.sql"))
+                .bind(now)
+                .fetch_all(connection)
+                .await?,
+        )
+    }
+    async fn update(&self, pool: &PgPool, _id: &str, _version: i64) -> Result<(), ApiError> {
+        // A notification only wakes reconciliation. Never advance a vector on
+        // the assumption that unrelated notifications arrived in order.
+        self.refresh(pool).await
     }
     async fn refresh(&self, pool: &PgPool) -> Result<(), ApiError> {
         let mut tx = pool.begin().await?;
@@ -218,7 +304,7 @@ async fn listen(state: &AppState) -> anyhow::Result<()> {
                 }
             }
             _ = tick.tick() => {
-                // A primary-key version lookup detects lost notifications and
+                // The 64-row version vector detects lost notifications and
                 // evicted keys. Redis applies due resets before reading Top 10.
                 if state.caches.redis.as_ref().is_some_and(|r| r.available()) {
                     state.quota_rank.refresh(&state.pool).await
@@ -342,7 +428,7 @@ mod tests {
         result
     }
     async fn version(pool: &PgPool) -> i64 {
-        sqlx::query_scalar("SELECT generation FROM cache_domain_versions WHERE domain='quota_rank'")
+        sqlx::query_scalar("SELECT coalesce(sum(generation),0)::bigint FROM cache_bucket_versions WHERE domain='quota_rank'")
             .fetch_one(pool)
             .await
             .unwrap()
@@ -450,8 +536,11 @@ mod tests {
             .fetch_one(&state.pool)
             .await
             .unwrap();
-        let base = redis.key("quota_rank", &format!("exact-v1:{schema}"));
-        for suffix in ["rank", "members", "deadlines", "meta"] {
+        let mut connection = state.pool.acquire().await.unwrap();
+        let (rank_version, _) = RankVersion::read(&mut connection).await.unwrap();
+        drop(connection);
+        let base = QuotaRank::base(&redis, &schema, &rank_version);
+        for suffix in ["rank", "members", "deadlines", "versions", "meta"] {
             redis.delete(&format!("{base}:{suffix}")).await;
             ids(&state, Utc::now()).await;
         }
@@ -511,7 +600,10 @@ mod tests {
             .fetch_one(&state.pool)
             .await
             .unwrap();
-        let base = redis.key("quota_rank", &format!("exact-v1:{schema}"));
+        let mut connection = state.pool.acquire().await.unwrap();
+        let (rank_version, _) = RankVersion::read(&mut connection).await.unwrap();
+        drop(connection);
+        let base = QuotaRank::base(&redis, &schema, &rank_version);
         let worker = tokio::spawn(run(state.clone()));
         // Wait until the listener has checked out its connection.
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -520,7 +612,10 @@ mod tests {
             .execute(&state.pool)
             .await
             .unwrap();
-        let expected = format!("{:020}:", version(&state.pool).await);
+        let mut connection = state.pool.acquire().await.unwrap();
+        let (expected_version, _) = RankVersion::read(&mut connection).await.unwrap();
+        drop(connection);
+        let expected = format!("{}|", expected_version.stamp());
         tokio::time::timeout(Duration::from_secs(3), async {
             loop {
                 let meta: Option<String> = redis
@@ -551,5 +646,123 @@ mod tests {
         );
         state.quota_rank = Arc::new(QuotaRank::new(Some(unavailable)));
         assert_eq!(ids(&state, Utc::now()).await[0], nodes[0]);
+    }
+    #[tokio::test]
+    async fn stale_snapshots_cannot_undo_deletion_even_after_meta_eviction() {
+        if std::env::var("TEST_REDIS_URL").is_err() {
+            return;
+        }
+        let (state, redis, nodes) = fixture().await;
+        let initial = ids(&state, Utc::now()).await;
+        let mut old = state.pool.begin().await.unwrap();
+        sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+            .execute(&mut *old)
+            .await
+            .unwrap();
+        let (old_version, schema) = RankVersion::read(&mut old).await.unwrap();
+        sqlx::query("DELETE FROM nodes WHERE id=$1")
+            .bind(&nodes[11])
+            .execute(&state.pool)
+            .await
+            .unwrap();
+        assert!(!ids(&state, Utc::now()).await.contains(&nodes[11]));
+        // An unrelated process with an older DB snapshot can serve its own
+        // snapshot, but must not replace the newer shared mirror.
+        let other = QuotaRank::new(Some(redis.clone()));
+        assert_eq!(other.ids_on(&mut old, Utc::now()).await.unwrap(), initial);
+        let mut connection = state.pool.acquire().await.unwrap();
+        let (current, current_schema) = RankVersion::read(&mut connection).await.unwrap();
+        drop(connection);
+        let members: Option<Vec<Vec<u8>>> = redis
+            .command(QuotaRank::command(
+                &redis,
+                &current_schema,
+                "read",
+                &current,
+                Utc::now(),
+            ))
+            .await
+            .unwrap();
+        assert!(
+            !QuotaRank::decode(members.expect("new mirror must remain valid")).contains(&nodes[11])
+        );
+        let base = QuotaRank::base(&redis, &schema, &old_version);
+        redis.delete(&format!("{base}:meta")).await;
+        assert_eq!(other.ids_on(&mut old, Utc::now()).await.unwrap(), initial);
+        let meta: Option<String> = redis
+            .command(redis::cmd("GET").arg(format!("{base}:meta")).to_owned())
+            .await
+            .unwrap();
+        assert!(
+            meta.is_none(),
+            "tombstone must reject an older rebuild before publishing metadata"
+        );
+        old.commit().await.unwrap();
+        assert!(!ids(&state, Utc::now()).await.contains(&nodes[11]));
+        assert!(
+            !warm_without_package_access(&state, Utc::now())
+                .await
+                .contains(&nodes[11])
+        );
+    }
+
+    #[tokio::test]
+    async fn lost_and_reordered_notifications_reconcile_every_entity_with_exact_bigint_versions() {
+        if std::env::var("TEST_REDIS_URL").is_err() {
+            return;
+        }
+        let (state, redis, nodes) = fixture().await;
+        ids(&state, Utc::now()).await;
+        // Deliberately exceed Lua's exact integer range. Redis must compare
+        // padded decimal revisions, without tonumber on entity generations.
+        sqlx::query(
+            "UPDATE cache_entity_versions SET generation=9007199254740993 WHERE kind='quota_rank'",
+        )
+        .execute(&state.pool)
+        .await
+        .unwrap();
+        let mut tx = state.pool.begin().await.unwrap();
+        sqlx::query("UPDATE node_packages SET usage_bytes=2000 WHERE node_id=$1")
+            .bind(&nodes[0])
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE node_packages SET usage_bytes=3000 WHERE node_id=$1")
+            .bind(&nodes[1])
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        // Only the stale hint for one entity arrives. Reconciliation obtains
+        // all committed changes from the DB vector rather than trusting it.
+        state
+            .quota_rank
+            .update(&state.pool, &nodes[0], 0)
+            .await
+            .unwrap();
+        assert_eq!(
+            warm_without_package_access(&state, Utc::now()).await[0],
+            nodes[1]
+        );
+        let mut connection = state.pool.acquire().await.unwrap();
+        let (version, schema) = RankVersion::read(&mut connection).await.unwrap();
+        drop(connection);
+        let base = QuotaRank::base(&redis, &schema, &version);
+        let revision: Option<String> = redis
+            .command(
+                redis::cmd("HGET")
+                    .arg(format!("{base}:versions"))
+                    .arg(&nodes[1])
+                    .to_owned(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(revision.as_deref(), Some("00009007199254740994"));
+        state
+            .quota_rank
+            .update(&state.pool, &nodes[1], 1)
+            .await
+            .unwrap();
+        assert_eq!(ids(&state, Utc::now()).await[0], nodes[1]);
     }
 }

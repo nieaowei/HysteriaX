@@ -499,13 +499,15 @@ mod tests {
     async fn direct_writes_have_bounded_lock_waits() {
         let pool = test_pool_with_max_connections(2).await;
         let mut holder = pool.begin().await.unwrap();
-        sqlx::query("SELECT * FROM cache_generation FOR UPDATE")
-            .execute(&mut *holder)
-            .await
-            .unwrap();
+        sqlx::query(
+            "SELECT * FROM cache_bucket_versions WHERE domain='nodes' AND bucket=0 FOR UPDATE",
+        )
+        .execute(&mut *holder)
+        .await
+        .unwrap();
         let error = tokio::time::timeout(
             Duration::from_secs(3),
-            sqlx::query("UPDATE cache_generation SET generation=generation+1").execute(&pool),
+            sqlx::query("UPDATE cache_bucket_versions SET generation=generation+1 WHERE domain='nodes' AND bucket=0").execute(&pool),
         )
         .await
         .expect("direct writers must release their connection after a bounded wait")

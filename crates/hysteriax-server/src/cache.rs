@@ -332,7 +332,7 @@ impl RuntimeCaches {
             Arc::new(
                 crate::redis_cache::RedisCache::new(
                     &url,
-                    format!("hysteriax:cache:2:{namespace}"),
+                    format!("hysteriax:cache:3:{namespace}"),
                     secrets,
                 )
                 .unwrap_or_else(|_| panic!("invalid HYSTERIAX_REDIS_URL")),
@@ -376,7 +376,7 @@ impl RuntimeCaches {
 #[cfg(test)]
 pub async fn generation(pool: &sqlx::PgPool) -> Result<i64, ApiError> {
     Ok(
-        sqlx::query_scalar("SELECT generation FROM cache_generation WHERE id")
+        sqlx::query_scalar("SELECT coalesce(sum(generation),0)::bigint FROM cache_bucket_versions")
             .fetch_one(pool)
             .await?,
     )
@@ -573,7 +573,7 @@ mod tests {
 
 pub async fn configuration_generation(pool: &sqlx::PgPool) -> Result<i64, ApiError> {
     Ok(
-        sqlx::query_scalar("SELECT configuration_generation FROM cache_generation WHERE id")
+        sqlx::query_scalar("SELECT coalesce(sum(generation),0)::bigint FROM cache_bucket_versions WHERE domain='directory'")
             .fetch_one(pool)
             .await?,
     )

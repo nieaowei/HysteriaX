@@ -81,9 +81,14 @@ pub async fn check_migration_key(pool: &PgPool, secrets: &SecretBox) -> Result<(
 pub async fn finalize(pool: &PgPool, secrets: &SecretBox) -> Result<()> {
     check_schema(pool).await?;
     check_migration_key(pool, secrets).await?;
+    let mut tx = pool.begin().await?;
+    sqlx::query("UPDATE cache_version_epoch SET epoch=gen_random_uuid()::text WHERE id")
+        .execute(&mut *tx)
+        .await?;
     sqlx::query("INSERT INTO runtime_contract(id,schema_version,management_protocol,master_key_fingerprint) VALUES(true,$1,$2,$3) ON CONFLICT(id) DO UPDATE SET schema_version=EXCLUDED.schema_version,management_protocol=EXCLUDED.management_protocol,initialized_at=clock_timestamp()")
         .bind(MIGRATOR.iter().last().unwrap().version).bind(MANAGEMENT_PROTOCOL).bind(secrets.fingerprint())
-        .execute(pool).await?;
+        .execute(&mut *tx).await?;
+    tx.commit().await?;
     check_runtime(pool, secrets).await
 }
 
@@ -98,9 +103,40 @@ mod tests {
         let other = SecretBox::from_base64("AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE").unwrap();
         assert!(check_runtime(&pool, &secrets).await.is_err());
         finalize(&pool, &secrets).await.unwrap();
+        let epoch: String = sqlx::query_scalar("SELECT epoch FROM cache_version_epoch WHERE id")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
         check_runtime(&pool, &secrets).await.unwrap();
+        let unchanged: String =
+            sqlx::query_scalar("SELECT epoch FROM cache_version_epoch WHERE id")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            epoch, unchanged,
+            "normal startup must not rotate cache epochs"
+        );
         assert!(check_runtime(&pool, &other).await.is_err());
         assert!(finalize(&pool, &other).await.is_err());
+        let unchanged: String =
+            sqlx::query_scalar("SELECT epoch FROM cache_version_epoch WHERE id")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            epoch, unchanged,
+            "rejected maintenance must not alter cache identity"
+        );
+        finalize(&pool, &secrets).await.unwrap();
+        let rotated: String = sqlx::query_scalar("SELECT epoch FROM cache_version_epoch WHERE id")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_ne!(
+            epoch, rotated,
+            "explicit maintenance invalidates restored Redis state"
+        );
         check_runtime(&pool, &secrets).await.unwrap();
         sqlx::query("UPDATE runtime_contract SET management_protocol=999 WHERE id")
             .execute(&pool)
