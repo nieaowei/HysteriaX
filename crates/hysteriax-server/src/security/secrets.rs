@@ -6,7 +6,7 @@ use chacha20poly1305::{
 };
 
 #[derive(Clone)]
-pub struct SecretBox(XChaCha20Poly1305);
+pub struct SecretBox(XChaCha20Poly1305, String);
 
 impl SecretBox {
     pub fn from_base64(encoded: &str) -> Result<Self> {
@@ -16,9 +16,16 @@ impl SecretBox {
         if key.len() != 32 {
             bail!("HYSTERIAX_MASTER_KEY must decode to exactly 32 bytes");
         }
+        use sha2::{Digest, Sha256};
+        let fingerprint = hex::encode(Sha256::digest(&key));
         Ok(Self(
             XChaCha20Poly1305::new_from_slice(&key).expect("validated key length"),
+            fingerprint,
         ))
+    }
+
+    pub fn fingerprint(&self) -> &str {
+        &self.1
     }
 
     pub fn encrypt(&self, plaintext: &str) -> Result<String> {

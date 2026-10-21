@@ -1,6 +1,7 @@
 mod analytics;
 mod api;
 mod artifact_cache;
+mod bootstrap;
 mod cache;
 mod cache_domains;
 mod config;
@@ -10,6 +11,7 @@ mod deployment;
 mod dns;
 mod error;
 mod events;
+mod execution;
 mod jobs;
 mod kick_requests;
 mod monitoring;
@@ -64,27 +66,33 @@ async fn main() -> Result<()> {
         .context("connect to PostgreSQL database")?;
     let mut instance_lock = db::acquire_instance_lock(&database_url).await?;
 
-    db::run_migrations(&pool).await?;
-    initialize_admin_token(&pool).await?;
     let master_key = env::var("HYSTERIAX_MASTER_KEY")
         .context("HYSTERIAX_MASTER_KEY must be a base64 encoded 32-byte key")?;
     let secret_box = SecretBox::from_base64(&master_key)?;
-    credentials::migration::migrate(&pool, &secret_box).await?;
-    api::subscriptions::templates::initialize(&pool, &secret_box)
-        .await
-        .map_err(|e| anyhow::anyhow!("initialize subscription templates: {}", e.message))?;
-    credentials::reference_index::initialize(&pool, &secret_box)
-        .await
-        .map_err(|error| anyhow::anyhow!("initialize reference index: {}", error.message))?;
-    analytics::refresh(&pool)
-        .await
-        .context("initialize analytics")?;
     if migrate_only {
+        bootstrap::check_existing_key(&pool, &secret_box).await?;
+        db::run_migrations(&pool).await?;
+        bootstrap::check_migration_key(&pool, &secret_box).await?;
+        initialize_admin_token(&pool).await?;
+        credentials::migration::migrate(&pool, &secret_box).await?;
+        api::subscriptions::templates::initialize(&pool, &secret_box)
+            .await
+            .map_err(|e| anyhow::anyhow!("initialize subscription templates: {}", e.message))?;
+        credentials::reference_index::initialize(&pool, &secret_box)
+            .await
+            .map_err(|error| anyhow::anyhow!("initialize reference index: {}", error.message))?;
+        analytics::refresh(&pool)
+            .await
+            .context("initialize analytics")?;
+        bootstrap::finalize(&pool, &secret_box).await?;
         tracing::info!("database and credential migration completed; workers were not started");
         return Ok(());
     }
+    bootstrap::check_runtime(&pool, &secret_box).await?;
     let state = AppState::new(pool, secret_box);
     proxy_monitor::cleanup_probe_directories()?;
+    let publisher = tokio::spawn(events::run_publisher(state.clone()));
+    let heartbeat = tokio::spawn(execution::run_heartbeats(state.clone()));
     let mtls = tokio::spawn(credentials::maintenance::run(state.clone()));
     let analytics = tokio::spawn(analytics::run(state.clone()));
     let jobs = tokio::spawn(jobs::run(state.clone()));
@@ -121,7 +129,7 @@ async fn main() -> Result<()> {
     // Abort and join before releasing the instance lock. Dropping worker JoinSets
     // cancels their child jobs; persisted running work is recovered on startup.
     let workers = [
-        analytics, jobs, traffic, network, limits, probes, quota_rank, mtls,
+        analytics, jobs, traffic, network, limits, probes, quota_rank, mtls, heartbeat, publisher,
     ];
     for worker in &workers {
         worker.abort();

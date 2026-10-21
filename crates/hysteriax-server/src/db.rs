@@ -73,6 +73,7 @@ pub async fn try_begin_write(
         .fetch_one(&mut *transaction)
         .await?;
     if acquired {
+        crate::execution::guard_current(&mut transaction).await?;
         Ok(Some(transaction))
     } else {
         transaction.rollback().await?;
@@ -95,6 +96,71 @@ pub async fn begin_write(pool: &PgPool) -> Result<Transaction<'_, Postgres>, sql
         // Waiting writers release their connections before retrying.
         tokio::time::sleep(Duration::from_millis(rand::random_range(25..75))).await;
     }
+}
+
+/// Error metadata used by the pure-database retry boundary. Business errors
+/// (including revision conflicts) must return false.
+pub trait RetryableTransactionError: From<sqlx::Error> {
+    fn retryable_transaction(&self) -> bool;
+}
+impl RetryableTransactionError for sqlx::Error {
+    fn retryable_transaction(&self) -> bool {
+        self.as_database_error()
+            .and_then(|error| error.code())
+            .is_some_and(|code| matches!(code.as_ref(), "40001" | "40P01"))
+    }
+}
+impl RetryableTransactionError for anyhow::Error {
+    fn retryable_transaction(&self) -> bool {
+        self.chain()
+            .filter_map(|error| error.downcast_ref::<sqlx::Error>())
+            .any(RetryableTransactionError::retryable_transaction)
+    }
+}
+
+/// Retry ONLY database work. Never put SSH, DNS, HTTP, file writes or other
+/// external side effects in this closure. Each attempt uses a fresh snapshot.
+/// A transaction may be attempted once plus at most five conflict retries.
+pub async fn serializable<T, E, F>(pool: &PgPool, mut operation: F) -> Result<T, E>
+where
+    E: RetryableTransactionError,
+    F: for<'connection> FnMut(
+        &'connection mut Transaction<'static, Postgres>,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<T, E>> + Send + 'connection>,
+    >,
+{
+    for attempt in 0..=5 {
+        let mut tx = pool.begin().await.map_err(E::from)?;
+        sqlx::query("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
+            .execute(&mut *tx)
+            .await
+            .map_err(E::from)?;
+        crate::execution::guard_current(&mut tx)
+            .await
+            .map_err(E::from)?;
+        let result = match operation(&mut tx).await {
+            Ok(value) => tx.commit().await.map(|()| value).map_err(E::from),
+            Err(error) => {
+                // Finish rollback before retrying or returning a connection.
+                tx.rollback().await.map_err(E::from)?;
+                Err(error)
+            }
+        };
+        match result {
+            Err(error) if error.retryable_transaction() && attempt < 5 => {
+                let delay = rand::random_range(10..40) * (1_u64 << attempt);
+                tracing::debug!(
+                    attempt = attempt + 1,
+                    delay_ms = delay,
+                    "retrying database transaction"
+                );
+                tokio::time::sleep(Duration::from_millis(delay)).await;
+            }
+            result => return result,
+        }
+    }
+    unreachable!("bounded transaction attempts always return")
 }
 
 pub async fn run_migrations(pool: &PgPool) -> Result<()> {
@@ -189,11 +255,90 @@ pub async fn test_pool_through_version(max_connections: u32, through_version: i6
 #[cfg(test)]
 mod tests {
     use super::{
-        MIGRATOR, acquire_instance_lock, begin_write, check_instance_lock, test_pool,
+        MIGRATOR, acquire_instance_lock, begin_write, check_instance_lock, serializable, test_pool,
         test_pool_with_max_connections,
     };
     use sqlx::Connection;
     use std::time::Duration;
+
+    #[tokio::test]
+    async fn serializable_retries_write_skew_from_a_fresh_snapshot() {
+        let pool = test_pool_with_max_connections(4).await;
+        sqlx::raw_sql("CREATE TABLE retry_counter(id int PRIMARY KEY, value bigint NOT NULL); INSERT INTO retry_counter VALUES(1,0);")
+            .execute(&pool).await.unwrap();
+        let barrier = std::sync::Arc::new(tokio::sync::Barrier::new(2));
+        let mut tasks = tokio::task::JoinSet::new();
+        for _ in 0..2 {
+            let pool = pool.clone();
+            let barrier = barrier.clone();
+            tasks.spawn(async move {
+                let mut first = true;
+                serializable::<_, sqlx::Error, _>(&pool, move |connection| {
+                    let wait = first;
+                    first = false;
+                    let barrier = barrier.clone();
+                    Box::pin(async move {
+                        let old: i64 =
+                            sqlx::query_scalar("SELECT value FROM retry_counter WHERE id=1")
+                                .fetch_one(&mut **connection)
+                                .await?;
+                        if wait {
+                            barrier.wait().await;
+                        }
+                        sqlx::query("UPDATE retry_counter SET value=$1 WHERE id=1")
+                            .bind(old + 1)
+                            .execute(&mut **connection)
+                            .await?;
+                        Ok(())
+                    })
+                })
+                .await
+                .unwrap();
+            });
+        }
+        while let Some(result) = tasks.join_next().await {
+            result.unwrap();
+        }
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT value FROM retry_counter WHERE id=1")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            2
+        );
+    }
+
+    #[tokio::test]
+    async fn serializable_bounds_retries_and_preserves_business_conflicts() {
+        use crate::error::ApiError;
+        let pool = test_pool().await;
+        let mut attempts = 0;
+        let error = serializable::<(), sqlx::Error, _>(&pool, |connection| {
+            attempts += 1;
+            Box::pin(async move {
+                sqlx::query("DO $$ BEGIN RAISE EXCEPTION 'retry' USING ERRCODE='40001'; END $$;")
+                    .execute(&mut **connection)
+                    .await?;
+                Ok(())
+            })
+        })
+        .await
+        .unwrap_err();
+        assert_eq!(attempts, 6);
+        assert_eq!(
+            ApiError::from(error).status,
+            axum::http::StatusCode::SERVICE_UNAVAILABLE
+        );
+        let mut attempts = 0;
+        let error = serializable::<(), ApiError, _>(&pool, |_| {
+            attempts += 1;
+            Box::pin(async { Err(ApiError::conflict("revision changed")) })
+        })
+        .await
+        .unwrap_err();
+        assert_eq!(attempts, 1);
+        assert_eq!(error.status, axum::http::StatusCode::CONFLICT);
+    }
 
     #[tokio::test]
     async fn fresh_database_has_postgresql_native_columns_and_repeatable_migrations() {

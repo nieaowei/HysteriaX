@@ -75,6 +75,13 @@ impl IntoResponse for ApiError {
 impl From<sqlx::Error> for ApiError {
     fn from(error: sqlx::Error) -> Self {
         tracing::error!(error = %error, "database operation failed");
+        if crate::db::RetryableTransactionError::retryable_transaction(&error) {
+            return Self::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "transaction_retry_exhausted",
+                "concurrent database changes; retry the request",
+            );
+        }
         Self::internal()
     }
 }
@@ -83,5 +90,11 @@ impl From<anyhow::Error> for ApiError {
     fn from(error: anyhow::Error) -> Self {
         tracing::error!(error = %error, "request operation failed");
         Self::internal()
+    }
+}
+
+impl crate::db::RetryableTransactionError for ApiError {
+    fn retryable_transaction(&self) -> bool {
+        self.code == "transaction_retry_exhausted"
     }
 }

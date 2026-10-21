@@ -494,14 +494,14 @@ fn stream_events(
             updates.borrow_and_update();
             match state.events.read(cursor,job_id.as_deref()) {
                 crate::events::Read::Live(events,watermark)=>{
-                    for event in events {if *shutdown.borrow() {return;} cursor=event.id;yield Ok(Event::default().id(event.id.to_string()).event(event.kind.clone()).data(event.data.clone()));}
+                    for event in events {if *shutdown.borrow() {return;} cursor=event.id;yield Ok(Event::default().id(event.id.to_string()).event(event.kind.clone()).data(event.wire_data()));}
                     cursor=cursor.max(watermark);
                 }
                 crate::events::Read::Replay(until)=>{
                     match crate::events::read_database(&state.pool,cursor,until,job_id.as_deref()).await {
                         Ok(events)=>{
                             let full=events.len()==256;
-                            for event in events {if *shutdown.borrow() {return;} cursor=event.id;yield Ok(Event::default().id(event.id.to_string()).event(event.kind.clone()).data(event.data.clone()));}
+                            for event in events {if *shutdown.borrow() {return;} cursor=event.id;yield Ok(Event::default().id(event.id.to_string()).event(event.kind.clone()).data(event.wire_data()));}
                             if !full {cursor=cursor.max(until);}
                             continue;
                         }

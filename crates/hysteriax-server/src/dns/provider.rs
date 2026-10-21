@@ -61,6 +61,29 @@ impl Cloudflare {
         Ok(provider)
     }
     async fn request(&self, method: Method, path: &str, body: Option<&Value>) -> Result<Value> {
+        if method == Method::GET {
+            crate::execution::check_current().await?;
+            return self.request_remote(method, path, body).await;
+        }
+        let digest = crate::security::token_digest(&format!(
+            "{method}:{path}:{}",
+            body.unwrap_or(&Value::Null)
+        ));
+        crate::execution::remote(
+            "dns-request",
+            digest,
+            self.request_remote(method, path, body),
+            |response| json!({"result":response["result"],"success":response["success"]}),
+        )
+        .await
+    }
+
+    async fn request_remote(
+        &self,
+        method: Method,
+        path: &str,
+        body: Option<&Value>,
+    ) -> Result<Value> {
         let mut request = self
             .client
             .request(method, format!("{}{path}", self.base))

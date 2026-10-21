@@ -6,6 +6,7 @@ use crate::security::SecretBox;
 
 #[derive(Clone)]
 pub struct AppState {
+    pub instance_id: String,
     pub pool: PgPool,
     pub caches: Arc<crate::cache::RuntimeCaches>,
     pub quota_rank: Arc<crate::quota_rank::QuotaRank>,
@@ -22,6 +23,7 @@ impl AppState {
         let secrets = Arc::new(secrets);
         let caches = Arc::new(crate::cache::RuntimeCaches::new(secrets.clone()));
         Self {
+            instance_id: uuid::Uuid::new_v4().to_string(),
             pool,
             quota_rank: Arc::new(crate::quota_rank::QuotaRank::new(caches.redis.clone())),
             caches,

@@ -83,6 +83,7 @@ impl client::Handler for HostKeyHandler {
 }
 
 pub async fn connect(node: &SshNode) -> Result<FingerprintResult> {
+    crate::execution::check_current().await?;
     let observed = Arc::new(Mutex::new(None));
     let handler = HostKeyHandler {
         expected: node.host_fingerprint.clone(),
@@ -178,6 +179,20 @@ impl SshSession {
         timeout: Duration,
         max_output: usize,
     ) -> Result<CommandOutput> {
+        crate::execution::remote(
+            "ssh-command",
+            crate::security::token_digest(command),
+            self.execute_remote(command,timeout,max_output),
+            |output| serde_json::json!({"exit_code":output.code,"stdout_digest":crate::security::token_digest(&output.stdout),"stderr_digest":crate::security::token_digest(&output.stderr)}),
+        ).await
+    }
+
+    async fn execute_remote(
+        &self,
+        command: &str,
+        timeout: Duration,
+        max_output: usize,
+    ) -> Result<CommandOutput> {
         let deadline = tokio::time::Instant::now() + timeout;
         let mut channel = tokio::time::timeout_at(deadline, self.handle.channel_open_session())
             .await
@@ -207,7 +222,9 @@ impl SshSession {
                 }
             }
             Ok(CommandOutput {
-                code: exit_code.unwrap_or(255),
+                code: exit_code.context(
+                    "SSH command completion was not acknowledged; verification required",
+                )?,
                 stdout: String::from_utf8_lossy(&stdout).into_owned(),
                 stderr: String::from_utf8_lossy(&stderr).into_owned(),
             })
@@ -254,6 +271,13 @@ impl SshSession {
     }
 
     pub async fn upload(&self, remote_path: &str, contents: &[u8]) -> Result<()> {
+        use sha2::{Digest, Sha256};
+        let digest = hex::encode(Sha256::digest(contents));
+        crate::execution::remote("ssh-upload",crate::security::token_digest(&format!("{remote_path}:{digest}")),self.upload_remote(remote_path,contents),
+            |_|serde_json::json!({"remote_path":remote_path,"content_digest":digest,"acknowledged":true})).await
+    }
+
+    async fn upload_remote(&self, remote_path: &str, contents: &[u8]) -> Result<()> {
         tokio::time::timeout(Duration::from_secs(120), async {
             let channel = self.handle.channel_open_session().await?;
             channel.request_subsystem(true, "sftp").await?;
@@ -299,6 +323,32 @@ impl SshSession {
     }
 
     async fn loopback_http_request(
+        &self,
+        method: &str,
+        port: u32,
+        path: &str,
+        host: &str,
+        secret: Option<&str>,
+        body: Option<&[u8]>,
+    ) -> Result<Vec<u8>> {
+        if method == "GET" {
+            crate::execution::check_current().await?;
+            return self
+                .loopback_http_remote(method, port, path, host, secret, body)
+                .await;
+        }
+        use sha2::{Digest, Sha256};
+        let digest = hex::encode(Sha256::digest(body.unwrap_or_default()));
+        crate::execution::remote(
+            "ssh-http",
+            crate::security::token_digest(&format!("{method}:{port}:{path}:{host}:{digest}")),
+            self.loopback_http_remote(method, port, path, host, secret, body),
+            |response| serde_json::json!({"response_digest":hex::encode(Sha256::digest(response))}),
+        )
+        .await
+    }
+
+    async fn loopback_http_remote(
         &self,
         method: &str,
         port: u32,

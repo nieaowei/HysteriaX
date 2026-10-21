@@ -27,6 +27,8 @@ impl server::Handler for TestServer {
             session.data(channel, b"hello".to_vec())?;
             session.exit_status_request(channel, 0)?;
             session.close(channel)?;
+        } else if data == b"unacknowledged" {
+            session.close(channel)?;
         } else {
             let handle = session.handle();
             tokio::spawn(async move {
@@ -84,6 +86,13 @@ async fn commands_bound_active_output_and_execution_time() {
     let output = session.execute("ok").await.unwrap();
     assert_eq!(output.stdout, "hello");
     assert_eq!(output.code, 0);
+    let unacknowledged = session.execute("unacknowledged").await.unwrap_err();
+    assert!(
+        unacknowledged
+            .to_string()
+            .contains("completion was not acknowledged")
+    );
+    assert!(!crate::deployment::retryable(&unacknowledged));
     let limit = session
         .execute_with_limits("flood", Duration::from_secs(2), 1024)
         .await

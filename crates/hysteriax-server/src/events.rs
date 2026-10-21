@@ -12,10 +12,24 @@ use tokio::sync::watch;
 
 pub struct PersistedEvent {
     pub id: i64,
+    pub source_id: i64,
     pub job_id: String,
     pub kind: String,
     pub data: String,
 }
+impl PersistedEvent {
+    /// The stable source ID supports de-duplication independently of resume order.
+    pub fn wire_data(&self) -> String {
+        let mut payload: Value = serde_json::from_str(&self.data).unwrap_or(Value::Null);
+        if let Some(object) = payload.as_object_mut() {
+            object.insert("event_id".into(), self.source_id.into());
+            payload.to_string()
+        } else {
+            self.data.clone()
+        }
+    }
+}
+
 struct Buffer {
     events: VecDeque<Arc<PersistedEvent>>,
     bytes: usize,
@@ -57,9 +71,13 @@ impl EventHub {
                     let Some(hub) = weak.upgrade() else {
                         break;
                     };
+                    if let Err(error) = publish_pending(&pool).await {
+                        tracing::warn!(%error, "event publication failed");
+                        continue;
+                    }
                     if cursor.is_none() {
                         match sqlx::query_scalar::<_, i64>(
-                            "SELECT coalesce(max(id),0) FROM job_events",
+                            "SELECT head FROM event_publication_stream WHERE id",
                         )
                         .fetch_one(&pool)
                         .await
@@ -149,13 +167,14 @@ pub async fn read_database(
     until: i64,
     job_id: Option<&str>,
 ) -> Result<Vec<Arc<PersistedEvent>>, sqlx::Error> {
-    let rows=sqlx::query("SELECT id,job_id,event_type,payload_json FROM job_events WHERE id>$1 AND id<=$2 AND ($3::text IS NULL OR job_id=$3) ORDER BY id LIMIT 256")
+    let rows=sqlx::query("SELECT p.publication_seq AS id,e.id AS source_id,e.job_id,e.event_type,e.payload_json FROM event_publications p JOIN job_events e ON e.id=p.event_id WHERE p.publication_seq>$1 AND p.publication_seq<=$2 AND ($3::text IS NULL OR e.job_id=$3) ORDER BY p.publication_seq LIMIT 256")
         .bind(cursor).bind(until).bind(job_id).fetch_all(pool).await?;
     Ok(rows
         .into_iter()
         .map(|row| {
             Arc::new(PersistedEvent {
                 id: row.get("id"),
+                source_id: row.get("source_id"),
                 job_id: row.get("job_id"),
                 kind: row.get("event_type"),
                 data: row.get::<Value, _>("payload_json").to_string(),
@@ -164,9 +183,139 @@ pub async fn read_database(
         .collect())
 }
 
+/// Publish a bounded batch of committed outbox rows. The stream row serializes
+/// publishers through commit, so a resume cursor never skips a late commit.
+/// No business transaction acquires this lock.
+pub async fn publish_pending(pool: &PgPool) -> Result<usize, sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    let mut head: i64 =
+        sqlx::query_scalar("SELECT head FROM event_publication_stream WHERE id FOR UPDATE")
+            .fetch_one(&mut *tx)
+            .await?;
+    let pending: Vec<i64> = sqlx::query_scalar(
+        "SELECT event_id FROM event_publication_pending ORDER BY event_id LIMIT 256",
+    )
+    .fetch_all(&mut *tx)
+    .await?;
+    for id in &pending {
+        head += 1;
+        sqlx::query("INSERT INTO event_publications(publication_seq,event_id) VALUES($1,$2)")
+            .bind(head)
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+    }
+    if !pending.is_empty() {
+        sqlx::query("DELETE FROM event_publication_pending WHERE event_id=ANY($1)")
+            .bind(&pending)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("UPDATE event_publication_stream SET head=$1 WHERE id")
+            .bind(head)
+            .execute(&mut *tx)
+            .await?;
+    }
+    tx.commit().await?;
+    Ok(pending.len())
+}
+
+pub async fn run_publisher(state: crate::state::AppState) {
+    loop {
+        match publish_pending(&state.pool).await {
+            Ok(256) => continue,
+            Ok(_) => {}
+            Err(error) => tracing::warn!(%error,"event outbox publisher failed"),
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    async fn fixture(pool: &PgPool) {
+        sqlx::query("INSERT INTO jobs(id,kind,status,stage,available_at,created_at,updated_at) VALUES('a','sync','queued','queued',now(),now(),now()),('b','sync','queued','queued',now(),now(),now())")
+            .execute(pool).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn migration_backfills_history_without_renumbering_source_events() {
+        let pool = crate::db::test_pool_through_version(2, 40).await;
+        fixture(&pool).await;
+        sqlx::query("INSERT INTO job_events(id,job_id,event_type,payload_json,created_at) OVERRIDING SYSTEM VALUE VALUES(8,'a','first','{\"retained\":true}',now()),(19,'b','second','{\"retained\":true}',now())")
+            .execute(&pool).await.unwrap();
+        crate::db::run_migrations(&pool).await.unwrap();
+        let events = read_database(&pool, 0, i64::MAX, None).await.unwrap();
+        assert_eq!(
+            events
+                .iter()
+                .map(|event| (event.id, event.source_id))
+                .collect::<Vec<_>>(),
+            vec![(1, 8), (2, 19)]
+        );
+        assert!(events.iter().all(|event| event.data.contains("retained")));
+        assert_eq!(publish_pending(&pool).await.unwrap(), 0);
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM jobs")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            2
+        );
+    }
+
+    #[tokio::test]
+    async fn late_commit_with_smaller_source_id_is_published_after_the_head() {
+        let pool = crate::db::test_pool_with_max_connections(4).await;
+        fixture(&pool).await;
+        // Isolate the future concurrency contract while the legacy write and
+        // cache triggers are removed in later stages of plan 0034.
+        sqlx::raw_sql("ALTER TABLE job_events DISABLE TRIGGER USER; ALTER TABLE job_events ENABLE TRIGGER event_publication_pending;")
+            .execute(&pool).await.unwrap();
+        let mut early = pool.begin().await.unwrap();
+        let first: i64 = sqlx::query_scalar("INSERT INTO job_events(job_id,event_type,payload_json,created_at) VALUES('a','early','{}',now()) RETURNING id")
+            .fetch_one(&mut *early).await.unwrap();
+        let second: i64 = sqlx::query_scalar("INSERT INTO job_events(job_id,event_type,payload_json,created_at) VALUES('b','later','{}',now()) RETURNING id")
+            .fetch_one(&pool).await.unwrap();
+        assert!(first < second);
+        assert_eq!(publish_pending(&pool).await.unwrap(), 1);
+        let published = read_database(&pool, 0, i64::MAX, None).await.unwrap();
+        assert_eq!(published[0].source_id, second);
+        let head = published[0].id;
+        early.commit().await.unwrap();
+        assert_eq!(publish_pending(&pool).await.unwrap(), 1);
+        let resumed = read_database(&pool, head, i64::MAX, None).await.unwrap();
+        assert_eq!(resumed.len(), 1);
+        assert_eq!(resumed[0].source_id, first);
+        assert_eq!(resumed[0].id, head + 1);
+    }
+
+    #[tokio::test]
+    async fn concurrent_publishers_publish_once_and_rollback_does_not_advance_head() {
+        let pool = crate::db::test_pool_with_max_connections(4).await;
+        fixture(&pool).await;
+        sqlx::query("INSERT INTO job_events(job_id,event_type,payload_json,created_at) SELECT 'a','event','{}',now() FROM generate_series(1,600)")
+            .execute(&pool).await.unwrap();
+        let mut rolled_back = pool.begin().await.unwrap();
+        sqlx::query("UPDATE event_publication_stream SET head=999 WHERE id")
+            .execute(&mut *rolled_back)
+            .await
+            .unwrap();
+        rolled_back.rollback().await.unwrap();
+        let (a, b, c) = tokio::join!(
+            publish_pending(&pool),
+            publish_pending(&pool),
+            publish_pending(&pool)
+        );
+        let sizes = [a.unwrap(), b.unwrap(), c.unwrap()];
+        assert!(sizes.iter().all(|size| *size <= 256));
+        assert_eq!(sizes.iter().sum::<usize>(), 600);
+        assert_eq!(publish_pending(&pool).await.unwrap(), 0);
+        let (count,distinct,head): (i64,i64,i64) = sqlx::query_as("SELECT count(*),count(DISTINCT event_id),(SELECT head FROM event_publication_stream WHERE id) FROM event_publications")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!((count, distinct, head), (600, 600, 600));
+    }
+
     #[tokio::test]
     async fn shared_reader_replays_history_filters_jobs_and_delivers_new_events() {
         let pool = crate::db::test_pool().await;
@@ -195,7 +344,7 @@ mod tests {
         match hub.read(until, Some("a")) {
             Read::Live(events, watermark) => {
                 assert_eq!(events.len(), 1);
-                assert_eq!(events[0].id, id);
+                assert_eq!(events[0].source_id, id);
                 assert_eq!(watermark, id);
             }
             _ => panic!("new events should be shared"),
