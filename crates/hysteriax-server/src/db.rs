@@ -12,6 +12,14 @@ pub static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
 const INSTANCE_LOCK_KEY: i64 = 62_177_345_902_812;
 const WRITE_LOCK_KEY: i64 = 62_177_345_902_811;
 
+// A stopped client can leave one active statement, then an idle transaction.
+// Together their server-side limits must fit inside a fresh execution lease.
+const RUNTIME_STATEMENT_SECONDS: i64 = 20;
+const RUNTIME_IDLE_TRANSACTION_SECONDS: i64 = 20;
+const _: () = assert!(
+    RUNTIME_STATEMENT_SECONDS + RUNTIME_IDLE_TRANSACTION_SECONDS < crate::execution::LEASE_SECONDS
+);
+
 pub fn connect_options(database_url: &str) -> Result<PgConnectOptions> {
     let options = PgConnectOptions::from_str(database_url)
         .context("DATABASE_URL is not a valid PostgreSQL connection URL")?;
@@ -32,6 +40,10 @@ pub fn pool_options_for_maintenance(maintenance: bool) -> PgPoolOptions {
                 sqlx::query("SET lock_timeout='1s'")
                     .execute(&mut *connection)
                     .await?;
+                sqlx::query("SELECT set_config('statement_timeout',$1,false),set_config('idle_in_transaction_session_timeout',$2,false)")
+                    .bind(if maintenance {"0".to_owned()} else {format!("{RUNTIME_STATEMENT_SECONDS}s")})
+                    .bind(if maintenance {"0".to_owned()} else {format!("{RUNTIME_IDLE_TRANSACTION_SECONDS}s")})
+                    .execute(&mut *connection).await?;
                 sqlx::query("SELECT set_config('hysteriax.reference_maintenance',$1,false)")
                     .bind(if maintenance { "on" } else { "off" })
                     .execute(connection)
@@ -231,20 +243,17 @@ pub async fn run_migrations(pool: &PgPool) -> Result<()> {
 }
 
 async fn migrate_with(pool: &PgPool, migrator: &Migrator) -> Result<()> {
-    // Startup migrations may legitimately wait on DDL or the migration lock.
-    // Apply the short lock deadline only to normal application queries.
+    // Maintenance migrations can legitimately exceed runtime statement/idle
+    // deadlines. Restore all settings even on failure; never leak an unlimited
+    // connection back into the runtime pool.
     let mut connection = pool.acquire().await?;
-    let previous: String = sqlx::query_scalar("SHOW lock_timeout")
-        .fetch_one(&mut *connection)
-        .await?;
-    sqlx::query("SET lock_timeout='0'")
-        .execute(&mut *connection)
-        .await?;
+    let previous: (String,String,String) = sqlx::query_as("SELECT current_setting('lock_timeout'),current_setting('statement_timeout'),current_setting('idle_in_transaction_session_timeout')")
+        .fetch_one(&mut *connection).await?;
+    sqlx::query("SELECT set_config('lock_timeout','0',false),set_config('statement_timeout','0',false),set_config('idle_in_transaction_session_timeout','0',false)")
+        .execute(&mut *connection).await?;
     let result = migrator.run(&mut *connection).await;
-    let restored = sqlx::query("SELECT set_config('lock_timeout',$1,false)")
-        .bind(previous)
-        .execute(&mut *connection)
-        .await;
+    let restored = sqlx::query("SELECT set_config('lock_timeout',$1,false),set_config('statement_timeout',$2,false),set_config('idle_in_transaction_session_timeout',$3,false)")
+        .bind(previous.0).bind(previous.1).bind(previous.2).execute(&mut *connection).await;
     if restored.is_err() {
         connection.close().await?;
     }
@@ -619,3 +628,7 @@ mod tests {
         tx.rollback().await.unwrap();
     }
 }
+
+#[cfg(test)]
+#[path = "db/runtime_timeout_tests.rs"]
+mod runtime_timeout_tests;
