@@ -12,29 +12,31 @@ use sqlx::{Postgres, Row, Transaction, postgres::PgRow};
 use uuid::Uuid;
 
 pub async fn initialize(pool: &sqlx::PgPool, secrets: &SecretBox) -> Result<(), ApiError> {
-    let mut tx = db::begin_write(pool).await?;
-    let initialized: bool =
-        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM subscription_template_initialization)")
-            .fetch_one(&mut *tx)
-            .await?;
-    if !initialized {
-        for format in ["mihomo", "singbox"] {
-            let document = render::single_seed(format);
-            ensure_valid(&validate(format, &document)?)?;
-            let encrypted = secrets
-                .encrypt(&serde_json::to_string(&document).map_err(|_| ApiError::internal())?)?;
-            let id = format!("default-{format}");
-            sqlx::query("INSERT INTO subscription_templates(id,name,format,draft_enc,is_default,published_version) VALUES($1,$2,$3,$4,TRUE,1)")
-                .bind(&id).bind(format!("Default {format}")).bind(format).bind(&encrypted).execute(&mut *tx).await?;
-            sqlx::query("INSERT INTO subscription_template_versions(template_id,version,document_enc) VALUES($1,1,$2)").bind(&id).bind(&encrypted).execute(&mut *tx).await?;
-        }
-        sqlx::query("INSERT INTO subscription_template_initialization(id) VALUES(1)")
-            .execute(&mut *tx)
-            .await?;
+    let mut seeds = Vec::new();
+    for format in ["mihomo", "singbox"] {
+        let document = render::single_seed(format);
+        ensure_valid(&validate(format, &document)?)?;
+        let encrypted = secrets
+            .encrypt(&serde_json::to_string(&document).map_err(|_| ApiError::internal())?)?;
+        seeds.push((format.to_owned(), encrypted));
     }
-    tx.commit().await?;
-    Ok(())
+    db::serializable(pool,move |tx| {
+        let seeds=seeds.clone();
+        Box::pin(async move {
+            let claimed=sqlx::query("INSERT INTO subscription_template_initialization(id) VALUES(1) ON CONFLICT DO NOTHING").execute(&mut **tx).await?.rows_affected()==1;
+            if claimed {
+                for (format,encrypted) in seeds {
+                    let id=format!("default-{format}");
+                    sqlx::query("INSERT INTO subscription_templates(id,name,format,draft_enc,is_default,published_version) VALUES($1,$2,$3,$4,TRUE,1)")
+                        .bind(&id).bind(format!("Default {format}")).bind(format).bind(&encrypted).execute(&mut **tx).await?;
+                    sqlx::query("INSERT INTO subscription_template_versions(template_id,version,document_enc) VALUES($1,1,$2)").bind(id).bind(encrypted).execute(&mut **tx).await?;
+                }
+            }
+            Ok::<_,ApiError>(())
+        })
+    }).await
 }
+
 fn metadata(row: &PgRow) -> Value {
     json!({"id":row.get::<String,_>("id"),"name":row.get::<String,_>("name"),"format":row.get::<String,_>("format"),"revision":row.get::<i64,_>("revision"),"archived":row.get::<bool,_>("archived"),"is_default":row.get::<bool,_>("is_default"),"published_version":row.get::<Option<i64>,_>("published_version"),"updated_at":row.get::<chrono::DateTime<chrono::Utc>,_>("updated_at")})
 }
@@ -112,7 +114,7 @@ pub async fn list(
         json!({"items":rows.iter().map(metadata).collect::<Vec<_>>(),"page":page,"page_size":size,"total":total}),
     ))
 }
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Create {
     pub expected_revision: i64,
@@ -143,21 +145,29 @@ async fn create_inner(
         .document
         .unwrap_or_else(|| render::single_seed(&input.format));
     document.shape()?;
-    let mut tx = db::begin_write(&state.pool).await?;
     let id = Uuid::new_v4().to_string();
-    let row=sqlx::query("INSERT INTO subscription_templates(id,name,format,draft_enc) VALUES($1,$2,$3,$4) RETURNING *")
-        .bind(&id).bind(name).bind(input.format).bind(state.secrets.encrypt(&serde_json::to_string(&document).map_err(|_|ApiError::internal())?)?).fetch_one(&mut *tx).await?;
-    audit(&mut tx, &id, "template.created", 1, None).await?;
-    tx.commit().await?;
-    Ok((StatusCode::CREATED, Json(metadata(&row))))
+    let name = name.to_owned();
+    let encrypted = state
+        .secrets
+        .encrypt(&serde_json::to_string(&document).map_err(|_| ApiError::internal())?)?;
+    db::serializable(&state.pool, move |tx| {
+        let (id,name,format,encrypted)=(id.clone(),name.clone(),input.format.clone(),encrypted.clone());
+        Box::pin(async move {
+            let row=sqlx::query("INSERT INTO subscription_templates(id,name,format,draft_enc) VALUES($1,$2,$3,$4) RETURNING *")
+                .bind(&id).bind(name).bind(format).bind(encrypted).fetch_one(&mut **tx).await?;
+            audit(tx,&id,"template.created",1,None).await?;
+            Ok((StatusCode::CREATED,Json(metadata(&row))))
+        })
+    }).await
 }
+
 pub async fn get(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
     Ok(Json(metadata(&row(&state, &id).await?)))
 }
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Patch {
     pub expected_revision: i64,
@@ -172,8 +182,40 @@ async fn patch_inner(
     Path(id): Path<String>,
     Json(input): Json<Patch>,
 ) -> Result<Json<Value>, ApiError> {
-    let mut tx = db::begin_write(&state.pool).await?;
-    let current = locked(&mut tx, &id, input.expected_revision).await?;
+    db::serializable(&state.pool, move |tx| {
+        let (id, input) = (id.clone(), input.clone());
+        Box::pin(async move { patch_on(tx, id, input).await })
+    })
+    .await
+}
+async fn lock_patch_parents_on(
+    tx: &mut Transaction<'_, Postgres>,
+    id: &str,
+    input: &Patch,
+) -> Result<(), ApiError> {
+    let current = sqlx::query("SELECT format,is_default FROM subscription_templates WHERE id=$1")
+        .bind(id)
+        .fetch_optional(&mut **tx)
+        .await?
+        .ok_or_else(|| ApiError::not_found("template"))?;
+    if input.is_default == Some(true)
+        || (input.archived == Some(true) && current.get::<bool, _>("is_default"))
+    {
+        let ids = vec![
+            id.to_owned(),
+            input.replacement_id.clone().unwrap_or_default(),
+        ];
+        sqlx::query("SELECT id FROM subscription_templates WHERE (format=$1 AND is_default) OR id=ANY($2) ORDER BY id FOR UPDATE").bind(current.get::<String,_>("format")).bind(ids).fetch_all(&mut **tx).await?;
+    }
+    Ok(())
+}
+async fn patch_on(
+    tx: &mut Transaction<'_, Postgres>,
+    id: String,
+    input: Patch,
+) -> Result<Json<Value>, ApiError> {
+    lock_patch_parents_on(tx, &id, &input).await?;
+    let current = locked(tx, &id, input.expected_revision).await?;
     let format: String = current.get("format");
     let make_default = input.is_default.unwrap_or(false);
     if make_default
@@ -198,7 +240,7 @@ async fn patch_inner(
                 ApiError::bad_request("default archive requires a different replacement template")
             })?;
         let candidate = locked(
-            &mut tx,
+            tx,
             replacement,
             input
                 .replacement_revision
@@ -216,11 +258,11 @@ async fn patch_inner(
         }
         sqlx::query("UPDATE subscription_templates SET is_default=FALSE WHERE id=$1")
             .bind(&id)
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await?;
-        sqlx::query("UPDATE subscription_templates SET is_default=TRUE,revision=revision+1,updated_at=now() WHERE id=$1").bind(replacement).execute(&mut *tx).await?;
+        sqlx::query("UPDATE subscription_templates SET is_default=TRUE,revision=revision+1,updated_at=now() WHERE id=$1").bind(replacement).execute(&mut **tx).await?;
         audit(
-            &mut tx,
+            tx,
             replacement,
             "template.default_changed",
             candidate.get::<i64, _>("revision") + 1,
@@ -229,10 +271,10 @@ async fn patch_inner(
         .await?;
     }
     if make_default {
-        let changed=sqlx::query("UPDATE subscription_templates SET is_default=FALSE,revision=revision+1,updated_at=now() WHERE format=$1 AND is_default AND id<>$2 RETURNING id,revision,published_version").bind(&format).bind(&id).fetch_all(&mut *tx).await?;
+        let changed=sqlx::query("UPDATE subscription_templates SET is_default=FALSE,revision=revision+1,updated_at=now() WHERE format=$1 AND is_default AND id<>$2 RETURNING id,revision,published_version").bind(&format).bind(&id).fetch_all(&mut **tx).await?;
         for old in changed {
             audit(
-                &mut tx,
+                tx,
                 &old.get::<String, _>("id"),
                 "template.default_changed",
                 old.get("revision"),
@@ -242,9 +284,9 @@ async fn patch_inner(
         }
     }
     let row=sqlx::query("UPDATE subscription_templates SET name=coalesce($2,name),is_default=CASE WHEN $3 THEN TRUE WHEN $4 THEN FALSE ELSE is_default END,archived=coalesce($5,archived),revision=revision+1,updated_at=now() WHERE id=$1 RETURNING *")
-        .bind(&id).bind(input.name.as_deref().map(name).transpose()?).bind(make_default).bind(input.archived==Some(true)).bind(input.archived).fetch_one(&mut *tx).await?;
+        .bind(&id).bind(input.name.as_deref().map(name).transpose()?).bind(make_default).bind(input.archived==Some(true)).bind(input.archived).fetch_one(&mut **tx).await?;
     audit(
-        &mut tx,
+        tx,
         &id,
         if input.archived == Some(true) {
             "template.archived"
@@ -257,9 +299,9 @@ async fn patch_inner(
         row.get("published_version"),
     )
     .await?;
-    tx.commit().await?;
     Ok(Json(metadata(&row)))
 }
+
 pub async fn draft(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -270,7 +312,7 @@ pub async fn draft(
         json!({"template":metadata(&row),"document":document}),
     ))
 }
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Save {
     pub expected_revision: i64,
@@ -282,20 +324,20 @@ async fn save_inner(
     Json(input): Json<Save>,
 ) -> Result<Json<Value>, ApiError> {
     input.document.shape()?;
-    let mut tx = db::begin_write(&state.pool).await?;
-    locked(&mut tx, &id, input.expected_revision).await?;
-    let row=sqlx::query("UPDATE subscription_templates SET draft_enc=$2,revision=revision+1,updated_at=now() WHERE id=$1 RETURNING *").bind(&id).bind(state.secrets.encrypt(&serde_json::to_string(&input.document).map_err(|_|ApiError::internal())?)?).fetch_one(&mut *tx).await?;
-    audit(
-        &mut tx,
-        &id,
-        "template.draft_saved",
-        row.get("revision"),
-        None,
-    )
-    .await?;
-    tx.commit().await?;
-    Ok(Json(metadata(&row)))
+    let encrypted = state
+        .secrets
+        .encrypt(&serde_json::to_string(&input.document).map_err(|_| ApiError::internal())?)?;
+    db::serializable(&state.pool,move |tx| {
+        let (id,encrypted)=(id.clone(),encrypted.clone());
+        Box::pin(async move {
+            locked(tx,&id,input.expected_revision).await?;
+            let row=sqlx::query("UPDATE subscription_templates SET draft_enc=$2,revision=revision+1,updated_at=now() WHERE id=$1 RETURNING *").bind(&id).bind(encrypted).fetch_one(&mut **tx).await?;
+            audit(tx,&id,"template.draft_saved",row.get("revision"),None).await?;
+            Ok(Json(metadata(&row)))
+        })
+    }).await
 }
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Validate {
@@ -325,24 +367,37 @@ async fn publish_document(
     revision: i64,
     version: Option<i64>,
 ) -> Result<Json<Value>, ApiError> {
-    let mut tx = db::begin_write(&state.pool).await?;
-    let current = locked(&mut tx, id, revision).await?;
+    let (id, secrets) = (id.to_owned(), state.secrets.clone());
+    db::serializable(&state.pool, move |tx| {
+        let (id, secrets) = (id.clone(), secrets.clone());
+        Box::pin(async move { publish_on(tx, &secrets, &id, revision, version).await })
+    })
+    .await
+}
+async fn publish_on(
+    tx: &mut Transaction<'_, Postgres>,
+    secrets: &SecretBox,
+    id: &str,
+    revision: i64,
+    version: Option<i64>,
+) -> Result<Json<Value>, ApiError> {
+    let current = locked(tx, id, revision).await?;
     let format: String = current.get("format");
     let cipher = if let Some(version) = version {
-        sqlx::query_scalar::<_,String>("SELECT document_enc FROM subscription_template_versions WHERE template_id=$1 AND version=$2").bind(id).bind(version).fetch_optional(&mut *tx).await?.ok_or_else(||ApiError::not_found("template version"))?
+        sqlx::query_scalar::<_,String>("SELECT document_enc FROM subscription_template_versions WHERE template_id=$1 AND version=$2").bind(id).bind(version).fetch_optional(&mut **tx).await?.ok_or_else(||ApiError::not_found("template version"))?
     } else {
         current.get("draft_enc")
     };
-    let document = decode(&state.secrets, &cipher)?;
+    let document = decode(secrets, &cipher)?;
     let diagnostics = validate(&format, &document)?;
     ensure_valid(&diagnostics)?;
     // Use the exact production renderer for both empty and representative node sets on every platform.
     super::verify_rendering(&format, &document)?;
-    let next:i64=sqlx::query_scalar("SELECT coalesce(max(version),0)+1 FROM subscription_template_versions WHERE template_id=$1").bind(id).fetch_one(&mut *tx).await?;
-    sqlx::query("INSERT INTO subscription_template_versions(template_id,version,document_enc) VALUES($1,$2,$3)").bind(id).bind(next).bind(&cipher).execute(&mut *tx).await?;
-    let row=sqlx::query("UPDATE subscription_templates SET published_version=$2,draft_enc=$3,revision=revision+1,updated_at=now() WHERE id=$1 RETURNING *").bind(id).bind(next).bind(&cipher).fetch_one(&mut *tx).await?;
+    let next:i64=sqlx::query_scalar("SELECT coalesce(max(version),0)+1 FROM subscription_template_versions WHERE template_id=$1").bind(id).fetch_one(&mut **tx).await?;
+    sqlx::query("INSERT INTO subscription_template_versions(template_id,version,document_enc) VALUES($1,$2,$3)").bind(id).bind(next).bind(&cipher).execute(&mut **tx).await?;
+    let row=sqlx::query("UPDATE subscription_templates SET published_version=$2,draft_enc=$3,revision=revision+1,updated_at=now() WHERE id=$1 RETURNING *").bind(id).bind(next).bind(&cipher).fetch_one(&mut **tx).await?;
     audit_with_source(
-        &mut tx,
+        tx,
         id,
         if version.is_some() {
             "template.rolled_back"
@@ -354,9 +409,9 @@ async fn publish_document(
         version,
     )
     .await?;
-    tx.commit().await?;
     Ok(Json(metadata(&row)))
 }
+
 async fn publish_inner(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -764,13 +819,21 @@ async fn report_failure<T>(
     result: Result<T, ApiError>,
 ) -> Result<T, ApiError> {
     if let Err(error) = &result {
-        let recorded=async{
-            let mut tx=db::begin_write(&state.pool).await?;
-            sqlx::query("INSERT INTO audit_records(id,actor,action,entity_type,entity_id,detail_json,created_at) VALUES($1,$2,$3,'subscription_template',$4,$5,now())")
-                .bind(Uuid::new_v4().to_string()).bind(crate::api::audit_actor()).bind(action).bind(id)
-                .bind(json!({"result":"failure","expected_revision":revision,"version":version,"code":error.code,"status":error.status.as_u16()}))
-                .execute(&mut *tx).await?;tx.commit().await?;Ok::<_,sqlx::Error>(())
-        }.await;
+        let (id, action, actor, audit_id) = (
+            id.to_owned(),
+            action.to_owned(),
+            crate::api::audit_actor(),
+            Uuid::new_v4().to_string(),
+        );
+        let detail = json!({"result":"failure","expected_revision":revision,"version":version,"code":error.code,"status":error.status.as_u16()});
+        let recorded=db::serializable::<_,sqlx::Error,_>(&state.pool, |tx| {
+            let (id,action,actor,audit_id,detail)=(id.clone(),action.clone(),actor.clone(),audit_id.clone(),detail.clone());
+            Box::pin(async move {
+                sqlx::query("INSERT INTO audit_records(id,actor,action,entity_type,entity_id,detail_json,created_at) VALUES($1,$2,$3,'subscription_template',$4,$5,now())")
+                    .bind(audit_id).bind(actor).bind(action).bind(id).bind(detail).execute(&mut **tx).await?;
+                Ok(())
+            })
+        }).await;
         if recorded.is_err() {
             tracing::error!(
                 action,

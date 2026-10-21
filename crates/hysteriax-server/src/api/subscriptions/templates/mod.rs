@@ -7,6 +7,8 @@ mod runtime_checks;
 mod store;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod transaction_tests;
 use super::formats::{ClientInfo, Platform, SubscriptionNode};
 use crate::error::ApiError;
 use axum::{
