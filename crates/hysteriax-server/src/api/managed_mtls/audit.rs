@@ -47,11 +47,19 @@ where
         error.message = reason.chars().take(1024).collect();
         detail["reason"] = error.message.clone().into();
         detail["http_status"] = error.status.as_u16().into();
-        let persisted = async {
-            let mut tx = db::begin_write(&state.pool).await?;
-            record(&mut tx, actor, action, target, detail).await?;
-            tx.commit().await
-        }
+        let (request_actor, entity_type, entity_id) =
+            (actor.clone(), target.0.to_owned(), target.1.to_owned());
+        let persisted = db::serializable::<_, sqlx::Error, _>(&state.pool, move |tx| {
+            let (actor, entity_type, entity_id, detail) = (
+                request_actor.clone(),
+                entity_type.clone(),
+                entity_id.clone(),
+                detail.clone(),
+            );
+            Box::pin(
+                async move { record(tx, &actor, action, (&entity_type, &entity_id), detail).await },
+            )
+        })
         .await;
         if persisted.is_err() {
             tracing::error!(operation=action,actor_id=%actor.id,"failed to persist managed CA request failure audit");

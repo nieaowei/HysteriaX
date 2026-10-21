@@ -1192,3 +1192,5 @@ async fn ca_display_status_tracks_published_generation_during_blocked_rotation()
         .unwrap();
     check(&state, &ca, "active").await;
 }
+
+mod transaction_tests;

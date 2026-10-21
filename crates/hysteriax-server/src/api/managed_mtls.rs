@@ -24,14 +24,14 @@ use crate::{
     state::AppState,
 };
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Copy, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Source {
     Generated,
     Imported,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct CreateAuthority {
     pub name: String,
@@ -43,7 +43,7 @@ pub struct CreateAuthority {
     pub idempotency_key: String,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct UpdatePolicy {
     pub expected_revision: i64,
@@ -102,6 +102,99 @@ async fn receipt(
 ) -> Result<(), ApiError> {
     sqlx::query("INSERT INTO mtls_operations(actor_id,idempotency_key,operation,request_digest,receipt,created_at) VALUES($1,$2,$3,$4,$5,$6)")
         .bind(&actor.id).bind(key).bind(operation).bind(digest).bind(result).bind(Utc::now()).execute(&mut **tx).await?;
+    Ok(())
+}
+
+fn managed_transaction_error(error: anyhow::Error) -> ApiError {
+    if crate::db::RetryableTransactionError::retryable_transaction(&error) {
+        ApiError::from(error)
+    } else {
+        ApiError::conflict(error.to_string())
+    }
+}
+async fn managed_transaction<F>(
+    pool: &sqlx::PgPool,
+    actor: &AdminActor,
+    key: &str,
+    operation: &str,
+    digest: &str,
+    write: F,
+) -> Result<Value, ApiError>
+where
+    F: for<'c> FnMut(
+        &'c mut Transaction<'static, Postgres>,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<Value, ApiError>> + Send + 'c>,
+    >,
+{
+    match db::serializable(pool, write).await {
+        Err(error) if error.code == "mtls_operation_committed" => {
+            let mut tx = crate::read_snapshot::transaction(pool).await?;
+            let prior = existing(&mut tx, actor, key, operation, digest).await?;
+            tx.commit().await?;
+            prior.ok_or(error)
+        }
+        result => result,
+    }
+}
+async fn lock_ca_on(
+    tx: &mut Transaction<'_, Postgres>,
+    ca: &str,
+    publication: bool,
+) -> Result<(), ApiError> {
+    if publication {
+        sqlx::query("SELECT n.id FROM nodes n WHERE n.id IN (SELECT node_id FROM mtls_node_trust WHERE ca_id=$1 UNION SELECT node_id FROM mtls_live_activation_trust WHERE ca_id=$1) ORDER BY n.id FOR NO KEY UPDATE OF n").bind(ca).fetch_all(&mut **tx).await?;
+        let users:Vec<String>=sqlx::query_scalar("SELECT u.id FROM users u JOIN mtls_user_identities i ON i.user_id=u.id WHERE i.ca_id=$1 ORDER BY u.id FOR NO KEY UPDATE OF u").bind(ca).fetch_all(&mut **tx).await?;
+        sqlx::query("SELECT id FROM credentials WHERE id=$1 OR owner_user_id=ANY($2) ORDER BY id FOR UPDATE").bind(ca).bind(&users).fetch_all(&mut **tx).await?;
+    } else {
+        sqlx::query("SELECT id FROM credentials WHERE id=$1 FOR UPDATE")
+            .bind(ca)
+            .fetch_all(&mut **tx)
+            .await?;
+    }
+    let authority =
+        sqlx::query("SELECT credential_id FROM mtls_authorities WHERE credential_id=$1 FOR UPDATE")
+            .bind(ca)
+            .fetch_optional(&mut **tx)
+            .await?;
+    if publication && authority.is_none() {
+        return Err(ApiError::not_found("CA identity"));
+    }
+    if publication {
+        sqlx::query("SELECT id FROM mtls_user_identities WHERE ca_id=$1 ORDER BY id FOR UPDATE")
+            .bind(ca)
+            .fetch_all(&mut **tx)
+            .await?;
+        sqlx::query("SELECT id FROM mtls_rotations WHERE ca_id=$1 ORDER BY id FOR UPDATE")
+            .bind(ca)
+            .fetch_all(&mut **tx)
+            .await?;
+    }
+    Ok(())
+}
+async fn lock_reissue_on(
+    tx: &mut Transaction<'_, Postgres>,
+    user: &str,
+    cas: &[String],
+) -> Result<(), ApiError> {
+    sqlx::query("SELECT n.id FROM nodes n JOIN node_assignments a ON a.node_id=n.id WHERE a.user_id=$1 ORDER BY n.id FOR NO KEY UPDATE OF n").bind(user).fetch_all(&mut **tx).await?;
+    sqlx::query("SELECT id FROM users WHERE id=$1 FOR NO KEY UPDATE")
+        .bind(user)
+        .fetch_optional(&mut **tx)
+        .await?
+        .ok_or_else(|| ApiError::not_found("user"))?;
+    sqlx::query(
+        "SELECT id FROM credentials WHERE owner_user_id=$1 OR id=ANY($2) ORDER BY id FOR UPDATE",
+    )
+    .bind(user)
+    .bind(cas)
+    .fetch_all(&mut **tx)
+    .await?;
+    sqlx::query("SELECT credential_id FROM mtls_authorities WHERE credential_id=ANY($1) ORDER BY credential_id FOR UPDATE").bind(cas).fetch_all(&mut **tx).await?;
+    sqlx::query("SELECT id FROM mtls_user_identities WHERE user_id=$1 ORDER BY id FOR UPDATE")
+        .bind(user)
+        .fetch_all(&mut **tx)
+        .await?;
     Ok(())
 }
 
@@ -168,9 +261,17 @@ async fn create_inner(
     let mut metadata = authority.metadata.clone();
     metadata["source"] = json!(source);
     metadata["trust_anchor_certificate"] = json!(authority.trust_anchor().map_err(bad)?);
-    let mut tx = db::begin_write(&state.pool).await?;
+    let name = name.to_owned();
+    let authority = std::sync::Arc::new(authority);
+    let pool = state.pool.clone();
+    let (request_actor, request_key, request_digest) =
+        (actor.clone(), input.idempotency_key.clone(), digest.clone());
+    let result=managed_transaction(&pool,&request_actor,&request_key,"ca.create",&request_digest,move |tx| {
+        let (state,actor,input,digest,authority,metadata,name)=(state.clone(),actor.clone(),input.clone(),digest.clone(),authority.clone(),metadata.clone(),name.clone());
+        Box::pin(async move {
+
     if let Some(value) = existing(
-        &mut tx,
+        tx,
         &actor,
         &input.idempotency_key,
         "ca.create",
@@ -178,12 +279,12 @@ async fn create_inner(
     )
     .await?
     {
-        return Ok((StatusCode::CREATED, Json(value)));
+        return Ok(value);
     }
     let id = credentials::insert(
-        &mut tx,
+        tx,
         &state.secrets,
-        name,
+        &name,
         "ca_identity",
         None,
         &authority.payload(),
@@ -193,12 +294,12 @@ async fn create_inner(
     .await?;
     let next_action = (source == "generated").then_some(authority.expires_at - Duration::days(365));
     sqlx::query("INSERT INTO mtls_authorities(credential_id,source,client_validity_days,renew_before_hours,next_action_at) VALUES($1,$2,$3,$4,$5)")
-        .bind(&id).bind(source).bind(i32::from(input.policy.client_validity_days)).bind(i32::from(input.policy.renew_before_hours)).bind(next_action).execute(&mut *tx).await?;
+        .bind(&id).bind(source).bind(i32::from(input.policy.client_validity_days)).bind(i32::from(input.policy.renew_before_hours)).bind(next_action).execute(&mut **tx).await?;
     sqlx::query("INSERT INTO mtls_ca_generations(ca_id,ca_version,state,expires_at,published_at) VALUES($1,1,'published',$2,$3)")
-        .bind(&id).bind(authority.expires_at).bind(now).execute(&mut *tx).await?;
+        .bind(&id).bind(authority.expires_at).bind(now).execute(&mut **tx).await?;
     let result = json!({"id":id,"version":1,"revision":1,"policy_revision":1});
     receipt(
-        &mut tx,
+        tx,
         &actor,
         &input.idempotency_key,
         "ca.create",
@@ -207,14 +308,16 @@ async fn create_inner(
     )
     .await?;
     super::credentials::record(
-        &mut tx,
+        tx,
         &actor,
         "ca.created",
         &id,
         json!({"source":source,"version":1,"policy":input.policy}),
     )
     .await?;
-    tx.commit().await?;
+    Ok(result)
+        })
+    }).await?;
     Ok((StatusCode::CREATED, Json(result)))
 }
 
@@ -227,9 +330,16 @@ async fn update_policy_inner(
     validate_key(&input.idempotency_key)?;
     input.policy.validate().map_err(bad)?;
     let digest = digest(&(&id, &input))?;
-    let mut tx = db::begin_write(&state.pool).await?;
+
+    let pool = state.pool.clone();
+    let (request_actor, request_key, request_digest) =
+        (actor.clone(), input.idempotency_key.clone(), digest.clone());
+    let result=managed_transaction(&pool,&request_actor,&request_key,"ca.policy",&request_digest,move |tx| {
+        let (actor,input,digest,id)=(actor.clone(),input.clone(),digest.clone(),id.clone());
+        Box::pin(async move {
+
     if let Some(value) = existing(
-        &mut tx,
+        tx,
         &actor,
         &input.idempotency_key,
         "ca.policy",
@@ -237,14 +347,15 @@ async fn update_policy_inner(
     )
     .await?
     {
-        return Ok(Json(value));
+        return Ok(value);
     }
+    lock_ca_on(tx,&id,false).await?;
     let result = sqlx::query("UPDATE mtls_authorities a SET client_validity_days=$1,renew_before_hours=$2,policy_revision=policy_revision+1 FROM credentials c WHERE a.credential_id=$3 AND a.policy_revision=$4 AND c.id=a.credential_id AND NOT c.archived RETURNING a.policy_revision")
-        .bind(i32::from(input.policy.client_validity_days)).bind(i32::from(input.policy.renew_before_hours)).bind(&id).bind(input.expected_revision).fetch_optional(&mut *tx).await?
+        .bind(i32::from(input.policy.client_validity_days)).bind(i32::from(input.policy.renew_before_hours)).bind(&id).bind(input.expected_revision).fetch_optional(&mut **tx).await?
         .ok_or_else(|| ApiError::conflict("CA policy changed, is archived, or was deleted"))?;
     let result = json!({"id":id,"policy_revision":result.get::<i64,_>("policy_revision"),"policy":input.policy});
     receipt(
-        &mut tx,
+        tx,
         &actor,
         &input.idempotency_key,
         "ca.policy",
@@ -253,18 +364,20 @@ async fn update_policy_inner(
     )
     .await?;
     super::credentials::record(
-        &mut tx,
+        tx,
         &actor,
         "ca.policy_updated",
         &id,
         json!({"previous_revision":input.expected_revision,"policy":input.policy}),
     )
     .await?;
-    tx.commit().await?;
+    Ok(result)
+        })
+    }).await?;
     Ok(Json(result))
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct PublishAuthority {
     pub expected_revision: i64,
@@ -326,9 +439,16 @@ async fn publish_inner(
             .map_err(|_| ApiError::internal())?
             .map_err(bad)?
     };
-    let mut tx = db::begin_write(&state.pool).await?;
+    let authority = std::sync::Arc::new(authority);
+    let pool = state.pool.clone();
+    let (request_actor, request_key, request_digest) =
+        (actor.clone(), input.idempotency_key.clone(), digest.clone());
+    let result=managed_transaction(&pool,&request_actor,&request_key,"ca.publish",&request_digest,move |tx| {
+        let (state,actor,input,digest,id,source,authority)=(state.clone(),actor.clone(),input.clone(),digest.clone(),id.clone(),source.clone(),authority.clone());
+        Box::pin(async move {
+
     if let Some(value) = existing(
-        &mut tx,
+        tx,
         &actor,
         &input.idempotency_key,
         "ca.publish",
@@ -336,16 +456,17 @@ async fn publish_inner(
     )
     .await?
     {
-        return Ok((StatusCode::ACCEPTED, Json(value)));
+        return Ok(value);
     }
-    let row = sqlx::query("SELECT c.revision,c.latest_version,c.archived,a.source,a.published_version FROM credentials c JOIN mtls_authorities a ON a.credential_id=c.id WHERE c.id=$1").bind(&id).fetch_optional(&mut *tx).await?.ok_or_else(|| ApiError::not_found("CA identity"))?;
+    lock_ca_on(tx,&id,true).await?;
+    let row = sqlx::query("SELECT c.revision,c.latest_version,c.archived,a.source,a.published_version FROM credentials c JOIN mtls_authorities a ON a.credential_id=c.id WHERE c.id=$1").bind(&id).fetch_optional(&mut **tx).await?.ok_or_else(|| ApiError::not_found("CA identity"))?;
     if row.get::<i64, _>("revision") != input.expected_revision
         || row.get::<bool, _>("archived")
         || row.get::<String, _>("source") != source
     {
         return Err(ApiError::conflict("CA changed or is archived"));
     }
-    let pending=sqlx::query("SELECT r.id,r.phase,r.ca_version,g.expires_at FROM mtls_rotations r JOIN mtls_ca_generations g ON g.ca_id=r.ca_id AND g.ca_version=r.ca_version WHERE r.ca_id=$1 AND r.phase<>'complete'").bind(&id).fetch_optional(&mut *tx).await?;
+    let pending=sqlx::query("SELECT r.id,r.phase,r.ca_version,g.expires_at FROM mtls_rotations r JOIN mtls_ca_generations g ON g.ca_id=r.ca_id AND g.ca_version=r.ca_version WHERE r.ca_id=$1 AND r.phase<>'complete'").bind(&id).fetch_optional(&mut **tx).await?;
     if let Some(pending) = pending {
         let phase: String = pending.get("phase");
         let previous_id: String = pending.get("id");
@@ -361,18 +482,18 @@ async fn publish_inner(
             ));
         }
         if unpublished {
-            sqlx::query("UPDATE mtls_ca_generations SET state='retired' WHERE ca_id=$1 AND ca_version=$2 AND state='preparing'").bind(&id).bind(previous).execute(&mut *tx).await?;
-            sqlx::query("UPDATE mtls_user_versions SET discarded=TRUE WHERE ca_id=$1 AND ca_version=$2 AND NOT released").bind(&id).bind(previous).execute(&mut *tx).await?;
-            let deadline:Option<DateTime<Utc>>=sqlx::query_scalar("SELECT max(expires_at)+interval '5 minutes' FROM(SELECT expires_at FROM mtls_user_versions WHERE ca_id=$1 AND ca_version=$2 UNION ALL SELECT expires_at FROM mtls_probe_versions WHERE ca_id=$1 AND ca_version=$2) materials").bind(&id).bind(previous).fetch_one(&mut *tx).await?;
-            sqlx::query("INSERT INTO mtls_trust_cleanup(ca_id,ca_version,next_action_at) VALUES($1,$2,$3) ON CONFLICT DO NOTHING").bind(&id).bind(previous).bind(deadline.unwrap_or_else(Utc::now)).execute(&mut *tx).await?;
+            sqlx::query("UPDATE mtls_ca_generations SET state='retired' WHERE ca_id=$1 AND ca_version=$2 AND state='preparing'").bind(&id).bind(previous).execute(&mut **tx).await?;
+            sqlx::query("UPDATE mtls_user_versions SET discarded=TRUE WHERE ca_id=$1 AND ca_version=$2 AND NOT released").bind(&id).bind(previous).execute(&mut **tx).await?;
+            let deadline:Option<DateTime<Utc>>=sqlx::query_scalar("SELECT max(expires_at)+interval '5 minutes' FROM(SELECT expires_at FROM mtls_user_versions WHERE ca_id=$1 AND ca_version=$2 UNION ALL SELECT expires_at FROM mtls_probe_versions WHERE ca_id=$1 AND ca_version=$2) materials").bind(&id).bind(previous).fetch_one(&mut **tx).await?;
+            sqlx::query("INSERT INTO mtls_trust_cleanup(ca_id,ca_version,next_action_at) VALUES($1,$2,$3) ON CONFLICT DO NOTHING").bind(&id).bind(previous).bind(deadline.unwrap_or_else(Utc::now)).execute(&mut **tx).await?;
         }
-        let cancelled=sqlx::query("UPDATE jobs j SET status='cancelled',stage='ca_target_superseded',updated_at=$2,finished_at=$2 FROM mtls_node_operations o WHERE o.job_id=j.id AND o.rotation_id=$1 AND j.status IN ('queued','waiting_confirmation') RETURNING j.id,j.kind,j.node_id").bind(&previous_id).bind(Utc::now()).fetch_all(&mut *tx).await?;
+        let cancelled=sqlx::query("UPDATE jobs j SET status='cancelled',stage='ca_target_superseded',updated_at=$2,finished_at=$2 FROM mtls_node_operations o WHERE o.job_id=j.id AND o.rotation_id=$1 AND j.status IN ('queued','waiting_confirmation') RETURNING j.id,j.kind,j.node_id").bind(&previous_id).bind(Utc::now()).fetch_all(&mut **tx).await?;
         for job in cancelled {
-            crate::kick_requests::event(&mut tx,&job.get::<String,_>("id"),"job.cancelled",json!({"id":job.get::<String,_>("id"),"kind":job.get::<String,_>("kind"),"node_id":job.get::<Option<String>,_>("node_id"),"status":"cancelled","stage":"ca_target_superseded"})).await?;
+            crate::kick_requests::event(tx,&job.get::<String,_>("id"),"job.cancelled",json!({"id":job.get::<String,_>("id"),"kind":job.get::<String,_>("kind"),"node_id":job.get::<Option<String>,_>("node_id"),"status":"cancelled","stage":"ca_target_superseded"})).await?;
         }
-        sqlx::query("UPDATE mtls_rotations SET phase='complete',outcome=$3,error_message='Target was replaced by an explicit publication request',updated_at=$2 WHERE id=$1").bind(&previous_id).bind(Utc::now()).bind(if unpublished{"superseded_unpublished_target"}else{"superseded_expired_publication"}).execute(&mut *tx).await?;
+        sqlx::query("UPDATE mtls_rotations SET phase='complete',outcome=$3,error_message='Target was replaced by an explicit publication request',updated_at=$2 WHERE id=$1").bind(&previous_id).bind(Utc::now()).bind(if unpublished{"superseded_unpublished_target"}else{"superseded_expired_publication"}).execute(&mut **tx).await?;
         super::credentials::record(
-            &mut tx,
+            tx,
             &actor,
             "ca.target_superseded",
             &id,
@@ -389,14 +510,14 @@ async fn publish_inner(
     metadata["source"] = json!(source);
     metadata["trust_anchor_certificate"] = json!(authority.trust_anchor().map_err(bad)?);
     sqlx::query("INSERT INTO credential_versions(credential_id,version,payload_enc,metadata,created_at) VALUES($1,$2,$3,$4,$5)")
-        .bind(&id).bind(version).bind(state.secrets.encrypt(&authority.payload().to_string())?).bind(metadata).bind(now).execute(&mut *tx).await?;
+        .bind(&id).bind(version).bind(state.secrets.encrypt(&authority.payload().to_string())?).bind(metadata).bind(now).execute(&mut **tx).await?;
     sqlx::query(
         "UPDATE credentials SET latest_version=$2,revision=revision+1,updated_at=$3 WHERE id=$1",
     )
     .bind(&id)
     .bind(version)
     .bind(now)
-    .execute(&mut *tx)
+    .execute(&mut **tx)
     .await?;
     let batch = uuid::Uuid::new_v4().to_string();
     sqlx::query(
@@ -406,28 +527,28 @@ async fn publish_inner(
     .bind(&id)
     .bind(version)
     .bind(now)
-    .execute(&mut *tx)
+    .execute(&mut **tx)
     .await?;
     // A historical or deferred user identity also needs a coordinated transition.
-    let referenced: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM mtls_node_trust WHERE ca_id=$1 UNION ALL SELECT 1 FROM mtls_user_identities WHERE ca_id=$1)").bind(&id).fetch_one(&mut *tx).await?;
+    let referenced: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM mtls_node_trust WHERE ca_id=$1 UNION ALL SELECT 1 FROM mtls_user_identities WHERE ca_id=$1)").bind(&id).fetch_one(&mut **tx).await?;
     let rotation = if referenced {
-        sqlx::query("INSERT INTO mtls_ca_generations(ca_id,ca_version,state,expires_at) VALUES($1,$2,'preparing',$3)").bind(&id).bind(version).bind(authority.expires_at).execute(&mut *tx).await?;
+        sqlx::query("INSERT INTO mtls_ca_generations(ca_id,ca_version,state,expires_at) VALUES($1,$2,'preparing',$3)").bind(&id).bind(version).bind(authority.expires_at).execute(&mut **tx).await?;
         let rotation = uuid::Uuid::new_v4().to_string();
         sqlx::query("INSERT INTO mtls_rotations(id,ca_id,ca_version,phase,batch_id,next_action_at,created_at,updated_at) VALUES($1,$2,$3,'trust',$4,$5,$5,$5)")
-            .bind(&rotation).bind(&id).bind(version).bind(&batch).bind(now).execute(&mut *tx).await?;
+            .bind(&rotation).bind(&id).bind(version).bind(&batch).bind(now).execute(&mut **tx).await?;
         sqlx::query("INSERT INTO mtls_rotation_nodes(rotation_id,node_id,expected_revision) SELECT DISTINCT $1,t.node_id,n.desired_revision FROM mtls_node_trust t JOIN nodes n ON n.id=t.node_id WHERE t.ca_id=$2 AND (t.desired OR t.deployed)")
-            .bind(&rotation).bind(&id).execute(&mut *tx).await?;
+            .bind(&rotation).bind(&id).execute(&mut **tx).await?;
         Some(rotation)
     } else {
         sqlx::query(
             "UPDATE mtls_ca_generations SET state='retired' WHERE ca_id=$1 AND state='published'",
         )
         .bind(&id)
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?;
-        sqlx::query("INSERT INTO mtls_ca_generations(ca_id,ca_version,state,expires_at,published_at) VALUES($1,$2,'published',$3,$4)").bind(&id).bind(version).bind(authority.expires_at).bind(now).execute(&mut *tx).await?;
+        sqlx::query("INSERT INTO mtls_ca_generations(ca_id,ca_version,state,expires_at,published_at) VALUES($1,$2,'published',$3,$4)").bind(&id).bind(version).bind(authority.expires_at).bind(now).execute(&mut **tx).await?;
         sqlx::query("UPDATE mtls_authorities SET published_version=$2,next_action_at=$3,maintenance_error=NULL WHERE credential_id=$1")
-            .bind(&id).bind(version).bind((source=="generated").then_some(authority.expires_at - Duration::days(365))).execute(&mut *tx).await?;
+            .bind(&id).bind(version).bind((source=="generated").then_some(authority.expires_at - Duration::days(365))).execute(&mut **tx).await?;
         None
     };
     if let Some(rotation) = &rotation {
@@ -435,12 +556,12 @@ async fn publish_inner(
             .bind(rotation)
             .bind(&actor.id)
             .bind(row.get::<i64, _>("published_version"))
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await?;
     }
     let result = json!({"id":id,"version":version,"revision":input.expected_revision+1,"batch_id":batch,"rotation_id":rotation,"published":!referenced});
     receipt(
-        &mut tx,
+        tx,
         &actor,
         &input.idempotency_key,
         "ca.publish",
@@ -449,14 +570,16 @@ async fn publish_inner(
     )
     .await?;
     super::credentials::record(
-        &mut tx,
+        tx,
         &actor,
         "ca.version_prepared",
         &id,
         json!({"version":version,"batch_id":batch,"rotation_id":rotation}),
     )
     .await?;
-    tx.commit().await?;
+    Ok(result)
+        })
+    }).await?;
     Ok((StatusCode::ACCEPTED, Json(result)))
 }
 
@@ -556,7 +679,7 @@ pub async fn reissue_user(
     .await
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ReissueUser {
     pub ca_credential_id: Option<String>,
@@ -594,6 +717,20 @@ async fn reissue_user_inner(
         .map(|r| (r.get("ca_id"), r.get("revision")))
         .collect();
     if actual != input.expected_revisions {
+        // A same-key request may have committed between the early receipt read
+        // and this preparation snapshot. Recover its receipt before rejecting
+        // the now-stale identity revision.
+        if let Some(value) = existing(
+            &mut *state.pool.acquire().await?,
+            &actor,
+            &input.idempotency_key,
+            "mtls.reissue",
+            &digest,
+        )
+        .await?
+        {
+            return Ok(Json(value));
+        }
         return Err(ApiError::conflict(
             "managed identities changed; reload before reissuing",
         ));
@@ -613,9 +750,16 @@ async fn reissue_user_inner(
         .map_err(|e| ApiError::conflict(e.to_string()))?;
         prepared.push((ca, identity));
     }
-    let mut tx = db::begin_write(&state.pool).await?;
+
+    let pool = state.pool.clone();
+    let (request_actor, request_key, request_digest) =
+        (actor.clone(), input.idempotency_key.clone(), digest.clone());
+    let result=managed_transaction(&pool,&request_actor,&request_key,"mtls.reissue",&request_digest,move |tx| {
+        let (state,actor,input,digest,user,prepared)=(state.clone(),actor.clone(),input.clone(),digest.clone(),user.clone(),prepared.clone());
+        Box::pin(async move {
+
     if let Some(value) = existing(
-        &mut tx,
+        tx,
         &actor,
         &input.idempotency_key,
         "mtls.reissue",
@@ -623,10 +767,11 @@ async fn reissue_user_inner(
     )
     .await?
     {
-        return Ok(Json(value));
+        return Ok(value);
     }
+    let cas:Vec<String>=prepared.iter().map(|(ca,_)|ca.clone()).collect();lock_reissue_on(tx,&user,&cas).await?;
     let current: std::collections::BTreeMap<String,i64> = sqlx::query_as::<_,(String,i64)>("SELECT ca_id,revision FROM mtls_user_identities WHERE user_id=$1 AND NOT archived AND ($2::text IS NULL OR ca_id=$2) ORDER BY ca_id")
-        .bind(&user).bind(&input.ca_credential_id).fetch_all(&mut *tx).await?.into_iter().collect();
+        .bind(&user).bind(&input.ca_credential_id).fetch_all(&mut **tx).await?.into_iter().collect();
     if current != input.expected_revisions {
         return Err(ApiError::conflict(
             "managed identities changed during signing; reload before reissuing",
@@ -635,16 +780,16 @@ async fn reissue_user_inner(
     let mut results = Vec::new();
     for (ca, candidate) in prepared {
         let issued = candidate.will_issue();
-        let (identity, version) = identities::commit_user(&mut tx, &state.secrets, candidate)
+        let (identity, version) = crate::credentials::identities::commit_user(tx, &state.secrets, candidate)
             .await
-            .map_err(|e| ApiError::conflict(e.to_string()))?;
+            .map_err(managed_transaction_error)?;
         let nodes =
-            crate::credentials::authorization::referenced_nodes_on(&mut tx, &user, &ca).await?;
+            crate::credentials::authorization::referenced_nodes_on(tx, &user, &ca).await?;
         results.push(json!({"ca_credential_id":ca,"identity_id":identity,"credential_version":version,"issued":issued,"affected_node_ids":nodes}));
     }
     let result = json!({"user_id":user,"identities":results,"refresh_subscription":true});
     receipt(
-        &mut tx,
+        tx,
         &actor,
         &input.idempotency_key,
         "mtls.reissue",
@@ -653,14 +798,16 @@ async fn reissue_user_inner(
     )
     .await?;
     audit::record(
-        &mut tx,
+        tx,
         &actor,
         "mtls.user_reissued",
         ("user", &user),
         result.clone(),
     )
     .await?;
-    tx.commit().await?;
+    Ok(result)
+        })
+    }).await?;
     Ok(Json(result))
 }
 

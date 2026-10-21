@@ -76,6 +76,15 @@ impl IntoResponse for ApiError {
 impl From<sqlx::Error> for ApiError {
     fn from(error: sqlx::Error) -> Self {
         if error.as_database_error().is_some_and(|e| {
+            e.code().as_deref() == Some("23505") && e.constraint() == Some("mtls_operations_pkey")
+        }) {
+            return Self::new(
+                StatusCode::CONFLICT,
+                "mtls_operation_committed",
+                "a concurrent request committed this managed identity operation",
+            );
+        }
+        if error.as_database_error().is_some_and(|e| {
             e.code().as_deref() == Some("23505")
                 && e.constraint() == Some("dns_bindings_hostname_key")
         }) {
