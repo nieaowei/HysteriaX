@@ -33,7 +33,7 @@ services:
       timeout: 3s
       retries: 10
 
-  api:
+  api: &api-runtime
     build: .
     image: "${HYSTERIAX_IMAGE:-hysteriax-server}:${HYSTERIAX_VERSION:-dev}"
     restart: unless-stopped
@@ -59,6 +59,14 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
+
+  migrate:
+    <<: *api-runtime
+    profiles: [maintenance]
+    restart: "no"
+    command: ["--migrate-only"]
+    healthcheck:
+      disable: true
 
   caddy:
     image: caddy:2.10

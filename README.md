@@ -41,8 +41,13 @@ SSH、节点连接和订阅等敏感材料在服务端加密保存。管理员�
 git clone https://github.com/nieaowei/HysteriaX.git
 cd HysteriaX
 scripts/init-secrets.sh manage.example.com
-docker compose up -d --build
+docker compose build api
+docker compose up -d postgres redis
+docker compose --profile maintenance run --rm --no-deps migrate
+docker compose up -d api caddy
 ```
+
+数据库初始化和升级必须先运行 `migrate`。普通 API 启动只检查 schema、协议和主密钥，不执行初始化改写。已有安装升级前先备份并停止所有 API 实例，完成迁移后再启动。
 
 Compose 会启动管理 API、PostgreSQL、Redis 和 Caddy。Caddy 自动申请和续期管理域名的 HTTPS 证书；数据库和 Redis 不向宿主机公开端口。
 

@@ -6,12 +6,12 @@
 2. Install Docker Engine and the Docker Compose plugin.
 3. From the project directory, run `scripts/init-secrets.sh manage.example.com`. This creates a private `.env` with the administrator token, encryption key, and separate PostgreSQL administrator and application passwords.
 4. Save the administrator token and make a separate protected backup of `HYSTERIAX_MASTER_KEY`.
-5. Start the service with `docker compose up -d --build`.
+5. Build the image with `docker compose build api`, start dependencies with `docker compose up -d postgres redis`, and initialize the database with `docker compose --profile maintenance run --rm --no-deps migrate`. Then start the service with `docker compose up -d api caddy`.
 6. Confirm `https://manage.example.com/readyz` returns `{"status":"ready","database":"ok"}`.
 
 Compose starts PostgreSQL 18 with a persistent volume and a non-superuser application role. The database listens only on the Compose network and is not published to the host. Caddy obtains and renews the management HTTPS certificate; TCP 80 and 443 must reach the host. Node Hysteria traffic uses the configured UDP ports. This service does not alter cloud security groups or host firewalls.
 
-For a tagged release image, set `HYSTERIAX_IMAGE=ghcr.io/<owner>/hysteriax-server` and `HYSTERIAX_VERSION=vX.Y.Z` in `.env`, then run `docker compose pull` and `docker compose up -d`. Caddy state and PostgreSQL data use separate named volumes. Keep `.env`, database backups, `HYSTERIAX_MASTER_KEY`, and Caddy state in protected backups. Never commit `.env` or production data.
+For a tagged release image, set `HYSTERIAX_IMAGE=ghcr.io/<owner>/hysteriax-server` and `HYSTERIAX_VERSION=vX.Y.Z` in `.env`, then run `docker compose pull`, stop all existing API instances, run `docker compose --profile maintenance run --rm --no-deps migrate`, and start the service with `docker compose up -d api caddy`. Caddy state and PostgreSQL data use separate named volumes. Keep `.env`, database backups, `HYSTERIAX_MASTER_KEY`, and Caddy state in protected backups. Never commit `.env` or production data.
 
 ## Local development and tests
 
@@ -41,7 +41,7 @@ Use the initial token from `.env` as the Bearer token. In macOS Settings, create
 
 ## Credential center upgrade (API 1.0.0)
 
-Upgrade the service and macOS client together. The credential changes modify `/api/v1` directly and break its previous request/response contract. No v2 management routes are exposed. Existing subscription URLs and authentication callbacks remain valid. Back up PostgreSQL and the matching master key before upgrading. Startup converts stored SSH material, certificate/ECH resources, DNS configuration and user mTLS material atomically before workers start. It preserves existing token values, revisions, counters and historical deployment references. Invalid ciphertext or missing resources aborts conversion and keeps the API unready.
+Upgrade the service and macOS client together. The credential changes modify `/api/v1` directly and break its previous request/response contract. No v2 management routes are exposed. Existing subscription URLs and authentication callbacks remain valid. Back up PostgreSQL and the matching master key before upgrading. The explicit `--migrate-only` maintenance command converts stored SSH material, certificate/ECH resources, DNS configuration and user mTLS material before workers start. Ordinary startup only verifies the complete migration checksums, runtime initialization, management protocol, and shared master-key fingerprint; it rejects missing initialization or incompatible instances without rewriting business data. It preserves existing token values, revisions, counters and historical deployment references. Invalid ciphertext or missing resources aborts conversion and keeps the API unready.
 
 To preflight a database copy, run `hysteriax-server --migrate-only` with that copy's `DATABASE_URL` and the matching `HYSTERIAX_MASTER_KEY`. This mode does not start workers or contact nodes. `scripts/verify-credentials-migration.py` compares an untouched copy against the migrated copy; provide its two database URLs and master key through environment variables. Restore the pre-upgrade backup with the old image when reverting; merely selecting the old image against the upgraded schema is unsupported.
 
