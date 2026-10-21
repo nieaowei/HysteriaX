@@ -84,6 +84,7 @@ async fn main() -> Result<()> {
             .await
             .map_err(|error| anyhow::anyhow!("initialize reference index: {}", error.message))?;
         traffic::work::initialize(&pool).await?;
+        traffic::access::initialize(&pool).await?;
         analytics::refresh(&pool)
             .await
             .context("initialize analytics")?;

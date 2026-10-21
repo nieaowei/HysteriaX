@@ -196,24 +196,7 @@ pub async fn enforce_user(
     tx: &mut sqlx::Transaction<'static, sqlx::Postgres>,
     user: &str,
 ) -> Result<()> {
-    let marked:Option<String>=sqlx::query_scalar("UPDATE users SET access_kick_enqueued_at=clock_timestamp(),updated_at=clock_timestamp() WHERE id=$1 AND access_kick_enqueued_at IS NULL AND (NOT enabled OR expires_at<=clock_timestamp() OR usage_bytes>=quota_bytes) RETURNING id")
-        .bind(user).fetch_optional(&mut **tx).await?;
-    if marked.is_some() {
-        let nodes:Vec<(String,String)>=sqlx::query_as("SELECT n.id,n.state FROM node_assignments a JOIN nodes n ON n.id=a.node_id WHERE a.user_id=$1 ORDER BY n.id")
-            .bind(user).fetch_all(&mut **tx).await?;
-        for (node, state) in nodes {
-            let payload = json!({"user_id":user,"kick_reason":"access_restricted"});
-            if state == "deleting" {
-                // Keep the obligation if removal later fails, but do not add
-                // new remote work behind the running removal operation.
-                crate::kick_requests::prepare(tx, &node, &payload).await?;
-            } else {
-                crate::api::enqueue_job_with_payload_in_tx(tx, "kick", Some(&node), None, payload)
-                    .await?;
-            }
-        }
-    }
-    Ok(())
+    super::access::admit_on(tx, user).await
 }
 
 pub async fn drain(pool: &PgPool, id: &str) -> Result<bool> {

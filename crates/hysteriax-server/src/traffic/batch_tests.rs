@@ -43,6 +43,20 @@ async fn usage(pool: &PgPool) -> Vec<i64> {
 async fn isolate_source_writes(pool: &PgPool) {
     sqlx::raw_sql("DO $$ DECLARE relation record; BEGIN FOR relation IN SELECT tablename FROM pg_tables WHERE schemaname=current_schema() LOOP EXECUTE format('ALTER TABLE %I DISABLE TRIGGER USER',relation.tablename); END LOOP; END $$;")
         .execute(pool).await.unwrap();
+    // This is business state used by durable revocation fencing, rather than
+    // a shared read model: keep it active even in the old contention fixture.
+    sqlx::query("ALTER TABLE users ENABLE TRIGGER track_access_restriction_epoch")
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query("ALTER TABLE users ENABLE TRIGGER schedule_changed_user_access_check")
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query("ALTER TABLE users ENABLE TRIGGER schedule_new_user_access_check")
+        .execute(pool)
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
@@ -116,6 +130,16 @@ async fn duplicate_captures_and_parallel_processors_preserve_every_user_and_quot
     batches::drain(&pool, "a1").await.unwrap();
     batches::drain(&pool, "b1").await.unwrap();
     assert_eq!(usage(&pool).await, vec![20; 3]);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM background_work WHERE kind='access-revocation' AND state='queued'"
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        3
+    );
+    super::access::drain_for_test(&pool).await;
     assert_eq!(
         sqlx::query_scalar::<_, i64>("SELECT count(*) FROM traffic_records")
             .fetch_one(&pool)
@@ -489,6 +513,16 @@ async fn node_cleanup_purges_pending_items_and_batches_in_its_durable_cursor() {
     crate::node_cleanup::purge_history(&pool, &job)
         .await
         .unwrap();
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM background_work WHERE kind='access-revocation' AND state='queued'"
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        1
+    );
+    super::access::drain_for_test(&pool).await;
     // Late callbacks cannot repopulate a node after its cleanup cursor passed.
     let late_cycle = uuid::Uuid::new_v4();
     crate::overview::record_online(

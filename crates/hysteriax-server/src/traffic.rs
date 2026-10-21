@@ -14,6 +14,7 @@ use crate::{
     state::AppState,
 };
 
+pub(crate) mod access;
 #[cfg(test)]
 mod batch_tests;
 pub(crate) mod batches;
@@ -64,8 +65,7 @@ pub async fn run(state: AppState) {
     // Pure DB maintenance keeps ticking independently of remote collection.
     tokio::join!(
         crate::background::run_sampling(state.clone(), "traffic"),
-        maintenance_loop(state.clone()),
-        expiration_loop(&state.pool)
+        maintenance_loop(state)
     );
 }
 
@@ -81,30 +81,42 @@ async fn maintenance_loop(state: AppState) {
 }
 async fn maintenance_pass(state: &AppState) -> Result<()> {
     use crate::background::maintenance;
-    maintenance::ensure(
-        &state.pool,
-        "traffic-capture-expiry",
-        "traffic-maintenance",
-        serde_json::json!({"operation":"capture_expiry"}),
-    )
-    .await?;
-    let Some(work) =
-        maintenance::claim(&state.pool, "traffic-maintenance", &state.instance_id).await?
-    else {
-        return Ok(());
-    };
-    crate::execution::supervise(state.pool.clone(), work.leases.clone(), async {
-        let result = expire_work(state, &work).await;
-        if let Err(error) = result {
-            tracing::warn!(%error,"traffic capture cleanup deferred");
-            work.retry(&state.pool).await?;
-        }
-        Ok::<_, anyhow::Error>(())
-    })
-    .await
-    .transpose()?;
-    Ok(())
+    for (key, operation) in [
+        ("traffic-capture-expiry", "capture_expiry"),
+        ("traffic-access-expiry", "access_expiry"),
+    ] {
+        maintenance::ensure(
+            &state.pool,
+            key,
+            "traffic-maintenance",
+            serde_json::json!({"operation":operation}),
+        )
+        .await?;
+    }
+    for _ in 0..2 {
+        let Some(work) =
+            maintenance::claim(&state.pool, "traffic-maintenance", &state.instance_id).await?
+        else {
+            break;
+        };
+        crate::execution::supervise(state.pool.clone(), work.leases.clone(), async {
+            let result = match work.payload["operation"].as_str() {
+                Some("capture_expiry") => expire_work(state, &work).await,
+                Some("access_expiry") => access::scan_work(&state.pool, &work).await,
+                _ => Err(anyhow::anyhow!("unsupported traffic maintenance operation")),
+            };
+            if let Err(error) = result {
+                tracing::warn!(%error,"traffic maintenance batch deferred");
+                work.retry(&state.pool).await?;
+            }
+            Ok::<_, anyhow::Error>(())
+        })
+        .await
+        .transpose()?;
+    }
+    access::dispatch_pass(&state.pool, &state.instance_id).await
 }
+
 async fn expire_work(state: &AppState, work: &crate::background::maintenance::Work) -> Result<()> {
     let work = work.clone();
     db::write(&state.pool, move |tx| {
@@ -116,17 +128,6 @@ async fn expire_work(state: &AppState, work: &crate::background::maintenance::Wo
         })
     })
     .await
-}
-
-async fn expiration_loop(pool: &PgPool) {
-    let mut tick = tokio::time::interval(Duration::from_secs(10));
-    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    loop {
-        tick.tick().await;
-        if let Err(error) = schedule_expirations(pool).await {
-            tracing::warn!(%error,"access expiry deferred");
-        }
-    }
 }
 
 pub async fn finish_captured_for_removal(pool: &PgPool, node: &str) -> Result<()> {
@@ -383,25 +384,6 @@ fn parse_counters(counters: &Map<String, Value>) -> Result<Vec<(String, u64, u64
             Ok((user_id.clone(), tx, rx))
         })
         .collect()
-}
-
-async fn schedule_expirations(pool: &PgPool) -> Result<()> {
-    let ids:Vec<String>=sqlx::query_scalar("SELECT id FROM users WHERE access_kick_enqueued_at IS NULL AND (NOT enabled OR expires_at<=clock_timestamp() OR usage_bytes>=quota_bytes) ORDER BY id")
-        .fetch_all(pool).await?;
-    for id in ids {
-        db::write(pool, move |tx| {
-            let id = id.clone();
-            Box::pin(async move {
-                sqlx::query("SELECT id FROM users WHERE id=$1 FOR NO KEY UPDATE")
-                    .bind(&id)
-                    .fetch_optional(&mut **tx)
-                    .await?;
-                batches::enforce_user(tx, &id).await
-            })
-        })
-        .await?;
-    }
-    Ok(())
 }
 
 async fn record_gap(pool: &PgPool, node_id: &str, reason: &str) -> Result<()> {
@@ -737,6 +719,8 @@ mod tests {
                 .unwrap(),
             520
         );
+        assert_eq!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM background_work WHERE kind='access-revocation' AND state='queued'").fetch_one(&pool).await.unwrap(),1);
+        super::access::drain_for_test(&pool).await;
         assert_eq!(
             sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM jobs WHERE kind = 'kick'")
                 .fetch_one(&pool)
