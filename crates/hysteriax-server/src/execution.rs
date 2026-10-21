@@ -283,6 +283,44 @@ pub async fn guard_current(connection: &mut PgConnection) -> Result<(), sqlx::Er
     Ok(())
 }
 
+/// Renewal must not wait on its own guarded transaction's row locks. These
+/// ordinary reads observe committed owner/generation/expiry and cancellation;
+/// every result write and external dispatch still takes the stronger row locks.
+async fn observe_current(scope: &Scope) -> Result<(), sqlx::Error> {
+    for lease in &scope.leases {
+        let valid:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM resource_leases WHERE resource_key=$1 AND owner=$2 AND generation=$3 AND work_id=$4 AND expires_at>clock_timestamp() AND NOT blocked)")
+            .bind(&lease.resource).bind(&lease.owner).bind(lease.generation).bind(&lease.work).fetch_one(&scope.pool).await?;
+        if !valid {
+            return Err(sqlx::Error::Protocol("execution lease was lost".into()));
+        }
+    }
+    if let Some(job) = scope.leases.iter().find(|l| l.resource.starts_with("job:")) {
+        let active: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM jobs WHERE id=$1 AND status='running')",
+        )
+        .bind(&job.work)
+        .fetch_one(&scope.pool)
+        .await?;
+        if !active {
+            return Err(sqlx::Error::Protocol("job execution was cancelled".into()));
+        }
+    }
+    if let Some(work) = scope
+        .leases
+        .iter()
+        .find(|l| l.resource.starts_with("work:"))
+    {
+        let active:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM background_work w WHERE w.id=$1 AND w.owner=$2 AND w.generation=$3 AND w.state='running' AND (w.node_id IS NULL OR EXISTS(SELECT 1 FROM nodes n WHERE n.id=w.node_id AND n.state NOT IN ('deleting','delete_failed'))))")
+            .bind(&work.work).bind(&work.owner).bind(work.generation).fetch_one(&scope.pool).await?;
+        if !active {
+            return Err(sqlx::Error::Protocol(
+                "background execution was cancelled or ownership changed".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Losing renewal cancels the local future. An external request may still run;
 /// its dispatch intent remains durable and prevents releasing that resource.
 pub async fn supervise<T>(
@@ -304,20 +342,28 @@ pub async fn supervise<T>(
         }
         let renew=async {
             loop {
+                let mut contended=false;
                 for lease in &scope.leases {
                     match lease.renew(&scope.pool).await {
                         Ok(true)=>{},
+                        Err(error) if error.as_database_error().and_then(|e|e.code()).as_deref()==Some("55P03")=>{
+                            // A guarded result transaction holds these same
+                            // rows. A lock timeout is contention, not evidence
+                            // of takeover; observe committed ownership below.
+                            contended=true;
+                        },
                         result=>{
                             tracing::warn!(resource=%lease.resource,owner=%lease.owner,generation=lease.generation,?result,"execution renewal lost; stopping local work");
                             return;
                         }
                     }
                 }
-                if let Err(error)=check_current().await {
-                    tracing::warn!(%error,"execution was cancelled; stopping local work");
+                if let Err(error)=observe_current(&scope).await {
+                    tracing::warn!(%error,"execution was cancelled or ownership expired; stopping local work");
                     return;
                 }
-                tokio::time::sleep(std::time::Duration::from_secs(RENEW_SECONDS)).await;
+                let delay=if contended {std::time::Duration::from_millis(250)}else{std::time::Duration::from_secs(RENEW_SECONDS)};
+                tokio::time::sleep(delay).await;
             }
         };
         tokio::select! {
@@ -417,6 +463,79 @@ mod boundary_tests {
             .unwrap();
         tx.commit().await.unwrap();
         (pool, lease)
+    }
+
+    #[tokio::test]
+    async fn a_guarded_database_batch_does_not_lose_ownership_to_its_own_renewal_lock_wait() {
+        let (pool, lease) = fixture().await;
+        sqlx::query("CREATE TABLE guarded_progress(value bigint)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let result = supervise(
+            pool.clone(),
+            vec![lease.clone()],
+            crate::db::write::<_, anyhow::Error, _>(&pool, |tx| {
+                Box::pin(async move {
+                    sqlx::query("SELECT pg_sleep(13)")
+                        .execute(&mut **tx)
+                        .await?;
+                    sqlx::query("INSERT INTO guarded_progress VALUES(42)")
+                        .execute(&mut **tx)
+                        .await?;
+                    Ok(42)
+                })
+            }),
+        )
+        .await;
+        assert_eq!(result.unwrap().unwrap(), 42);
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM guarded_progress WHERE value=42")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            1
+        );
+        assert!(lease.renew(&pool).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn renewal_contention_still_observes_committed_job_cancellation() {
+        let (pool, node) = fixture().await;
+        sqlx::query("INSERT INTO jobs(id,kind,status,stage,available_at,created_at,updated_at) VALUES('work','sync','running','running',now(),now(),now())").execute(&pool).await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        let job = acquire(&mut tx, "job:work", "instance-a", "work")
+            .await
+            .unwrap()
+            .unwrap();
+        tx.commit().await.unwrap();
+        let (guarded, ready) = tokio::sync::oneshot::channel();
+        let other = pool.clone();
+        let cancel = tokio::spawn(async move {
+            ready.await.unwrap();
+            sqlx::query("UPDATE jobs SET status='cancelled',stage='cancelled' WHERE id='work'")
+                .execute(&other)
+                .await
+                .unwrap();
+        });
+        let writes = Arc::new(AtomicUsize::new(0));
+        let counter = writes.clone();
+        let started = tokio::time::Instant::now();
+        let result = supervise(pool.clone(), vec![job, node.clone()], async {
+            let mut held = pool.begin().await.unwrap();
+            // Hold only the node lease to make renewal contend while the job's
+            // persisted cancellation remains independently writable.
+            node.guard(&mut held).await.unwrap();
+            guarded.send(()).unwrap();
+            tokio::time::sleep(std::time::Duration::from_secs(20)).await;
+            counter.fetch_add(1, Ordering::SeqCst);
+            held.commit().await.unwrap();
+        })
+        .await;
+        cancel.await.unwrap();
+        assert!(result.is_none());
+        assert!(started.elapsed() < std::time::Duration::from_secs(15));
+        assert_eq!(writes.load(Ordering::SeqCst), 0);
     }
 
     #[tokio::test]
