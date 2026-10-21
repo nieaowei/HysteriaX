@@ -513,6 +513,7 @@ pub(crate) async fn sample_work(state: &AppState, work: &crate::background::Work
         }
         return Ok(());
     }
+    crate::background::admit_read(&state.pool, work).await?;
     let result = tokio::time::timeout(
         Duration::from_secs(30),
         sample(state, &work.node, generation, captured_at),

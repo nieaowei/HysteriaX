@@ -127,6 +127,7 @@ async fn billing_loop(pool: &PgPool) {
 }
 
 pub(crate) async fn sample_work(state: &AppState, work: &crate::background::Work) -> Result<()> {
+    crate::background::admit_read(&state.pool, work).await?;
     let result = tokio::time::timeout(
         Duration::from_secs(45),
         sample_node(

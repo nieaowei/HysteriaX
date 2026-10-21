@@ -93,6 +93,23 @@ pub async fn claim(pool: &PgPool, kind: &str, owner: &str) -> Result<Option<Work
     }).await
 }
 
+/// Admission is checked immediately before collection, so a locally paused
+/// claimant cannot start an uncaptured remote read after its slot has closed.
+/// Once collection has started, its bounded result may arrive after the slot.
+pub async fn admit_read(pool: &PgPool, work: &Work) -> Result<()> {
+    let work = work.clone();
+    db::write(pool,move |tx| {
+        let work=work.clone();
+        Box::pin(async move {
+            for lease in &work.leases {lease.guard(tx).await?;}
+            let timely:bool=sqlx::query_scalar("SELECT deadline_at>clock_timestamp() OR (kind='traffic' AND EXISTS(SELECT 1 FROM traffic_sample_batches b WHERE b.sample_id=w.id AND b.payload_digest IS NOT NULL)) FROM background_work w WHERE id=$1")
+                .bind(&work.id).fetch_one(&mut **tx).await?;
+            anyhow::ensure!(timely,"sampling slot expired before remote collection");
+            Ok(())
+        })
+    }).await
+}
+
 pub async fn finish(pool: &PgPool, work: &Work, success: bool) -> Result<()> {
     let work = work.clone();
     db::write(pool,move |tx| {

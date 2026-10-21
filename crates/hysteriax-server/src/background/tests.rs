@@ -439,3 +439,46 @@ async fn sampling_migration_preserves_config_ciphertext_usage_and_old_online_his
         0
     );
 }
+
+#[tokio::test]
+async fn a_claimant_paused_past_the_slot_cannot_start_an_uncaptured_read() {
+    for kind in ["traffic", "network"] {
+        let (state, _) = fixture().await;
+        freeze(&state, kind).await;
+        let work = claim(&state.pool, kind, "paused").await.unwrap().unwrap();
+        sqlx::query("UPDATE background_work SET deadline_at=clock_timestamp()-interval '1 second'")
+            .execute(&state.pool)
+            .await
+            .unwrap();
+        execution::supervise(state.pool.clone(), work.leases.clone(), async {
+            let error = if kind == "traffic" {
+                crate::traffic::sample_work(&state, &work)
+                    .await
+                    .unwrap_err()
+            } else {
+                crate::node_limits::sample_work(&state, &work)
+                    .await
+                    .unwrap_err()
+            };
+            assert!(
+                error
+                    .to_string()
+                    .contains("slot expired before remote collection")
+            );
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            count(&state, "SELECT count(*) FROM traffic_sample_batches").await,
+            0
+        );
+        assert_eq!(
+            count(&state, "SELECT count(*) FROM node_network_samples").await,
+            0
+        );
+        assert_eq!(
+            count(&state, "SELECT count(*) FROM execution_operations").await,
+            0
+        );
+    }
+}
