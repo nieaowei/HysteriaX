@@ -100,13 +100,15 @@ pub async fn get_user(
     State(state): State<AppState>,
     Path(user_id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
+    let mut tx = crate::read_snapshot::begin(&state.pool).await?;
     let user = sqlx::query("SELECT id, revision FROM users WHERE id = $1")
         .bind(&user_id)
-        .fetch_optional(&state.pool)
+        .fetch_optional(&mut *tx)
         .await?
         .ok_or_else(|| ApiError::not_found("user"))?;
-    let credential = sqlx::query("SELECT id, token_enc, created_at FROM subscription_credentials WHERE user_id = $1 AND revoked_at IS NULL ORDER BY created_at DESC LIMIT 1")
-        .bind(&user_id).fetch_optional(&state.pool).await?;
+    let credential = sqlx::query("SELECT id, token_enc, created_at FROM subscription_credentials WHERE user_id = $1 AND revoked_at IS NULL ORDER BY created_at DESC,id DESC LIMIT 1")
+        .bind(&user_id).fetch_optional(&mut *tx).await?;
+    tx.commit().await?;
     let active = if let Some(row) = credential {
         let token: String = row.get("token_enc");
         let token = state.secrets.decrypt(&token)?;
@@ -126,39 +128,35 @@ pub async fn rotate(
     Path(user_id): Path<String>,
     Json(input): Json<RotateSubscription>,
 ) -> Result<Json<Value>, ApiError> {
-    let mut tx = db::begin_write(&state.pool).await?;
-    let user = sqlx::query("SELECT revision FROM users WHERE id = $1")
-        .bind(&user_id)
-        .fetch_optional(&mut *tx)
-        .await?
-        .ok_or_else(|| ApiError::not_found("user"))?;
-    let revision: i64 = user.get("revision");
-    if revision != input.expected_revision {
-        return Err(ApiError::conflict(format!(
-            "user revision is {revision}; reload before rotating subscription"
-        )));
-    }
     let token = generate_token();
-    let timestamp = now();
-    sqlx::query("UPDATE subscription_credentials SET revoked_at = $1 WHERE user_id = $2 AND revoked_at IS NULL")
-        .bind(timestamp).bind(&user_id).execute(&mut *tx).await?;
-    sqlx::query("INSERT INTO subscription_credentials (id, user_id, token_hash, token_enc, created_at) VALUES ($1, $2, $3, $4, $5)")
-        .bind(Uuid::new_v4().to_string()).bind(&user_id).bind(token_digest(&token))
-        .bind(state.secrets.encrypt(&token)?).bind(timestamp).execute(&mut *tx).await?;
-    let next_revision = revision + 1;
-    sqlx::query("UPDATE users SET revision = $1, updated_at = $2 WHERE id = $3 AND revision = $4")
-        .bind(next_revision)
-        .bind(timestamp)
-        .bind(&user_id)
-        .bind(revision)
-        .execute(&mut *tx)
-        .await?;
-    sqlx::query("INSERT INTO audit_records (id, actor, action, entity_type, entity_id, detail_json, created_at) VALUES ($1, 'admin', 'user.subscription_rotated', 'user', $2, $3, $4)")
-        .bind(Uuid::new_v4().to_string()).bind(&user_id).bind(json!({"revision": next_revision})).bind(timestamp).execute(&mut *tx).await?;
-    tx.commit().await?;
-    Ok(Json(
-        json!({"user_id": user_id, "revision": next_revision, "token": token, "url": auto_subscription_url(&token), "note": "The old subscription URL has been revoked."}),
-    ))
+    let id = Uuid::new_v4().to_string();
+    let token_enc = state.secrets.encrypt(&token)?;
+    let token_hash = token_digest(&token);
+    let actor = super::audit_actor();
+    let expected = input.expected_revision;
+    db::serializable::<_,ApiError,_>(&state.pool,move |tx| {
+        let (user_id,id,token,token_enc,token_hash,actor)=(user_id.clone(),id.clone(),token.clone(),token_enc.clone(),token_hash.clone(),actor.clone());
+        Box::pin(async move {
+            let revision: i64=sqlx::query_scalar("SELECT revision FROM users WHERE id=$1 FOR NO KEY UPDATE")
+                .bind(&user_id).fetch_optional(&mut **tx).await?.ok_or_else(||ApiError::not_found("user"))?;
+            if revision!=expected {
+                return Err(ApiError::conflict(format!("user revision is {revision}; reload before rotating subscription")));
+            }
+            sqlx::query("SELECT id FROM subscription_credentials WHERE user_id=$1 AND revoked_at IS NULL ORDER BY id FOR UPDATE")
+                .bind(&user_id).fetch_all(&mut **tx).await?;
+            let timestamp=now();
+            sqlx::query("UPDATE subscription_credentials SET revoked_at=$1 WHERE user_id=$2 AND revoked_at IS NULL")
+                .bind(timestamp).bind(&user_id).execute(&mut **tx).await?;
+            sqlx::query("INSERT INTO subscription_credentials(id,user_id,token_hash,token_enc,created_at) VALUES($1,$2,$3,$4,$5)")
+                .bind(id).bind(&user_id).bind(token_hash).bind(token_enc).bind(timestamp).execute(&mut **tx).await?;
+            let next_revision=revision+1;
+            let updated=sqlx::query("UPDATE users SET revision=$1,updated_at=$2 WHERE id=$3 AND revision=$4")
+                .bind(next_revision).bind(timestamp).bind(&user_id).bind(revision).execute(&mut **tx).await?;
+            if updated.rows_affected()!=1 {return Err(ApiError::conflict("user changed while rotating subscription"));}
+            super::audit_on(tx,&actor,"user.subscription_rotated","user",&user_id,json!({"revision":next_revision})).await?;
+            Ok(Json(json!({"user_id":user_id,"revision":next_revision,"token":token,"url":auto_subscription_url(&token),"note":"The old subscription URL has been revoked."})))
+        })
+    }).await
 }
 
 pub async fn download_auto(
@@ -917,3 +915,6 @@ mod tests {
         assert_eq!(proxy_value["handshake-timeout"].as_u64(), Some(30));
     }
 }
+
+#[cfg(test)]
+mod transaction_tests;
