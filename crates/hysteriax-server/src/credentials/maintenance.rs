@@ -12,7 +12,8 @@ pub async fn run(state: AppState) {
     tokio::join!(
         maintenance_loop(state.clone()),
         super::retention::run(state.clone()),
-        super::identity_maintenance::run(state)
+        super::identity_maintenance::run(state.clone()),
+        super::probe_maintenance::run(state)
     );
 }
 
@@ -36,7 +37,7 @@ pub async fn maintain(state: &AppState) -> Result<()> {
     let now: DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
         .fetch_one(&state.pool)
         .await?;
-    renew_probes(state, now).await?;
+    super::probe_maintenance::pass(state).await?;
     rotate_authorities(state, now).await?;
     super::rotations::run_pass(state).await?;
     super::retention::prune(state).await?;
@@ -44,6 +45,7 @@ pub async fn maintain(state: &AppState) -> Result<()> {
 }
 
 /// Each probe belongs to a node. It is independent of user eligibility/policy.
+#[cfg(test)]
 pub async fn renew_probe(
     state: &AppState,
     node: &str,
@@ -62,50 +64,6 @@ pub async fn renew_probe_on(
 ) -> Result<(String, i64)> {
     let prepared = super::probe::prepare(pool, secrets, node, ca, ca_version).await?;
     super::probe::commit(pool, prepared).await
-}
-
-async fn renew_probes(state: &AppState, now: DateTime<Utc>) -> Result<()> {
-    let mut cursor = (
-        DateTime::<Utc>::from_timestamp(0, 0).expect("Unix epoch"),
-        String::new(),
-        String::new(),
-        0_i64,
-    );
-    loop {
-        let rows=sqlx::query("SELECT p.node_id,p.ca_id,p.ca_version,p.next_action_at,p.credential_id,p.credential_version FROM mtls_probe_versions p JOIN mtls_ca_generations g ON g.ca_id=p.ca_id AND g.ca_version=p.ca_version WHERE g.state='published' AND NOT p.discarded AND p.next_action_at<=$1 AND (p.next_action_at,p.node_id,p.ca_id,p.ca_version)>($2,$3,$4,$5) AND NOT EXISTS(SELECT 1 FROM mtls_probe_versions newer WHERE newer.node_id=p.node_id AND newer.ca_id=p.ca_id AND newer.ca_version=p.ca_version AND newer.credential_version>p.credential_version AND NOT newer.discarded) AND EXISTS(SELECT 1 FROM mtls_node_trust t WHERE t.node_id=p.node_id AND t.ca_id=p.ca_id AND t.ca_version=p.ca_version AND (t.desired OR t.deployed)) ORDER BY p.next_action_at,p.node_id,p.ca_id,p.ca_version LIMIT $6")
-            .bind(now).bind(cursor.0).bind(&cursor.1).bind(&cursor.2).bind(cursor.3).bind(PAGE).fetch_all(&state.pool).await?;
-        if rows.is_empty() {
-            break;
-        }
-        for row in rows {
-            let node: String = row.get("node_id");
-            cursor = (
-                row.get("next_action_at"),
-                node.clone(),
-                row.get("ca_id"),
-                row.get("ca_version"),
-            );
-            if let Err(error) = renew_probe(
-                state,
-                &node,
-                &row.get::<String, _>("ca_id"),
-                row.get("ca_version"),
-            )
-            .await
-            {
-                tracing::warn!(node_id=node,%error,"probe certificate maintenance failed");
-                let mut tx = db::begin_write(&state.pool).await?;
-                sqlx::query("UPDATE nodes SET mtls_error=$2 WHERE id=$1 AND mtls_state='ready'")
-                    .bind(&node)
-                    .bind(format!("Probe certificate renewal failed: {error}"))
-                    .execute(&mut *tx)
-                    .await?;
-                sqlx::query("UPDATE mtls_probe_versions SET next_action_at=$4 WHERE node_id=$1 AND credential_id=$2 AND credential_version=$3").bind(&node).bind(row.get::<String,_>("credential_id")).bind(row.get::<i64,_>("credential_version")).bind(now+Duration::hours(1)).execute(&mut *tx).await?;
-                tx.commit().await?;
-            }
-        }
-    }
-    Ok(())
 }
 
 async fn rotate_authorities(state: &AppState, now: DateTime<Utc>) -> Result<()> {

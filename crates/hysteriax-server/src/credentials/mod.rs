@@ -8,6 +8,7 @@ pub mod maintenance;
 pub mod migration;
 pub mod node_mtls;
 pub(crate) mod probe;
+mod probe_maintenance;
 pub(crate) mod reference_index;
 pub mod retention;
 pub mod rotations;
