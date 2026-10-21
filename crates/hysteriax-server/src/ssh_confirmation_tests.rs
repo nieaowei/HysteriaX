@@ -783,3 +783,99 @@ async fn failed_ssh_auth_after_confirmation_preserves_existing_deployment_warnin
         server.abort();
     }
 }
+
+async fn disable_confirmation_legacy_lock(state: &AppState) {
+    sqlx::raw_sql("DO $$ DECLARE entry record; BEGIN FOR entry IN SELECT c.relname,tr.tgname FROM pg_trigger tr JOIN pg_class c ON c.oid=tr.tgrelid JOIN pg_proc p ON p.oid=tr.tgfoid WHERE c.relnamespace=current_schema()::regnamespace AND p.proname='hysteriax_serialize_writes' LOOP EXECUTE format('ALTER TABLE %I DISABLE TRIGGER %I',entry.relname,entry.tgname); END LOOP; END $$").execute(&state.pool).await.unwrap();
+}
+#[tokio::test]
+async fn concurrent_confirmations_commit_one_trust_revision_without_legacy_lock() {
+    let (state, node, auth, server) = fixture(false).await;
+    let id = start(&state, &node).await;
+    let fp = fingerprint(&row(&state, &id).await);
+    disable_confirmation_legacy_lock(&state).await;
+    let legacy = db::begin_write(&state.pool).await.unwrap();
+    let (a, b) = tokio::join!(confirm(&state, &id, 1, &fp), confirm(&state, &id, 1, &fp));
+    legacy.rollback().await.unwrap();
+    assert_eq!([&a, &b].iter().filter(|result| result.is_ok()).count(), 1);
+    assert_eq!(
+        [&a, &b]
+            .iter()
+            .filter(|result| result
+                .as_ref()
+                .err()
+                .is_some_and(|error| error.status == axum::http::StatusCode::CONFLICT))
+            .count(),
+        1
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT desired_revision FROM nodes WHERE id=$1")
+            .bind(&node)
+            .fetch_one(&state.pool)
+            .await
+            .unwrap(),
+        2
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM config_versions WHERE node_id=$1")
+            .bind(&node)
+            .fetch_one(&state.pool)
+            .await
+            .unwrap(),
+        2
+    );
+    assert_eq!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM job_events WHERE job_id=$1 AND event_type='job.fingerprint_confirmed'").bind(&id).fetch_one(&state.pool).await.unwrap(),1);
+    assert_eq!(auth.load(Ordering::SeqCst), 0);
+    server.abort();
+}
+#[tokio::test]
+async fn confirmation_audit_failure_rolls_back_and_native_conflict_retries_atomically() {
+    let (state, node, auth, server) = fixture(false).await;
+    let id = start(&state, &node).await;
+    let fp = fingerprint(&row(&state, &id).await);
+    disable_confirmation_legacy_lock(&state).await;
+    sqlx::raw_sql("CREATE FUNCTION reject_trust_audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.action='node.ssh_fingerprint_confirmed' THEN RAISE EXCEPTION 'injected failure'; END IF; RETURN NEW; END $$; CREATE TRIGGER reject_trust_audit BEFORE INSERT ON audit_records FOR EACH ROW EXECUTE FUNCTION reject_trust_audit();").execute(&state.pool).await.unwrap();
+    assert!(confirm(&state, &id, 1, &fp).await.is_err());
+    assert_eq!(
+        row(&state, &id).await.get::<String, _>("status"),
+        "waiting_confirmation"
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM config_versions WHERE node_id=$1")
+            .bind(&node)
+            .fetch_one(&state.pool)
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM job_events WHERE job_id=$1 AND event_type='job.fingerprint_confirmed'").bind(&id).fetch_one(&state.pool).await.unwrap(),0);
+    sqlx::raw_sql("DROP TRIGGER reject_trust_audit ON audit_records; CREATE SEQUENCE trust_attempts; CREATE FUNCTION retry_trust_audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.action='node.ssh_fingerprint_confirmed' AND nextval('trust_attempts')=1 THEN RAISE EXCEPTION 'injected conflict' USING ERRCODE='40001'; END IF; RETURN NEW; END $$; CREATE TRIGGER retry_trust_audit BEFORE INSERT ON audit_records FOR EACH ROW EXECUTE FUNCTION retry_trust_audit();").execute(&state.pool).await.unwrap();
+    confirm(&state, &id, 1, &fp).await.unwrap();
+    assert_eq!(row(&state, &id).await.get::<String, _>("status"), "queued");
+    let (revision, fingerprint): (i64, Option<String>) =
+        sqlx::query_as("SELECT desired_revision,ssh_host_fingerprint FROM nodes WHERE id=$1")
+            .bind(&node)
+            .fetch_one(&state.pool)
+            .await
+            .unwrap();
+    assert_eq!(revision, 2);
+    assert_eq!(fingerprint.as_deref(), Some(fp.as_str()));
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM config_versions WHERE node_id=$1")
+            .bind(&node)
+            .fetch_one(&state.pool)
+            .await
+            .unwrap(),
+        2
+    );
+    assert_eq!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM job_events WHERE job_id=$1 AND event_type='job.fingerprint_confirmed'").bind(&id).fetch_one(&state.pool).await.unwrap(),1);
+    assert_eq!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM audit_records WHERE action='node.ssh_fingerprint_confirmed' AND actor='admin'").fetch_one(&state.pool).await.unwrap(),1);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT last_value FROM trust_attempts")
+            .fetch_one(&state.pool)
+            .await
+            .unwrap(),
+        2
+    );
+    assert_eq!(auth.load(Ordering::SeqCst), 0);
+    server.abort();
+}
