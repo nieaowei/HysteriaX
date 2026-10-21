@@ -5,6 +5,39 @@ enum TemplateHTTPClientLayout {
     static let http2 = ["idle_timeout", "keep_alive_period", "stream_receive_window", "connection_receive_window", "max_concurrent_streams"]
     static let quic = ["initial_packet_size", "disable_path_mtu_discovery"]
     static let tlsBasic = ["server_name", "insecure", "min_version", "max_version", "certificate", "certificate_path", "certificate_sha256", "certificate_public_key_sha256"]
+    struct TLSSection: Identifiable {
+        let title: String
+        let keys: [String]
+        var id: String { title }
+    }
+    static func tlsAllowedKeys(_ schema: JSONValue, value: JSONValue) -> Set<String> {
+        let keys = Set((schema["properties"].objectValue ?? [:]).keys).subtracting(["enabled"])
+        if isApple(value) { return keys.intersection(tlsBasic) }
+        if ["apple", "windows"].contains(value["tls"]["engine"].stringValue ?? "") {
+            return keys.intersection(tlsBasic + ["engine", "alpn", "handshake_timeout"])
+        }
+        return keys
+    }
+    static func tlsSections(_ schema: JSONValue, value: JSONValue) -> [TLSSection] {
+        let definitions: [(String, [String])] = [
+            ("TLS 基础设置", ["engine", "server_name", "disable_sni", "insecure", "handshake_timeout"]),
+            ("TLS 协议协商", ["alpn", "min_version", "max_version", "cipher_suites", "curve_preferences"]),
+            ("TLS 证书校验", ["certificate", "certificate_path", "certificate_sha256", "certificate_public_key_sha256"]),
+            ("TLS 客户端身份", ["client_certificate", "client_certificate_path", "client_key", "client_key_path"]),
+            ("TLS 分片与伪装", ["fragment", "fragment_fallback_delay", "record_fragment", "spoof", "spoof_method"]),
+            ("TLS 内核设置", ["kernel_tx", "kernel_rx"]),
+            ("ECH", ["ech"]), ("uTLS", ["utls"]), ("Reality", ["reality"])
+        ]
+        let allowed = tlsAllowedKeys(schema, value: value)
+        var sections = definitions.compactMap { title, keys -> TLSSection? in
+            let keys = keys.filter { allowed.contains($0) }
+            return keys.isEmpty ? nil : TLSSection(title: title, keys: keys)
+        }
+        let covered = Set(sections.flatMap(\.keys))
+        let remaining = allowed.subtracting(covered).sorted()
+        if !remaining.isEmpty { sections.append(TLSSection(title: "TLS 其他设置", keys: remaining)) }
+        return sections
+    }
     static func matches(_ schema: JSONValue) -> Bool {
         let keys = Set(schema["properties"].objectValue?.keys.map { $0 } ?? [])
         return schema["type"].stringValue == "object" && keys.isSuperset(of: ["engine", "version", "disable_version_fallback", "headers"])
@@ -48,17 +81,15 @@ enum TemplateHTTPClientLayout {
         case .object(let fields): !fields.isEmpty
         }
     }
-    static func memoryValue(_ text: String) -> JSONValue {
-        if let number = Int(text) { return .integer(number) }
-        if let number = UInt64(text) { return .unsignedInteger(number) }
-        return .string(text)
-    }
     static func incompatiblePaths(_ value: JSONValue, tlsSchema: JSONValue) -> [[String]] {
-        guard isApple(value) else { return [] }
-        var paths = (["disable_version_fallback"] + http2 + quic).filter { hasValue(value[$0]) }.map { [$0] }
-        if let version = value["version"].integerValue, ![0, 2].contains(version) { paths.insert(["version"], at: 0) }
+        var paths: [[String]] = []
+        if isApple(value) {
+            paths = (["disable_version_fallback"] + http2 + quic).filter { hasValue(value[$0]) }.map { [$0] }
+            if let version = value["version"].integerValue, ![0, 2].contains(version) { paths.insert(["version"], at: 0) }
+        }
+        let allowed = tlsAllowedKeys(tlsSchema, value: value)
         for key in (tlsSchema["properties"].objectValue ?? [:]).keys.sorted()
-            where key != "enabled" && !tlsBasic.contains(key) && hasValue(value["tls"][key]) {
+            where key != "enabled" && !allowed.contains(key) && hasValue(value["tls"][key]) {
             paths.append(["tls", key])
         }
         return paths

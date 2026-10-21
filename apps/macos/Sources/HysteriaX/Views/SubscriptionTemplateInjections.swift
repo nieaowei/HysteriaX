@@ -80,11 +80,7 @@ struct SubscriptionTemplateInjections: View {
                             }
                         }
                     }.formStyle(.grouped)
-                    HStack {
-                        Text(L10n.text("修改会应用到本地草稿")).font(.caption).foregroundStyle(.secondary)
-                        Spacer()
-                        Button(L10n.text("完成")) { editingIndex = nil }.keyboardShortcut(.cancelAction)
-                    }.padding(16)
+                    TemplateEditorFooter(store: store) { editingIndex = nil }.id(index)
                 }.frame(width: 800, height: 640).accessibilityIdentifier("templates.complexEditor")
             }
         }

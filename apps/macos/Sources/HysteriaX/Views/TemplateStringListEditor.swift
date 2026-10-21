@@ -13,7 +13,7 @@ struct TemplateScalarListEditor: View {
     }
     private var values: Binding<[JSONValue]> {
         Binding(get: {
-            let value = store.effective.at(path)
+            let value = store.effective.at(path) ?? TemplateEditorGuidance.defaultValue(path, schema: store.schema, value: store.effective)
             if let value, value != .null, value.arrayValue == nil,
                allowsScalar || value.schemaType == store.schema.resolve(itemDefinition)["type"].stringValue { return [value] }
             return value?.arrayValue ?? []
@@ -55,7 +55,7 @@ struct TemplateScalarListEditor: View {
                 if selectableValues.isEmpty { Text(L10n.text("暂无条目")).foregroundStyle(.secondary) }
             }
         } else {
-            TemplateLineListInput(values: values, identifier: "templates.lines." + SubscriptionTemplateStore.pointer(path), integers: schema["type"].stringValue == "integer", prefersMultiline: path.last?.localizedCaseInsensitiveContains("regex") == true || path.last?.localizedCaseInsensitiveContains("url") == true)
+            TemplateLineListInput(values: values, identifier: "templates.lines." + SubscriptionTemplateStore.pointer(path), integers: schema["type"].stringValue == "integer")
             .id(store.layer)
         }
     }
@@ -70,23 +70,16 @@ struct TemplateLineListInput: View {
     @State private var editingID: UUID?
     @State private var inputHasError = false
     @State private var bulkText: String
-    @State private var isBulkEditing: Bool
+    @State private var isBulkEditing = false
     @State private var dragScope = UUID()
     @FocusState private var inputFocused: Bool
 
-    init(values: Binding<[JSONValue]>, identifier: String, integers: Bool = false, prefersMultiline: Bool = false) {
+    init(values: Binding<[JSONValue]>, identifier: String, integers: Bool = false) {
         _values = values
         self.identifier = identifier
         self.integers = integers
         _tokens = State(initialValue: TemplateTokenListDraft(values.wrappedValue))
         _bulkText = State(initialValue: TemplateLineListCodec.text(values.wrappedValue))
-        _isBulkEditing = State(initialValue: prefersMultiline || Self.needsBulk(values.wrappedValue))
-    }
-    private static func needsBulk(_ values: [JSONValue]) -> Bool {
-        values.count > 50 || values.contains {
-            let text = $0.stringValue ?? $0.pretty
-            return text.count > 120 || text.contains(where: \.isNewline)
-        }
     }
     private var parsedBulk: [JSONValue]? { TemplateLineListCodec.parse(bulkText, integers: integers) }
     var body: some View {
@@ -192,7 +185,6 @@ struct TemplateLineListInput: View {
         guard tokens.submit(input, integers: integers, replacing: editingID) else { inputHasError = true; return false }
         values = tokens.values
         cancelInput()
-        if Self.needsBulk(values) { bulkText = TemplateLineListCodec.text(values); isBulkEditing = true }
         return true
     }
     private func cancelInput() { input = ""; editingID = nil; inputHasError = false }

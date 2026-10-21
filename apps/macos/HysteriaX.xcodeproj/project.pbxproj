@@ -101,6 +101,10 @@
 		F11E0000000000000000000D /* Views/AuthorizationUserImpactList.swift in Sources */ = {isa = PBXBuildFile; fileRef = F11F0000000000000000000D /* Views/AuthorizationUserImpactList.swift */; };
 		A3207EBD4510F5B6947AF01F /* Models/MihomoTemplateRule.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00DD25B4749AA5E518D61257 /* Models/MihomoTemplateRule.swift */; };
 		46DB2436058952FC9DF38DD7 /* Models/SubscriptionTemplateDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = E6A1671076FE13DA6D3DCACD /* Models/SubscriptionTemplateDocument.swift */; };
+		AE6D6D6486D144D09CF00001 /* Models/TemplateEditorGuidance.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE6D6D6486D144D09CF00002 /* Models/TemplateEditorGuidance.swift */; };
+		AE6D6D6486D144D09CF00011 /* Models/TemplateDocumentationOrder.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE6D6D6486D144D09CF00012 /* Models/TemplateDocumentationOrder.swift */; };
+		AE6D6D6486D144D09CF00021 /* Models/TemplateProtocolOptions.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE6D6D6486D144D09CF00022 /* Models/TemplateProtocolOptions.swift */; };
+		AE6D6D6486D144D09CF00031 /* Models/TemplateDefaultCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE6D6D6486D144D09CF00032 /* Models/TemplateDefaultCatalog.swift */; };
 		AF6B6D6486D144D09CF00003 /* Views/TemplateHTTPClientFields.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF6B6D6486D144D09CF00004 /* Views/TemplateHTTPClientFields.swift */; };
 		AF6B6D6486D144D09CF00001 /* Models/TemplateHTTPClientLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF6B6D6486D144D09CF00002 /* Models/TemplateHTTPClientLayout.swift */; };
 		BC687BAFD593465BA64ED001 /* Models/TemplateRequiredFields.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC687BAFD593465BA64ED002 /* Models/TemplateRequiredFields.swift */; };
@@ -212,6 +216,10 @@
 		F11F0000000000000000000D /* Views/AuthorizationUserImpactList.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/AuthorizationUserImpactList.swift; sourceTree = "<group>"; };
 		00DD25B4749AA5E518D61257 /* Models/MihomoTemplateRule.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models/MihomoTemplateRule.swift; sourceTree = "<group>"; };
 		E6A1671076FE13DA6D3DCACD /* Models/SubscriptionTemplateDocument.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models/SubscriptionTemplateDocument.swift; sourceTree = "<group>"; };
+		AE6D6D6486D144D09CF00002 /* Models/TemplateEditorGuidance.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models/TemplateEditorGuidance.swift; sourceTree = "<group>"; };
+		AE6D6D6486D144D09CF00012 /* Models/TemplateDocumentationOrder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models/TemplateDocumentationOrder.swift; sourceTree = "<group>"; };
+		AE6D6D6486D144D09CF00022 /* Models/TemplateProtocolOptions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models/TemplateProtocolOptions.swift; sourceTree = "<group>"; };
+		AE6D6D6486D144D09CF00032 /* Models/TemplateDefaultCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models/TemplateDefaultCatalog.swift; sourceTree = "<group>"; };
 		AF6B6D6486D144D09CF00004 /* Views/TemplateHTTPClientFields.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/TemplateHTTPClientFields.swift; sourceTree = "<group>"; };
 		AF6B6D6486D144D09CF00002 /* Models/TemplateHTTPClientLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models/TemplateHTTPClientLayout.swift; sourceTree = "<group>"; };
 		BC687BAFD593465BA64ED002 /* Models/TemplateRequiredFields.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models/TemplateRequiredFields.swift; sourceTree = "<group>"; };
@@ -246,6 +254,10 @@
 			children = (
 				00DD25B4749AA5E518D61257 /* Models/MihomoTemplateRule.swift */,
 				E6A1671076FE13DA6D3DCACD /* Models/SubscriptionTemplateDocument.swift */,
+				AE6D6D6486D144D09CF00002 /* Models/TemplateEditorGuidance.swift */,
+				AE6D6D6486D144D09CF00012 /* Models/TemplateDocumentationOrder.swift */,
+				AE6D6D6486D144D09CF00022 /* Models/TemplateProtocolOptions.swift */,
+				AE6D6D6486D144D09CF00032 /* Models/TemplateDefaultCatalog.swift */,
 				AF6B6D6486D144D09CF00004 /* Views/TemplateHTTPClientFields.swift */,
 				AF6B6D6486D144D09CF00002 /* Models/TemplateHTTPClientLayout.swift */,
 				BC687BAFD593465BA64ED002 /* Models/TemplateRequiredFields.swift */,
@@ -445,6 +457,10 @@
 				F00800000000000000000203 /* Stores/SubscriptionTemplateListStore.swift in Sources */,
 				A3207EBD4510F5B6947AF01F /* Models/MihomoTemplateRule.swift in Sources */,
 				46DB2436058952FC9DF38DD7 /* Models/SubscriptionTemplateDocument.swift in Sources */,
+				AE6D6D6486D144D09CF00001 /* Models/TemplateEditorGuidance.swift in Sources */,
+				AE6D6D6486D144D09CF00011 /* Models/TemplateDocumentationOrder.swift in Sources */,
+				AE6D6D6486D144D09CF00021 /* Models/TemplateProtocolOptions.swift in Sources */,
+				AE6D6D6486D144D09CF00031 /* Models/TemplateDefaultCatalog.swift in Sources */,
 				AF6B6D6486D144D09CF00003 /* Views/TemplateHTTPClientFields.swift in Sources */,
 				AF6B6D6486D144D09CF00001 /* Models/TemplateHTTPClientLayout.swift in Sources */,
 				BC687BAFD593465BA64ED001 /* Models/TemplateRequiredFields.swift in Sources */,

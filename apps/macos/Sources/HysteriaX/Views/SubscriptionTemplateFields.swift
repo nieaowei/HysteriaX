@@ -11,6 +11,7 @@ struct SubscriptionTemplateFields: View {
     var showsFieldHeader = true
     var expandsObjectInline = false
     @State private var editingObject = false
+    @State private var integerDraft: String?
     private var selectedItem: Int? {
         get { store.collectionSelections[SubscriptionTemplateStore.pointer(path)].flatMap(Int.init) }
         nonmutating set { store.collectionSelections[SubscriptionTemplateStore.pointer(path)] = newValue.map(String.init) }
@@ -25,8 +26,23 @@ struct SubscriptionTemplateFields: View {
     private var value: JSONValue { store.editorValue(editingDefinition, path: path) }
     private var schema: JSONValue { store.schema.resolve(editingDefinition, value: value) }
     private var properties: [String: JSONValue] { schema["properties"].objectValue ?? [:] }
+    private var variants: [JSONValue] { store.schema.variants(editingDefinition) }
+    private var showsVariantPicker: Bool {
+        guard !path.isEmpty, variants.count > 1, scalarListItemDefinition == nil else { return false }
+        // A collapsed object delegates type editing to its detail editor. Mixed
+        // string/object references still need this picker to select a shared tag.
+        let delegatesToDetail = schema["type"].stringValue == "object" && !isEditorRoot && !displaysObjectInline
+            && schema["x-unverified"].boolValue != true
+            && variants.allSatisfy { store.schema.resolve($0)["type"].stringValue == "object" }
+        return !delegatesToDetail
+    }
     private var title: String { path.last ?? "" }
-    private var displaysObjectInline: Bool { expandsObjectInline || title == "default_domain_resolver" }
+    private var hasPreviewValue: Bool {
+        !TemplateEditorGuidance.isSingbox(store.schema) || store.effective.at(path) != nil
+            || schema.objectValue?["default"] != nil
+            || TemplateEditorGuidance.defaultValue(path, schema: store.schema, value: store.effective) != nil
+    }
+    private var displaysObjectInline: Bool { expandsObjectInline || TemplateEditorGuidance.isInlineObject(path, schema: store.schema) }
     private var usesCollectionOverview: Bool {
         title == "domain_resolver" || (path.first == "dns" && title == "predefined")
     }
@@ -34,15 +50,14 @@ struct SubscriptionTemplateFields: View {
         store.schema.scalarListItemDefinition(editingDefinition)
     }
     @ViewBuilder private var fieldActionItems: some View {
+        if let url = TemplateEditorGuidance.documentURL(path, schema: store.schema, value: store.effective) {
+            Link(L10n.text("查看配置文档"), destination: url)
+        }
         Button(L10n.text("恢复默认")) { store.restoreDefault(path: path, definition: definition) }
         Button(L10n.text("显式 null")) { store.set(path, .null) }
     }
     private var enumChoices: [JSONValue]? {
-        guard var values = schema["enum"].arrayValue ?? schema["x-enum-choices"].arrayValue else { return nil }
-        if store.effective.at(path) != nil, !values.contains(value) { values.append(value) }
-        return values.reduce(into: []) { result, choice in
-            if !result.contains(where: { $0.pretty == choice.pretty }) { result.append(choice) }
-        }
+        schema["enum"].arrayValue ?? schema["x-enum-choices"].arrayValue
     }
     private var usesNativeControl: Bool {
         let variants = store.schema.variants(editingDefinition)
@@ -62,18 +77,14 @@ struct SubscriptionTemplateFields: View {
     @ViewBuilder private var nativeValueControl: some View {
         let label = schema["title"].stringValue ?? title
         if let values = enumChoices, !values.isEmpty {
-            enumPicker(label, values: values)
+            enumPicker(label)
         } else {
             switch schema["type"].stringValue {
             case "boolean":
                 Toggle(label, isOn: Binding(get: { value.boolValue ?? false }, set: { store.set(path, .bool($0)) }))
                     .toggleStyle(.switch)
             case "integer":
-                TextField(label, text: Binding(get: { value.stringValue ?? value.pretty }, set: { text in
-                    if let number = Int(text) { store.set(path, .integer(number)) }
-                    else if let number = UInt64(text) { store.set(path, .unsignedInteger(number)) }
-                    else { store.set(path, .string(text)) }
-                })).textFieldStyle(.roundedBorder)
+                integerInput(label)
             case "number":
                 TextField(label, value: Binding(get: {
                     if case .decimal(let number) = value { return number }
@@ -98,24 +109,50 @@ struct SubscriptionTemplateFields: View {
             }
         }
     }
+    private func integerInput(_ label: String) -> some View {
+        let fixed = schema["x-editor-fixed-scalar"] == .string("integer")
+        return VStack(alignment: .leading, spacing: 4) {
+            TextField(label, text: Binding(get: {
+                integerDraft ?? (hasPreviewValue ? (value.stringValue ?? value.pretty) : "")
+            }, set: { text in
+                if fixed { integerDraft = text }
+                if let number = TemplateSchema.integerValue(text) { store.set(path, number) }
+                else if !fixed { store.set(path, .string(text)) }
+            })).textFieldStyle(.roundedBorder)
+            if fixed, let draft = integerDraft, TemplateSchema.integerValue(draft) == nil {
+                Text(L10n.text("请输入整数。")).font(.caption).foregroundStyle(.orange)
+            } else if fixed, value.stringValue != nil {
+                Text(L10n.text("原有字符串值已保留；修改时请输入整数。"))
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+    }
     private func stringInput(_ label: String) -> some View {
-        let isMark = ["routing_mark", "default_mark"].contains(title)
+        let isMark = title.hasSuffix("mark")
+        let prompt = isMark ? "0x1234" : (TemplateEditorGuidance.isSingbox(store.schema) ? TemplateEditorGuidance.prompt(definition, path: path) : nil)
         return TextField(label, text: Binding(get: {
             value.stringValue ?? (isMark && value != .null ? value.pretty : "")
-        }, set: { store.set(path, .string($0)) }), prompt: isMark ? Text(verbatim: "0x1234") : nil, axis: .vertical)
+        }, set: { store.set(path, .string($0)) }), prompt: prompt.map { Text(verbatim: $0) }, axis: .vertical)
             .textFieldStyle(.roundedBorder)
             .frame(minWidth: 0, idealWidth: 200, maxWidth: .infinity)
     }
-    private func enumPicker(_ label: String, values: [JSONValue]) -> some View {
-        Picker(label, selection: Binding(get: { value.pretty }, set: { token in
-            guard let choice = values.first(where: { $0.pretty == token }) else { return }
+    private func enumPicker(_ label: String) -> some View {
+        let options = TemplateEditorGuidance.enumPickerOptions(schema, path: path, schema: store.schema, value: store.effective)
+        return Picker(label, selection: Binding(get: { options.selection }, set: { token in
+            if options.includesUnset && token == TemplateEnumPickerOptions.unsetToken {
+                store.setState(store.layer == "common" ? "inherit" : "remove", path: path, schema: definition)
+                return
+            }
+            guard let choice = options.values.first(where: { $0.pretty == token }) else { return }
             store.set(path, choice)
         })) {
-            if values.isEmpty { Text(L10n.text("未设置")).tag(value.pretty) }
-            ForEach(values, id: \.pretty) { choice in
-                Text(TemplateSchema.pickerTitle(choice)).tag(choice.pretty)
+            if options.includesUnset {
+                Text(TemplateEditorGuidance.enumPickerTitle(nil, path: path, schema: store.schema)).tag(TemplateEnumPickerOptions.unsetToken)
             }
-        }.disabled(values.isEmpty)
+            ForEach(options.values, id: \.pretty) { choice in
+                Text(TemplateEditorGuidance.enumPickerTitle(choice, path: path, schema: store.schema)).tag(choice.pretty)
+            }
+        }.disabled(enumChoices?.isEmpty != false)
     }
     /// Unset removes the key instead of storing an empty string, and an unknown existing tag
     /// stays visible without adding a second blank choice next to "未设置".
@@ -138,7 +175,9 @@ struct SubscriptionTemplateFields: View {
         !isCacheFile || (store.effective.at(path + ["enabled"]) ?? store.initialValue(properties["enabled"] ?? .null, path: path + ["enabled"])).boolValue == true
     }
     private var members: [String] {
-        let keys = properties.keys.sorted()
+        let owned = showsVariantPicker ? store.schema.variantFieldKeys(editingDefinition, value: value) : []
+        let visible = TemplateEditorGuidance.visibleKeys(schema, path: path, schema: store.schema, value: store.effective).filter { !owned.contains($0) }
+        let keys = TemplateEditorGuidance.ordered(visible, path: path, schema: store.schema, value: store.effective)
         guard isCacheFile, properties["enabled"] != nil else { return keys }
         return ["enabled"] + (showsObjectDetails ? keys.filter { $0 != "enabled" } : [])
     }
@@ -174,7 +213,7 @@ struct SubscriptionTemplateFields: View {
                 else if usesNativeControl {
                     nativeControl
                         .disabled(!store.allowed(path, value: value))
-                        .help(schema["description"].stringValue ?? title)
+                        .help(schema["description"].stringValue ?? TemplateEditorGuidance.help(path, schema: store.schema, value: store.effective) ?? title)
                 }
                 else if isEditorRoot { control }
                 else {
@@ -197,6 +236,8 @@ struct SubscriptionTemplateFields: View {
             fieldActionItems.disabled(schema["x-unverified"].boolValue == true || !store.allowed(path, value: value))
         }
         .onAppear { selectFocused(store.focusedPath) }
+        .onChange(of: value) { _, _ in integerDraft = nil }
+        .onChange(of: store.layer) { _, _ in integerDraft = nil }
         .id(SubscriptionTemplateStore.pointer(path))
         .onChange(of: store.focusGeneration) { _, _ in
             selectFocused(store.focusedPath)
@@ -215,8 +256,8 @@ struct SubscriptionTemplateFields: View {
         }
     }
     @ViewBuilder private var control: some View {
-        let variants = store.schema.variants(editingDefinition)
-        if variants.count > 1, scalarListItemDefinition == nil {
+        let variants = self.variants
+        if showsVariantPicker {
             Picker(L10n.text("配置类型"), selection: Binding(get: { variantIndex(variants) }, set: { index in
                 guard variants.indices.contains(index) else { return }
                 store.set(path, store.schema.selecting(variants[index], from: definition, value: value))
@@ -224,28 +265,31 @@ struct SubscriptionTemplateFields: View {
                 ForEach(Array(variants.enumerated()), id: \.offset) { index, variant in
                     Text(store.schema.variantTitle(variant, index: index)).tag(index)
                 }
-            }
+            }.accessibilityIdentifier("templates.variant.\(SubscriptionTemplateStore.pointer(path))")
         }
         if schema["x-unverified"].boolValue == true {
             Text(L10n.text("未验证字段：保留原值，可通过源码编辑。"))
                 .foregroundStyle(.orange).font(.caption)
         } else if let itemDefinition = scalarListItemDefinition {
             TemplateScalarListEditor(store: store, path: path, itemDefinition: itemDefinition, allowsScalar: true)
-        } else if let values = enumChoices {
-            enumPicker(title, values: values)
+        } else if enumChoices != nil {
+            enumPicker(title)
         } else if let constant = schema.objectValue?["const"] {
             Text(TemplateSchema.pickerTitle(constant)).foregroundStyle(.secondary)
+                .accessibilityIdentifier("templates.constant.\(SubscriptionTemplateStore.pointer(path))")
         } else {
             switch schema["type"].stringValue ?? value.schemaType {
             case "boolean": Toggle(title, isOn: Binding(get: { value.boolValue ?? false }, set: { store.set(path, .bool($0)) })).toggleStyle(.switch).labelsHidden()
-            case "integer": TextField(title, text: Binding(get: { value.stringValue ?? value.pretty }, set: { text in
-                if let number = Int(text) { store.set(path, .integer(number)) }
-                else if let number = UInt64(text) { store.set(path, .unsignedInteger(number)) }
-                else { store.set(path, .string(text)) }
-            })).textFieldStyle(.roundedBorder).accessibilityIdentifier("templates.value.\(SubscriptionTemplateStore.pointer(path))")
+            case "integer": integerInput(title).accessibilityIdentifier("templates.value.\(SubscriptionTemplateStore.pointer(path))")
             case "number": TextField(title, value: Binding(get: { if case .decimal(let n) = value { return n }; return Double(value.integerValue ?? 0) }, set: { store.set(path, .decimal($0)) }), format: .number).textFieldStyle(.roundedBorder).accessibilityIdentifier("templates.value.\(SubscriptionTemplateStore.pointer(path))")
             case "object":
-                if isEditorRoot || displaysObjectInline { objectFields }
+                if isEditorRoot || displaysObjectInline {
+                    if TemplateEditorGuidance.automaticTLS(path, schema: store.schema, value: store.effective) {
+                        Text(L10n.text("此位置的 TLS 由协议自动启用。"))
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    objectFields
+                }
                 else if TemplateSchema.isObjectResolver(path) {
                     TemplateCollectionFields(store: store, definition: editingDefinition, path: path, depth: depth, isSingleObject: true)
                 } else if path.first == "dns", title == "predefined" {
@@ -274,7 +318,7 @@ struct SubscriptionTemplateFields: View {
                 } else if let reference {
                     referencePicker(title, kind: reference)
                 } else {
-                    TextField(title, text: Binding(get: { value.stringValue ?? "" }, set: { store.set(path, .string($0)) }), axis: .vertical)
+                    TextField(title, text: Binding(get: { value.stringValue ?? "" }, set: { store.set(path, .string($0)) }), prompt: (TemplateEditorGuidance.isSingbox(store.schema) ? TemplateEditorGuidance.prompt(definition, path: path) : nil).map { Text(verbatim: $0) }, axis: .vertical)
                         .textFieldStyle(.roundedBorder)
                 }
             }
@@ -305,6 +349,14 @@ struct SubscriptionTemplateFields: View {
                         SubscriptionTemplateFields(store: store, definition: field, path: path + [key], depth: depth + 1).padding(.vertical, 4)
                     }
                 }
+            }
+        }
+        let hidden = TemplateEditorGuidance.hiddenConfiguredKeys(schema, path: path, schema: store.schema, value: store.effective)
+        if !hidden.isEmpty {
+            DisclosureGroup(L10n.text("当前条件下隐藏的已有配置")) {
+                Text(hidden.joined(separator: "、")).font(.caption).textSelection(.enabled)
+                Text(L10n.text("这些字段的值已保留。更改相关开关或模式后可继续编辑，也可在源码中查看。"))
+                    .font(.caption).foregroundStyle(.secondary)
             }
         }
         if showsObjectDetails {
@@ -342,7 +394,9 @@ struct TemplateFieldLabel: View {
     let path: [String]
     let title: String
     var value: JSONValue? = nil
+    @State private var showingHelp = false
     private var platforms: [String] { store.supportedPlatforms(path, value: value ?? store.effective.at(path)) }
+    private var guidance: String? { TemplateEditorGuidance.help(path, schema: store.schema, value: store.effective) }
     var body: some View {
         HStack(spacing: 6) {
             Text(title).textSelection(.enabled)
@@ -350,6 +404,24 @@ struct TemplateFieldLabel: View {
                 Text(verbatim: "*").foregroundStyle(.red)
                     .accessibilityLabel(L10n.text("必填"))
                     .accessibilityIdentifier("templates.required.\(SubscriptionTemplateStore.pointer(path))")
+            }
+            if let guidance {
+                Button(L10n.text("字段说明"), systemImage: "info.circle") { showingHelp.toggle() }
+                    .labelStyle(.iconOnly).buttonStyle(.borderless)
+                    .help(L10n.text("字段说明"))
+                    .accessibilityLabel(Text(title + " " + L10n.text("字段说明")))
+                    .accessibilityIdentifier("templates.help.\(SubscriptionTemplateStore.pointer(path))")
+                    .popover(isPresented: $showingHelp) {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text(title).font(.headline)
+                            Text(guidance).textSelection(.enabled)
+                            if let url = TemplateEditorGuidance.documentURL(path, schema: store.schema, value: store.effective) {
+                                Link(L10n.text("查看配置文档"), destination: url)
+                            }
+                            Text(L10n.text("表单依据 sing-box 1.14.2；在线文档可能包含更新版本的字段。"))
+                                .font(.caption).foregroundStyle(.secondary)
+                        }.padding(16).frame(width: 320, alignment: .leading)
+                    }
             }
             if platforms.count < TemplatePlatform.all.count {
                 if platforms.isEmpty {

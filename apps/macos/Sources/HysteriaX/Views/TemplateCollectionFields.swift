@@ -29,25 +29,32 @@ struct TemplateCollectionFields: View {
                 Text(L10n.text("暂无项目，点击添加开始配置。"))
                     .foregroundStyle(.secondary).frame(maxWidth: .infinity, minHeight: 60)
             } else {
-                List(selection: Binding(get: { selected }, set: { selected = $0 })) {
+                VStack(spacing: 0) {
                     // SwiftUI may refresh a removed row after the store has changed.
                     // Keep its value with the row instead of subscripting the live collection.
                     ForEach(Array(items.enumerated()), id: \.offset) { index, value in
                         HStack {
+                            Button { selected = index } label: {
+                            HStack {
                             Text(String(index + 1)).monospacedDigit().foregroundStyle(.secondary).frame(width: 28)
                             VStack(alignment: .leading, spacing: 3) {
                                 Text(title(value, index: index)).lineLimit(1)
                                 Text(summary(value)).font(.caption).foregroundStyle(.secondary).lineLimit(2)
                             }
                             Spacer()
+                            }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
+                            }.buttonStyle(.plain)
+                                .accessibilityIdentifier("templates.item.select.\(SubscriptionTemplateStore.pointer(path)).\(index)")
                             Button(L10n.text("编辑"), systemImage: "pencil") { open(index) }
                                 .labelStyle(.iconOnly).buttonStyle(.borderless)
                                 .accessibilityIdentifier("templates.item.edit.\(SubscriptionTemplateStore.pointer(path)).\(index)")
                         }
-                        .tag(index)
+                        .padding(10)
+                        .background(selected == index ? Color.accentColor.opacity(0.12) : Color.clear, in: RoundedRectangle(cornerRadius: 8))
                         .onTapGesture(count: 2) { open(index) }
+                        if index < items.count - 1 { Divider().padding(.horizontal, 10) }
                     }
-                }.frame(height: min(280, max(80, CGFloat(items.count) * 54)))
+                }
             }
             HStack {
                 if isSingleObject && !items.isEmpty {
@@ -83,6 +90,7 @@ struct TemplateCollectionFields: View {
                 TemplateStructuredFieldEditor(store: store, definition: definition, path: isSingleObject ? path : path + [String(item.index)], depth: depth + 1, title: title(items[item.index], index: item.index))
             }
         }
+        .modifier(TemplateCascadeDeletionPresenter(store: store, path: path))
         .onChange(of: items.count) { _, _ in
             if let item = editing, !items.indices.contains(item.index) { editing = nil }
         }
@@ -94,6 +102,7 @@ struct TemplateCollectionFields: View {
         return value["name"].stringValue ?? value["tag"].stringValue ?? value["type"].stringValue ?? (value.objectValue == nil && value.arrayValue == nil ? value.pretty : nil) ?? L10n.text("项目 {0}", String(index + 1))
     }
     private func summary(_ value: JSONValue) -> String {
+        if TemplateEditorGuidance.isSingbox(store.schema), let summary = TemplateEditorGuidance.summary(value, path: path) { return summary }
         if path == ["http_clients"] {
             let engine = value["engine"].stringValue ?? "go"
             let version = TemplateHTTPClientLayout.isApple(value) ? L10n.text("系统管理版本") : TemplateHTTPClientLayout.versionTitle(TemplateHTTPClientLayout.version(value))
@@ -137,5 +146,37 @@ struct TemplateCollectionFields: View {
         }
         guard target.starts(with: path), target.count > path.count, let index = Int(target[path.count]), items.indices.contains(index) else { return }
         open(index)
+    }
+}
+
+struct TemplateCascadeDeletionPresenter: ViewModifier {
+    @Bindable var store: SubscriptionTemplateStore
+    let path: [String]
+    func body(content: Content) -> some View {
+        content.sheet(isPresented: Binding(get: { store.pendingDeletion?.presenterPath == path }, set: { if !$0 { store.pendingDeletion = nil } })) {
+            if let pending = store.pendingDeletion {
+                VStack(alignment: .leading, spacing: 16) {
+                    Text(L10n.text("级联删除预览")).font(.title2.bold())
+                    Text(pending.names.joined(separator: "、")).font(.headline).textSelection(.enabled)
+                    Text(L10n.text("将删除所选对象及依赖规则，并处理下列引用。整次操作可以一次撤销。"))
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 8) {
+                            ForEach(pending.changes, id: \.self) { Text($0).font(.system(.caption, design: .monospaced)).textSelection(.enabled) }
+                            DisclosureGroup(L10n.text("查看完整变更")) {
+                                Text(SubscriptionTemplateStore.difference(pending.before, pending.after).pretty)
+                                    .font(.system(.caption, design: .monospaced)).textSelection(.enabled)
+                            }
+                        }.frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    HStack {
+                        Spacer()
+                        Button(L10n.text("取消")) { store.pendingDeletion = nil }.keyboardShortcut(.cancelAction)
+                        Button(L10n.text("级联删除"), role: .destructive) { store.confirmCascadeDeletion() }
+                            .keyboardShortcut(.defaultAction).accessibilityIdentifier("templates.cascade.confirm")
+                    }
+                }.padding(24).frame(width: 680, height: 520).disabled(store.busy)
+                .accessibilityIdentifier("templates.cascade.preview")
+            }
+        }
     }
 }

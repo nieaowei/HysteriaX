@@ -38,6 +38,15 @@ final class SubscriptionTemplateStore {
     var preview: [String: JSONValue] = [:]
     var history: [JSONValue] = []
     var error: String?
+    struct PendingDeletion {
+        let before: JSONValue
+        let after: JSONValue
+        let layer: String
+        let presenterPath: [String]
+        let names: [String]
+        let changes: [String]
+    }
+    var pendingDeletion: PendingDeletion?
     var remoteConflict: JSONValue?
     var conflictTemplate: SubscriptionTemplate?
     var comparison: JSONValue?
@@ -72,6 +81,22 @@ final class SubscriptionTemplateStore {
     }
     func undo() { if let previous = undoStack.popLast() { redoStack.append(document); document = previous } }
     func redo() { if let next = redoStack.popLast() { undoStack.append(document); document = next } }
+    struct EditorCheckpoint {
+        let document: JSONValue
+        let undoStack: [JSONValue]
+        let redoStack: [JSONValue]
+        let error: String?
+    }
+    func editorCheckpoint() -> EditorCheckpoint {
+        EditorCheckpoint(document: document, undoStack: undoStack, redoStack: redoStack, error: error)
+    }
+    func restoreEditorCheckpoint(_ checkpoint: EditorCheckpoint) {
+        pendingDeletion = nil
+        document = checkpoint.document
+        undoStack = checkpoint.undoStack
+        redoStack = checkpoint.redoStack
+        error = checkpoint.error
+    }
     func state(_ path: [String]) -> String {
         if layer == "common" { return common.at(path) == nil ? "inherit" : "set" }
         let pointer = Self.pointer(path)
@@ -79,7 +104,7 @@ final class SubscriptionTemplateStore {
         return overlay.at(path) == nil ? "inherit" : "set"
     }
     func setState(_ state: String, path: [String], schema: JSONValue) {
-        if state == "set" { set(path, effective.at(path) ?? initialValue(schema, path: path)); return }
+        if state == "set" { set(path, effective.at(path) ?? editorValue(schema, path: path)); return }
         for index in path.indices where effective.at(Array(path.prefix(index)))?.arrayValue != nil {
             let parent = Array(path.prefix(index)); var array = effective.at(parent) ?? .array([])
             array.set(Array(path.dropFirst(index)), nil); set(parent, array); return
@@ -111,6 +136,7 @@ final class SubscriptionTemplateStore {
         }
         let parent = Array(path.dropLast())
         if path.last == "server", TemplateSchema.isObjectResolver(parent), let server = effective.at(parent)?.stringValue { return .string(server) }
+        if let value = TemplateEditorGuidance.defaultValue(path, schema: schema, value: effective) { return value }
         return initialValue(definition, path: path)
     }
     func restoreDefault(path: [String], definition: JSONValue) {
@@ -127,12 +153,21 @@ final class SubscriptionTemplateStore {
                 return
             }
         }
-        if selected != nil, path.count >= 3, ["name", "tag"].contains(path.last ?? ""),
-           let old = effective.at(path)?.stringValue, !old.isEmpty, value != .string(old) {
-            let kinds = ["proxy-groups": "outbound", "outbounds": "outbound", "inbounds": "inbound", "servers": "dns_server", "rule_set": "rule_set", "http_clients": "http_client", "certificate_providers": "certificate_provider", "network_namespaces": "network_namespace"]
-            if let kind = kinds[path.dropLast(2).last ?? ""] {
-                let next = candidate { $0.set(path, value) }
-                guard permitsDeletion(candidate: next, names: [old], kind: kind) else { return }
+        let referenceIndex = TemplateReferenceIndex(format: selected?.format ?? catalog["format"].stringValue ?? "mihomo", schema: schema)
+        if let collection = referenceIndex.collectionPaths.first(where: { path.starts(with: $0) && path.count > $0.count + 1 }),
+           ["name", "tag"].contains(path[collection.count + 1]) {
+            let owner = Array(path.prefix(collection.count + 1))
+            let oldNames = Set(referenceIndex.identities(at: owner, in: effective))
+            var changed = effective; changed.set(path, value)
+            let newNames = Set(referenceIndex.identities(at: owner, in: changed))
+            let removed = oldNames.subtracting(newNames), added = newNames.subtracting(oldNames)
+            if removed.count == 1, added.count == 1, let old = removed.first, let new = added.first {
+                renameReference(old, new: new.name, index: referenceIndex)
+                return
+            }
+            for old in removed {
+                let next = Self.applyingConfiguration(changed, to: document, layer: layer)
+                guard permitsDeletion(candidate: next, names: [old.name], kind: old.kind) else { return }
             }
         }
         // Editing an inherited array creates an explicit complete array override.
@@ -364,6 +399,86 @@ final class SubscriptionTemplateStore {
         let editor = SubscriptionTemplateStore(); editor.document = document; editor.layer = layer
         action(editor); return editor.document
     }
+    private static func applyingConfiguration(_ config: JSONValue, to document: JSONValue, layer: String) -> JSONValue {
+        TemplateReferenceIndex.applying(config, to: document, layer: layer)
+    }
+    private var referenceMutationLayers: [String] {
+        layer == "common" ? ["common"] + (document["platforms"].objectValue ?? [:]).keys.sorted().filter { TemplatePlatform.all.contains($0) } : [layer]
+    }
+    private func renameReference(_ identity: TemplateReferenceIndex.Identity, new: String, index: TemplateReferenceIndex) {
+        let targets = referenceMutationLayers
+        guard !new.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, !new.hasPrefix("hx:"),
+              !(index.format == "mihomo" && new.contains(",")),
+              !targets.contains(where: { index.exists(new, kind: identity.kind, in: TemplateReferenceIndex.effective(document, platform: $0)) }) else {
+            error = L10n.text("名称无效、已存在或使用了保留前缀。"); return
+        }
+        if layer != "common", identity.kind == "outbound", (document["injections"].arrayValue ?? []).contains(where: { $0["group"] == .string(identity.name) }) {
+            error = L10n.text("请先转换为统一配置，再重命名注入规则引用的对象。"); return
+        }
+        var next = document
+        if layer == "common", index.format == "mihomo", ["rule_set", "sub_rule"].contains(identity.kind), let collection = index.collections[identity.kind] {
+            let prefix = Self.pointer(collection + [identity.name]), replacement = Self.pointer(collection + [new])
+            for target in targets where target != "common" {
+                if let removals = next["platforms"][target]["remove"].arrayValue {
+                    next.set(["platforms", target, "remove"], .array(removals.map { item in
+                        guard let path = item.stringValue, path == prefix || path.hasPrefix(prefix + "/") else { return item }
+                        return .string(replacement + path.dropFirst(prefix.count))
+                    }))
+                }
+            }
+        }
+        for target in targets {
+            let config = TemplateReferenceIndex.effective(document, platform: target)
+            next = Self.applyingConfiguration(index.renamed(config, identity: identity, new: new), to: next, layer: target)
+        }
+        if identity.kind == "outbound" {
+            var injections = next["injections"].arrayValue ?? []
+            for i in injections.indices where injections[i]["group"] == .string(identity.name) { injections[i]["group"] = .string(new) }
+            if next.objectValue?["injections"] != nil { next["injections"] = .array(injections) }
+        }
+        pendingDeletion = nil; error = nil
+        edit { $0 = next }
+    }
+    private func deleteOrPreview(_ candidate: JSONValue, identities: [TemplateReferenceIndex.Identity], presenterPath: [String]) {
+        guard !identities.isEmpty else { pendingDeletion = nil; error = nil; edit { $0 = candidate }; return }
+        let index = TemplateReferenceIndex(format: selected?.format ?? catalog["format"].stringValue ?? "mihomo", schema: schema)
+        let targets = referenceMutationLayers
+        var next = candidate
+        var changes: Set<String> = []
+        var removed = Set(identities)
+        for target in targets {
+            let config = TemplateReferenceIndex.effective(next, platform: target)
+            let injectedGroups = Set((next["injections"].arrayValue ?? []).compactMap { $0["group"].stringValue })
+            let result = index.cascading(config, removing: removed, injectedGroups: injectedGroups)
+            removed.formUnion(result.removed)
+            next = Self.applyingConfiguration(result.config, to: next, layer: target)
+            let original = TemplateReferenceIndex.effective(document, platform: target)
+            for path in result.paths {
+                let address = TemplateReferenceIndex.originalPath(path, current: config, original: original)
+                let item = original.at(address) ?? .null
+                let name = item["name"].stringValue ?? item["tag"].stringValue
+                changes.insert(target + ":" + Self.pointer(address) + (name.map { " · " + $0 } ?? ""))
+            }
+        }
+        var injections = next["injections"].arrayValue ?? []
+        for i in injections.indices.reversed() {
+            guard let group = injections[i]["group"].stringValue,
+                  removed.contains(.init(kind: "outbound", name: group)),
+                  targets.contains(where: { !index.exists(group, kind: "outbound", in: TemplateReferenceIndex.effective(next, platform: $0)) }) else { continue }
+            changes.insert("/injections/\(i)"); injections.remove(at: i)
+        }
+        if next.objectValue?["injections"] != nil { next["injections"] = .array(injections) }
+        error = nil
+        if changes.isEmpty { pendingDeletion = nil; edit { $0 = candidate }; return }
+        pendingDeletion = PendingDeletion(before: document, after: next, layer: layer, presenterPath: presenterPath,
+            names: identities.map(\.name), changes: changes.sorted())
+    }
+    func confirmCascadeDeletion() {
+        guard let pending = pendingDeletion else { return }
+        pendingDeletion = nil
+        guard document == pending.before, layer == pending.layer else { error = L10n.text("配置已变化，请重新发起级联删除。"); return }
+        error = nil; edit { $0 = pending.after }
+    }
     private func permitsDeletion(candidate: JSONValue, names: [String], kind: String?) -> Bool {
         guard let kind, !names.isEmpty else { return true }
         let index = TemplateReferenceIndex(format: selected?.format ?? catalog["format"].stringValue ?? "mihomo", schema: schema)
@@ -373,19 +488,19 @@ final class SubscriptionTemplateStore {
     }
     func deleteField(parent: [String], key: String) {
         let path = parent + [key]
+        guard effective.at(path) != nil else { return }
         let kind = parent == ["rule-providers"] ? "rule_set" : (parent == ["sub-rules"] ? "sub_rule" : nil)
         let operation: (SubscriptionTemplateStore) -> Void = { editor in editor.setState(editor.layer == "common" ? "inherit" : "remove", path: path, schema: .object([:])) }
-        guard permitsDeletion(candidate: candidate(operation), names: [key], kind: kind) else { return }
-        operation(self)
+        guard let kind else { operation(self); return }
+        deleteOrPreview(candidate(operation), identities: [.init(kind: kind, name: key)], presenterPath: parent)
     }
     func deleteItem(path: [String], index: Int) {
         var values = effective.at(path)?.arrayValue ?? []; guard values.indices.contains(index) else { return }
-        let removed = values.remove(at: index)
-        let locations: [String: String] = ["proxy-groups":"outbound", "outbounds":"outbound", "inbounds":"inbound", "servers":"dns_server", "rule_set":"rule_set", "http_clients":"http_client", "certificate_providers":"certificate_provider", "network_namespaces":"network_namespace"]
-        let names = [removed["name"].stringValue ?? removed["tag"].stringValue].compactMap { $0 } + (removed["tag"].arrayValue?.compactMap(\.stringValue) ?? [])
+        values.remove(at: index)
+        let referenceIndex = TemplateReferenceIndex(format: selected?.format ?? catalog["format"].stringValue ?? "mihomo", schema: schema)
+        let identities = referenceIndex.identities(at: path + [String(index)], in: effective)
         let next = candidate { $0.set(path, .array(values)) }
-        guard permitsDeletion(candidate: next, names: names, kind: locations[path.last ?? ""]) else { return }
-        set(path, .array(values))
+        deleteOrPreview(next, identities: identities, presenterPath: path)
     }
     func adoptRemoteRevision() {
         if let conflictTemplate, let remoteConflict { selected = conflictTemplate; baseline = remoteConflict }

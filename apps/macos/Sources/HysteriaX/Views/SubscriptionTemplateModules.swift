@@ -57,7 +57,9 @@ struct SubscriptionTemplateModules: View {
                   schema["x-unverified"].boolValue != true,
                   let children = schema["properties"].objectValue, !children.isEmpty else { return [field] }
             guard model.allowed([key], value: model.effective.at([key]) ?? .null) else { return [field] }
-            let visibleKeys = children.keys.sorted {
+            let documentedVisible = Set(TemplateEditorGuidance.visibleKeys(schema, path: [key], schema: model.schema, value: model.effective))
+            let documentedKeys = TemplateEditorGuidance.ordered(Array(children.keys), path: [key], schema: model.schema, value: model.effective)
+            let visibleKeys = documentedKeys.sorted {
                 if key == "dns", ($0 == "disable_cache") != ($1 == "disable_cache") {
                     return $0 == "disable_cache"
                 }
@@ -66,9 +68,9 @@ struct SubscriptionTemplateModules: View {
                     let rightSwitch = ["enabled", "enable"].contains($1)
                     if leftSwitch != rightSwitch { return leftSwitch }
                 }
-                return $0 < $1
+                return documentedKeys.firstIndex(of: $0)! < documentedKeys.firstIndex(of: $1)!
             }.filter {
-                showsRootDetails(key) || (key == "log" && $0 == "disabled") || (key == "ntp" && ["enabled", "enable"].contains($0))
+                documentedVisible.contains($0) && (showsRootDetails(key) || (key == "log" && $0 == "disabled") || (key == "ntp" && ["enabled", "enable"].contains($0)))
             }
             return visibleKeys.map { Field(path: [key, $0], definition: children[$0]!) }
         }

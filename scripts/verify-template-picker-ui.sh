@@ -9,6 +9,10 @@ swiftc -swift-version 6 -parse-as-library \
   "$root/apps/macos/Sources/HysteriaX/Models/OpenAPIRequests.generated.swift" \
   "$root/apps/macos/Sources/HysteriaX/Models/OpenAPIResponses.generated.swift" \
   "$root/apps/macos/Sources/HysteriaX/Models/SubscriptionTemplateDocument.swift" \
+  "$root/apps/macos/Sources/HysteriaX/Models/TemplateEditorGuidance.swift" \
+  "$root/apps/macos/Sources/HysteriaX/Models/TemplateDocumentationOrder.swift" \
+  "$root/apps/macos/Sources/HysteriaX/Models/TemplateProtocolOptions.swift" \
+  "$root/apps/macos/Sources/HysteriaX/Models/TemplateDefaultCatalog.swift" \
   "$root/apps/macos/Sources/HysteriaX/Models/TemplateHTTPClientLayout.swift" \
   "$root/apps/macos/Sources/HysteriaX/Models/TemplateRequiredFields.swift" \
   "$root/apps/macos/Sources/HysteriaX/Models/MihomoTemplateRule.swift" \

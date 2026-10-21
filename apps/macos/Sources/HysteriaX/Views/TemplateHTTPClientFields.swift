@@ -10,8 +10,9 @@ struct TemplateHTTPClientFields: View {
     private var properties: [String: JSONValue] { definition["properties"].objectValue ?? [:] }
     private var tlsSchema: JSONValue { store.schema.resolve(properties["tls"] ?? .null, value: value["tls"]) }
     private var dialerKeys: [String] {
-        let ordered = TemplateFieldLayout.dialerFields(in: Array(properties.keys))
-        return ordered + (properties["protect_path"] == nil ? [] : ["protect_path"])
+        let visible = TemplateEditorGuidance.visibleKeys(definition, path: path, schema: store.schema, value: store.effective)
+        let ordered = TemplateFieldLayout.dialerFields(in: visible)
+        return ordered + (visible.contains("protect_path") ? ["protect_path"] : [])
     }
     var body: some View {
         Section(L10n.text("基础信息")) {
@@ -44,17 +45,27 @@ struct TemplateHTTPClientFields: View {
                 }
             }
         }
-        Section("TLS") {
+        ForEach(TemplateHTTPClientLayout.tlsSections(tlsSchema, value: value)) { section in
+        Section(L10n.text(section.title)) {
             let tlsProperties = tlsSchema["properties"].objectValue ?? [:]
-            ForEach(TemplateHTTPClientLayout.tlsBasic, id: \.self) { key in
-                if let field = tlsProperties[key] { fieldView(key, definition: field, parent: path + ["tls"]) }
+            if section.title == "TLS 基础设置" {
+                Text(L10n.text("TLS 随 HTTPS 请求自动启用。"))
+                    .font(.caption).foregroundStyle(.secondary)
             }
-            if !TemplateHTTPClientLayout.isApple(value) {
-                DisclosureGroup(L10n.text("TLS 高级设置")) {
-                    ForEach(tlsProperties.keys.filter { $0 != "enabled" && !TemplateHTTPClientLayout.tlsBasic.contains($0) }.sorted(), id: \.self) { key in
-                        if let field = tlsProperties[key] { fieldView(key, definition: field, parent: path + ["tls"]) }
-                    }
+            let visible = Set(TemplateEditorGuidance.visibleKeys(tlsSchema, path: path + ["tls"], schema: store.schema, value: store.effective))
+            ForEach(section.keys.filter { visible.contains($0) }, id: \.self) { key in
+                if let field = tlsProperties[key] {
+                    fieldView(key, definition: field, parent: path + ["tls"], inlineObject: ["ech", "utls", "reality"].contains(key))
                 }
+            }
+        }
+        }
+        let unknownTLSKeys = (value["tls"].objectValue ?? [:]).keys.filter { tlsSchema["properties"].objectValue?[$0] == nil }.sorted()
+        if !unknownTLSKeys.isEmpty {
+            Section(L10n.text("TLS 未验证字段")) {
+                Text(unknownTLSKeys.joined(separator: "、")).textSelection(.enabled)
+                Text(L10n.text("未验证字段：保留原值，可通过源码编辑。"))
+                    .font(.caption).foregroundStyle(.secondary)
             }
         }
         Section {
@@ -88,23 +99,10 @@ struct TemplateHTTPClientFields: View {
         return [0, 1, 2, 3] + ([0, 1, 2, 3].contains(current) ? [] : [current])
     }
     private var knownKeys: Set<String> {
-        Set(["tag", "engine", "version", "disable_version_fallback", "headers", "tls"] + TemplateHTTPClientLayout.http2 + TemplateHTTPClientLayout.quic + dialerKeys)
+        Set(["tag", "engine", "version", "disable_version_fallback", "headers", "tls"] + TemplateHTTPClientLayout.http2 + TemplateHTTPClientLayout.quic + TemplateFieldLayout.dialerFields(in: Array(properties.keys)) + ["protect_path"])
     }
-    @ViewBuilder private func fieldView(_ key: String, definition: JSONValue, parent: [String]? = nil) -> some View {
+    @ViewBuilder private func fieldView(_ key: String, definition: JSONValue, parent: [String]? = nil, inlineObject: Bool = false) -> some View {
         let fieldPath = (parent ?? path) + [key]
-        if ["stream_receive_window", "connection_receive_window"].contains(key) {
-            LabeledContent {
-                TextField(key, text: Binding(get: {
-                    guard let current = store.effective.at(fieldPath) else { return "" }
-                    return current.stringValue ?? current.pretty
-                }, set: { store.set(fieldPath, TemplateHTTPClientLayout.memoryValue($0)) }), prompt: Text(verbatim: "64 MB"))
-                    .textFieldStyle(.roundedBorder).labelsHidden()
-                    .accessibilityIdentifier("templates.value.\(SubscriptionTemplateStore.pointer(fieldPath))")
-            } label: {
-                TemplateFieldLabel(store: store, path: fieldPath, title: key)
-            }
-        } else {
-            SubscriptionTemplateFields(store: store, definition: definition, path: fieldPath, depth: depth + 1)
-        }
+        SubscriptionTemplateFields(store: store, definition: definition, path: fieldPath, depth: depth + 1, showsFieldHeader: !inlineObject, expandsObjectInline: inlineObject)
     }
 }

@@ -2006,3 +2006,165 @@
 "清除不兼容字段" = "Clear incompatible fields";
 
 "系统管理版本" = "System-managed version";
+
+"查看配置文档" = "View configuration documentation";
+
+"配置文档" = "Documentation";
+
+"共享证书提供者" = "Shared certificate provider";
+
+"接口设置" = "Interface settings";
+
+"监听设置" = "Listen settings";
+
+"证书与身份验证" = "Certificates and authentication";
+
+"规则集来源" = "Rule-set source";
+
+"下载设置" = "Download settings";
+
+"规则内容" = "Rule contents";
+
+"域名与规则集匹配" = "Domain and rule-set matching";
+
+"IP 匹配" = "IP matching";
+
+"端口匹配" = "Port matching";
+
+"进程与用户匹配" = "Process and user matching";
+
+"TLS 参数" = "TLS parameters";
+
+"WireGuard 对端" = "WireGuard peers";
+
+"选择上游出站后，其他拨号参数会被忽略。" = "Other dial parameters are ignored when an upstream outbound is selected.";
+
+"用于解析连接目标的域名；也可由路由的默认域名解析器提供。" = "Resolves connection destination names. The default route domain resolver can also provide this.";
+
+"连接超时时间，例如 300ms 或 10s。" = "Connection timeout, for example 300ms or 10s.";
+
+"启用后不使用 TCP 保活时间和保活间隔。" = "TCP keep-alive timing and interval settings are unused when this is enabled.";
+
+"仅在 fallback 网络策略下使用。" = "Used only with the fallback network strategy.";
+
+"网络选择策略与显式绑定的网络接口或地址互斥。" = "Network strategy conflicts with an explicitly bound interface or address.";
+
+"与 max_connections、min_streams 互斥。" = "Conflicts with max_connections and min_streams.";
+
+"与 max_streams 互斥。" = "Conflicts with max_streams.";
+
+"规则集路径或 URL 以 .json、.srs 结尾时，可自动推断格式。" = "The format can be inferred when the rule-set path or URL ends in .json or .srs.";
+
+"引用共享证书提供者，或配置独立的证书提供者。" = "Reference a shared certificate provider or configure a separate provider.";
+
+"TLS 基础设置" = "TLS basics";
+
+"TLS 协议协商" = "TLS negotiation";
+
+"TLS 证书校验" = "TLS certificate verification";
+
+"TLS 客户端身份" = "TLS client identity";
+
+"TLS 分片与伪装" = "TLS fragmentation and spoofing";
+
+"TLS 内核设置" = "TLS kernel settings";
+
+"TLS 其他设置" = "Other TLS settings";
+
+"TLS 随 HTTPS 请求自动启用。" = "TLS is enabled automatically for HTTPS requests.";
+"此位置的 TLS 由协议自动启用。" = "TLS is enabled automatically by this protocol.";
+"请输入整数。" = "Enter an integer.";
+"原有字符串值已保留；修改时请输入整数。" = "The existing string is preserved. Enter an integer to change it.";
+"未设置时由内核采用默认接收窗口（文档为 15 MB）；显式填写时使用整数字节数。" = "When unset, the kernel uses its default receive window (documented as 15 MB). Enter explicit values as integer bytes.";
+"此位置的 TLS 由协议自动启用，enabled 不控制启用状态。" = "TLS is enabled automatically here; enabled does not control its state.";
+"未设置 enabled 时不启用 TLS。关闭只隐藏参数，保留已有配置。" = "TLS is off when enabled is unset. Turning it off hides the parameters and preserves the configuration.";
+
+"TLS 未验证字段" = "Unverified TLS fields";
+
+"TUN 接口" = "TUN interface";
+
+"TUN DNS" = "TUN DNS";
+
+"自动重定向" = "Automatic redirection";
+
+"流量范围" = "Traffic scope";
+
+"系统代理" = "System proxy";
+
+"登录与控制服务器" = "Login and control server";
+
+"节点身份" = "Node identity";
+
+"子网与出口节点" = "Subnets and exit node";
+
+"中继与监听" = "Relay and listener";
+
+"系统接口" = "System interface";
+
+"状态与文件" = "State and files";
+
+"SSH 服务" = "SSH server";
+
+"加密与密钥" = "Encryption and keys";
+
+"数据通道" = "Data channel";
+
+"保活与重协商" = "Keepalive and renegotiation";
+
+"路由与推送" = "Routes and push options";
+
+"客户端身份" = "Client identity";
+
+"主机检查" = "Host checks";
+
+"会话与重连" = "Session and reconnection";
+
+"证书签发" = "Certificate issuance";
+
+"签发账户" = "Issuer account";
+
+"域名验证" = "Domain validation";
+
+"UDP NAT" = "UDP NAT";
+
+"传输层" = "Transport";
+
+"多路复用" = "Multiplex";
+
+"UDP over TCP" = "UDP over TCP";
+
+"TCP Brutal" = "TCP Brutal";
+
+"连接与流控制" = "Connection and flow control";
+
+"将连接交给指定入站；其他监听参数仍然有效。" = "Forward connections to the selected inbound; other listen options still apply.";
+
+"字段说明" = "Field help";
+"表单依据 sing-box 1.14.2；在线文档可能包含更新版本的字段。" = "The form follows sing-box 1.14.2; online documentation may include fields from newer versions.";
+
+"当前条件下隐藏的已有配置" = "Existing fields hidden under current conditions";
+"这些字段的值已保留。更改相关开关或模式后可继续编辑，也可在源码中查看。" = "These values are preserved. Change the related switch or mode to edit them, or inspect them in source.";
+
+"默认由内核编译选项决定：启用 gVisor 时为 mixed，否则为 system。" = "The default depends on kernel build options: mixed with gVisor, otherwise system.";
+"默认使用目标设备的 CPU 数量。" = "Uses the target device CPU count by default.";
+"默认读取目标系统的 hosts 文件：Windows 使用系统目录，其他系统使用 /etc/hosts。" = "Reads the target system hosts file by default: the system directory on Windows, /etc/hosts elsewhere.";
+"未设置时使用对应列表中的第一项。" = "Uses the first entry in the corresponding list when unset.";
+"默认由目标设备的平台、主机信息和接口状态决定。" = "The default depends on the target platform, host information and interface state.";
+"默认由目标平台、VPN 类型、服务器协商结果或系统网络设置决定。" = "The default depends on the target platform, VPN flavor, server negotiation or system network settings.";
+"默认由 OpenVPN 会话模式、传输协议、MTU、加密算法或服务器协商结果决定。" = "The default depends on the OpenVPN session mode, transport, MTU, cipher or server negotiation.";
+"TLS 模式默认采用服务器推送的拓扑；静态密钥模式默认使用 p2p。" = "TLS mode uses the topology pushed by the server; static-key mode defaults to p2p.";
+"默认由 TLS 实现及当前证书配置选择受支持的版本和算法。" = "The TLS implementation and certificate configuration select supported versions and algorithms by default.";
+"默认由 TLS 实现、对端地址和握手上下文决定。" = "The TLS implementation, remote address and handshake context determine the default.";
+"默认使用目标设备环境中的证书存储目录，不使用编辑器所在设备的路径。" = "Uses the certificate storage directory in the target device environment, not the editor device path.";
+"默认行为取决于使用标准 gRPC 还是内置 gRPC 实现。" = "The default behavior depends on whether standard or built-in gRPC is used.";
+"未设置（由内核决定）" = "Unset (kernel default)";
+"未设置（继承默认）" = "Unset (inherit default)";
+"按顺序连接（default）" = "Sequential connection (default)";
+"空字符串" = "Empty string";
+"名称无效、已存在或使用了保留前缀。" = "The name is invalid, already exists, or uses a reserved prefix.";
+"请先转换为统一配置，再重命名注入规则引用的对象。" = "Convert to a unified configuration before renaming an object used by an injection rule.";
+"配置已变化，请重新发起级联删除。" = "The configuration has changed. Request cascade deletion again.";
+"级联删除预览" = "Cascade deletion preview";
+"将删除所选对象及依赖规则，并处理下列引用。整次操作可以一次撤销。" = "Delete the selected object and dependent rules, and update the references below. Undo restores the entire operation.";
+"查看完整变更" = "View all changes";
+"级联删除" = "Delete with dependencies";

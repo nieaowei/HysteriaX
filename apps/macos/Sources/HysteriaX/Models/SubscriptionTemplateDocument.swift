@@ -46,11 +46,10 @@ struct TemplateSchema {
     static func isObjectResolver(_ path: [String]) -> Bool {
         ["domain_resolver", "default_domain_resolver"].contains(path.last ?? "")
     }
-    func isRequired(_ path: [String], value: JSONValue) -> Bool {
-        guard let key = path.last else { return false }
+    func definition(at path: [String], value: JSONValue) -> JSONValue {
         var definition = root
         var parentPath: [String] = []
-        for component in path.dropLast() {
+        for component in path {
             let parent = resolve(editorDefinition(definition, path: parentPath), value: value.at(parentPath) ?? .null)
             if parent["type"].stringValue == "array", Int(component) != nil {
                 definition = parent["items"]
@@ -59,6 +58,12 @@ struct TemplateSchema {
             }
             parentPath.append(component)
         }
+        return definition
+    }
+    func isRequired(_ path: [String], value: JSONValue) -> Bool {
+        guard let key = path.last else { return false }
+        let parentPath = Array(path.dropLast())
+        let definition = definition(at: parentPath, value: value)
         let parent = resolve(editorDefinition(definition, path: parentPath), value: value.at(parentPath) ?? .null)
         return parent["required"].arrayValue?.contains(.string(key)) == true
             || TemplateRequiredFields.contains(key, definition: definition, schema: parent,
@@ -72,31 +77,27 @@ struct TemplateSchema {
         return nil
     }
     func editorDefinition(_ definition: JSONValue, path: [String]) -> JSONValue {
-        let preferredType: String? = switch path.last {
-        case "udp_timeout": "integer"
-        case "auto_redirect_input_mark", "auto_redirect_output_mark", "auto_redirect_reset_mark": "string"
-        default: nil
-        }
-        if let preferredType {
-            var choices = variants(definition)
-            if let index = choices.firstIndex(where: { resolve($0)["type"].stringValue == preferredType }) {
-                // Prefer the requested type for new values without changing existing values.
-                choices.insert(choices.remove(at: index), at: 0)
-                var field = definition.objectValue ?? [:]
-                for key in ["$ref", "oneOf", "allOf"] { field.removeValue(forKey: key) }
-                field["anyOf"] = .array(choices)
-                return .object(field)
-            }
-        }
-        if ["routing_mark", "default_mark"].contains(path.last ?? "") {
-            let string = variants(definition).first { resolve($0)["type"].stringValue == "string" }
-            var field = resolve(string ?? definition)
-            field["type"] = .string("string")
+        let choices = variants(definition)
+        let types = Set(choices.compactMap { resolve($0)["type"].stringValue })
+        if types == ["integer", "string"] {
+            let type = path.last?.hasSuffix("mark") == true ? "string" : "integer"
+            let selected = choices.first { resolve($0)["type"].stringValue == type }!
+            var metadata = definition.objectValue ?? [:]
+            for key in ["$ref", "oneOf", "anyOf", "allOf"] { metadata[key] = nil }
+            var field = JSONValue.merging(.object(metadata), resolve(selected))
+            if let fallback = field.objectValue?["default"], fallback.schemaType != type { field.set(["default"], nil) }
+            field["x-editor-fixed-scalar"] = .string(type)
             return field
         }
         guard Self.isObjectResolver(path),
               let object = variants(definition).first(where: { resolve($0)["type"].stringValue == "object" }) else { return definition }
         return resolve(object)
+    }
+    static func integerValue(_ text: String) -> JSONValue? {
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let value = Int(text) { return .integer(value) }
+        if let value = UInt64(text) { return .unsignedInteger(value) }
+        return nil
     }
     func scalarListItemDefinition(_ definition: JSONValue) -> JSONValue? {
         let choices = variants(definition).map { resolve($0) }
@@ -114,15 +115,78 @@ struct TemplateSchema {
         if let ref = definition["$ref"].stringValue, ref.hasPrefix("#/") {
             return variants(root.at(ref.dropFirst(2).components(separatedBy: "/")) ?? .null, depth: depth + 1)
         }
-        if let choices = definition["oneOf"].arrayValue ?? definition["anyOf"].arrayValue { return choices }
+        if let choices = definition["oneOf"].arrayValue ?? definition["anyOf"].arrayValue {
+            return choices.flatMap { choice in
+                if choice["oneOf"].arrayValue != nil || choice["anyOf"].arrayValue != nil {
+                    return variants(choice, depth: depth + 1)
+                }
+                return [choice]
+            }
+        }
         return (definition["allOf"].arrayValue ?? []).flatMap { variants($0, depth: depth + 1) }
+    }
+    /// Fields represented by the selected variant's label belong to that picker.
+    /// Other enums (for example HTTP version or matching protocol) remain editable.
+    func variantFieldKeys(_ definition: JSONValue, value: JSONValue) -> Set<String> {
+        guard variants(definition).count > 1 else { return [] }
+        let selected = resolve(definition, value: value)
+        guard selected["type"].stringValue == "object",
+              TemplateHTTPClientLayout.referenceTitle(selected) == nil else { return [] }
+        let properties = selected["properties"]
+        for key in ["type", "action", "provider", "protocol", "version"] {
+            if properties[key].objectValue?["const"] != nil ||
+                properties[key]["enum"].arrayValue?.compactMap(\.stringValue).contains(where: { !$0.isEmpty }) == true {
+                if key == "type", properties["version"].objectValue?["const"] != nil { return [key, "version"] }
+                return [key]
+            }
+        }
+        return []
+    }
+    /// Actions are a separate union inside a rule's matching-condition union.
+    /// Search compositions only: nested matching rules must not acquire actions.
+    func actionDefinition(_ definition: JSONValue, depth: Int = 0) -> JSONValue? {
+        guard depth < 50 else { return nil }
+        if let ref = definition["$ref"].stringValue, ref.hasPrefix("#/") {
+            return actionDefinition(root.at(ref.dropFirst(2).components(separatedBy: "/")) ?? .null, depth: depth + 1)
+        }
+        let choices = definition["oneOf"].arrayValue ?? definition["anyOf"].arrayValue ?? []
+        let actions = choices.compactMap { resolve($0)["properties"]["action"]["const"].stringValue }
+        if actions.count > 1, actions.count == choices.count, Set(actions).count == choices.count {
+            return definition
+        }
+        for part in choices + (definition["allOf"].arrayValue ?? []) {
+            if let action = actionDefinition(part, depth: depth + 1) { return action }
+        }
+        return nil
+    }
+    func selectingAction(_ action: String, from definition: JSONValue, value: JSONValue) -> JSONValue {
+        guard let actions = actionDefinition(definition),
+              let variant = variants(actions).first(where: { resolve($0)["properties"]["action"]["const"] == .string(action) }) else { return value }
+        var current = value
+        // An omitted/empty action means route in sing-box. Recognize its fields
+        // when removing parameters that do not belong to the newly selected action.
+        if current.objectValue?["action"] == nil || current["action"] == .string("") { current["action"] = .string("route") }
+        var next = selecting(variant, from: actions, value: current)
+        // A key can also belong to the matching conditions (network_type is
+        // shared with the direct action). Retain it if the complete rule supports it.
+        let supported = resolve(definition, value: next)["properties"].objectValue ?? [:]
+        for (key, original) in current.objectValue ?? [:] where next.objectValue?[key] == nil && supported[key] != nil {
+            next[key] = original
+        }
+        return next
     }
     func variantTitle(_ definition: JSONValue, index: Int) -> String {
         let schema = resolve(definition)
         if let title = TemplateHTTPClientLayout.referenceTitle(schema) { return title }
+        if schema["x-tag-reference"].stringValue == "certificate_provider" { return L10n.text("共享证书提供者") }
         if let constant = schema.objectValue?["const"] { return Self.pickerTitle(constant) }
         for key in ["type", "action", "provider", "protocol", "version"] {
-            if let value = schema["properties"][key].objectValue?["const"] { return Self.pickerTitle(value) }
+            if let value = schema["properties"][key].objectValue?["const"] {
+                if key == "type", let version = schema["properties"]["version"].objectValue?["const"] {
+                    return Self.pickerTitle(value) + " · " + Self.pickerTitle(version)
+                }
+                return Self.pickerTitle(value)
+            }
             if let value = schema["properties"][key]["enum"].arrayValue?.compactMap(\.stringValue).first(where: { !$0.isEmpty }) { return Self.pickerTitle(.string(value)) }
         }
         return Self.pickerTitle(schema["title"].stringValue.map(JSONValue.string) ?? schema["type"].stringValue.map(JSONValue.string) ?? .string(String(index + 1)))
@@ -202,6 +266,35 @@ struct TemplateSchema {
         }
     }
 }
+
+/// Keeps the unset row separate from JSON values and folds documented empty
+/// aliases into their default choice without changing the stored document.
+struct TemplateEnumPickerOptions {
+    let values: [JSONValue]
+    let includesUnset: Bool
+    let selection: String
+    static let unsetToken = "$unset"
+
+    init(values: [JSONValue], current: JSONValue?, defaultValue: JSONValue?, supportsUnset: Bool, emptyUsesDefault: Bool) {
+        let empty = JSONValue.string("")
+        let emptyAlias = emptyUsesDefault && values.contains(empty)
+            && defaultValue != empty && defaultValue.map(values.contains) == true
+        includesUnset = supportsUnset && defaultValue == nil
+        var choices = values.reduce(into: [JSONValue]()) { result, value in
+            if !result.contains(where: { $0.pretty == value.pretty }) { result.append(value) }
+        }
+        if emptyAlias || includesUnset { choices.removeAll { $0 == empty } }
+        if includesUnset && (current == nil || current == empty) {
+            selection = Self.unsetToken
+        } else {
+            let selected = (emptyAlias && current == empty ? defaultValue : current) ?? defaultValue ?? choices.first ?? .null
+            if !choices.contains(where: { $0.pretty == selected.pretty }) { choices.append(selected) }
+            selection = selected.pretty
+        }
+        self.values = choices
+    }
+}
+
 enum TemplateLineListCodec {
     static func text(_ values: [JSONValue]) -> String {
         values.map { $0.stringValue ?? $0.pretty }.joined(separator: "\n")

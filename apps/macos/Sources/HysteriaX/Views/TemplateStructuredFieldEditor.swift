@@ -10,15 +10,33 @@ struct TemplateStructuredFieldEditor: View {
     private var value: JSONValue { store.effective.at(path) ?? .null }
     private var schema: JSONValue { store.schema.resolve(definition, value: value) }
     private var variants: [JSONValue] { store.schema.variants(definition) }
+    private var actionDefinition: JSONValue? { store.schema.actionDefinition(definition) }
     private var properties: [String: JSONValue] { schema["properties"].objectValue ?? [:] }
+    private var showsVariantPicker: Bool { variants.count > 1 && !(actionDefinition != nil && properties["type"] == nil) }
+    private var visibleKeys: [String] {
+        let owned = showsVariantPicker ? store.schema.variantFieldKeys(definition, value: value) : []
+        return TemplateEditorGuidance.visibleKeys(schema, path: path, schema: store.schema, value: store.effective)
+            .filter { !owned.contains($0) }
+    }
+    private func section(_ key: String) -> String { TemplateEditorGuidance.section(key, path: path, schema: store.schema, value: store.effective) }
     private var groups: [String] {
-        Set(properties.keys.map { TemplateFieldLayout.objectSection($0, path: path) })
-            .sorted { TemplateFieldLayout.objectSectionOrder.firstIndex(of: $0) ?? 99 < TemplateFieldLayout.objectSectionOrder.firstIndex(of: $1) ?? 99 }
+        var order = TemplateEditorGuidance.isSingbox(store.schema) ? TemplateEditorGuidance.sectionOrder : TemplateFieldLayout.objectSectionOrder
+        if TemplateEditorGuidance.isSingbox(store.schema),
+           TemplateEditorGuidance.context(path, schema: store.schema, value: store.effective).name == "DNSRule" {
+            order.removeAll { $0 == "规则动作" }
+            if let index = order.firstIndex(of: "域名与规则集匹配") {
+                order.insert("规则动作", at: index)
+            }
+        }
+        return Set(visibleKeys.map { section($0) }).sorted {
+            let lhs = order.firstIndex(of: $0) ?? order.count, rhs = order.firstIndex(of: $1) ?? order.count
+            return lhs == rhs ? $0 < $1 : lhs < rhs
+        }
     }
     var body: some View {
         let properties = self.properties
         let variants = self.variants
-        let dialerKeys = TemplateFieldLayout.dialerFields(in: Array(properties.keys))
+        let dialerKeys = TemplateFieldLayout.dialerFields(in: visibleKeys)
         VStack(spacing: 0) {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
@@ -26,6 +44,9 @@ struct TemplateStructuredFieldEditor: View {
                     Text(SubscriptionTemplateStore.pointer(path)).font(.caption.monospaced()).foregroundStyle(.secondary).textSelection(.enabled)
                 }
                 Spacer()
+                if let url = TemplateEditorGuidance.documentURL(path, schema: store.schema, value: store.effective) {
+                    Link(L10n.text("配置文档"), destination: url)
+                }
                 Button(L10n.text("撤销"), systemImage: "arrow.uturn.backward") { store.undo() }
                     .labelStyle(.iconOnly).disabled(store.undoStack.isEmpty)
                 Button(L10n.text("重做"), systemImage: "arrow.uturn.forward") { store.redo() }
@@ -39,8 +60,9 @@ struct TemplateStructuredFieldEditor: View {
                     if TemplateHTTPClientLayout.matches(schema) {
                         TemplateHTTPClientFields(store: store, definition: schema, path: path, depth: depth)
                     } else {
-                    if variants.count > 1 {
+                    if showsVariantPicker {
                         Section(L10n.text("配置类型")) {
+                            let key = ["type", "action", "provider", "protocol", "version"].first { store.schema.variantFieldKeys(definition, value: value).contains($0) } ?? "type"
                             Picker(selection: Binding(get: {
                                 variants.firstIndex { store.schema.resolve($0, value: value) == schema } ?? 0
                             }, set: { index in
@@ -49,7 +71,7 @@ struct TemplateStructuredFieldEditor: View {
                             })) {
                                 ForEach(Array(variants.enumerated()), id: \.offset) { index, variant in Text(store.schema.variantTitle(variant, index: index)).tag(index) }
                             } label: {
-                                TemplateFieldLabel(store: store, path: path + ["type"], title: L10n.text("类型"), value: schema["properties"]["type"]["const"])
+                                TemplateFieldLabel(store: store, path: path + [key], title: key == "type" ? L10n.text("类型") : key, value: value[key])
                             }.accessibilityIdentifier("templates.variant.\(SubscriptionTemplateStore.pointer(path))")
                         }
                     }
@@ -57,7 +79,7 @@ struct TemplateStructuredFieldEditor: View {
                         let ordinaryKeys = keys(in: group).filter { !dialerKeys.contains($0) }
                         if !ordinaryKeys.isEmpty {
                         Section {
-                            fields(ordinaryKeys, properties: properties, group: group, variants: variants)
+                            fields(ordinaryKeys, properties: properties, group: group)
                         } header: {
                             if ordinaryKeys.count == 1, let key = ordinaryKeys.first, let field = properties[key], !showsHeader(for: key, definition: field, in: group) {
                                 TemplateFieldLabel(store: store, path: path + [key], title: L10n.text(group))
@@ -70,10 +92,18 @@ struct TemplateStructuredFieldEditor: View {
                     if !dialerKeys.isEmpty {
                         Section {
                             TemplateDialerSettings(store: store, path: path, title: title) {
-                                fields(dialerKeys, properties: properties, group: "网络连接", variants: variants)
+                                fields(dialerKeys, properties: properties, group: "网络连接")
                             }
                         }
                     }
+                    }
+                    let hidden = TemplateEditorGuidance.hiddenConfiguredKeys(schema, path: path, schema: store.schema, value: store.effective)
+                    if !hidden.isEmpty {
+                        Section(L10n.text("当前条件下隐藏的已有配置")) {
+                            Text(hidden.joined(separator: "、")).font(.caption).textSelection(.enabled)
+                            Text(L10n.text("这些字段的值已保留。更改相关开关或模式后可继续编辑，也可在源码中查看。"))
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
                     }
                     if schema["additionalProperties"].objectValue != nil {
                         Section(L10n.text("自定义字段")) { TemplateMapFields(store: store, definition: schema["additionalProperties"], path: path, knownKeys: Set(properties.keys), depth: depth) }
@@ -99,25 +129,22 @@ struct TemplateStructuredFieldEditor: View {
             }
             }
             Divider()
-            HStack {
-                Text(L10n.text("修改会应用到本地草稿")).font(.caption).foregroundStyle(.secondary)
-                Spacer()
-                Button(L10n.text("完成")) { dismiss() }.keyboardShortcut(.cancelAction)
-            }.padding(16)
+            TemplateEditorFooter(store: store) { dismiss() }
         }
         .frame(width: 800, height: 640)
         .accessibilityIdentifier("templates.complexEditor")
     }
-    @ViewBuilder private func fields(_ keys: [String], properties: [String: JSONValue], group: String, variants: [JSONValue]) -> some View {
+    @ViewBuilder private func fields(_ keys: [String], properties: [String: JSONValue], group: String) -> some View {
         ForEach(keys, id: \.self) { key in
             if let field = properties[key] {
-                if let constant = field.objectValue?["const"] {
-                    if variants.count <= 1 || key != "type" {
-                        LabeledContent {
-                            Text(TemplateSchema.pickerTitle(constant))
-                        } label: {
-                            TemplateFieldLabel(store: store, path: path + [key], title: key, value: constant)
-                        }
+                if key == "action", let actions = actionDefinition {
+                    actionPicker(actions)
+                } else if let constant = field.objectValue?["const"] {
+                    LabeledContent {
+                        Text(TemplateSchema.pickerTitle(constant))
+                            .accessibilityIdentifier("templates.constant.\(SubscriptionTemplateStore.pointer(path + [key]))")
+                    } label: {
+                        TemplateFieldLabel(store: store, path: path + [key], title: key, value: constant)
                     }
                 } else {
                     SubscriptionTemplateFields(store: store, definition: field, path: path + [key], depth: depth + 1, showsFieldHeader: showsHeader(for: key, definition: field, in: group))
@@ -125,15 +152,57 @@ struct TemplateStructuredFieldEditor: View {
             }
         }
     }
+    private func actionPicker(_ actionsDefinition: JSONValue) -> some View {
+        let actions = store.schema.variants(actionsDefinition).compactMap { store.schema.resolve($0)["properties"]["action"]["const"].stringValue }
+        let current = value["action"].stringValue.flatMap { $0.isEmpty ? nil : $0 } ?? "route"
+        return Picker(selection: Binding(get: {
+            current
+        }, set: { action in
+            store.set(path, store.schema.selectingAction(action, from: definition, value: value))
+        })) {
+            if !actions.contains(current) { Text(current).tag(current) }
+            ForEach(actions, id: \.self) { action in Text(action).tag(action) }
+        } label: {
+            TemplateFieldLabel(store: store, path: path + ["action"], title: "action", value: .string(current))
+        }
+        .pickerStyle(.menu)
+        .id(SubscriptionTemplateStore.pointer(path + ["action"]))
+        .accessibilityIdentifier("templates.action.\(SubscriptionTemplateStore.pointer(path))")
+    }
     private func keys(in group: String) -> [String] {
-        let required = Set(schema["required"].arrayValue?.compactMap(\.stringValue) ?? [])
-        return TemplateFieldLayout.orderedObjectFields(properties.keys.filter {
-            TemplateFieldLayout.objectSection($0, path: path) == group
-        }, required: required)
+        TemplateEditorGuidance.ordered(visibleKeys.filter { section($0) == group }, path: path, schema: store.schema, value: store.effective)
     }
     private func showsHeader(for key: String, definition: JSONValue, in group: String) -> Bool {
         let resolved = store.schema.resolve(store.schema.editorDefinition(definition, path: path + [key]), value: value[key])
         return keys(in: group).count > 1 || !["object", "array"].contains(resolved["type"].stringValue ?? value[key].schemaType)
+    }
+}
+
+struct TemplateEditorFooter: View {
+    @Bindable var store: SubscriptionTemplateStore
+    let close: () -> Void
+    @State private var checkpoint: SubscriptionTemplateStore.EditorCheckpoint?
+
+    var body: some View {
+        HStack {
+            Text(L10n.text("修改会应用到本地草稿")).font(.caption).foregroundStyle(.secondary)
+            Spacer()
+            Button(L10n.text("取消")) {
+                guard let checkpoint else { return }
+                store.restoreEditorCheckpoint(checkpoint)
+                close()
+            }
+            .keyboardShortcut(.cancelAction)
+            .accessibilityIdentifier("templates.editor.cancel")
+            Button(L10n.text("完成"), action: close)
+                .keyboardShortcut(.defaultAction)
+                .accessibilityIdentifier("templates.editor.done")
+        }
+        .padding(16)
+        .disabled(store.busy || checkpoint == nil)
+        .onAppear {
+            if checkpoint == nil { checkpoint = store.editorCheckpoint() }
+        }
     }
 }
 
@@ -189,11 +258,17 @@ struct TemplateMapFields: View {
                     Text(L10n.text("暂无项目，点击添加开始配置。"))
                         .foregroundStyle(.secondary).frame(maxWidth: .infinity, minHeight: 60)
                 } else {
-                    List(selection: Binding(get: { selectedKey }, set: { selectedKey = $0 })) {
+                    VStack(spacing: 0) {
                         ForEach(keys, id: \.self) { key in
-                            entryRow(key).tag(key).onTapGesture(count: 2) { open(key) }
+                            entryRow(key)
+                                .padding(10)
+                                .contentShape(Rectangle())
+                                .background(selectedKey == key ? Color.accentColor.opacity(0.12) : Color.clear, in: RoundedRectangle(cornerRadius: 8))
+                                .onTapGesture { selectedKey = key }
+                                .onTapGesture(count: 2) { open(key) }
+                            if key != keys.last { Divider().padding(.horizontal, 10) }
                         }
-                    }.frame(height: min(280, max(80, CGFloat(keys.count) * 54)))
+                    }
                 }
             } else {
                 ForEach(keys, id: \.self) { key in entryRow(key) }
@@ -221,6 +296,7 @@ struct TemplateMapFields: View {
                 TemplateStructuredFieldEditor(store: store, definition: entryDefinition, path: path + [key], depth: depth + 1, title: key)
             }
         }
+        .modifier(TemplateCascadeDeletionPresenter(store: store, path: path))
         .onChange(of: keys) { _, next in
             if let key = editingKey, !next.contains(key) { editingKey = nil }
         }

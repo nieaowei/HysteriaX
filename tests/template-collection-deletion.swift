@@ -12,7 +12,7 @@ struct TemplateStructuredFieldEditor: View {
 }
 
 @main struct TemplateCollectionDeletionChecks {
-    @MainActor static func main() {
+    @MainActor static func main() throws {
         _ = NSApplication.shared
         let store = SubscriptionTemplateStore()
         let resolver: JSONValue = .object(["server": .string("dns-main")])
@@ -79,5 +79,31 @@ struct TemplateStructuredFieldEditor: View {
             precondition(store.effective.at(collectionPath) == .array([]))
         }
         print("Legacy resolvers and server/rule collection deletion: passed")
+        let largePath = ["dns", "servers"]
+        let largeValues: [JSONValue] = (0..<20).map { .object(["tag": .string("server-\($0)"), "type": .string("https"), "server": .string("example.com")]) }
+        store.set(largePath, .array(largeValues))
+        host.rootView = TemplateCollectionFields(store: store, definition: .object(["type": .string("object")]), path: largePath, depth: 0)
+        settle()
+        precondition(host.fittingSize.height > 700, "Collection must grow with its rows instead of imposing a clipped inner list")
+        print("Large collection uses natural row height: passed")
+        store.catalog = .object(["format": .string("singbox"), "schema": try JSONDecoder().decode(JSONValue.self, from: Data(contentsOf: URL(fileURLWithPath: CommandLine.arguments[1])))])
+        store.document = .object(["schema_version": .integer(2), "common": .object([
+            "dns": .object(["servers": .array([.object(["type": .string("udp"), "tag": .string("dns-main"), "server": .string("1.1.1.1")])]),
+                "rules": .array([.object(["server": .string("dns-main"), "action": .string("route")])])])
+        ])])
+        host.rootView = TemplateCollectionFields(store: store, definition: store.schema.definition(at: ["dns", "servers"], value: store.effective)["items"], path: ["dns", "servers"], depth: 0)
+        settle()
+        let original = store.document
+        let undoCount = store.undoStack.count
+        store.deleteItem(path: ["dns", "servers"], index: 0); settle()
+        precondition(store.document == original && store.pendingDeletion != nil && !window.sheets.isEmpty, "Referenced deletion must present a preview before changing the draft")
+        store.pendingDeletion = nil; settle(); settle()
+        precondition(store.document == original && window.sheets.isEmpty)
+        store.deleteItem(path: ["dns", "servers"], index: 0); settle()
+        store.confirmCascadeDeletion(); settle(); settle()
+        precondition(store.effective["dns"]["servers"] == .array([]) && store.effective["dns"]["rules"] == .array([]))
+        precondition(store.undoStack.count == undoCount + 1 && window.sheets.isEmpty)
+        store.undo(); settle(); precondition(store.document == original)
+        print("Native cascade preview presentation, cancel, confirmation, atomic removal and undo: passed")
     }
 }
