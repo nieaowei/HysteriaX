@@ -169,6 +169,7 @@ pub async fn migrate(pool: &PgPool, secrets: &SecretBox) -> Result<()> {
     {
         secrets.decrypt(&cipher)?;
     }
+    super::reference_index::flush_pending_on(&mut tx, secrets).await?;
     sqlx::query("DELETE FROM config_resources WHERE resource_kind IN ('certificate','private_key','ech_key')").execute(&mut *tx).await?;
     sqlx::query("ALTER TABLE nodes DROP COLUMN ssh_secret_enc, DROP COLUMN ssh_passphrase_enc, DROP COLUMN ssh_auth_type, ALTER COLUMN ssh_credential_id SET NOT NULL, ALTER COLUMN ssh_credential_version SET NOT NULL").execute(&mut *tx).await?;
     sqlx::query("ALTER TABLE node_assignments DROP COLUMN client_certificate_enc, DROP COLUMN client_private_key_enc").execute(&mut *tx).await?;

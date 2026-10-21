@@ -25,7 +25,7 @@ use axum::{
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use sqlx::{PgPool, Postgres, Row, Transaction};
+use sqlx::{Postgres, Row, Transaction};
 use uuid::Uuid;
 
 use crate::{db, error::ApiError, security::token_digest, state::AppState};
@@ -901,19 +901,6 @@ pub(crate) async fn audit_on(
 ) -> Result<(), ApiError> {
     sqlx::query("INSERT INTO audit_records(id,actor,action,entity_type,entity_id,detail_json,created_at) VALUES($1,$2,$3,$4,$5,$6,$7)")
         .bind(Uuid::new_v4().to_string()).bind(actor).bind(action).bind(entity_type).bind(entity_id).bind(detail).bind(now()).execute(connection).await?;
-    Ok(())
-}
-
-pub(crate) async fn audit(
-    pool: &PgPool,
-    action: &str,
-    entity_type: &str,
-    entity_id: &str,
-    detail: Value,
-) -> Result<(), ApiError> {
-    sqlx::query("INSERT INTO audit_records (id, actor, action, entity_type, entity_id, detail_json, created_at) VALUES ($1, 'admin', $2, $3, $4, $5, $6)")
-        .bind(Uuid::new_v4().to_string()).bind(action).bind(entity_type).bind(entity_id)
-        .bind(detail).bind(now()).execute(pool).await?;
     Ok(())
 }
 

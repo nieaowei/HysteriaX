@@ -77,6 +77,7 @@ async fn sync_source_on(
     generation: i64,
 ) -> Result<(), sqlx::Error> {
     let mut edges = Vec::<Value>::new();
+    let mut resources = Vec::<Value>::new();
     let mut parents = std::collections::BTreeSet::<String>::new();
     let source = if kind == "node" {
         sqlx::query("SELECT id AS node_id,NULL::text AS config_version_id,NULL::bigint AS revision,desired_config_enc,deployed_config_enc,ssh_credential_id FROM nodes WHERE id=$1 FOR NO KEY UPDATE")
@@ -106,6 +107,9 @@ async fn sync_source_on(
                     .map_err(|_| {
                         sqlx::Error::Protocol("invalid configuration reference source".into())
                     })?;
+                for resource in crate::api::resources::collect_resource_ids(&value) {
+                    resources.push(json!({"source":scope,"resource_id":resource}));
+                }
                 for (field, reference) in super::references(&value).map_err(|_| {
                     sqlx::Error::Protocol("invalid configuration reference source".into())
                 })? {
@@ -123,12 +127,24 @@ async fn sync_source_on(
     let edges = Value::Array(edges);
     sqlx::query("SELECT v.credential_id,v.version FROM credential_versions v JOIN (SELECT DISTINCT credential_id,version FROM jsonb_to_recordset($1::jsonb) r(credential_id text,version bigint)) r ON r.credential_id=v.credential_id AND r.version=v.version ORDER BY v.credential_id,v.version FOR KEY SHARE OF v")
         .bind(&edges).fetch_all(&mut *connection).await?;
+    let resources = Value::Array(resources);
+    if let Some(row) = &source {
+        sqlx::query("SELECT r.id FROM config_resources r JOIN (SELECT DISTINCT resource_id FROM jsonb_to_recordset($1::jsonb) e(resource_id text)) e ON e.resource_id=r.id WHERE r.node_id=$2 ORDER BY r.id FOR KEY SHARE OF r")
+            .bind(&resources).bind(row.get::<String,_>("node_id")).fetch_all(&mut *connection).await?;
+    }
+    sqlx::query("DELETE FROM config_resource_references WHERE kind=$1 AND source_id=$2")
+        .bind(kind)
+        .bind(id)
+        .execute(&mut *connection)
+        .await?;
     sqlx::query("DELETE FROM credential_reference_edges WHERE kind=$1 AND source_id=$2")
         .bind(kind)
         .bind(id)
         .execute(&mut *connection)
         .await?;
     if let Some(row) = source {
+        sqlx::query("INSERT INTO config_resource_references(kind,source_id,node_id,config_version_id,config_revision,source,resource_id) SELECT $1,$2,$3,$4,$5,source,resource_id FROM jsonb_to_recordset($6::jsonb) e(source text,resource_id text) ORDER BY resource_id,source")
+            .bind(kind).bind(id).bind(row.get::<String,_>("node_id")).bind(row.get::<Option<String>,_>("config_version_id")).bind(row.get::<Option<i64>,_>("revision")).bind(&resources).execute(&mut *connection).await?;
         sqlx::query("INSERT INTO credential_reference_edges(kind,source_id,node_id,config_version_id,config_revision,source,field,credential_id,version) SELECT $1,$2,$3,$4,$5,source,field,credential_id,version FROM jsonb_to_recordset($6::jsonb) r(source text,field text,credential_id text,version bigint) ORDER BY credential_id,version,source,field")
             .bind(kind).bind(id).bind(row.get::<String,_>("node_id")).bind(row.get::<Option<String>,_>("config_version_id")).bind(row.get::<Option<i64>,_>("revision")).bind(&edges).execute(&mut *connection).await?;
     }
@@ -258,12 +274,7 @@ mod tests {
         super::super::migration::migrate(&pool, &secrets)
             .await
             .unwrap();
-        let state = crate::state::AppState::new(pool.clone(), secrets.clone());
-        let request = crate::credentials::test_node_request(&state, json!({"name":"Upgrade","ssh_host":"127.0.0.1","ssh_port":22,"ssh_username":"root","ssh_auth_type":"password","ssh_secret":"test","public_host":"example.test","public_port":443,"listen_addr":":443"})).await;
-        let (_, Json(created)) = crate::api::nodes::create(State(state.clone()), Json(request))
-            .await
-            .unwrap();
-        let node = created["node"]["id"].as_str().unwrap();
+        let node = "upgrade-node";
         let mut tx = pool.begin().await.unwrap();
         let credential = super::super::insert(
             &mut tx,
@@ -282,13 +293,9 @@ mod tests {
                 &json!({"reference":format!("credential://{credential}/1/secret")}).to_string(),
             )
             .unwrap();
-        sqlx::query("UPDATE nodes SET desired_config_enc=$1 WHERE id=$2")
-            .bind(&cipher)
-            .bind(node)
-            .execute(&mut *tx)
-            .await
-            .unwrap();
-        sqlx::query("INSERT INTO config_versions(id,node_id,revision,config_enc,content_sha256,created_at) SELECT 'upgrade-'||n,$1,n,$2,'retained-hash',now() FROM generate_series(2,301) n").bind(node).bind(&cipher).execute(&mut *tx).await.unwrap();
+        sqlx::query("INSERT INTO nodes(id,name,ssh_host,ssh_port,ssh_username,ssh_credential_id,ssh_credential_version,public_host,public_port,listen_addr,node_token_hash,node_token_enc,traffic_stats_secret_enc,desired_config_enc,created_at,updated_at) VALUES($1,'Upgrade','127.0.0.1',22,'root',$2,1,'example.test',443,':443','hash',$3,$3,$4,now(),now())")
+            .bind(node).bind(&credential).bind(secrets.encrypt("retained-token").unwrap()).bind(&cipher).execute(&mut *tx).await.unwrap();
+        sqlx::query("INSERT INTO config_versions(id,node_id,revision,config_enc,content_sha256,created_at) SELECT 'upgrade-'||n,$1,n,$2,'retained-hash',now() FROM generate_series(1,300) n").bind(node).bind(&cipher).execute(&mut *tx).await.unwrap();
         tx.commit().await.unwrap();
         let snapshot = "SELECT jsonb_build_object('nodes',(SELECT jsonb_agg(to_jsonb(n) ORDER BY id) FROM nodes n),'history',(SELECT jsonb_agg(to_jsonb(v) ORDER BY id) FROM config_versions v),'credentials',(SELECT jsonb_agg(to_jsonb(c) ORDER BY id) FROM credentials c),'versions',(SELECT jsonb_agg(to_jsonb(v) ORDER BY credential_id,version) FROM credential_versions v))";
         let before: Value = sqlx::query_scalar(snapshot).fetch_one(&pool).await.unwrap();

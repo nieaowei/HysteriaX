@@ -307,11 +307,18 @@ async fn migration_preserves_pending_keys_and_source_content() {
         assert_eq!(value, before, "{table}");
     }
     let count: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM dirty_key_versions WHERE generation=1")
+        sqlx::query_scalar("SELECT count(*) FROM dirty_key_versions WHERE generation>=1")
             .fetch_one(&pool)
             .await
             .unwrap();
     assert_eq!(count as usize, expected);
+    // Later projection migrations may requeue an existing reference source.
+    // Statistics keys retain their initial generation; reference queue versions
+    // must still agree with the persistent per-key clock.
+    let invalid: i64 = sqlx::query_scalar("SELECT count(*) FROM dirty_key_versions WHERE queue<>'credential_reference_dirty' AND generation<>1").fetch_one(&pool).await.unwrap();
+    assert_eq!(invalid, 0);
+    let mismatched: i64 = sqlx::query_scalar("SELECT count(*) FROM credential_reference_dirty d LEFT JOIN dirty_key_versions v ON v.queue='credential_reference_dirty' AND v.entity_key=jsonb_build_object('kind',d.kind,'source_id',d.source_id)::text WHERE v.generation IS DISTINCT FROM d.generation").fetch_one(&pool).await.unwrap();
+    assert_eq!(mismatched, 0);
 }
 
 #[tokio::test]

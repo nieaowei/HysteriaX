@@ -77,6 +77,14 @@ impl From<sqlx::Error> for ApiError {
     fn from(error: sqlx::Error) -> Self {
         if error.as_database_error().is_some_and(|e| {
             e.code().as_deref() == Some("23503")
+                && e.constraint() == Some("resource_reference_resource")
+        }) {
+            return Self::conflict(
+                "configuration resource is referenced or no longer available; reload before retrying",
+            );
+        }
+        if error.as_database_error().is_some_and(|e| {
+            e.code().as_deref() == Some("23503")
                 && e.constraint()
                     .is_some_and(|name| name.starts_with("reference_edge_"))
         }) {
