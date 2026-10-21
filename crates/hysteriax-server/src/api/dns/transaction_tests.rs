@@ -1,5 +1,5 @@
 use super::*;
-async fn fixture() -> (AppState, String) {
+pub(super) async fn fixture() -> (AppState, String) {
     let pool = db::test_pool_with_max_connections(4).await;
     let secrets =
         crate::security::SecretBox::from_base64("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
@@ -23,7 +23,7 @@ async fn fixture() -> (AppState, String) {
     .unwrap();
     (state, created["id"].as_str().unwrap().into())
 }
-async fn connection(
+pub(super) async fn connection(
     state: &AppState,
     credential: &str,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
@@ -37,13 +37,13 @@ async fn connection(
     )
     .await
 }
-async fn disable_legacy_lock(state: &AppState) {
+pub(super) async fn disable_legacy_lock(state: &AppState) {
     sqlx::raw_sql("DO $$ DECLARE entry record; BEGIN FOR entry IN SELECT c.relname,tr.tgname FROM pg_trigger tr JOIN pg_class c ON c.oid=tr.tgrelid JOIN pg_proc p ON p.oid=tr.tgfoid WHERE c.relnamespace=current_schema()::regnamespace AND p.proname='hysteriax_serialize_writes' LOOP EXECUTE format('ALTER TABLE %I DISABLE TRIGGER %I',entry.relname,entry.tgname); END LOOP; END $$").execute(&state.pool).await.unwrap();
 }
-async fn waiting(state: &AppState, prefix: &str) {
+pub(super) async fn waiting(state: &AppState, prefix: &str) {
     tokio::time::timeout(std::time::Duration::from_secs(2),async {
         loop {
-            if sqlx::query_scalar::<_,bool>("SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE query LIKE $1 AND wait_event_type='Lock')").bind(format!("{prefix}%")).fetch_one(&state.pool).await.unwrap() {break;}
+            if sqlx::query_scalar::<_,bool>("SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND query LIKE $1 AND wait_event_type='Lock')").bind(format!("{prefix}%")).fetch_one(&state.pool).await.unwrap() {break;}
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
     }).await.unwrap();

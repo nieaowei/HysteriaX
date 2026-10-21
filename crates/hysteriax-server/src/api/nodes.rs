@@ -244,7 +244,7 @@ pub async fn create(
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
     let allocation_request = serde_json::to_value(&input).map_err(|_| ApiError::internal())?;
     if let Some(allocation) = &input.dns_allocation {
-        let mut tx = db::begin_write(&state.pool).await?;
+        let mut tx = crate::read_snapshot::transaction(&state.pool).await?;
         let previous = crate::dns::existing_operation(
             &mut tx,
             &allocation.idempotency_key,
@@ -253,16 +253,7 @@ pub async fn create(
         .await?;
         tx.commit().await?;
         if let Some(previous) = previous {
-            let node_id = previous["resource_id"]
-                .as_str()
-                .ok_or_else(ApiError::internal)?;
-            let Json(node) = get(State(state.clone()), Path(node_id.to_owned())).await?;
-            return Ok((
-                StatusCode::OK,
-                Json(
-                    json!({"node":node,"note":"Node already created; authentication token is not reissued."}),
-                ),
-            ));
+            return replay_created_node(&state, previous).await;
         }
     }
     let id = Uuid::new_v4().to_string();
@@ -329,35 +320,120 @@ pub async fn create(
     let stats_secret_enc = state.secrets.encrypt(&stats_secret)?;
     let digest = hex::encode(Sha256::digest(deployment_snapshot_json.as_bytes()));
 
-    let mut tx = db::begin_write(&state.pool).await?;
+    let replay_key = input
+        .dns_allocation
+        .as_ref()
+        .map(|a| a.idempotency_key.clone());
+    let creation = std::sync::Arc::new(PreparedNodeCreation {
+        id,
+        input,
+        prepared,
+        allocation_request: allocation_request.clone(),
+        token,
+        timestamp: now,
+        proxy_probe_url,
+        mtls,
+        config_enc,
+        node_token_enc,
+        stats_secret_enc,
+        deployment_snapshot_enc: state.secrets.encrypt(&deployment_snapshot_json)?,
+        digest,
+        actor: super::audit_actor(),
+    });
+    let app = state.clone();
+    let outcome = db::serializable::<_, ApiError, _>(&state.pool, move |tx| {
+        let (creation, app) = (creation.clone(), app.clone());
+        Box::pin(async move { insert_node_on(tx, &app, &creation).await })
+    })
+    .await;
+    let outcome = match outcome {
+        Err(error) if replay_key.is_some() => NodeCreation::Existing(
+            crate::dns::replay_after_error(
+                &state.pool,
+                replay_key.as_deref().unwrap(),
+                &allocation_request,
+                error,
+            )
+            .await?,
+        ),
+        other => other?,
+    };
+    match outcome {
+        NodeCreation::Created(value) => Ok((StatusCode::CREATED, Json(value))),
+        NodeCreation::Existing(previous) => replay_created_node(&state, previous).await,
+    }
+}
+
+struct PreparedNodeCreation {
+    id: String,
+    input: CreateNode,
+    prepared: Option<crate::dns::binding::Prepared>,
+    allocation_request: Value,
+    token: String,
+    timestamp: chrono::DateTime<chrono::Utc>,
+    proxy_probe_url: Option<String>,
+    mtls: crate::credentials::node_mtls::Settings,
+    config_enc: String,
+    node_token_enc: String,
+    stats_secret_enc: String,
+    deployment_snapshot_enc: String,
+    digest: String,
+    actor: String,
+}
+enum NodeCreation {
+    Created(Value),
+    Existing(Value),
+}
+
+fn credential_binding_error(error: anyhow::Error) -> ApiError {
+    if crate::db::RetryableTransactionError::retryable_transaction(&error) {
+        ApiError::from(error)
+    } else {
+        ApiError::conflict(error.to_string())
+    }
+}
+
+async fn replay_created_node(
+    state: &AppState,
+    previous: Value,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    let id = previous["resource_id"]
+        .as_str()
+        .ok_or_else(ApiError::internal)?;
+    let Json(node) = get(State(state.clone()), Path(id.into())).await?;
+    Ok((
+        StatusCode::OK,
+        Json(
+            json!({"node":node,"note":"Node already created; authentication token is not reissued."}),
+        ),
+    ))
+}
+
+async fn insert_node_on(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    state: &AppState,
+    creation: &PreparedNodeCreation,
+) -> Result<NodeCreation, ApiError> {
+    let input = &creation.input;
+    let id = &creation.id;
+    let mtls = &creation.mtls;
+    let token = &creation.token;
+    let now = creation.timestamp;
+    let proxy_probe_url = &creation.proxy_probe_url;
+    let config_enc = &creation.config_enc;
+    let node_token_enc = &creation.node_token_enc;
+    let stats_secret_enc = &creation.stats_secret_enc;
+    let digest = &creation.digest;
+    let allocation_request = &creation.allocation_request;
     if let Some(allocation) = &input.dns_allocation
-        && let Some(previous) = crate::dns::existing_operation(
-            &mut tx,
-            &allocation.idempotency_key,
-            &allocation_request,
-        )
-        .await?
+        && let Some(previous) =
+            crate::dns::existing_operation(tx, &allocation.idempotency_key, allocation_request)
+                .await?
     {
-        tx.commit().await?;
-        let Json(node) = get(
-            State(state.clone()),
-            Path(
-                previous["resource_id"]
-                    .as_str()
-                    .ok_or_else(ApiError::internal)?
-                    .to_owned(),
-            ),
-        )
-        .await?;
-        return Ok((
-            StatusCode::OK,
-            Json(
-                json!({"node":node,"note":"Node already created; authentication token is not reissued."}),
-            ),
-        ));
+        return Ok(NodeCreation::Existing(previous));
     }
     crate::credentials::check_bindings(
-        &mut tx,
+        tx,
         &input.config,
         None,
         Some((
@@ -367,59 +443,46 @@ pub async fn create(
         )),
     )
     .await
-    .map_err(|e| ApiError::conflict(e.to_string()))?;
-    crate::credentials::node_mtls::check_binding(&mut tx, &mtls, true)
+    .map_err(credential_binding_error)?;
+    crate::credentials::node_mtls::check_binding(tx, mtls, true)
         .await
-        .map_err(|e| ApiError::conflict(e.to_string()))?;
+        .map_err(credential_binding_error)?;
     sqlx::query("INSERT INTO nodes (id, name, ssh_host, ssh_port, ssh_username, ssh_credential_id, ssh_credential_version, ssh_host_fingerprint, public_host, public_port, listen_addr, traffic_stats_port, proxy_probe_url, tls_sni, tls_skip_verify, node_token_hash, node_token_enc, traffic_stats_secret_enc, desired_config_enc, desired_revision, state, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, 1, 'new', $20, $21)")
-        .bind(&id).bind(input.name.trim()).bind(input.ssh_host.trim()).bind(i32::from(input.ssh_port))
+        .bind(id).bind(input.name.trim()).bind(input.ssh_host.trim()).bind(i32::from(input.ssh_port))
         .bind(input.ssh_username.trim()).bind(&input.ssh_credential_id).bind(input.ssh_credential_version)
-        .bind(input.ssh_host_fingerprint).bind(input.public_host.trim()).bind(i32::from(input.public_port))
-        .bind(input.listen_addr.trim()).bind(i32::from(input.traffic_stats_port)).bind(&proxy_probe_url).bind(input.tls_sni).bind(input.tls_skip_verify).bind(token_digest(&token)).bind(node_token_enc)
-        .bind(stats_secret_enc).bind(config_enc).bind(now).bind(now).execute(&mut *tx).await?;
-    crate::credentials::node_mtls::save_target(&mut tx, &id, 1, &mtls).await?;
-    crate::node_limits::ensure(&mut tx, &id).await?;
+        .bind(&input.ssh_host_fingerprint).bind(input.public_host.trim()).bind(i32::from(input.public_port))
+        .bind(input.listen_addr.trim()).bind(i32::from(input.traffic_stats_port)).bind(proxy_probe_url).bind(&input.tls_sni).bind(input.tls_skip_verify).bind(token_digest(token)).bind(node_token_enc)
+        .bind(stats_secret_enc).bind(config_enc).bind(now).bind(now).execute(&mut **tx).await?;
+    crate::credentials::node_mtls::save_target(tx, id, 1, mtls).await?;
+    crate::node_limits::ensure(tx, id).await?;
     if let Some(package) = &input.package {
-        crate::node_limits::save(&mut tx, &id, package).await?;
+        crate::node_limits::save(tx, id, package).await?;
     }
     sqlx::query("UPDATE node_packages SET usage_bytes = $1 WHERE node_id = $2")
         .bind(input.initial_usage_bytes.unwrap_or(0))
-        .bind(&id)
-        .execute(&mut *tx)
+        .bind(id)
+        .execute(&mut **tx)
         .await?;
     sqlx::query("INSERT INTO config_versions (id, node_id, revision, config_enc, content_sha256, created_at) VALUES ($1, $2, 1, $3, $4, $5)")
-        .bind(Uuid::new_v4().to_string()).bind(&id).bind(state.secrets.encrypt(&deployment_snapshot_json)?).bind(digest).bind(now)
-        .execute(&mut *tx).await?;
-    let dns_result = if let (Some(allocation), Some(prepared)) = (&input.dns_allocation, &prepared)
-    {
-        Some(
-            crate::dns::binding::bind_in_tx(
-                &mut tx,
-                &id,
-                allocation,
-                prepared,
-                &allocation_request,
+        .bind(Uuid::new_v4().to_string()).bind(id).bind(creation.deployment_snapshot_enc.as_str()).bind(digest).bind(now)
+        .execute(&mut **tx).await?;
+    let dns_result =
+        if let (Some(allocation), Some(prepared)) = (&input.dns_allocation, &creation.prepared) {
+            Some(
+                crate::dns::binding::bind_in_tx(tx, id, allocation, prepared, allocation_request)
+                    .await?,
             )
-            .await?,
-        )
-    } else {
-        None
-    };
-    sqlx::query("INSERT INTO audit_records (id, actor, action, entity_type, entity_id, detail_json, created_at) VALUES ($1, 'admin', 'node.created', 'node', $2, $3, $4)")
-        .bind(Uuid::new_v4().to_string()).bind(&id).bind(json!({"name": input.name.trim(), "package": input.package, "initial_usage_bytes": input.initial_usage_bytes.unwrap_or(0)})).bind(now)
-        .execute(&mut *tx).await?;
-    crate::credentials::reference_index::flush_node_on(&mut tx, &state.secrets, &id).await?;
-    tx.commit().await?;
-
-    Ok((
-        StatusCode::CREATED,
-        Json(json!({
-            "node": {"id": id, "name": input.name.trim(), "revision": 1, "state": "new", "traffic_stats_port": input.traffic_stats_port, "proxy_probe_url": proxy_probe_url, "mtls_required": mtls.authority().is_some()},
-            "node_auth_token": token,
-            "dns_allocation": dns_result,
-            "note": "The node token is shown once here and is stored encrypted for server configuration generation."
-        })),
-    ))
+        } else {
+            None
+        };
+    super::audit_on(tx,&creation.actor,"node.created","node",id,json!({"name":input.name.trim(),"package":input.package,"initial_usage_bytes":input.initial_usage_bytes.unwrap_or(0)})).await?;
+    crate::credentials::reference_index::flush_node_on(tx, &state.secrets, id).await?;
+    Ok(NodeCreation::Created(json!({
+        "node": {"id": id, "name": input.name.trim(), "revision": 1, "state": "new", "traffic_stats_port": input.traffic_stats_port, "proxy_probe_url": proxy_probe_url, "mtls_required": mtls.authority().is_some()},
+        "node_auth_token": token,
+        "dns_allocation": dns_result,
+        "note": "The node token is shown once here and is stored encrypted for server configuration generation."
+    })))
 }
 
 pub async fn patch(

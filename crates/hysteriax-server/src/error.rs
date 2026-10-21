@@ -76,6 +76,22 @@ impl IntoResponse for ApiError {
 impl From<sqlx::Error> for ApiError {
     fn from(error: sqlx::Error) -> Self {
         if error.as_database_error().is_some_and(|e| {
+            e.code().as_deref() == Some("23505")
+                && e.constraint() == Some("dns_bindings_hostname_key")
+        }) {
+            return Self::conflict("hostname is already bound to another node");
+        }
+        if error.as_database_error().is_some_and(|e| {
+            e.code().as_deref() == Some("23505")
+                && e.constraint() == Some("dns_operations_idempotency_key_key")
+        }) {
+            return Self::new(
+                StatusCode::CONFLICT,
+                "dns_operation_committed",
+                "a concurrent request already committed this DNS operation",
+            );
+        }
+        if error.as_database_error().is_some_and(|e| {
             e.code().as_deref() == Some("23503")
                 && e.constraint() == Some("resource_reference_resource")
         }) {

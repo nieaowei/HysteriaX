@@ -28,19 +28,19 @@ pub struct ConnectionPatch {
     pub expected_revision: i64,
     pub name: String,
 }
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ActionInput {
     pub expected_revision: i64,
     pub idempotency_key: String,
 }
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ZonePatch {
     pub expected_revision: i64,
     pub enabled: bool,
 }
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct CreateRecord {
     pub zone_id: String,
@@ -185,40 +185,56 @@ async fn connection_action(
     input: ActionInput,
     action: &str,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
-    let mut tx = db::begin_write(&state.pool).await?;
     let request = json!({"connection_id":id,"action":action,"input":input});
-    if let Some(result) = dns::existing_operation(&mut tx, &input.idempotency_key, &request).await?
-    {
-        return Ok((StatusCode::ACCEPTED, Json(result)));
-    }
-    let row = sqlx::query("SELECT * FROM dns_connections WHERE id=$1")
-        .bind(id)
-        .fetch_optional(&mut *tx)
-        .await?
-        .ok_or_else(|| ApiError::not_found("DNS connection"))?;
-    if row.get::<i64, _>("revision") != input.expected_revision {
-        return Err(ApiError::conflict("DNS connection changed; reload"));
-    }
-    let result = dns::enqueue(
-        &mut tx,
-        Operation {
-            key: &input.idempotency_key,
-            request: &request,
-            connection: id,
-            version: row.get("credential_version"),
-            resource_type: "dns_connection",
-            resource: id,
-            resource_name: &row.get::<String, _>("name"),
-            resource_key: format!("dns-connection:{id}"),
-            action,
-            payload: json!({"expected_revision":input.expected_revision}),
-            node: None,
-        },
-    )
+    let id = id.to_owned();
+    let action = action.to_owned();
+    let key = input.idempotency_key.clone();
+    let callback_request = request.clone();
+    let result = dns::request_transaction(&state.pool, &key, &request, move |tx| {
+        let (id, input, action, request) = (
+            id.clone(),
+            input.clone(),
+            action.clone(),
+            callback_request.clone(),
+        );
+        Box::pin(async move {
+            if let Some(result) =
+                dns::existing_operation(tx, &input.idempotency_key, &request).await?
+            {
+                return Ok(result);
+            }
+            let row = sqlx::query("SELECT * FROM dns_connections WHERE id=$1 FOR UPDATE")
+                .bind(&id)
+                .fetch_optional(&mut **tx)
+                .await?
+                .ok_or_else(|| ApiError::not_found("DNS connection"))?;
+            if row.get::<i64, _>("revision") != input.expected_revision {
+                return Err(ApiError::conflict("DNS connection changed; reload"));
+            }
+            let result = dns::enqueue(
+                tx,
+                Operation {
+                    key: &input.idempotency_key,
+                    request: &request,
+                    connection: &id,
+                    version: row.get("credential_version"),
+                    resource_type: "dns_connection",
+                    resource: &id,
+                    resource_name: &row.get::<String, _>("name"),
+                    resource_key: format!("dns-connection:{id}"),
+                    action: &action,
+                    payload: json!({"expected_revision":input.expected_revision}),
+                    node: None,
+                },
+            )
+            .await?;
+            Ok(result)
+        })
+    })
     .await?;
-    tx.commit().await?;
     Ok((StatusCode::ACCEPTED, Json(result)))
 }
+
 pub async fn verify_connection(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -245,70 +261,95 @@ pub async fn patch_zone(
     Path(id): Path<String>,
     Json(input): Json<ZonePatch>,
 ) -> Result<Json<Value>, ApiError> {
-    let mut tx = db::begin_write(&state.pool).await?;
-    if !input.enabled {
-        let bound: bool =
-            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM dns_bindings WHERE zone_id=$1)")
-                .bind(&id)
-                .fetch_one(&mut *tx)
-                .await?;
-        if bound {
-            return Err(ApiError::conflict("zone still has node bindings"));
-        }
-    }
-    let row=sqlx::query("UPDATE dns_zones SET enabled=$1,revision=revision+1 WHERE id=$2 AND revision=$3 RETURNING *")
-        .bind(input.enabled).bind(&id).bind(input.expected_revision).fetch_optional(&mut *tx).await?.ok_or_else(||ApiError::conflict("zone changed; reload"))?;
-    dns::audit(
-        &mut tx,
-        "zone.updated",
-        &id,
-        json!({"enabled":input.enabled}),
-    )
-    .await?;
-    tx.commit().await?;
-    Ok(Json(dns::zone_json(&row)))
+    db::serializable::<_,ApiError,_>(&state.pool,move |tx| {
+        let (id,input)=(id.clone(),input.clone());
+        Box::pin(async move {
+            sqlx::query("SELECT c.id FROM dns_connections c JOIN dns_zones z ON z.connection_id=c.id WHERE z.id=$1 FOR KEY SHARE OF c").bind(&id).fetch_optional(&mut **tx).await?;
+            sqlx::query("SELECT id FROM dns_zones WHERE id=$1 FOR UPDATE").bind(&id).fetch_optional(&mut **tx).await?;
+            if !input.enabled {
+                let bound: bool =
+                    sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM dns_bindings WHERE zone_id=$1)")
+                        .bind(&id)
+                        .fetch_one(&mut **tx)
+                        .await?;
+                if bound {
+                    return Err(ApiError::conflict("zone still has node bindings"));
+                }
+            }
+            let row=sqlx::query("UPDATE dns_zones SET enabled=$1,revision=revision+1 WHERE id=$2 AND revision=$3 RETURNING *")
+                .bind(input.enabled).bind(&id).bind(input.expected_revision).fetch_optional(&mut **tx).await?.ok_or_else(||ApiError::conflict("zone changed; reload"))?;
+            dns::audit(
+                tx,
+                "zone.updated",
+                &id,
+                json!({"enabled":input.enabled}),
+            )
+            .await?;
+            Ok(Json(dns::zone_json(&row)))
+        })
+    }).await
 }
+
 pub async fn refresh_zone(
     State(state): State<AppState>,
     Path(id): Path<String>,
     Json(input): Json<ActionInput>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
-    let mut tx = db::begin_write(&state.pool).await?;
     let request = json!({"zone_id":id,"action":"zone-refresh","input":input});
-    if let Some(result) = dns::existing_operation(&mut tx, &input.idempotency_key, &request).await?
-    {
-        return Ok((StatusCode::ACCEPTED, Json(result)));
-    }
-    let row = zone_for_write(&mut tx, &id).await?;
-    if row.get::<i64, _>("revision") != input.expected_revision {
-        return Err(ApiError::conflict("zone changed; reload"));
-    }
-    let connection: String = row.get("connection_id");
-    let result = dns::enqueue(
-        &mut tx,
-        Operation {
-            key: &input.idempotency_key,
-            request: &request,
-            connection: &connection,
-            version: row.get("credential_version"),
-            resource_type: "dns_zone",
-            resource: &id,
-            resource_name: &row.get::<String, _>("name"),
-            resource_key: format!("dns-zone:{id}"),
-            action: "zone-refresh",
-            payload: json!({}),
-            node: None,
-        },
-    )
+    let key = input.idempotency_key.clone();
+    let callback_request = request.clone();
+    let result = dns::request_transaction(&state.pool, &key, &request, move |tx| {
+        let (id, input, request) = (id.clone(), input.clone(), callback_request.clone());
+        Box::pin(async move {
+            if let Some(result) =
+                dns::existing_operation(tx, &input.idempotency_key, &request).await?
+            {
+                return Ok(result);
+            }
+            let row = zone_for_write(tx, &id).await?;
+            if row.get::<i64, _>("revision") != input.expected_revision {
+                return Err(ApiError::conflict("zone changed; reload"));
+            }
+            let connection: String = row.get("connection_id");
+            let result = dns::enqueue(
+                tx,
+                Operation {
+                    key: &input.idempotency_key,
+                    request: &request,
+                    connection: &connection,
+                    version: row.get("credential_version"),
+                    resource_type: "dns_zone",
+                    resource: &id,
+                    resource_name: &row.get::<String, _>("name"),
+                    resource_key: format!("dns-zone:{id}"),
+                    action: "zone-refresh",
+                    payload: json!({}),
+                    node: None,
+                },
+            )
+            .await?;
+            Ok(result)
+        })
+    })
     .await?;
-    tx.commit().await?;
     Ok((StatusCode::ACCEPTED, Json(result)))
 }
+
+async fn lock_zone_on(tx: &mut Transaction<'_, Postgres>, id: &str) -> Result<(), ApiError> {
+    sqlx::query("SELECT c.id FROM dns_connections c JOIN dns_zones z ON z.connection_id=c.id WHERE z.id=$1 FOR KEY SHARE OF c").bind(id).fetch_optional(&mut **tx).await?;
+    sqlx::query("SELECT id FROM dns_zones WHERE id=$1 FOR SHARE")
+        .bind(id)
+        .fetch_optional(&mut **tx)
+        .await?;
+    Ok(())
+}
+
 pub async fn zone_for_write(
     tx: &mut Transaction<'_, Postgres>,
     id: &str,
 ) -> Result<sqlx::postgres::PgRow, ApiError> {
-    let row=sqlx::query("SELECT z.*,c.credential_version,c.status,c.credential_id FROM dns_zones z JOIN dns_connections c ON c.id=z.connection_id JOIN credentials v ON v.id=c.credential_id WHERE z.id=$1 AND NOT v.archived")
+    lock_zone_on(tx, id).await?;
+    let row=sqlx::query("SELECT z.*,c.credential_version,c.status,c.credential_id FROM dns_zones z JOIN dns_connections c ON c.id=z.connection_id JOIN credentials v ON v.id=c.credential_id WHERE z.id=$1 AND NOT v.archived FOR KEY SHARE OF v")
         .bind(id).fetch_optional(&mut **tx).await?.ok_or_else(||ApiError::bad_request("zone or active DNS credential not found"))?;
     if !row.get::<bool, _>("enabled") || row.get::<String, _>("status") != "verified" {
         return Err(ApiError::bad_request(
@@ -418,28 +459,31 @@ pub async fn create_record(
     Json(input): Json<CreateRecord>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
     let request = json!({"action":"record-create","input":input});
-    let mut tx = db::begin_write(&state.pool).await?;
-    if let Some(result) = dns::existing_operation(&mut tx, &input.idempotency_key, &request).await?
-    {
-        return Ok((StatusCode::ACCEPTED, Json(result)));
-    }
-    let zone = zone_for_write(&mut tx, &input.zone_id).await?;
-    let record = input
-        .record
-        .normalize(&zone.get::<String, _>("name"))
-        .map_err(bad)?;
-    let result = create_record_in_tx(
-        &mut tx,
-        &zone,
-        &input.idempotency_key,
-        &request,
-        &record,
-        None,
-    )
+    let key = input.idempotency_key.clone();
+    let callback_request = request.clone();
+    let result = dns::request_transaction(&state.pool, &key, &request, move |tx| {
+        let (input, request) = (input.clone(), callback_request.clone());
+        Box::pin(async move {
+            if let Some(result) =
+                dns::existing_operation(tx, &input.idempotency_key, &request).await?
+            {
+                return Ok(result);
+            }
+            let zone = zone_for_write(tx, &input.zone_id).await?;
+            let record = input
+                .record
+                .normalize(&zone.get::<String, _>("name"))
+                .map_err(bad)?;
+            let result =
+                create_record_in_tx(tx, &zone, &input.idempotency_key, &request, &record, None)
+                    .await?;
+            Ok(result)
+        })
+    })
     .await?;
-    tx.commit().await?;
     Ok((StatusCode::ACCEPTED, Json(result)))
 }
+
 pub async fn create_record_in_tx(
     tx: &mut Transaction<'_, Postgres>,
     zone: &sqlx::postgres::PgRow,
@@ -486,66 +530,76 @@ async fn record_action(
     record: Option<RecordInput>,
     action: &str,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
-    let mut tx = db::begin_write(&state.pool).await?;
     let request = json!({"action":action,"record_id":id,"input":input,"record":record});
-    if let Some(result) = dns::existing_operation(&mut tx, &input.idempotency_key, &request).await?
-    {
-        return Ok((StatusCode::ACCEPTED, Json(result)));
-    }
-    let row = sqlx::query("SELECT * FROM dns_records WHERE id=$1 AND deleted_at IS NULL")
-        .bind(id)
-        .fetch_optional(&mut *tx)
-        .await?
-        .ok_or_else(|| ApiError::not_found("DNS record"))?;
-    if row.get::<i64, _>("revision") != input.expected_revision {
-        return Err(ApiError::conflict("DNS record changed; reload"));
-    }
-    if row.get::<Option<Value>, _>("desired").is_some() && action != "record-check" {
-        return Err(ApiError::conflict(
-            "DNS record has an unfinished operation; retry that task or refresh after completion",
-        ));
-    }
-    let zone_id: String = row.get("zone_id");
-    let zone = zone_for_write(&mut tx, &zone_id).await?;
-    let bound:Option<String>=sqlx::query_scalar("SELECT n.id FROM nodes n WHERE EXISTS(SELECT 1 FROM dns_bindings b WHERE b.node_id=n.id AND b.record_ids ? $1) OR n.published_connection->>'public_host'=$2 LIMIT 1")
-        .bind(id).bind(row.get::<String,_>("name")).fetch_optional(&mut *tx).await?;
-    if action == "record-delete" && bound.is_some() {
-        return Err(ApiError::conflict(
-            "record is used by a binding or published connection; finish the domain switch before deleting it",
-        ));
-    }
-    if !matches!(
-        row.get::<String, _>("record_type").as_str(),
-        "A" | "AAAA" | "CNAME"
-    ) {
-        return Err(ApiError::bad_request("this record type is read-only"));
-    }
-    let desired = if let Some(record) = record {
-        let record = record
-            .normalize(&zone.get::<String, _>("name"))
-            .map_err(bad)?;
-        if bound.is_some()
-            && (record.name != row.get::<String, _>("name")
-                || record.record_type != row.get::<String, _>("record_type")
-                || record.proxied)
-        {
-            return Err(ApiError::conflict(
-                "bound records must retain their hostname, type and DNS-only status; reassign the node first",
-            ));
-        }
-        Some(record.remote())
-    } else {
-        None
-    };
-    if action != "record-check" {
-        sqlx::query("UPDATE dns_records SET desired=$1,state='pending',revision=revision+1,updated_at=now() WHERE id=$2")
-            .bind(desired.clone().unwrap_or_else(||json!({"delete":true}))).bind(id).execute(&mut *tx).await?;
-    }
-    let connection: String = zone.get("connection_id");
-    let result=dns::enqueue(&mut tx,Operation{key:&input.idempotency_key,request:&request,connection:&connection,version:zone.get("credential_version"),resource_type:"dns_record",resource:id,resource_name:&row.get::<String,_>("name"),resource_key:format!("dns-zone:{zone_id}"),action,payload:json!({"desired":desired,"baseline":row.get::<Option<Value>,_>("remote_snapshot")}),node:bound.as_deref()}).await?;
-    tx.commit().await?;
+    let id = id.to_owned();
+    let action = action.to_owned();
+    let key = input.idempotency_key.clone();
+    let callback_request = request.clone();
+    let result=dns::request_transaction(&state.pool,&key,&request,move |tx| {
+        let (id,input,record,action,request)=(id.clone(),input.clone(),record.clone(),action.clone(),callback_request.clone());
+        Box::pin(async move {
+            sqlx::query("SELECT n.id FROM nodes n WHERE EXISTS(SELECT 1 FROM dns_bindings b WHERE b.node_id=n.id AND b.record_ids ? $1) OR n.published_connection->>'public_host'=(SELECT name FROM dns_records WHERE id=$1) ORDER BY n.id FOR NO KEY UPDATE OF n").bind(&id).fetch_all(&mut **tx).await?;
+            let zone_id:String=sqlx::query_scalar("SELECT zone_id FROM dns_records WHERE id=$1 AND deleted_at IS NULL").bind(&id).fetch_optional(&mut **tx).await?.ok_or_else(||ApiError::not_found("DNS record"))?;
+            let zone=zone_for_write(tx,&zone_id).await?;
+            if let Some(result) = dns::existing_operation(tx, &input.idempotency_key, &request).await?
+            {
+                return Ok(result);
+            }
+            let row = sqlx::query("SELECT * FROM dns_records WHERE id=$1 AND deleted_at IS NULL FOR UPDATE")
+                .bind(&id)
+                .fetch_optional(&mut **tx)
+                .await?
+                .ok_or_else(|| ApiError::not_found("DNS record"))?;
+            if row.get::<i64, _>("revision") != input.expected_revision {
+                return Err(ApiError::conflict("DNS record changed; reload"));
+            }
+            if row.get::<Option<Value>, _>("desired").is_some() && action != "record-check" {
+                return Err(ApiError::conflict(
+                    "DNS record has an unfinished operation; retry that task or refresh after completion",
+                ));
+            }
+            let bound:Option<String>=sqlx::query_scalar("SELECT n.id FROM nodes n WHERE EXISTS(SELECT 1 FROM dns_bindings b WHERE b.node_id=n.id AND b.record_ids ? $1) OR n.published_connection->>'public_host'=$2 LIMIT 1")
+                .bind(&id).bind(row.get::<String,_>("name")).fetch_optional(&mut **tx).await?;
+            if action == "record-delete" && bound.is_some() {
+                return Err(ApiError::conflict(
+                    "record is used by a binding or published connection; finish the domain switch before deleting it",
+                ));
+            }
+            if !matches!(
+                row.get::<String, _>("record_type").as_str(),
+                "A" | "AAAA" | "CNAME"
+            ) {
+                return Err(ApiError::bad_request("this record type is read-only"));
+            }
+            let desired = if let Some(record) = record {
+                let record = record
+                    .normalize(&zone.get::<String, _>("name"))
+                    .map_err(bad)?;
+                if bound.is_some()
+                    && (record.name != row.get::<String, _>("name")
+                        || record.record_type != row.get::<String, _>("record_type")
+                        || record.proxied)
+                {
+                    return Err(ApiError::conflict(
+                        "bound records must retain their hostname, type and DNS-only status; reassign the node first",
+                    ));
+                }
+                Some(record.remote())
+            } else {
+                None
+            };
+            if action != "record-check" {
+                sqlx::query("UPDATE dns_records SET desired=$1,state='pending',revision=revision+1,updated_at=now() WHERE id=$2")
+                    .bind(desired.clone().unwrap_or_else(||json!({"delete":true}))).bind(&id).execute(&mut **tx).await?;
+            }
+            let connection: String = zone.get("connection_id");
+            let result=dns::enqueue(tx,Operation{key:&input.idempotency_key,request:&request,connection:&connection,version:zone.get("credential_version"),resource_type:"dns_record",resource:&id,resource_name:&row.get::<String,_>("name"),resource_key:format!("dns-zone:{zone_id}"),action:&action,payload:json!({"desired":desired,"baseline":row.get::<Option<Value>,_>("remote_snapshot")}),node:bound.as_deref()}).await?;
+            Ok(result)
+        })
+    }).await?;
     Ok((StatusCode::ACCEPTED, Json(result)))
 }
+
 pub async fn update_record(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -578,13 +632,13 @@ pub async fn check_record(
     record_action(&state, &id, input, None, "record-check").await
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct SetBinding {
     pub expected_revision: i64,
     pub allocation: crate::dns::binding::Allocation,
 }
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Unbind {
     pub expected_revision: i64,
@@ -662,7 +716,7 @@ pub async fn set_binding(
     Json(input): Json<SetBinding>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
     let request = json!({"node_id":node,"action":"binding-set","input":input});
-    let mut tx = db::begin_write(&state.pool).await?;
+    let mut tx = crate::read_snapshot::transaction(&state.pool).await?;
     let previous =
         dns::existing_operation(&mut tx, &input.allocation.idempotency_key, &request).await?;
     tx.commit().await?;
@@ -670,28 +724,44 @@ pub async fn set_binding(
         return Ok((StatusCode::ACCEPTED, Json(previous)));
     }
     let prepared = crate::dns::binding::prepare(&state, &node, &input.allocation).await?;
-    let mut tx = db::begin_write(&state.pool).await?;
-    if let Some(previous) =
-        dns::existing_operation(&mut tx, &input.allocation.idempotency_key, &request).await?
-    {
-        return Ok((StatusCode::ACCEPTED, Json(previous)));
-    }
-    // Domain binding, node revision and follow-up sync are one database transaction.
-    crate::dns::binding::change_hostname_in_tx(
-        &state,
-        &mut tx,
-        &node,
-        input.expected_revision,
-        &prepared.hostname,
-    )
-    .await?;
-    let result =
-        crate::dns::binding::bind_in_tx(&mut tx, &node, &input.allocation, &prepared, &request)
+    let key = input.allocation.idempotency_key.clone();
+    let prepared = std::sync::Arc::new(prepared);
+    let app = state.clone();
+    let callback_request = request.clone();
+    let result = dns::request_transaction(&state.pool, &key, &request, move |tx| {
+        let (node, input, prepared, app, request) = (
+            node.clone(),
+            input.clone(),
+            prepared.clone(),
+            app.clone(),
+            callback_request.clone(),
+        );
+        Box::pin(async move {
+            if let Some(previous) =
+                dns::existing_operation(tx, &input.allocation.idempotency_key, &request).await?
+            {
+                return Ok(previous);
+            }
+            // Domain binding, node revision and follow-up sync are one database transaction.
+            crate::dns::binding::change_hostname_in_tx(
+                &app,
+                tx,
+                &node,
+                input.expected_revision,
+                &prepared.hostname,
+            )
             .await?;
-    crate::dns::binding::queue_sync(&mut tx, &node).await?;
-    tx.commit().await?;
+            let result =
+                crate::dns::binding::bind_in_tx(tx, &node, &input.allocation, &prepared, &request)
+                    .await?;
+            crate::dns::binding::queue_sync(tx, &node).await?;
+            Ok(result)
+        })
+    })
+    .await?;
     Ok((StatusCode::ACCEPTED, Json(result)))
 }
+
 pub async fn unbind(
     State(state): State<AppState>,
     Path(node): Path<String>,
@@ -706,48 +776,61 @@ pub async fn unbind(
             "enter a replacement public IP or hostname",
         ));
     }
-    let mut tx = db::begin_write(&state.pool).await?;
-    if let Some(previous) =
-        dns::existing_operation(&mut tx, &input.idempotency_key, &request).await?
-    {
-        return Ok(Json(previous));
-    }
-    let binding=sqlx::query("SELECT b.*,c.credential_version FROM dns_bindings b JOIN dns_zones z ON z.id=b.zone_id JOIN dns_connections c ON c.id=z.connection_id WHERE node_id=$1")
-        .bind(&node).fetch_optional(&mut *tx).await?.ok_or_else(||ApiError::not_found("DNS binding"))?;
-    if input.public_host.trim() == binding.get::<String, _>("hostname") {
-        return Err(ApiError::bad_request(
-            "choose a different public address before unbinding",
-        ));
-    }
-    crate::dns::binding::change_hostname_in_tx(
-        &state,
-        &mut tx,
-        &node,
-        input.expected_revision,
-        input.public_host.trim(),
-    )
-    .await?;
-    sqlx::query("DELETE FROM dns_bindings WHERE node_id=$1")
-        .bind(&node)
-        .execute(&mut *tx)
-        .await?;
-    let connection: String = sqlx::query_scalar("SELECT connection_id FROM dns_zones WHERE id=$1")
-        .bind(binding.get::<String, _>("zone_id"))
-        .fetch_one(&mut *tx)
-        .await?;
-    sqlx::query("INSERT INTO dns_operations(id,idempotency_key,request_sha256,connection_id,credential_version,resource_type,resource_id,action,payload,result,applied_at) VALUES($1,$2,$3,$4,$5,'node',$6,'unbind',$7,$8,now())")
-        .bind(Uuid::new_v4().to_string()).bind(&input.idempotency_key).bind(dns::request_hash(&request)).bind(connection).bind(binding.get::<i64,_>("credential_version")).bind(&node).bind(request).bind(json!({"node_id":node})).execute(&mut *tx).await?;
-    crate::dns::binding::queue_sync(&mut tx, &node).await?;
-    dns::audit(
-        &mut tx,
-        "node.unbound",
-        &node,
-        json!({"public_host":input.public_host,"records_retained":true}),
-    )
-    .await?;
-    tx.commit().await?;
-    Ok(Json(json!({"node_id":node,"records_retained":true})))
+    let key = input.idempotency_key.clone();
+    let callback_request = request.clone();
+    let app = state.clone();
+    let result=dns::request_transaction(&state.pool,&key,&request,move |tx| {
+        let (node,input,request,app)=(node.clone(),input.clone(),callback_request.clone(),app.clone());
+        Box::pin(async move {
+            sqlx::query("SELECT id FROM nodes WHERE id=$1 FOR NO KEY UPDATE").bind(&node).fetch_optional(&mut **tx).await?;
+            if let Some(previous) =
+                dns::existing_operation(tx, &input.idempotency_key, &request).await?
+            {
+                return Ok(previous);
+            }
+            let zone_id:String=sqlx::query_scalar("SELECT zone_id FROM dns_bindings WHERE node_id=$1").bind(&node).fetch_optional(&mut **tx).await?.ok_or_else(||ApiError::not_found("DNS binding"))?;
+            lock_zone_on(tx,&zone_id).await?;
+            let binding=sqlx::query("SELECT b.*,c.credential_version FROM dns_bindings b JOIN dns_zones z ON z.id=b.zone_id JOIN dns_connections c ON c.id=z.connection_id WHERE node_id=$1")
+                .bind(&node).fetch_optional(&mut **tx).await?.ok_or_else(||ApiError::not_found("DNS binding"))?;
+            if input.public_host.trim() == binding.get::<String, _>("hostname") {
+                return Err(ApiError::bad_request(
+                    "choose a different public address before unbinding",
+                ));
+            }
+            crate::dns::binding::change_hostname_in_tx(
+                &app,
+                tx,
+                &node,
+                input.expected_revision,
+                input.public_host.trim(),
+            )
+            .await?;
+            sqlx::query("DELETE FROM dns_bindings WHERE node_id=$1")
+                .bind(&node)
+                .execute(&mut **tx)
+                .await?;
+            let connection: String = sqlx::query_scalar("SELECT connection_id FROM dns_zones WHERE id=$1")
+                .bind(binding.get::<String, _>("zone_id"))
+                .fetch_one(&mut **tx)
+                .await?;
+            sqlx::query("INSERT INTO dns_operations(id,idempotency_key,request_sha256,connection_id,credential_version,resource_type,resource_id,action,payload,result,applied_at) VALUES($1,$2,$3,$4,$5,'node',$6,'unbind',$7,$8,now())")
+                .bind(Uuid::new_v4().to_string()).bind(&input.idempotency_key).bind(dns::request_hash(&request)).bind(connection).bind(binding.get::<i64,_>("credential_version")).bind(&node).bind(request).bind(json!({"node_id":node})).execute(&mut **tx).await?;
+            crate::dns::binding::queue_sync(tx, &node).await?;
+            dns::audit(
+                tx,
+                "node.unbound",
+                &node,
+                json!({"public_host":input.public_host,"records_retained":true}),
+            )
+            .await?;
+            Ok(json!({"node_id":node,"records_retained":true}))
+        })
+    }).await?;
+    Ok(Json(result))
 }
 
 #[cfg(test)]
 mod transaction_tests;
+
+#[cfg(test)]
+mod queue_tests;

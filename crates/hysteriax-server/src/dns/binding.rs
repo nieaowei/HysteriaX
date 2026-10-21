@@ -197,6 +197,10 @@ pub async fn bind_in_tx(
     prepared: &Prepared,
     request: &Value,
 ) -> Result<Value, ApiError> {
+    sqlx::query("SELECT id FROM nodes WHERE id=$1 FOR NO KEY UPDATE")
+        .bind(node)
+        .fetch_optional(&mut **tx)
+        .await?;
     let zone = zone_for_write(tx, &input.zone_id).await?;
     let used: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM dns_bindings WHERE hostname=$1 AND node_id<>$2)",
@@ -351,11 +355,12 @@ pub async fn change_hostname_in_tx(
     revision: i64,
     host: &str,
 ) -> Result<(), ApiError> {
-    let current =
-        sqlx::query("SELECT desired_revision,deployed_revision,state FROM nodes WHERE id=$1")
-            .bind(node)
-            .fetch_one(&mut **tx)
-            .await?;
+    let current = sqlx::query(
+        "SELECT desired_revision,deployed_revision,state FROM nodes WHERE id=$1 FOR NO KEY UPDATE",
+    )
+    .bind(node)
+    .fetch_one(&mut **tx)
+    .await?;
     if current.get::<i64, _>("desired_revision") != revision
         || matches!(
             current.get::<String, _>("state").as_str(),
