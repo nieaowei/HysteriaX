@@ -263,7 +263,7 @@ async fn migration_preserves_pending_keys_and_source_content() {
     sqlx::raw_sql("INSERT INTO users(id,name,usage_bytes,created_at,updated_at) VALUES('retained-user','Retained',1234,now(),now());
         INSERT INTO nodes(id,name,ssh_host,ssh_port,ssh_username,ssh_auth_type,ssh_secret_enc,public_host,public_port,listen_addr,node_token_hash,node_token_enc,traffic_stats_secret_enc,desired_config_enc,created_at,updated_at) VALUES('live-node','Retained node','127.0.0.1',22,'root','private_key','opaque ciphertext','example.test',443,':443','retained-hash','opaque token','opaque stats','opaque config',now(),now());
         INSERT INTO online_samples(cycle_id,node_id,sampled_at,cycle_started_at,status,traffic_status,connections,expected_nodes) VALUES('00000000-0000-0000-0000-000000000002','live-node','2026-01-01','2026-01-01','ok','ok','{\"retained-user\":3}',1);").execute(&pool).await.unwrap();
-    const SOURCE: &str = "SELECT jsonb_build_object('users',(SELECT jsonb_agg(to_jsonb(u) ORDER BY id) FROM users u),'nodes',(SELECT jsonb_agg(to_jsonb(n) ORDER BY id) FROM nodes n),'samples',(SELECT jsonb_agg(to_jsonb(s) ORDER BY cycle_id,node_id) FROM online_samples s))";
+    const SOURCE: &str = "SELECT jsonb_build_object('users',(SELECT jsonb_agg(to_jsonb(u) ORDER BY id) FROM users u),'nodes',(SELECT jsonb_agg(to_jsonb(n) ORDER BY id) FROM nodes n),'samples',(SELECT jsonb_agg(to_jsonb(s)-'pending' ORDER BY cycle_id,node_id) FROM online_samples s))";
     let source_before: Value = sqlx::query_scalar(SOURCE).fetch_one(&pool).await.unwrap();
     sqlx::raw_sql(
         "INSERT INTO analytics_dirty_cycles VALUES('00000000-0000-0000-0000-000000000001');
@@ -298,6 +298,14 @@ async fn migration_preserves_pending_keys_and_source_content() {
         .sum();
     crate::db::run_migrations(&pool).await.unwrap();
     let source_after: Value = sqlx::query_scalar(SOURCE).fetch_one(&pool).await.unwrap();
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM online_samples WHERE pending")
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+        0,
+        "historical samples must remain completed"
+    );
     assert_eq!(
         source_before, source_after,
         "migration must preserve usage, ciphertext and historical samples"

@@ -446,7 +446,7 @@ mod boundary_tests {
             ),
         )
         .await;
-        assert!(result.unwrap().is_err());
+        assert!(result.is_none(), "cancelled work must not be polled at all");
         assert_eq!(sends.load(Ordering::SeqCst), 0);
         assert_eq!(
             sqlx::query_scalar::<_, i64>("SELECT count(*) FROM execution_operations")
