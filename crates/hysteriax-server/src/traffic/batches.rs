@@ -80,7 +80,6 @@ pub async fn seal(
 
 /// Only uncaptured work can expire. Captured counters remain available for
 /// another process; a collection timeout must never discard ready billing work.
-#[cfg(test)]
 pub async fn captured(pool: &PgPool, id: &str) -> Result<bool> {
     Ok(sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM traffic_sample_batches WHERE sample_id=$1 AND payload_digest IS NOT NULL)")
         .bind(id).fetch_one(pool).await?)
@@ -98,10 +97,24 @@ pub async fn discard_capture(pool: &PgPool, id: &str) -> Result<()> {
     }).await
 }
 
+pub async fn expire_captures_on(
+    tx: &mut sqlx::Transaction<'static, sqlx::Postgres>,
+) -> Result<usize> {
+    let cutoff: DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
+        .fetch_one(&mut **tx)
+        .await?;
+    let ids:Vec<String>=sqlx::query_scalar("SELECT b.sample_id FROM traffic_sample_batches b WHERE b.state='capturing' AND b.capture_deadline<=$1 AND NOT EXISTS(SELECT 1 FROM resource_leases l WHERE l.resource_key='work:'||b.sample_id AND l.owner IS NOT NULL AND l.expires_at>$1) ORDER BY b.capture_deadline,b.sample_id LIMIT 256 FOR UPDATE OF b SKIP LOCKED")
+        .bind(cutoff).fetch_all(&mut **tx).await?;
+    sqlx::query("UPDATE traffic_sample_batches SET state='discarded',completed_at=clock_timestamp() WHERE sample_id=ANY($1::text[])")
+        .bind(&ids).execute(&mut **tx).await?;
+    Ok(ids.len())
+}
+#[cfg(test)]
 pub async fn expire_captures(pool: &PgPool) -> Result<()> {
-    sqlx::query("UPDATE traffic_sample_batches SET state='discarded',completed_at=clock_timestamp() WHERE state='capturing' AND capture_deadline<=clock_timestamp()")
-        .execute(pool).await?;
-    Ok(())
+    db::write(pool, |tx| {
+        Box::pin(async move { expire_captures_on(tx).await.map(|_| ()) })
+    })
+    .await
 }
 
 /// All resources are locked node -> batch -> sorted users -> item/baseline.
@@ -211,15 +224,4 @@ pub async fn drain(pool: &PgPool, id: &str) -> Result<bool> {
             Progress::Committed { .. } => tokio::task::yield_now().await,
         }
     }
-}
-
-pub async fn process_next(pool: &PgPool) -> Result<bool> {
-    let ids:Vec<String>=sqlx::query_scalar("SELECT b.sample_id FROM traffic_sample_batches b WHERE b.state='ready' AND NOT EXISTS(SELECT 1 FROM traffic_sample_batches prior WHERE prior.node_id=b.node_id AND prior.sample_order<b.sample_order AND prior.state IN ('capturing','ready')) ORDER BY b.sample_order LIMIT 16")
-        .fetch_all(pool).await?;
-    for id in ids {
-        if let Progress::Committed { .. } = process(pool, &id).await? {
-            return Ok(true);
-        }
-    }
-    Ok(false)
 }

@@ -17,6 +17,7 @@ use crate::{
 #[cfg(test)]
 mod batch_tests;
 pub(crate) mod batches;
+pub mod work;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CounterDelta {
@@ -60,16 +61,61 @@ pub fn counter_delta(
 }
 
 pub async fn run(state: AppState) {
-    // Expiry enforcement must keep ticking even when SSH sampling is slow.
+    // Pure DB maintenance keeps ticking independently of remote collection.
     tokio::join!(
-        sampling_loop(&state),
-        expiration_loop(&state.pool),
-        billing_loop(&state.pool)
+        crate::background::run_sampling(state.clone(), "traffic"),
+        maintenance_loop(state.clone()),
+        expiration_loop(&state.pool)
     );
 }
 
-async fn sampling_loop(state: &AppState) {
-    crate::background::run_sampling(state.clone(), "traffic").await;
+async fn maintenance_loop(state: AppState) {
+    let mut tick = tokio::time::interval(Duration::from_secs(1));
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        tick.tick().await;
+        if let Err(error) = maintenance_pass(&state).await {
+            tracing::warn!(%error,"traffic maintenance deferred");
+        }
+    }
+}
+async fn maintenance_pass(state: &AppState) -> Result<()> {
+    use crate::background::maintenance;
+    maintenance::ensure(
+        &state.pool,
+        "traffic-capture-expiry",
+        "traffic-maintenance",
+        serde_json::json!({"operation":"capture_expiry"}),
+    )
+    .await?;
+    let Some(work) =
+        maintenance::claim(&state.pool, "traffic-maintenance", &state.instance_id).await?
+    else {
+        return Ok(());
+    };
+    crate::execution::supervise(state.pool.clone(), work.leases.clone(), async {
+        let result = expire_work(state, &work).await;
+        if let Err(error) = result {
+            tracing::warn!(%error,"traffic capture cleanup deferred");
+            work.retry(&state.pool).await?;
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .transpose()?;
+    Ok(())
+}
+async fn expire_work(state: &AppState, work: &crate::background::maintenance::Work) -> Result<()> {
+    let work = work.clone();
+    db::write(&state.pool, move |tx| {
+        let work = work.clone();
+        Box::pin(async move {
+            work.guard_on(tx).await?;
+            batches::expire_captures_on(tx).await?;
+            work.finish_on(tx, false, 1, None).await
+        })
+    })
+    .await
 }
 
 async fn expiration_loop(pool: &PgPool) {
@@ -78,7 +124,7 @@ async fn expiration_loop(pool: &PgPool) {
     loop {
         tick.tick().await;
         if let Err(error) = schedule_expirations(pool).await {
-            tracing::error!(%error, "failed to schedule expired-user revocations");
+            tracing::warn!(%error,"access expiry deferred");
         }
     }
 }
@@ -105,28 +151,11 @@ pub async fn finish_captured_for_removal(pool: &PgPool, node: &str) -> Result<()
     }
 }
 
-async fn billing_loop(pool: &PgPool) {
-    let mut tick = tokio::time::interval(Duration::from_secs(1));
-    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    loop {
-        tick.tick().await;
-        if let Err(error) = batches::expire_captures(pool).await {
-            tracing::warn!(%error,"expired traffic captures could not be closed");
-        }
-        for _ in 0..16 {
-            match batches::process_next(pool).await {
-                Ok(true) => {}
-                Ok(false) => break,
-                Err(error) => {
-                    tracing::warn!(%error,"captured traffic billing deferred");
-                    break;
-                }
-            }
-        }
-    }
-}
-
 pub(crate) async fn sample_work(state: &AppState, work: &crate::background::Work) -> Result<()> {
+    if batches::captured(&state.pool, &work.id).await? {
+        batches::drain(&state.pool, &work.id).await?;
+        return Ok(());
+    }
     crate::background::admit_read(&state.pool, work).await?;
     let result = tokio::time::timeout(
         Duration::from_secs(45),

@@ -6,7 +6,7 @@ async fn fixture(users: usize) -> PgPool {
     fixture_through(users, i64::MAX).await
 }
 
-async fn fixture_through(users: usize, version: i64) -> PgPool {
+pub(super) async fn fixture_through(users: usize, version: i64) -> PgPool {
     let pool = crate::db::test_pool_through_version(8, version).await;
     sqlx::query("INSERT INTO nodes(id,name,ssh_host,ssh_port,ssh_username,ssh_auth_type,ssh_secret_enc,public_host,public_port,listen_addr,node_token_hash,node_token_enc,traffic_stats_secret_enc,desired_config_enc,created_at,updated_at) SELECT id,id,'127.0.0.1',22,'root','password','secret','example.test',443,':443',id,id,'stats','{}',now(),now() FROM unnest(ARRAY['a','b']) id")
         .execute(&pool).await.unwrap();
@@ -429,7 +429,21 @@ async fn timeout_after_capture_keeps_payload_and_quality_for_background_billing(
     .unwrap();
     assert_eq!(after, before);
     assert!(batches::captured(&pool, &id).await.unwrap());
-    while batches::process_next(&pool).await.unwrap() {}
+    super::work::initialize(&pool).await.unwrap();
+    let state = crate::state::AppState::new(
+        pool.clone(),
+        crate::security::SecretBox::from_base64("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+            .unwrap(),
+    );
+    let work = crate::background::claim(&pool, "traffic", &state.instance_id)
+        .await
+        .unwrap()
+        .unwrap();
+    crate::execution::supervise(pool.clone(), work.leases.clone(), async {
+        super::sample_work(&state, &work).await.unwrap();
+        crate::background::finish(&pool, &work, true).await.unwrap();
+    })
+    .await;
     assert_eq!(usage(&pool).await, vec![100]);
     let after: String = sqlx::query_scalar(
         "SELECT traffic_status FROM online_samples WHERE node_id='a' AND cycle_id=$1",
