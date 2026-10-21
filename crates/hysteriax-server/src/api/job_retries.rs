@@ -8,7 +8,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use sqlx::Row;
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 pub struct RetryRequest {
     pub expected_revision: i64,
 }
@@ -18,10 +18,24 @@ pub async fn retry(
     Path(id): Path<String>,
     Json(input): Json<RetryRequest>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
-    let mut tx = db::begin_write(&state.pool).await?;
+    let actor = super::audit_actor();
+    db::serializable(&state.pool, move |tx| {
+        let (id, input, actor) = (id.clone(), input.clone(), actor.clone());
+        Box::pin(async move { retry_on(tx, id, input, actor).await })
+    })
+    .await
+}
+
+async fn retry_on(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    id: String,
+    input: RetryRequest,
+    actor: String,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    lock_retry_parents_on(tx, &id).await?;
     let original = sqlx::query("SELECT * FROM jobs WHERE id=$1 FOR UPDATE")
         .bind(&id)
-        .fetch_optional(&mut *tx)
+        .fetch_optional(&mut **tx)
         .await?
         .ok_or_else(|| ApiError::not_found("job"))?;
     let status: String = original.get("status");
@@ -37,7 +51,7 @@ pub async fn retry(
     }
     if let Some(child) = sqlx::query("SELECT id,status FROM jobs WHERE retry_of_job_id=$1")
         .bind(&id)
-        .fetch_optional(&mut *tx)
+        .fetch_optional(&mut **tx)
         .await?
     {
         let status: String = child.get("status");
@@ -54,12 +68,29 @@ pub async fn retry(
             "this job already has a completed retry; open the latest attempt",
         ));
     }
+    let uncertain:bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM execution_operations WHERE work_id=$1 AND state IN ('dispatching','reconciling','needs_attention') UNION ALL SELECT 1 FROM resource_leases WHERE work_id=$1 AND blocked)").bind(&id).fetch_one(&mut **tx).await?;
+    if uncertain {
+        return Err(ApiError::conflict(
+            "remote outcome requires verification before retrying this job",
+        ));
+    }
+    // Publish a new parent tuple with the retry. A waiter with an older
+    // SERIALIZABLE snapshot must retry before it can infer there is no child.
+    sqlx::query("UPDATE jobs SET updated_at=clock_timestamp() WHERE id=$1")
+        .bind(&id)
+        .execute(&mut **tx)
+        .await?;
     if managed {
-        let child =
-            crate::credentials::rotations::retry_node_job(&mut tx, &id, input.expected_revision)
-                .await
-                .map_err(|e| ApiError::conflict(e.to_string()))?;
-        tx.commit().await?;
+        let child = crate::credentials::rotations::retry_node_job(tx, &id, input.expected_revision)
+            .await
+            .map_err(|error| {
+                if crate::db::RetryableTransactionError::retryable_transaction(&error) {
+                    ApiError::from(error)
+                } else {
+                    ApiError::conflict(error.to_string())
+                }
+            })?;
+        audit_retry_on(tx, &actor, &id, &child, json!({})).await?;
         return Ok((
             StatusCode::ACCEPTED,
             Json(json!({"job_id":child,"status":"queued"})),
@@ -70,7 +101,7 @@ pub async fn retry(
         let mut payload: Value = original.get("payload_json");
         let operation = sqlx::query("SELECT * FROM dns_operations WHERE id=$1")
             .bind(payload["dns_operation_id"].as_str())
-            .fetch_one(&mut *tx)
+            .fetch_one(&mut **tx)
             .await?;
         let resource: String = operation.get("resource_id");
         let resource_type: String = operation.get("resource_type");
@@ -78,19 +109,19 @@ pub async fn retry(
             "dns_record" => {
                 sqlx::query_scalar::<_, i64>("SELECT revision FROM dns_records WHERE id=$1")
                     .bind(&resource)
-                    .fetch_one(&mut *tx)
+                    .fetch_one(&mut **tx)
                     .await?
             }
             "dns_zone" => {
                 sqlx::query_scalar::<_, i64>("SELECT revision FROM dns_zones WHERE id=$1")
                     .bind(&resource)
-                    .fetch_one(&mut *tx)
+                    .fetch_one(&mut **tx)
                     .await?
             }
             "dns_connection" => {
                 sqlx::query_scalar::<_, i64>("SELECT revision FROM dns_connections WHERE id=$1")
                     .bind(&resource)
-                    .fetch_one(&mut *tx)
+                    .fetch_one(&mut **tx)
                     .await?
             }
             _ => return Err(ApiError::bad_request("unsupported DNS retry target")),
@@ -115,7 +146,7 @@ pub async fn retry(
             let desired: Option<Value> =
                 sqlx::query_scalar("SELECT desired FROM dns_records WHERE id=$1")
                     .bind(&resource)
-                    .fetch_one(&mut *tx)
+                    .fetch_one(&mut **tx)
                     .await?;
             if desired.is_none() {
                 return Err(ApiError::conflict(
@@ -129,23 +160,23 @@ pub async fn retry(
             "SELECT credential_version FROM dns_connections WHERE id=$1 AND status='verified'",
         )
         .bind(operation.get::<String, _>("connection_id"))
-        .fetch_optional(&mut *tx)
+        .fetch_optional(&mut **tx)
         .await?
         .ok_or_else(|| ApiError::conflict("verify the DNS connection before retrying"))?;
         payload["dns_credential_version"] = json!(verified_version);
         let node: Option<String> = original.get("node_id");
         let child =
-            super::enqueue_job_with_payload_in_tx(&mut tx, &kind, node.as_deref(), None, payload)
+            super::enqueue_job_with_payload_in_tx(tx, &kind, node.as_deref(), None, payload)
                 .await?;
         sqlx::query("UPDATE jobs SET retry_of_job_id=$1,resource_key=$2,resource_type=$3,resource_id=$4,resource_name=$5 WHERE id=$6")
             .bind(&id).bind(original.get::<Option<String>,_>("resource_key")).bind(&resource_type).bind(&resource)
-            .bind(original.get::<Option<String>,_>("resource_name")).bind(&child).execute(&mut *tx).await?;
+            .bind(original.get::<Option<String>,_>("resource_name")).bind(&child).execute(&mut **tx).await?;
         sqlx::query("UPDATE dns_operations SET job_id=$1 WHERE id=$2")
             .bind(&child)
             .bind(operation.get::<String, _>("id"))
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await?;
-        tx.commit().await?;
+        audit_retry_on(tx, &actor, &id, &child, json!({})).await?;
         return Ok((
             StatusCode::ACCEPTED,
             Json(json!({"job_id":child,"status":"queued"})),
@@ -166,7 +197,7 @@ pub async fn retry(
     let node = node.ok_or_else(|| ApiError::conflict("job has no node to retry"))?;
     let row = sqlx::query("SELECT desired_revision,state FROM nodes WHERE id=$1")
         .bind(&node)
-        .fetch_optional(&mut *tx)
+        .fetch_optional(&mut **tx)
         .await?
         .ok_or_else(|| ApiError::not_found("node"))?;
     let revision: i64 = row.get("desired_revision");
@@ -181,18 +212,16 @@ pub async fn retry(
     }
     if retry_kind == "kick" {
         let changed = sqlx::query("UPDATE kick_requests SET state='active',updated_at=now() WHERE node_id=$1 AND latest_job_id=$2 AND state IN ('waiting_recovery','needs_attention')")
-            .bind(&node).bind(&id).execute(&mut *tx).await?;
+            .bind(&node).bind(&id).execute(&mut **tx).await?;
         if changed.rows_affected() != 1 {
             return Err(ApiError::conflict(
                 "kick request is completed, cancelled or superseded; open the latest attempt",
             ));
         }
-        crate::kick_requests::schedule(&mut tx, Some(&node), false).await?;
+        crate::kick_requests::schedule(tx, Some(&node), false).await?;
         let child: String = sqlx::query_scalar("SELECT latest_job_id FROM kick_requests WHERE node_id=$1 AND latest_job_id IN (SELECT id FROM jobs WHERE retry_of_job_id=$2)")
-            .bind(&node).bind(&id).fetch_one(&mut *tx).await?;
-        sqlx::query("INSERT INTO audit_records(id,actor,action,entity_type,entity_id,detail_json,created_at) VALUES($1,'admin','job.retry_requested','job',$2,$3,now())")
-            .bind(uuid::Uuid::new_v4().to_string()).bind(&id).bind(json!({"job_id":child,"node_id":node})).execute(&mut *tx).await?;
-        tx.commit().await?;
+            .bind(&node).bind(&id).fetch_one(&mut **tx).await?;
+        audit_retry_on(tx, &actor, &id, &child, json!({"node_id":node})).await?;
         return Ok((
             StatusCode::ACCEPTED,
             Json(json!({"job_id":child,"status":"queued"})),
@@ -202,7 +231,7 @@ pub async fn retry(
         let target: Option<i64> = original.get("target_revision");
         let target = target.ok_or_else(|| ApiError::conflict("rollback has no target revision"))?;
         let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM config_versions WHERE node_id=$1 AND revision=$2 AND deployed_success=TRUE)")
-            .bind(&node).bind(target).fetch_one(&mut *tx).await?;
+            .bind(&node).bind(target).fetch_one(&mut **tx).await?;
         if !exists {
             return Err(ApiError::conflict("rollback target is no longer available"));
         }
@@ -218,24 +247,107 @@ pub async fn retry(
     if retry_kind == "ssh-test" && state_value == "delete_failed" {
         payload["delete_recovery"] = json!(true);
     }
-    let child = super::enqueue_job_with_payload_in_tx(
-        &mut tx,
-        retry_kind,
-        Some(&node),
-        Some(target),
-        payload,
-    )
-    .await?;
+    let child =
+        super::enqueue_job_with_payload_in_tx(tx, retry_kind, Some(&node), Some(target), payload)
+            .await?;
     sqlx::query("UPDATE jobs SET retry_of_job_id=$2 WHERE id=$1")
         .bind(&child)
         .bind(&id)
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?;
-    sqlx::query("INSERT INTO audit_records(id,actor,action,entity_type,entity_id,detail_json,created_at) VALUES($1,'admin','job.retry_requested','job',$2,$3,now())")
-        .bind(uuid::Uuid::new_v4().to_string()).bind(&id).bind(json!({"job_id":child,"node_id":node,"target_revision":target})).execute(&mut *tx).await?;
-    tx.commit().await?;
+    audit_retry_on(
+        tx,
+        &actor,
+        &id,
+        &child,
+        json!({"node_id":node,"target_revision":target}),
+    )
+    .await?;
     Ok((
         StatusCode::ACCEPTED,
         Json(json!({"job_id":child,"status":"queued"})),
     ))
 }
+
+async fn audit_retry_on(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    actor: &str,
+    parent: &str,
+    child: &str,
+    mut detail: Value,
+) -> Result<(), ApiError> {
+    detail["job_id"] = json!(child);
+    super::audit_on(tx, actor, "job.retry_requested", "job", parent, detail).await
+}
+
+async fn lock_retry_parents_on(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    id: &str,
+) -> Result<(), ApiError> {
+    let original = sqlx::query("SELECT node_id,kind,payload_json FROM jobs WHERE id=$1")
+        .bind(id)
+        .fetch_optional(&mut **tx)
+        .await?
+        .ok_or_else(|| ApiError::not_found("job"))?;
+    if let Some(node) = original.get::<Option<String>, _>("node_id") {
+        sqlx::query("SELECT id FROM nodes WHERE id=$1 FOR NO KEY UPDATE")
+            .bind(node)
+            .fetch_optional(&mut **tx)
+            .await?
+            .ok_or_else(|| ApiError::not_found("node"))?;
+    }
+    let payload: Value = original.get("payload_json");
+    if original.get::<String, _>("kind") == "kick"
+        && let Some(user) = payload["user_id"].as_str()
+    {
+        sqlx::query("SELECT id FROM users WHERE id=$1 FOR NO KEY UPDATE")
+            .bind(user)
+            .fetch_optional(&mut **tx)
+            .await?;
+    }
+    if let Some(operation) = payload["dns_operation_id"].as_str() {
+        let operation=sqlx::query("SELECT o.connection_id,CASE WHEN o.resource_type='dns_zone' THEN o.resource_id WHEN o.resource_type='dns_record' THEN (SELECT r.zone_id FROM dns_records r WHERE r.id=o.resource_id) END AS zone_id,o.resource_type,o.resource_id FROM dns_operations o WHERE o.id=$1").bind(operation).fetch_optional(&mut **tx).await?.ok_or_else(|| ApiError::not_found("DNS operation"))?;
+        sqlx::query("SELECT id FROM dns_connections WHERE id=$1 FOR NO KEY UPDATE")
+            .bind(operation.get::<String, _>("connection_id"))
+            .fetch_optional(&mut **tx)
+            .await?;
+        if let Some(zone) = operation.get::<Option<String>, _>("zone_id") {
+            sqlx::query("SELECT id FROM dns_zones WHERE id=$1 FOR SHARE")
+                .bind(zone)
+                .fetch_optional(&mut **tx)
+                .await?;
+        }
+        if operation.get::<String, _>("resource_type") == "dns_record" {
+            sqlx::query("SELECT id FROM dns_records WHERE id=$1 FOR UPDATE")
+                .bind(operation.get::<String, _>("resource_id"))
+                .fetch_optional(&mut **tx)
+                .await?;
+        }
+    }
+    if payload["mtls_operation"] == true {
+        let operation =
+            sqlx::query("SELECT ca_id,rotation_id FROM mtls_node_operations WHERE job_id=$1")
+                .bind(id)
+                .fetch_one(&mut **tx)
+                .await?;
+        let ca: String = operation.get("ca_id");
+        sqlx::query("SELECT id FROM credentials WHERE id=$1 FOR NO KEY UPDATE")
+            .bind(&ca)
+            .fetch_optional(&mut **tx)
+            .await?;
+        sqlx::query("SELECT credential_id FROM mtls_authorities WHERE credential_id=$1 FOR UPDATE")
+            .bind(ca)
+            .fetch_optional(&mut **tx)
+            .await?;
+        if let Some(rotation) = operation.get::<Option<String>, _>("rotation_id") {
+            sqlx::query("SELECT id FROM mtls_rotations WHERE id=$1 FOR UPDATE")
+                .bind(rotation)
+                .fetch_optional(&mut **tx)
+                .await?;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod transaction_tests;
