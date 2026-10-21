@@ -1336,7 +1336,11 @@ pub(crate) async fn before_node_delete(
 ) -> Result<(), sqlx::Error> {
     crate::credentials::authorization::reconcile_node(tx, node_id, true)
         .await
-        .map_err(|e| sqlx::Error::Protocol(e.to_string()))?;
+        .map_err(|error| {
+            error
+                .downcast::<sqlx::Error>()
+                .unwrap_or_else(|error| sqlx::Error::Protocol(error.to_string()))
+        })?;
     sqlx::query("UPDATE users SET revision=revision+1,updated_at=$2 WHERE id IN (SELECT user_id FROM node_assignments WHERE node_id=$1 UNION SELECT gu.user_id FROM authorization_group_users gu JOIN authorization_group_nodes gn ON gn.group_id=gu.group_id WHERE gn.node_id=$1)")
         .bind(node_id)
         .bind(timestamp)

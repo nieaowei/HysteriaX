@@ -52,7 +52,7 @@ pub struct CreateNode {
     config: Value,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PatchNode {
     package: Option<crate::node_limits::Package>,
@@ -493,6 +493,10 @@ pub async fn patch(
     if input.expected_revision < 1 {
         return Err(ApiError::bad_request("expected_revision must be positive"));
     }
+    let explicit_mtls = input
+        .config
+        .as_ref()
+        .is_some_and(|config| config.get("mtls").is_some());
     let current = sqlx::query("SELECT * FROM nodes WHERE id = $1")
         .bind(&id)
         .fetch_optional(&state.pool)
@@ -685,19 +689,176 @@ pub async fn patch(
     let next_revision = revision + 1;
     let old_config: Value = serde_json::from_str(&state.secrets.decrypt(&old_config_enc)?)
         .map_err(|_| ApiError::internal())?;
-    let mut tx = db::begin_write(&state.pool).await?;
+    let actor = super::audit_actor();
+    let package = input.package;
+    let prepared = std::sync::Arc::new(PreparedNodePatch {
+        id,
+        revision,
+        next_revision,
+        name,
+        ssh_host,
+        ssh_port,
+        ssh_username,
+        ssh_credential_id,
+        ssh_credential_version,
+        ssh_changed,
+        host_fingerprint,
+        public_host,
+        public_port,
+        listen_addr,
+        traffic_stats_port,
+        proxy_probe_url,
+        tls_sni,
+        tls_skip_verify,
+        config,
+        old_config,
+        config_enc,
+        deployment_snapshot_json,
+        updated_at,
+        mtls,
+        new_ca,
+        explicit_mtls,
+        config_changed,
+        fingerprint_supplied,
+        ssh_host_supplied,
+        connection_changed,
+        listener_changed,
+        proxy_probe_url_changed,
+        traffic_stats_port_changed,
+        actor,
+        package,
+    });
+    let pool = state.pool.clone();
+    db::serializable(&pool, move |tx| {
+        let (state, prepared) = (state.clone(), prepared.clone());
+        Box::pin(async move { patch_on(tx, &state, (*prepared).clone()).await })
+    })
+    .await
+}
+
+#[derive(Clone)]
+struct PreparedNodePatch {
+    id: String,
+    revision: i64,
+    next_revision: i64,
+    name: String,
+    ssh_host: String,
+    ssh_port: u16,
+    ssh_username: String,
+    ssh_credential_id: String,
+    ssh_credential_version: i64,
+    ssh_changed: bool,
+    host_fingerprint: Option<String>,
+    public_host: String,
+    public_port: u16,
+    listen_addr: String,
+    traffic_stats_port: u16,
+    proxy_probe_url: Option<String>,
+    tls_sni: Option<String>,
+    tls_skip_verify: bool,
+    config: Value,
+    old_config: Value,
+    config_enc: String,
+    deployment_snapshot_json: String,
+    updated_at: chrono::DateTime<chrono::Utc>,
+    mtls: crate::credentials::node_mtls::Settings,
+    new_ca: bool,
+    explicit_mtls: bool,
+    config_changed: bool,
+    fingerprint_supplied: bool,
+    ssh_host_supplied: bool,
+    connection_changed: bool,
+    listener_changed: bool,
+    proxy_probe_url_changed: bool,
+    traffic_stats_port_changed: bool,
+    actor: String,
+    package: Option<crate::node_limits::Package>,
+}
+
+async fn patch_on(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    state: &AppState,
+    prepared: PreparedNodePatch,
+) -> Result<Json<Value>, ApiError> {
+    let PreparedNodePatch {
+        id,
+        revision,
+        next_revision,
+        name,
+        ssh_host,
+        ssh_port,
+        ssh_username,
+        ssh_credential_id,
+        ssh_credential_version,
+        ssh_changed,
+        host_fingerprint,
+        public_host,
+        public_port,
+        listen_addr,
+        traffic_stats_port,
+        proxy_probe_url,
+        tls_sni,
+        tls_skip_verify,
+        config,
+        old_config,
+        config_enc,
+        deployment_snapshot_json,
+        updated_at,
+        mtls,
+        new_ca,
+        explicit_mtls,
+        config_changed,
+        fingerprint_supplied,
+        ssh_host_supplied,
+        connection_changed,
+        listener_changed,
+        proxy_probe_url_changed,
+        traffic_stats_port_changed,
+        actor,
+        package,
+    } = prepared;
+    let current = sqlx::query("SELECT * FROM nodes WHERE id=$1 FOR NO KEY UPDATE")
+        .bind(&id)
+        .fetch_optional(&mut **tx)
+        .await?
+        .ok_or_else(|| ApiError::not_found("node"))?;
+    if current.get::<i64, _>("desired_revision") != revision {
+        return Err(ApiError::conflict(
+            "node changed while saving; reload before editing",
+        ));
+    }
+    if current.get::<String, _>("state") == "deleting" {
+        return Err(ApiError::conflict("node deletion is in progress"));
+    }
+    if config_changed
+        && current.get::<String, _>("mtls_state") == "needs_configuration"
+        && !explicit_mtls
+    {
+        return Err(ApiError::bad_request(
+            "select mtls.mode explicitly before recovering a reset node",
+        ));
+    }
+    let users:Vec<String> = sqlx::query_scalar("SELECT u.id FROM users u JOIN node_assignments a ON a.user_id=u.id WHERE a.node_id=$1 ORDER BY u.id FOR NO KEY UPDATE OF u").bind(&id).fetch_all(&mut **tx).await?;
+    sqlx::query("SELECT id FROM credentials WHERE owner_user_id=ANY($1) ORDER BY id FOR UPDATE")
+        .bind(&users)
+        .fetch_all(&mut **tx)
+        .await?;
+    sqlx::query("SELECT id FROM mtls_user_identities WHERE user_id=ANY($1) ORDER BY id FOR UPDATE")
+        .bind(&users)
+        .fetch_all(&mut **tx)
+        .await?;
     crate::credentials::check_bindings(
-        &mut tx,
+        tx,
         &config,
         Some(&old_config),
         Some((&ssh_credential_id, ssh_credential_version, !ssh_changed)),
     )
     .await
-    .map_err(|e| ApiError::conflict(e.to_string()))?;
+    .map_err(credential_binding_error)?;
     let bound: Option<String> =
         sqlx::query_scalar("SELECT hostname FROM dns_bindings WHERE node_id=$1")
             .bind(&id)
-            .fetch_optional(&mut *tx)
+            .fetch_optional(&mut **tx)
             .await?;
     if bound.as_ref().is_some_and(|host| host != &public_host) {
         return Err(ApiError::conflict(
@@ -705,15 +866,15 @@ pub async fn patch(
         ));
     }
     if config_changed {
-        crate::credentials::node_mtls::check_binding(&mut tx, &mtls, new_ca)
+        crate::credentials::node_mtls::check_binding(tx, &mtls, new_ca)
             .await
-            .map_err(|e| ApiError::conflict(e.to_string()))?;
+            .map_err(credential_binding_error)?;
     }
     let updated = sqlx::query("UPDATE nodes SET name = $1, ssh_host = $2, ssh_port = $3, ssh_username = $4, ssh_credential_id = $5, ssh_credential_version = $6, ssh_host_fingerprint = $7, public_host = $8, public_port = $9, listen_addr = $10, traffic_stats_port = $11, proxy_probe_url = $12, tls_sni = $13, tls_skip_verify = $14, desired_config_enc = $15, desired_revision = $16, state = CASE WHEN $17 = TRUE AND state IN ('needs_fingerprint', 'fingerprint_changed') THEN 'ready' ELSE state END, updated_at = $18 WHERE id = $19 AND desired_revision = $20")
         .bind(name.trim()).bind(ssh_host.trim()).bind(i32::from(ssh_port)).bind(ssh_username.trim()).bind(&ssh_credential_id)
         .bind(ssh_credential_version).bind(host_fingerprint).bind(public_host.trim()).bind(i32::from(public_port)).bind(listen_addr.trim())
         .bind(i32::from(traffic_stats_port)).bind(&proxy_probe_url).bind(tls_sni).bind(tls_skip_verify).bind(&config_enc).bind(next_revision).bind(fingerprint_supplied).bind(updated_at).bind(&id).bind(revision)
-        .execute(&mut *tx).await?;
+        .execute(&mut **tx).await?;
     if updated.rows_affected() == 0 {
         return Err(ApiError::conflict(
             "node changed while saving; reload before editing",
@@ -722,19 +883,19 @@ pub async fn patch(
     if config_changed {
         sqlx::query("UPDATE nodes SET mtls_recovery_configured=TRUE WHERE id=$1")
             .bind(&id)
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await?;
     }
-    crate::credentials::node_mtls::save_target(&mut tx, &id, next_revision, &mtls).await?;
-    super::ssh_fingerprint::cancel_waiting(&mut tx, &id).await?;
+    crate::credentials::node_mtls::save_target(tx, &id, next_revision, &mtls).await?;
+    super::ssh_fingerprint::cancel_waiting(tx, &id).await?;
     sqlx::query("INSERT INTO config_versions (id, node_id, revision, config_enc, content_sha256, created_at) VALUES ($1, $2, $3, $4, $5, $6)")
         .bind(Uuid::new_v4().to_string()).bind(&id).bind(next_revision).bind(state.secrets.encrypt(&deployment_snapshot_json)?)
-        .bind(hex::encode(Sha256::digest(deployment_snapshot_json.as_bytes()))).bind(updated_at).execute(&mut *tx).await?;
-    if let Some(package) = &input.package {
-        crate::node_limits::save(&mut tx, &id, package).await?;
+        .bind(hex::encode(Sha256::digest(deployment_snapshot_json.as_bytes()))).bind(updated_at).execute(&mut **tx).await?;
+    if let Some(package) = &package {
+        crate::node_limits::save(tx, &id, package).await?;
     }
     let dns_job_ids = if ssh_host_supplied {
-        crate::dns::binding::sync_ssh_target_in_tx(&mut tx, &id, next_revision, &ssh_host).await?
+        crate::dns::binding::sync_ssh_target_in_tx(tx, &id, next_revision, &ssh_host).await?
     } else {
         Vec::new()
     };
@@ -744,11 +905,11 @@ pub async fn patch(
         || proxy_probe_url_changed
         || traffic_stats_port_changed;
     if sync_required {
-        supersede_queued_syncs_in_tx(&mut tx, &id).await?;
+        supersede_queued_syncs_in_tx(tx, &id).await?;
         let recovery =
             config_changed && current.get::<String, _>("mtls_state") == "needs_configuration";
         enqueue_job_with_payload_in_tx(
-            &mut tx,
+            tx,
             "sync",
             Some(&id),
             Some(next_revision),
@@ -756,11 +917,8 @@ pub async fn patch(
         )
         .await?;
     }
-    sqlx::query("INSERT INTO audit_records (id, actor, action, entity_type, entity_id, detail_json, created_at) VALUES ($1, 'admin', 'node.updated', 'node', $2, $3, $4)")
-        .bind(Uuid::new_v4().to_string()).bind(&id).bind(json!({"revision": next_revision, "config_changed": config_changed, "proxy_probe_url_changed": proxy_probe_url_changed, "traffic_stats_port_changed": traffic_stats_port_changed, "package_changed": input.package.is_some(), "package": input.package, "dns_job_ids": dns_job_ids})).bind(updated_at)
-        .execute(&mut *tx).await?;
-    crate::credentials::reference_index::flush_node_on(&mut tx, &state.secrets, &id).await?;
-    tx.commit().await?;
+    super::audit_on(tx,&actor,"node.updated","node",&id,json!({"revision": next_revision, "config_changed": config_changed, "proxy_probe_url_changed": proxy_probe_url_changed, "traffic_stats_port_changed": traffic_stats_port_changed, "package_changed": package.is_some(), "package": package, "dns_job_ids": dns_job_ids})).await?;
+    crate::credentials::reference_index::flush_node_on(tx, &state.secrets, &id).await?;
     Ok(Json(
         json!({"id": id, "name": name.trim(), "revision": next_revision, "state": current.get::<String, _>("state"), "traffic_stats_port": traffic_stats_port, "proxy_probe_url": proxy_probe_url, "sync_job_queued": sync_required, "dns_job_ids": dns_job_ids}),
     ))
@@ -775,10 +933,28 @@ pub async fn remove_record(
     let expected = query.expected_revision.filter(|r| *r > 0).ok_or_else(|| {
         ApiError::bad_request("positive expected_revision query parameter is required")
     })?;
-    let mut tx = db::begin_write(&state.pool).await?;
+    let pool = state.pool.clone();
+    let node = id.clone();
+    let result = db::serializable(&pool, move |tx| {
+        let id = node.clone();
+        Box::pin(async move { remove_record_on(tx, id, expected).await })
+    })
+    .await?;
+    if result == StatusCode::NO_CONTENT {
+        let _ = state.removed_nodes.send(id);
+    }
+    Ok(result)
+}
+
+async fn remove_record_on(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    id: String,
+    expected: i64,
+) -> Result<StatusCode, ApiError> {
+    lock_node_removal_graph_on(tx, &id).await?;
     let node = sqlx::query("SELECT name, desired_revision FROM nodes WHERE id=$1 FOR UPDATE")
         .bind(&id)
-        .fetch_optional(&mut *tx)
+        .fetch_optional(&mut **tx)
         .await?
         .ok_or_else(|| ApiError::not_found("node"))?;
     if node.get::<i64, _>("desired_revision") != expected {
@@ -787,65 +963,62 @@ pub async fn remove_record(
         ));
     }
     let removing: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM jobs WHERE node_id=$1 AND kind='record-remove' AND status IN ('queued','running'))")
-        .bind(&id).fetch_one(&mut *tx).await?;
+        .bind(&id).fetch_one(&mut **tx).await?;
     if removing {
         return Ok(StatusCode::ACCEPTED);
     }
     // Cancelling the local future cannot retract an already-issued remote script.
     // Wait for these operations before promising a record-only removal.
     let mutating: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM jobs WHERE node_id=$1 AND status='running' AND (kind IN ('deploy','sync','rollback','uninstall','credential-apply') OR kind LIKE 'dns-%'))")
-        .bind(&id).fetch_one(&mut *tx).await?;
+        .bind(&id).fetch_one(&mut **tx).await?;
     if mutating {
         return Err(ApiError::conflict(
             "a remote deployment, uninstall or credential update is still running; wait for it to finish before removing the node record",
         ));
     }
-    if managed_remote_trust(&mut tx, &id).await? {
+    if managed_remote_trust(tx, &id).await? {
         return Err(ApiError::conflict(
             "managed mTLS remote trust is still deployed or unconfirmed; recover SSH and uninstall or complete the switch before removing the node record",
         ));
     }
     let unresolved_dns: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM jobs j JOIN dns_operations o ON o.job_id=j.id WHERE j.node_id=$1 AND o.applied_at IS NULL AND o.action IN ('record-create','record-update','record-delete') AND j.status IN ('running','failed','queued'))")
-        .bind(&id).fetch_one(&mut *tx).await?;
+        .bind(&id).fetch_one(&mut **tx).await?;
     if unresolved_dns {
         return Err(ApiError::conflict(
             "finish or reconcile pending DNS writes before removing the node record",
         ));
     }
     let cancelled = sqlx::query("UPDATE jobs SET status='cancelled',stage='node_removed',updated_at=now(),finished_at=now() WHERE node_id=$1 AND status IN ('queued','running','waiting_confirmation') RETURNING id,kind")
-        .bind(&id).fetch_all(&mut *tx).await?;
+        .bind(&id).fetch_all(&mut **tx).await?;
     for job in &cancelled {
         let job_id: String = job.get("id");
-        crate::kick_requests::event(&mut tx,&job_id,"job.cancelled",json!({"id":job_id,"kind":job.get::<String,_>("kind"),"node_id":id,"status":"cancelled","stage":"node_removed"})).await?;
+        crate::kick_requests::event(tx,&job_id,"job.cancelled",json!({"id":job_id,"kind":job.get::<String,_>("kind"),"node_id":id,"status":"cancelled","stage":"node_removed"})).await?;
     }
     let pending: i64 = sqlx::query_scalar("SELECT count(*) FROM kick_requests WHERE node_id=$1 AND state NOT IN ('completed','cancelled')")
-        .bind(&id).fetch_one(&mut *tx).await?;
+        .bind(&id).fetch_one(&mut **tx).await?;
     let assignments: i64 =
         sqlx::query_scalar("SELECT count(*) FROM node_assignments WHERE node_id=$1")
             .bind(&id)
-            .fetch_one(&mut *tx)
+            .fetch_one(&mut **tx)
             .await?;
-    if crate::node_cleanup::needs_background_cleanup(&mut tx, &id).await? {
-        queue_record_removal(&mut tx, &id, expected, json!({
+    if crate::node_cleanup::needs_background_cleanup(tx, &id).await? {
+        queue_record_removal(tx, &id, expected, json!({
             "node_name":node.get::<String,_>("name"),"expected_revision":expected,
             "remote_uninstall":false,"remote_service_may_be_running":true,
             "cancelled_jobs":cancelled.len(),"removed_assignments":assignments,"removed_pending_kicks":pending
         })).await?;
-        tx.commit().await?;
         return Ok(StatusCode::ACCEPTED);
     }
-    crate::api::authorization_groups::before_node_delete(&mut tx, &id, now()).await?;
-    crate::dns::binding::before_node_delete(&mut tx, &id).await?;
+    crate::api::authorization_groups::before_node_delete(tx, &id, now()).await?;
+    crate::dns::binding::before_node_delete(tx, &id).await?;
     // Child configuration, assignments, monitoring data and kick obligations
     // cascade; jobs retain their historical node ID, name snapshot and events.
     sqlx::query("DELETE FROM nodes WHERE id=$1")
         .bind(&id)
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?;
     sqlx::query("INSERT INTO audit_records(id,actor,action,entity_type,entity_id,detail_json,created_at) VALUES($1,$4,'node.record_removed','node',$2,$3,now())")
-        .bind(Uuid::new_v4().to_string()).bind(&id).bind(json!({"node_name":node.get::<String,_>("name"),"expected_revision":expected,"remote_uninstall":false,"remote_service_may_be_running":true,"cancelled_jobs":cancelled.len(),"removed_assignments":assignments,"removed_pending_kicks":pending})).bind(super::audit_actor()).execute(&mut *tx).await?;
-    tx.commit().await?;
-    let _ = state.removed_nodes.send(id);
+        .bind(Uuid::new_v4().to_string()).bind(&id).bind(json!({"node_name":node.get::<String,_>("name"),"expected_revision":expected,"remote_uninstall":false,"remote_service_may_be_running":true,"cancelled_jobs":cancelled.len(),"removed_assignments":assignments,"removed_pending_kicks":pending})).bind(super::audit_actor()).execute(&mut **tx).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -900,12 +1073,56 @@ pub async fn delete(
     let expected = query
         .expected_revision
         .ok_or_else(|| ApiError::bad_request("expected_revision query parameter is required"))?;
-    let node =
-        sqlx::query("SELECT desired_revision, deployed_revision, state FROM nodes WHERE id = $1")
-            .bind(&id)
-            .fetch_optional(&state.pool)
-            .await?
-            .ok_or_else(|| ApiError::not_found("node"))?;
+    let pool = state.pool.clone();
+    let node = id.clone();
+    let result = db::serializable(&pool, move |tx| {
+        let id = node.clone();
+        Box::pin(async move { delete_on(tx, id, expected).await })
+    })
+    .await?;
+    if result.0 == StatusCode::NO_CONTENT {
+        let _ = state.removed_nodes.send(id);
+    }
+    Ok(result)
+}
+
+/// Parent groups precede nodes; users, credentials and identities follow in ID order.
+/// SERIALIZABLE retries also cover memberships committed after this graph snapshot.
+async fn lock_node_removal_graph_on(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    node: &str,
+) -> Result<(), ApiError> {
+    sqlx::query("SELECT g.id FROM authorization_groups g JOIN authorization_group_nodes m ON m.group_id=g.id WHERE m.node_id=$1 ORDER BY g.id FOR UPDATE OF g").bind(node).fetch_all(&mut **tx).await?;
+    sqlx::query("SELECT id FROM nodes WHERE id=$1 FOR UPDATE")
+        .bind(node)
+        .fetch_optional(&mut **tx)
+        .await?
+        .ok_or_else(|| ApiError::not_found("node"))?;
+    let users: Vec<String> = sqlx::query_scalar("SELECT u.id FROM users u WHERE u.id IN (SELECT user_id FROM node_assignments WHERE node_id=$1 UNION SELECT gu.user_id FROM authorization_group_users gu JOIN authorization_group_nodes gn ON gn.group_id=gu.group_id WHERE gn.node_id=$1) ORDER BY u.id FOR NO KEY UPDATE OF u").bind(node).fetch_all(&mut **tx).await?;
+    sqlx::query("SELECT id FROM credentials WHERE owner_user_id=ANY($1) ORDER BY id FOR UPDATE")
+        .bind(&users)
+        .fetch_all(&mut **tx)
+        .await?;
+    sqlx::query("SELECT id FROM mtls_user_identities WHERE user_id=ANY($1) ORDER BY id FOR UPDATE")
+        .bind(&users)
+        .fetch_all(&mut **tx)
+        .await?;
+    Ok(())
+}
+
+async fn delete_on(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    id: String,
+    expected: i64,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    lock_node_removal_graph_on(tx, &id).await?;
+    let node = sqlx::query(
+        "SELECT desired_revision, deployed_revision, state FROM nodes WHERE id = $1 FOR UPDATE",
+    )
+    .bind(&id)
+    .fetch_optional(&mut **tx)
+    .await?
+    .ok_or_else(|| ApiError::not_found("node"))?;
     let revision: i64 = node.get("desired_revision");
     if revision != expected {
         return Err(ApiError::conflict(
@@ -913,9 +1130,8 @@ pub async fn delete(
         ));
     }
     let deployed_revision: Option<i64> = node.get("deployed_revision");
-    let mut tx = db::begin_write(&state.pool).await?;
     let unresolved_dns: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM jobs j JOIN dns_operations o ON o.job_id=j.id WHERE j.node_id=$1 AND o.applied_at IS NULL AND o.action IN ('record-create','record-update','record-delete') AND j.status IN ('running','failed','queued'))")
-        .bind(&id).fetch_one(&mut *tx).await?;
+        .bind(&id).fetch_one(&mut **tx).await?;
     if unresolved_dns {
         return Err(ApiError::conflict(
             "finish or reconcile pending DNS writes before deleting the node",
@@ -923,13 +1139,12 @@ pub async fn delete(
     }
     let node_state: String = sqlx::query_scalar("SELECT state FROM nodes WHERE id = $1")
         .bind(&id)
-        .fetch_one(&mut *tx)
+        .fetch_one(&mut **tx)
         .await?;
     if node_state == "deleting" {
         let existing: Option<String> = sqlx::query_scalar("SELECT id FROM jobs WHERE node_id = $1 AND kind IN ('uninstall','record-remove') AND status IN ('queued', 'running') ORDER BY created_at DESC LIMIT 1")
-            .bind(&id).fetch_optional(&mut *tx).await?;
+            .bind(&id).fetch_optional(&mut **tx).await?;
         if let Some(job_id) = existing {
-            tx.rollback().await?;
             return Ok((
                 StatusCode::ACCEPTED,
                 Json(json!({"job_id": job_id, "status": "queued"})),
@@ -937,46 +1152,42 @@ pub async fn delete(
         }
     }
     let active_deployment: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM jobs WHERE node_id = $1 AND status = 'running' AND kind IN ('deploy', 'sync', 'rollback', 'uninstall', 'credential-apply')")
-        .bind(&id).fetch_one(&mut *tx).await?;
+        .bind(&id).fetch_one(&mut **tx).await?;
     let never_installed = deployed_revision.is_none()
-        && !managed_remote_trust(&mut tx, &id).await?
+        && !managed_remote_trust(tx, &id).await?
         && active_deployment == 0
         && matches!(
             node_state.as_str(),
             "new" | "ready" | "needs_fingerprint" | "fingerprint_changed"
         );
     if never_installed {
-        cancel_queued_node_jobs_in_tx(&mut tx, &id).await?;
-        cancel_running_node_jobs_in_tx(&mut tx, &id).await?;
-        if crate::node_cleanup::needs_background_cleanup(&mut tx, &id).await? {
-            let job = queue_record_removal(&mut tx, &id, expected, json!({"expected_revision":expected,"remote_uninstall":false,"remote_install":false})).await?;
-            tx.commit().await?;
+        cancel_queued_node_jobs_in_tx(tx, &id).await?;
+        cancel_running_node_jobs_in_tx(tx, &id).await?;
+        if crate::node_cleanup::needs_background_cleanup(tx, &id).await? {
+            let job = queue_record_removal(tx, &id, expected, json!({"expected_revision":expected,"remote_uninstall":false,"remote_install":false})).await?;
             return Ok((
                 StatusCode::ACCEPTED,
                 Json(json!({"job_id":job,"status":"queued"})),
             ));
         }
-        crate::api::authorization_groups::before_node_delete(&mut tx, &id, now()).await?;
-        crate::dns::binding::before_node_delete(&mut tx, &id).await?;
+        crate::api::authorization_groups::before_node_delete(tx, &id, now()).await?;
+        crate::dns::binding::before_node_delete(tx, &id).await?;
         sqlx::query("DELETE FROM nodes WHERE id = $1 AND desired_revision = $2")
             .bind(&id)
             .bind(expected)
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await?;
         sqlx::query("INSERT INTO audit_records (id, actor, action, entity_type, entity_id, detail_json, created_at) VALUES ($1, $5, 'node.deleted', 'node', $2, $3, $4)")
-            .bind(Uuid::new_v4().to_string()).bind(&id).bind(json!({"expected_revision": expected, "remote_install": false})).bind(now()).bind(super::audit_actor()).execute(&mut *tx).await?;
-        tx.commit().await?;
-        let _ = state.removed_nodes.send(id);
+            .bind(Uuid::new_v4().to_string()).bind(&id).bind(json!({"expected_revision": expected, "remote_install": false})).bind(now()).bind(super::audit_actor()).execute(&mut **tx).await?;
         return Ok((StatusCode::NO_CONTENT, Json(Value::Null)));
     }
     if node_state != "deleting" {
         let updated = sqlx::query("UPDATE nodes SET state = 'deleting', updated_at = $1 WHERE id = $2 AND desired_revision = $3 AND state = $4")
-            .bind(now()).bind(&id).bind(expected).bind(&node_state).execute(&mut *tx).await?;
+            .bind(now()).bind(&id).bind(expected).bind(&node_state).execute(&mut **tx).await?;
         if updated.rows_affected() == 0 {
             let existing: Option<String> = sqlx::query_scalar("SELECT id FROM jobs WHERE node_id = $1 AND kind = 'uninstall' AND status IN ('queued', 'running') ORDER BY created_at DESC LIMIT 1")
-                .bind(&id).fetch_optional(&mut *tx).await?;
+                .bind(&id).fetch_optional(&mut **tx).await?;
             if let Some(job_id) = existing {
-                tx.rollback().await?;
                 return Ok((
                     StatusCode::ACCEPTED,
                     Json(json!({"job_id": job_id, "status": "queued"})),
@@ -987,11 +1198,10 @@ pub async fn delete(
             ));
         }
     }
-    cancel_queued_node_jobs_in_tx(&mut tx, &id).await?;
-    let job_id = enqueue_job_in_tx(&mut tx, "uninstall", Some(&id), Some(revision)).await?;
+    cancel_queued_node_jobs_in_tx(tx, &id).await?;
+    let job_id = enqueue_job_in_tx(tx, "uninstall", Some(&id), Some(revision)).await?;
     sqlx::query("INSERT INTO audit_records (id, actor, action, entity_type, entity_id, detail_json, created_at) VALUES ($1, $5, 'node.uninstall_requested', 'node', $2, $3, $4)")
-        .bind(Uuid::new_v4().to_string()).bind(&id).bind(json!({"job_id": job_id, "expected_revision": expected})).bind(now()).bind(super::audit_actor()).execute(&mut *tx).await?;
-    tx.commit().await?;
+        .bind(Uuid::new_v4().to_string()).bind(&id).bind(json!({"job_id": job_id, "expected_revision": expected})).bind(now()).bind(super::audit_actor()).execute(&mut **tx).await?;
     Ok((
         StatusCode::ACCEPTED,
         Json(json!({"job_id": job_id, "status": "queued"})),
@@ -1050,33 +1260,7 @@ pub async fn rollback(
     Path(id): Path<String>,
     Json(input): Json<NodeAction>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
-    let row = sqlx::query("SELECT deployed_revision FROM nodes WHERE id = $1")
-        .bind(&id)
-        .fetch_optional(&state.pool)
-        .await?
-        .ok_or_else(|| ApiError::not_found("node"))?;
-    let deployed: Option<i64> = row.get("deployed_revision");
-    let Some(deployed) = deployed else {
-        return Err(ApiError::conflict(
-            "node has no successful deployment to roll back",
-        ));
-    };
-    let previous: Option<i64> = sqlx::query_scalar("SELECT MAX(revision) FROM config_versions WHERE node_id = $1 AND deployed_success = TRUE AND revision < $2")
-        .bind(&id).bind(deployed).fetch_one(&state.pool).await?;
-    let Some(previous) = previous else {
-        return Err(ApiError::conflict(
-            "node has no earlier successful configuration to restore",
-        ));
-    };
-    action_to(
-        &state,
-        &id,
-        input.expected_revision,
-        "rollback",
-        previous,
-        json!({}),
-    )
-    .await
+    action(&state, &id, input.expected_revision, "rollback").await
 }
 
 pub(crate) fn action_allowed(state: &str, kind: &str) -> bool {
@@ -1089,47 +1273,32 @@ async fn action(
     expected: i64,
     kind: &str,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
-    let row = sqlx::query("SELECT desired_revision, state FROM nodes WHERE id = $1")
-        .bind(id)
-        .fetch_optional(&state.pool)
-        .await?
-        .ok_or_else(|| ApiError::not_found("node"))?;
-    let revision: i64 = row.get("desired_revision");
-    let state_value: String = row.get("state");
-    if !action_allowed(&state_value, kind) {
-        return Err(ApiError::conflict(
-            "node is being deleted; retry deletion after checking the SSH state",
-        ));
-    }
-    if expected != revision {
-        return Err(ApiError::conflict(format!(
-            "node revision is {revision}; reload before starting {kind}"
-        )));
-    }
-    let payload = if kind == "sync" {
-        json!({"force": true})
-    } else {
-        json!({})
-    };
-    action_to(state, id, expected, kind, revision, payload).await
+    let (id, kind, state, actor) = (
+        id.to_owned(),
+        kind.to_owned(),
+        state.clone(),
+        super::audit_actor(),
+    );
+    let pool = state.pool.clone();
+    let receipt = db::serializable(&pool, move |tx| {
+        let (id, kind, state, actor) = (id.clone(), kind.clone(), state.clone(), actor.clone());
+        Box::pin(async move { action_on(tx, &state, &id, expected, &kind, &actor).await })
+    })
+    .await?;
+    Ok((StatusCode::ACCEPTED, Json(receipt)))
 }
 
-async fn action_to(
+async fn action_on(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     state: &AppState,
     id: &str,
     expected: i64,
     kind: &str,
-    target_revision: i64,
-    payload: Value,
-) -> Result<(StatusCode, Json<Value>), ApiError> {
-    let mut tx = db::begin_write(&state.pool).await?;
+    actor: &str,
+) -> Result<Value, ApiError> {
     let row = sqlx::query(
-        "SELECT desired_revision,state,mtls_state,mtls_recovery_configured FROM nodes WHERE id=$1",
-    )
-    .bind(id)
-    .fetch_optional(&mut *tx)
-    .await?
-    .ok_or_else(|| ApiError::not_found("node"))?;
+        "SELECT desired_revision,deployed_revision,state,mtls_state,mtls_recovery_configured FROM nodes WHERE id=$1 FOR NO KEY UPDATE",
+    ).bind(id).fetch_optional(&mut **tx).await?.ok_or_else(|| ApiError::not_found("node"))?;
     let desired_revision: i64 = row.get("desired_revision");
     let state_value: String = row.get("state");
     if !action_allowed(&state_value, kind) {
@@ -1151,36 +1320,51 @@ async fn action_to(
             "node requires an explicit off or managed configuration before recovery deployment",
         ));
     }
-    if kind == "rollback" && mtls_state != "ready" {
-        return Err(ApiError::conflict(
-            "node activation must be recovered before historical rollback",
-        ));
-    }
-    let mut payload = payload;
+    let target_revision = if kind == "rollback" {
+        if mtls_state != "ready" {
+            return Err(ApiError::conflict(
+                "node activation must be recovered before historical rollback",
+            ));
+        }
+        let deployed = row
+            .get::<Option<i64>, _>("deployed_revision")
+            .ok_or_else(|| ApiError::conflict("node has no successful deployment to roll back"))?;
+        sqlx::query_scalar::<_, i64>("SELECT revision FROM config_versions WHERE node_id=$1 AND deployed_success=TRUE AND revision<$2 ORDER BY revision DESC LIMIT 1 FOR KEY SHARE")
+            .bind(id).bind(deployed).fetch_optional(&mut **tx).await?
+            .ok_or_else(|| ApiError::conflict("node has no earlier successful configuration to restore"))?
+    } else {
+        desired_revision
+    };
+    let mut payload = if kind == "sync" {
+        json!({"force":true})
+    } else {
+        json!({})
+    };
     if kind == "ssh-test" && state_value == "delete_failed" {
         payload["delete_recovery"] = json!(true);
     }
-    let recovery = if kind == "sync" && payload["force"] == true {
-        crate::credentials::rotations::enqueue_explicit_recovery(&mut tx, &state.secrets, id)
+    let recovery = if kind == "sync" {
+        crate::credentials::rotations::enqueue_explicit_recovery(tx, &state.secrets, id)
             .await
-            .map_err(|e| ApiError::conflict(e.to_string()))?
+            .map_err(credential_binding_error)?
     } else {
         None
     };
     let job_id = if let Some(job) = recovery {
         job
     } else {
-        enqueue_job_with_payload_in_tx(&mut tx, kind, Some(id), Some(target_revision), payload)
-            .await?
+        enqueue_job_with_payload_in_tx(tx, kind, Some(id), Some(target_revision), payload).await?
     };
-    sqlx::query("INSERT INTO audit_records (id, actor, action, entity_type, entity_id, detail_json, created_at) VALUES ($1, 'admin', $2, 'node', $3, $4, $5)")
-        .bind(Uuid::new_v4().to_string()).bind(format!("node.{kind}" )).bind(id).bind(json!({"job_id": job_id, "target_revision": target_revision})).bind(now())
-        .execute(&mut *tx).await?;
-    tx.commit().await?;
-    Ok((
-        StatusCode::ACCEPTED,
-        Json(json!({"job_id": job_id, "status": "queued"})),
-    ))
+    super::audit_on(
+        tx,
+        actor,
+        &format!("node.{kind}"),
+        "node",
+        id,
+        json!({"job_id":job_id,"target_revision":target_revision}),
+    )
+    .await?;
+    Ok(json!({"job_id":job_id,"status":"queued"}))
 }
 
 async fn node_json(state: &AppState, row: &sqlx::postgres::PgRow) -> Result<Value, ApiError> {
@@ -1439,6 +1623,9 @@ fn validate_traffic_stats_port(port: u16) -> Result<(), ApiError> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod transaction_tests;
 
 #[cfg(test)]
 mod tests {

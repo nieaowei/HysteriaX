@@ -326,7 +326,7 @@ async fn enqueue_node(
         json!({"mtls_operation":true}),
     )
     .await
-    .map_err(|e| anyhow::anyhow!(e.message))?;
+    .map_err(anyhow::Error::new)?;
     sqlx::query("INSERT INTO mtls_node_operations(job_id,node_id,ca_id,ca_version,rotation_id,stage,desired_revision,base_revision,base_activation_id,base_digest,use_desired,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)")
         .bind(&job).bind(node).bind(ca).bind(version).bind(rotation).bind(stage).bind(desired).bind(base).bind(row.get::<Option<String>,_>("mtls_activation_id")).bind(row.get::<Option<String>,_>("deployed_content_sha256")).bind(use_desired).bind(Utc::now()).execute(&mut **tx).await?;
     Ok(job)
