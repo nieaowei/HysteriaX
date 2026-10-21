@@ -1,12 +1,10 @@
 //! Indexed, restart-safe maintenance. Shared renewals publish one version per
 //! user/CA and never enqueue connection kicks or increment users.revision.
-use anyhow::{Result, ensure};
+use anyhow::Result;
 use chrono::{DateTime, Duration, Utc};
-use serde_json::json;
 use sqlx::Row;
-use uuid::Uuid;
 
-use super::{ca::Authority, identities};
+use super::identities;
 use crate::{db, state::AppState};
 
 const PAGE: i64 = 100;
@@ -149,84 +147,8 @@ pub async fn renew_probe_on(
     ca: &str,
     ca_version: i64,
 ) -> Result<(String, i64)> {
-    let now = Utc::now();
-    let row=sqlx::query("SELECT n.desired_revision,g.state FROM nodes n CROSS JOIN mtls_ca_generations g WHERE n.id=$1 AND g.ca_id=$2 AND g.ca_version=$3")
-        .bind(node).bind(ca).bind(ca_version).fetch_one(pool).await?;
-    let generation: String = row.get("state");
-    ensure!(generation != "retired", "retired CA cannot sign a probe");
-    let expected: i64 = row.get("desired_revision");
-    let existing=sqlx::query("SELECT p.credential_id,p.credential_version FROM mtls_probe_versions p WHERE node_id=$1 AND ca_id=$2 AND ca_version=$3 AND NOT discarded ORDER BY credential_version DESC LIMIT 1")
-        .bind(node).bind(ca).bind(ca_version).fetch_optional(pool).await?;
-    let expected_probe = existing.as_ref().map(|r| {
-        (
-            r.get::<String, _>("credential_id"),
-            r.get::<i64, _>("credential_version"),
-        )
-    });
-    let (_, _, _, payload, _) = super::load(pool, secrets, ca, ca_version).await?;
-    let node_id = Uuid::parse_str(node)?;
-    let issued = tokio::task::spawn_blocking(move || {
-        Authority::from_payload(&payload, now)?.sign_probe(&node_id, now)
-    })
-    .await??;
-    let mut metadata = super::validate_payload("tls_identity", &issued.material.payload())?;
-    metadata["managed"] = json!(true);
-    metadata["internal_probe"] = json!(true);
-    metadata["ca_id"] = json!(ca);
-    metadata["node_id"] = json!(node);
-    metadata["ca_version"] = json!(ca_version);
-    let mut tx = db::begin_write(pool).await?;
-    let current:Option<(i64,String)>=sqlx::query_as("SELECT n.desired_revision,g.state FROM nodes n CROSS JOIN mtls_ca_generations g WHERE n.id=$1 AND g.ca_id=$2 AND g.ca_version=$3")
-        .bind(node).bind(ca).bind(ca_version).fetch_optional(&mut *tx).await?;
-    ensure!(
-        current == Some((expected, generation.clone())),
-        "node or CA changed during probe signing"
-    );
-    let current_probe:Option<(String,i64)>=sqlx::query_as("SELECT credential_id,credential_version FROM mtls_probe_versions WHERE node_id=$1 AND ca_id=$2 AND ca_version=$3 AND NOT discarded ORDER BY credential_version DESC LIMIT 1")
-        .bind(node).bind(ca).bind(ca_version).fetch_optional(&mut *tx).await?;
-    ensure!(
-        current_probe == expected_probe,
-        "probe identity changed during signing"
-    );
-    let (credential, version) = if let Some((credential, version)) = expected_probe {
-        // Reuse the node identity but generate a fresh private key each time.
-        let next: i64 = sqlx::query_scalar("SELECT latest_version+1 FROM credentials WHERE id=$1")
-            .bind(&credential)
-            .fetch_one(&mut *tx)
-            .await?;
-        let previous:DateTime<Utc>=sqlx::query_scalar("SELECT expires_at FROM mtls_probe_versions WHERE node_id=$1 AND credential_id=$2 AND credential_version=$3")
-            .bind(node).bind(&credential).bind(version).fetch_one(&mut *tx).await?;
-        ensure!(
-            issued.expires_at > previous,
-            "CA update required: cannot extend probe certificate"
-        );
-        sqlx::query("INSERT INTO credential_versions(credential_id,version,payload_enc,metadata,created_at) VALUES($1,$2,$3,$4,$5)").bind(&credential).bind(next).bind(secrets.encrypt(&issued.material.payload().to_string())?).bind(metadata).bind(now).execute(&mut *tx).await?;
-        sqlx::query("UPDATE credentials SET latest_version=$2,revision=revision+1,updated_at=$3 WHERE id=$1").bind(&credential).bind(next).bind(now).execute(&mut *tx).await?;
-        (credential, next)
-    } else {
-        (
-            super::insert(
-                &mut tx,
-                secrets,
-                &format!("Internal probe · {node}"),
-                "tls_identity",
-                None,
-                &issued.material.payload(),
-                &metadata,
-                &json!({}),
-            )
-            .await?,
-            1,
-        )
-    };
-    sqlx::query("INSERT INTO mtls_probe_versions(node_id,credential_id,credential_version,ca_id,ca_version,expires_at,next_action_at) VALUES($1,$2,$3,$4,$5,$6,$7)")
-        .bind(node).bind(&credential).bind(version).bind(ca).bind(ca_version).bind(issued.expires_at).bind(issued.next_action_at).execute(&mut *tx).await?;
-    if generation == "published" {
-        sqlx::query("UPDATE nodes SET mtls_error=NULL WHERE id=$1 AND mtls_state='ready' AND mtls_error LIKE 'Probe certificate renewal failed:%'").bind(node).execute(&mut *tx).await?;
-        super::rotations::switch_probe_on(&mut tx, node, ca, ca_version).await?;
-    }
-    tx.commit().await?;
-    Ok((credential, version))
+    let prepared = super::probe::prepare(pool, secrets, node, ca, ca_version).await?;
+    super::probe::commit(pool, prepared).await
 }
 
 async fn renew_probes(state: &AppState, now: DateTime<Utc>) -> Result<()> {

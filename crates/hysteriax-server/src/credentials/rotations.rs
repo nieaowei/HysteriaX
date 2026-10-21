@@ -287,7 +287,7 @@ pub async fn switch_probe_on(
     ca: &str,
     version: i64,
 ) -> Result<bool> {
-    let probe:Option<(String,i64)>=sqlx::query_as("SELECT p.credential_id,p.credential_version FROM mtls_probe_versions p JOIN mtls_node_trust t ON t.node_id=p.node_id AND t.ca_id=p.ca_id AND t.ca_version=p.ca_version JOIN nodes n ON n.id=p.node_id WHERE p.node_id=$1 AND p.ca_id=$2 AND p.ca_version=$3 AND t.deployed AND n.mtls_state='ready' AND NOT p.discarded AND p.expires_at>$4 ORDER BY p.credential_version DESC LIMIT 1").bind(node).bind(ca).bind(version).bind(Utc::now()).fetch_optional(&mut **tx).await?;
+    let probe:Option<(String,i64)>=sqlx::query_as("SELECT p.credential_id,p.credential_version FROM mtls_probe_versions p JOIN mtls_node_trust t ON t.node_id=p.node_id AND t.ca_id=p.ca_id AND t.ca_version=p.ca_version JOIN nodes n ON n.id=p.node_id WHERE p.node_id=$1 AND p.ca_id=$2 AND p.ca_version=$3 AND t.deployed AND n.mtls_state='ready' AND NOT p.discarded AND p.expires_at>clock_timestamp() ORDER BY p.credential_version DESC LIMIT 1").bind(node).bind(ca).bind(version).fetch_optional(&mut **tx).await?;
     let Some((credential, cv)) = probe else {
         return Ok(false);
     };
