@@ -14,12 +14,13 @@ use sqlx::{PgPool, Postgres, Row, Transaction};
 use uuid::Uuid;
 
 use crate::{
-    api::enqueue_job_with_payload_in_tx,
     db,
     error::ApiError,
     ssh::{self, FingerprintResult},
     state::AppState,
 };
+
+mod maintenance;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
@@ -141,8 +142,8 @@ async fn audit(
     id: &str,
     detail: Value,
 ) -> Result<(), sqlx::Error> {
-    sqlx::query("INSERT INTO audit_records (id,actor,action,entity_type,entity_id,detail_json,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7)")
-        .bind(Uuid::new_v4().to_string()).bind(actor).bind(action).bind(entity_type).bind(id).bind(detail).bind(Utc::now()).execute(&mut **tx).await?;
+    sqlx::query("INSERT INTO audit_records (id,actor,action,entity_type,entity_id,detail_json,created_at) VALUES ($1,$2,$3,$4,$5,$6,clock_timestamp())")
+        .bind(Uuid::new_v4().to_string()).bind(actor).bind(action).bind(entity_type).bind(id).bind(detail).execute(&mut **tx).await?;
     Ok(())
 }
 pub async fn ensure(tx: &mut Transaction<'_, Postgres>, id: &str) -> Result<(), sqlx::Error> {
@@ -172,7 +173,10 @@ pub async fn save(
             .fetch_one(&mut **tx)
             .await?;
     let previous: Package = serde_json::from_value(old).map_err(|_| ApiError::internal())?;
-    rollover(tx, id, Utc::now()).await.map_err(ApiError::from)?;
+    let now = sqlx::query_scalar("SELECT clock_timestamp()")
+        .fetch_one(&mut **tx)
+        .await?;
+    rollover(tx, id, now).await.map_err(ApiError::from)?;
     let changed_meter = previous.interface != package.interface
         || previous.direction != package.direction
         || previous.quota_bytes.is_some() != package.quota_bytes.is_some();
@@ -180,8 +184,8 @@ pub async fn save(
         || previous.reset_day != package.reset_day
         || previous.timezone != package.timezone;
     sqlx::query("UPDATE node_packages SET config = $1, generation = generation + 1, next_reset_at = CASE WHEN $2 THEN $3 ELSE next_reset_at END, boot_id = CASE WHEN $4 THEN NULL ELSE boot_id END, sampled_at = CASE WHEN $4 THEN NULL ELSE sampled_at END, gap_reason = CASE WHEN $4 THEN 'meter_configuration_changed' ELSE gap_reason END WHERE node_id = $5")
-        .bind(json!(package)).bind(changed_cycle).bind(next_reset(package, Utc::now())).bind(changed_meter).bind(id).execute(&mut **tx).await?;
-    evaluate(tx, id, Utc::now()).await.map_err(ApiError::from)?;
+        .bind(json!(package)).bind(changed_cycle).bind(next_reset(package, now)).bind(changed_meter).bind(id).execute(&mut **tx).await?;
+    evaluate(tx, id, now).await.map_err(ApiError::from)?;
     Ok(())
 }
 async fn rollover(tx: &mut Transaction<'_, Postgres>, id: &str, now: DateTime<Utc>) -> Result<()> {
@@ -259,17 +263,14 @@ pub(crate) fn snapshot_from_reading(
 }
 
 pub async fn restricted(pool: &PgPool, id: &str) -> Result<bool> {
-    let Some(row) = sqlx::query(
-        "SELECT config, usage_bytes, next_reset_at FROM node_packages WHERE node_id = $1",
-    )
-    .bind(id)
-    .fetch_optional(&mut *crate::read_snapshot::begin(pool).await?)
-    .await?
-    else {
+    let mut tx = crate::read_snapshot::begin(pool).await?;
+    let row = sqlx::query("SELECT config,usage_bytes,next_reset_at,clock_timestamp() AS database_now FROM node_packages WHERE node_id=$1")
+        .bind(id).fetch_optional(&mut *tx).await?;
+    let Some(row) = row else {
         return Ok(false);
     };
     let package: Package = serde_json::from_value(row.get("config"))?;
-    let now = Utc::now();
+    let now = row.get("database_now");
     Ok(!reasons(
         &package,
         effective_usage(row.get("usage_bytes"), row.get("next_reset_at"), now),
@@ -346,24 +347,6 @@ async fn evaluate(tx: &mut Transaction<'_, Postgres>, id: &str, now: DateTime<Ut
             .bind(Uuid::new_v4().to_string()).bind(id).bind(kind).bind(scope).bind(now).execute(&mut **tx).await?;
     }
     let blocked = !restrictions.is_empty();
-    if blocked && !row.get::<bool, _>("restricted") {
-        let users: Vec<String> = sqlx::query_scalar(
-            "SELECT user_id FROM node_assignments WHERE node_id = $1 ORDER BY user_id",
-        )
-        .bind(id)
-        .fetch_all(&mut **tx)
-        .await?;
-        for user in users {
-            enqueue_job_with_payload_in_tx(
-                tx,
-                "kick",
-                Some(id),
-                None,
-                json!({"user_id": user, "node_limit": true}),
-            )
-            .await?;
-        }
-    }
     if blocked != row.get::<bool, _>("restricted") {
         sqlx::query("UPDATE node_packages SET restricted = $1 WHERE node_id = $2")
             .bind(blocked)
@@ -383,9 +366,7 @@ async fn evaluate(tx: &mut Transaction<'_, Postgres>, id: &str, now: DateTime<Ut
             json!({"reasons": restrictions}),
         )
         .await?;
-        if !blocked {
-            crate::kick_requests::clear_reason(tx, Some(id), None, "node_limit").await?;
-        }
+        maintenance::admit_on(tx, id, blocked).await?;
     }
     Ok(())
 }
@@ -424,7 +405,8 @@ pub async fn update_usage(
         ));
     }
     ensure(tx, &id).await?;
-    rollover(tx, &id, Utc::now())
+    let now = sqlx::query_scalar("SELECT clock_timestamp()").fetch_one(&mut **tx).await?;
+    rollover(tx, &id, now)
         .await
         .map_err(ApiError::from)?;
     sqlx::query("UPDATE node_packages SET usage_bytes = $1, generation = generation + 1, boot_id = NULL, sampled_at = NULL, gap_reason = 'usage_corrected', period_id = CASE WHEN $2 THEN $3 ELSE period_id END WHERE node_id = $4")
@@ -452,7 +434,7 @@ pub async fn update_usage(
         json!({"usage_bytes": input.usage_bytes}),
     )
     .await?;
-    evaluate(tx, &id, Utc::now())
+    evaluate(tx, &id, now)
         .await
         .map_err(ApiError::from)?;
     Ok(json!({"id": id, "revision": revision + 1}))
@@ -463,31 +445,11 @@ pub async fn update_usage(
 
 pub async fn run(state: AppState) {
     loop {
-        if let Err(error) = check_all(&state.pool).await {
-            tracing::error!(%error, "node limit evaluation failed");
+        if let Err(error) = maintenance::pass(&state.pool, &state.instance_id).await {
+            tracing::error!(%error, "node limit maintenance deferred");
         }
         tokio::time::sleep(Duration::from_secs(1)).await;
     }
-}
-async fn check_all(pool: &PgPool) -> Result<()> {
-    let ids: Vec<String> = sqlx::query_scalar(
-        "SELECT id FROM nodes WHERE state NOT IN ('deleting','delete_failed') ORDER BY id",
-    )
-    .fetch_all(pool)
-    .await?;
-    for id in ids {
-        db::write(pool,move |tx| {
-            let id=id.clone();
-            Box::pin(async move {
-                let active:Option<bool>=sqlx::query_scalar("SELECT true FROM nodes WHERE id=$1 AND state NOT IN ('deleting','delete_failed') FOR NO KEY UPDATE")
-                    .bind(&id).fetch_optional(&mut **tx).await?;
-                if active.is_none() {return Ok(());}
-                ensure(tx,&id).await?;
-                evaluate(tx,&id,Utc::now()).await
-            })
-        }).await?;
-    }
-    Ok(())
 }
 
 pub async fn collect(state: AppState) {
@@ -1070,7 +1032,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(subscriptions, 1);
-        check_all(&state.pool).await.unwrap();
+        maintenance::drain_for_test(&state.pool).await;
         let jobs: Vec<(String, String)> =
             sqlx::query_as("SELECT node_id,status FROM jobs WHERE kind='kick'")
                 .fetch_all(&state.pool)
@@ -1095,6 +1057,7 @@ mod tests {
         .unwrap();
         assert_eq!(serde_json::to_value(probe.0).unwrap()["ok"], true);
         set_package(&state, &id, &Package::default()).await;
+        maintenance::drain_for_test(&state.pool).await;
         assert!(!restricted(&state.pool, &id).await.unwrap());
         let stale = crate::deployment::JobInput {
             id: "stale".into(),
