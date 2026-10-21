@@ -29,7 +29,7 @@ pub async fn ensure_cycle(pool: &PgPool, kind: &str) -> Result<Uuid> {
     db::serializable(pool,move |tx| {
         let kind=kind.clone();
         Box::pin(async move {
-            let seconds=match kind.as_str(){"traffic"|"network"=>10_i64,_=>anyhow::bail!("unsupported sampling kind")};
+            let seconds=match kind.as_str(){"traffic"|"network"=>10_i64,"proxy"=>60_i64,_=>anyhow::bail!("unsupported sampling kind")};
             let period:DateTime<Utc>=sqlx::query_scalar("SELECT to_timestamp(floor(extract(epoch FROM clock_timestamp())/$1)*$1)").bind(seconds as f64).fetch_one(&mut **tx).await?;
             let deadline=period+chrono::Duration::seconds(seconds);
             let created=sqlx::query("INSERT INTO sampling_cycles(id,kind,period_start,deadline_at,expected_nodes) VALUES($1,$2,$3,$4,0) ON CONFLICT(kind,period_start) DO NOTHING")
@@ -37,6 +37,8 @@ pub async fn ensure_cycle(pool: &PgPool, kind: &str) -> Result<Uuid> {
             if !created {return Ok(sqlx::query_scalar("SELECT id FROM sampling_cycles WHERE kind=$1 AND period_start=$2").bind(&kind).bind(period).fetch_one(&mut **tx).await?);}
             let ids:Vec<String>=if kind=="traffic" {
                 sqlx::query_scalar("SELECT id FROM nodes WHERE deployed_revision IS NOT NULL AND state NOT IN ('deleting','delete_failed') ORDER BY id FOR KEY SHARE").fetch_all(&mut **tx).await?
+            } else if kind=="proxy" {
+                sqlx::query_scalar("SELECT id FROM nodes WHERE deployed_revision IS NOT NULL AND state NOT IN ('deleting','delete_failed') AND mtls_state='ready' ORDER BY id FOR KEY SHARE").fetch_all(&mut **tx).await?
             } else {
                 sqlx::query_scalar("SELECT n.id FROM nodes n JOIN node_packages p ON p.node_id=n.id WHERE (n.deployed_revision IS NOT NULL OR p.config->>'quota_bytes' IS NOT NULL) AND n.state NOT IN ('deleting','delete_failed') ORDER BY n.id FOR KEY SHARE OF n").fetch_all(&mut **tx).await?
             };
@@ -79,6 +81,9 @@ pub async fn claim(pool: &PgPool, kind: &str, owner: &str) -> Result<Option<Work
                 if payload.get("captured_at").is_none() {
                     let captured:DateTime<Utc>=sqlx::query_scalar("SELECT clock_timestamp()").fetch_one(&mut **tx).await?;
                     payload["captured_at"]=json!(captured);
+                    if kind=="proxy" {
+                        payload["deployed_revision"]=json!(sqlx::query_scalar::<_,Option<i64>>("SELECT deployed_revision FROM nodes WHERE id=$1").bind(&node).fetch_one(&mut **tx).await?);
+                    }
                     if kind=="network" {
                         payload["capture_generation"]=json!(sqlx::query_scalar::<_,i64>("SELECT generation FROM node_packages WHERE node_id=$1").bind(&node).fetch_one(&mut **tx).await?);
                     }
@@ -93,6 +98,10 @@ pub async fn claim(pool: &PgPool, kind: &str, owner: &str) -> Result<Option<Work
     }).await
 }
 
+#[derive(Debug, thiserror::Error)]
+#[error("sampling slot expired before remote collection")]
+pub struct SlotExpired;
+
 /// Admission is checked immediately before collection, so a locally paused
 /// claimant cannot start an uncaptured remote read after its slot has closed.
 /// Once collection has started, its bounded result may arrive after the slot.
@@ -104,7 +113,7 @@ pub async fn admit_read(pool: &PgPool, work: &Work) -> Result<()> {
             for lease in &work.leases {lease.guard(tx).await?;}
             let timely:bool=sqlx::query_scalar("SELECT deadline_at>clock_timestamp() OR (kind='traffic' AND EXISTS(SELECT 1 FROM traffic_sample_batches b WHERE b.sample_id=w.id AND b.payload_digest IS NOT NULL)) FROM background_work w WHERE id=$1")
                 .bind(&work.id).fetch_one(&mut **tx).await?;
-            anyhow::ensure!(timely,"sampling slot expired before remote collection");
+            if !timely {return Err(SlotExpired.into());}
             Ok(())
         })
     }).await
@@ -161,6 +170,7 @@ pub async fn run_sampling(state: AppState, kind: &'static str) {
                             let result=match kind {
                                 "traffic"=>crate::traffic::sample_work(&app,&work).await,
                                 "network"=>crate::node_limits::sample_work(&app,&work).await,
+                                "proxy"=>crate::proxy_monitor::sample_work(&app,&work).await,
                                 _=>unreachable!(),
                             };
                             if let Err(error)=&result {tracing::warn!(kind,node_id=%work.node,%error,"sampling work failed");}

@@ -442,7 +442,7 @@ async fn sampling_migration_preserves_config_ciphertext_usage_and_old_online_his
 
 #[tokio::test]
 async fn a_claimant_paused_past_the_slot_cannot_start_an_uncaptured_read() {
-    for kind in ["traffic", "network"] {
+    for kind in ["traffic", "network", "proxy"] {
         let (state, _) = fixture().await;
         freeze(&state, kind).await;
         let work = claim(&state.pool, kind, "paused").await.unwrap().unwrap();
@@ -453,6 +453,10 @@ async fn a_claimant_paused_past_the_slot_cannot_start_an_uncaptured_read() {
         execution::supervise(state.pool.clone(), work.leases.clone(), async {
             let error = if kind == "traffic" {
                 crate::traffic::sample_work(&state, &work)
+                    .await
+                    .unwrap_err()
+            } else if kind == "proxy" {
+                crate::proxy_monitor::sample_work(&state, &work)
                     .await
                     .unwrap_err()
             } else {
