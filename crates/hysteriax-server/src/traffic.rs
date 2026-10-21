@@ -2,17 +2,21 @@ use crate::db;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
-use serde_json::{Map, Value, json};
-use sqlx::{PgPool, Row};
+use serde_json::{Map, Value};
+use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::{
-    api::{enqueue_job_with_payload_in_tx, now},
+    api::now,
     deployment,
     security::SecretBox,
     ssh::{self, FingerprintResult},
     state::AppState,
 };
+
+#[cfg(test)]
+mod batch_tests;
+mod batches;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CounterDelta {
@@ -57,7 +61,11 @@ pub fn counter_delta(
 
 pub async fn run(state: AppState) {
     // Expiry enforcement must keep ticking even when SSH sampling is slow.
-    tokio::join!(sampling_loop(&state), expiration_loop(&state.pool));
+    tokio::join!(
+        sampling_loop(&state),
+        expiration_loop(&state.pool),
+        billing_loop(&state.pool)
+    );
 }
 
 async fn sampling_loop(state: &AppState) {
@@ -82,6 +90,49 @@ async fn expiration_loop(pool: &PgPool) {
     }
 }
 
+pub async fn finish_captured_for_removal(pool: &PgPool, node: &str) -> Result<()> {
+    let owned = node.to_owned();
+    db::write(pool,move |tx| {
+        let node=owned.clone();
+        Box::pin(async move {
+            sqlx::query("UPDATE traffic_sample_batches SET state='discarded',completed_at=clock_timestamp() WHERE node_id=$1 AND state='capturing' AND EXISTS(SELECT 1 FROM nodes WHERE id=$1 AND state IN ('deleting','delete_failed'))")
+                .bind(&node).execute(&mut **tx).await?;
+            Ok::<_,anyhow::Error>(())
+        })
+    }).await?;
+    loop {
+        let id:Option<String>=sqlx::query_scalar("SELECT sample_id FROM traffic_sample_batches WHERE node_id=$1 AND state='ready' ORDER BY sample_order LIMIT 1")
+            .bind(node).fetch_optional(pool).await?;
+        let Some(id) = id else {
+            return Ok(());
+        };
+        if !batches::drain(pool, &id).await? {
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    }
+}
+
+async fn billing_loop(pool: &PgPool) {
+    let mut tick = tokio::time::interval(Duration::from_secs(1));
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        tick.tick().await;
+        if let Err(error) = batches::expire_captures(pool).await {
+            tracing::warn!(%error,"expired traffic captures could not be closed");
+        }
+        for _ in 0..16 {
+            match batches::process_next(pool).await {
+                Ok(true) => {}
+                Ok(false) => break,
+                Err(error) => {
+                    tracing::warn!(%error,"captured traffic billing deferred");
+                    break;
+                }
+            }
+        }
+    }
+}
+
 async fn collect_all(state: &AppState) -> Result<()> {
     let ids: Vec<String> = sqlx::query_scalar("SELECT id FROM nodes WHERE deployed_revision IS NOT NULL AND state NOT IN ('deleting', 'delete_failed') ORDER BY id")
         .fetch_all(&state.pool).await?;
@@ -92,21 +143,66 @@ async fn collect_all(state: &AppState) -> Result<()> {
         let state = state.clone();
         async move {
             let pool = &state.pool;
-            let result = tokio::time::timeout(Duration::from_secs(45), sample_node(
-                pool, &state.secrets, &node_id, cycle, cycle_started, expected_nodes,
-            )).await.unwrap_or_else(|_| Err(anyhow::anyhow!("traffic sample timed out")));
+            let result = tokio::time::timeout(
+                Duration::from_secs(45),
+                sample_node(
+                    pool,
+                    &state.secrets,
+                    &node_id,
+                    cycle,
+                    cycle_started,
+                    expected_nodes,
+                ),
+            )
+            .await
+            .unwrap_or_else(|_| Err(anyhow::anyhow!("traffic sample timed out")));
             if let Err(error) = result {
                 tracing::warn!(node_id, %error, "traffic sample failed");
-                crate::overview::record_online(pool, &node_id, cycle, cycle_started, expected_nodes, None).await?;
-                crate::overview::finish_traffic_sample(pool, &node_id, cycle, "failed").await;
-                record_gap(pool, &node_id, classify_sample_error(&error)).await?;
-                sqlx::query("UPDATE nodes SET state = CASE WHEN state IN ('deployed', 'syncing') THEN 'unreachable' ELSE state END, updated_at = $1 WHERE id = $2")
-                    .bind(now()).bind(&node_id).execute(pool).await?;
+                record_failed_sample(pool, &node_id, cycle, cycle_started, expected_nodes, &error)
+                    .await?;
             }
             Ok(())
         }
-    }).await;
+    })
+    .await;
     Ok(())
+}
+
+async fn record_failed_sample(
+    pool: &PgPool,
+    node: &str,
+    cycle: Uuid,
+    started: chrono::DateTime<chrono::Utc>,
+    expected: i64,
+    error: &anyhow::Error,
+) -> Result<()> {
+    let (node, id, reason) = (
+        node.to_owned(),
+        format!("{cycle}:{node}"),
+        classify_sample_error(error),
+    );
+    db::write(pool,move |tx| {
+        let (node,id)=(node.clone(),id.clone());
+        Box::pin(async move {
+            let active:Option<bool>=sqlx::query_scalar("SELECT true FROM nodes WHERE id=$1 AND state NOT IN ('deleting','delete_failed') FOR NO KEY UPDATE")
+                .bind(&node).fetch_optional(&mut **tx).await?;
+            if active.is_none() {return Ok(());}
+            // A timeout may fire just after capture commit. Check after locking
+            // the node, so sealing and failure admission cannot race.
+            let captured:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM traffic_sample_batches WHERE sample_id=$1 AND payload_digest IS NOT NULL)")
+                .bind(&id).fetch_one(&mut **tx).await?;
+            if captured {return Ok(());}
+            sqlx::query("UPDATE traffic_sample_batches SET state='discarded',completed_at=clock_timestamp() WHERE sample_id=$1 AND state='capturing'")
+                .bind(&id).execute(&mut **tx).await?;
+            crate::overview::record_online_on(&mut **tx,&node,cycle,started,expected,None).await?;
+            sqlx::query("UPDATE online_samples SET traffic_status='failed' WHERE node_id=$1 AND cycle_id=$2")
+                .bind(&node).bind(cycle).execute(&mut **tx).await?;
+            record_gap_in_tx(tx,&node,reason,&now()).await?;
+            sqlx::query("UPDATE nodes SET state=CASE WHEN state IN ('deployed','syncing') THEN 'unreachable' ELSE state END,updated_at=clock_timestamp() WHERE id=$1")
+                .bind(&node).execute(&mut **tx).await?;
+            Ok(())
+        })
+    }).await
 }
 
 async fn collect_nodes<F, Fut>(ids: Vec<String>, mut sample: F)
@@ -143,6 +239,12 @@ async fn sample_node(
     cycle_started: chrono::DateTime<chrono::Utc>,
     expected_nodes: i64,
 ) -> Result<()> {
+    let sample_id = format!("{cycle}:{node_id}");
+    let state = batches::reserve(pool, &sample_id, node_id, Some(cycle)).await?;
+    if state != "capturing" {
+        batches::drain(pool, &sample_id).await?;
+        return Ok(());
+    }
     let node = deployment::load_ssh_node(pool, secrets, node_id).await?;
     let session = match ssh::connect(&node).await? {
         FingerprintResult::Trusted(session) => session,
@@ -195,6 +297,7 @@ async fn sample_node(
         serde_json::from_slice(&body).context("Hysteria traffic API returned invalid JSON")?;
     let after_instance = systemd_instance(&session).await?;
     if before_instance != after_instance {
+        batches::discard_capture(pool, &sample_id).await?;
         record_gap(pool, node_id, "hysteria_restarted_during_sample").await?;
         crate::overview::finish_traffic_sample(pool, node_id, cycle, "failed").await;
         return Ok(());
@@ -202,16 +305,8 @@ async fn sample_node(
     let counters = traffic
         .as_object()
         .context("Hysteria traffic API returned an invalid response shape")?;
-    apply_sample(pool, node_id, &before_instance, counters).await?;
-    let sampled_at = now();
-    sqlx::query("UPDATE nodes SET state = CASE WHEN state = 'unreachable' THEN 'deployed' ELSE state END, last_seen_at = $1, last_sample_at = $2, updated_at = $3 WHERE id = $4")
-        .bind(sampled_at).bind(sampled_at).bind(sampled_at).bind(node_id).execute(pool).await?;
-    crate::overview::finish_traffic_sample(pool, node_id, cycle, "ok").await;
-    sqlx::query("UPDATE data_gaps SET resolved_at = $1 WHERE node_id = $2 AND resolved_at IS NULL")
-        .bind(now())
-        .bind(node_id)
-        .execute(pool)
-        .await?;
+    batches::seal(pool, &sample_id, &before_instance, counters).await?;
+    batches::drain(pool, &sample_id).await?;
     Ok(())
 }
 
@@ -235,99 +330,18 @@ async fn systemd_instance(session: &ssh::SshSession) -> Result<String> {
     Ok(instance.to_owned())
 }
 
+#[cfg(test)]
 async fn apply_sample(
     pool: &PgPool,
     node_id: &str,
     instance_id: &str,
     counters: &Map<String, Value>,
 ) -> Result<()> {
-    let counters = parse_counters(counters)?;
-    let timestamp = now();
-    let mut tx = db::begin_write(pool).await?;
-    for (user_id, tx_total, rx_total) in counters {
-        let tx_total_i64 = tx_total as i64;
-        let rx_total_i64 = rx_total as i64;
-        let user = sqlx::query("SELECT u.usage_bytes, u.quota_bytes, u.enabled, u.expires_at FROM users u JOIN node_assignments a ON a.user_id = u.id WHERE u.id = $1 AND a.node_id = $2")
-            .bind(&user_id).bind(node_id).fetch_optional(&mut *tx).await?;
-        let Some(user) = user else { continue };
-        let baseline = sqlx::query("SELECT instance_id, tx_total, rx_total FROM traffic_baselines WHERE node_id = $1 AND user_id = $2")
-            .bind(node_id).bind(&user_id).fetch_optional(&mut *tx).await?;
-        let previous = baseline.as_ref().map(|row| {
-            (
-                row.get::<String, _>("instance_id"),
-                row.get::<i64, _>("tx_total") as u64,
-                row.get::<i64, _>("rx_total") as u64,
-            )
-        });
-        let delta = counter_delta(
-            previous
-                .as_ref()
-                .map(|(instance, tx, rx)| (instance.as_str(), *tx, *rx)),
-            instance_id,
-            tx_total,
-            rx_total,
-        );
-        let delta_tx = i64::try_from(delta.tx).unwrap_or(i64::MAX);
-        let delta_rx = i64::try_from(delta.rx).unwrap_or(i64::MAX);
-        let delta_bytes = delta_tx.saturating_add(delta_rx);
-        let old_usage: i64 = user.get("usage_bytes");
-        let new_usage = old_usage.saturating_add(delta_bytes);
-        sqlx::query("INSERT INTO traffic_baselines (node_id, user_id, instance_id, tx_total, rx_total, sampled_at) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT(node_id, user_id) DO UPDATE SET instance_id = excluded.instance_id, tx_total = excluded.tx_total, rx_total = excluded.rx_total, sampled_at = excluded.sampled_at")
-            .bind(node_id).bind(&user_id).bind(instance_id).bind(tx_total_i64).bind(rx_total_i64).bind(timestamp).execute(&mut *tx).await?;
-        sqlx::query("INSERT INTO traffic_records (id, node_id, user_id, instance_id, baseline_tx, baseline_rx, delta_tx, delta_rx, gap_reason, sampled_at, baseline_only) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)")
-            .bind(Uuid::new_v4().to_string()).bind(node_id).bind(&user_id).bind(instance_id).bind(tx_total_i64).bind(rx_total_i64).bind(delta_tx).bind(delta_rx).bind(delta.gap_reason).bind(timestamp).bind(previous.is_none()).execute(&mut *tx).await?;
-        sqlx::query("UPDATE users SET usage_bytes = $1, updated_at = $2 WHERE id = $3")
-            .bind(new_usage)
-            .bind(timestamp)
-            .bind(&user_id)
-            .execute(&mut *tx)
-            .await?;
-
-        let enabled: bool = user.get("enabled");
-        let expires_at: Option<chrono::DateTime<chrono::Utc>> = user.get("expires_at");
-        let quota: Option<i64> = user.get("quota_bytes");
-        let expired = expires_at.is_some_and(|expiration| expiration <= chrono::Utc::now());
-        let restricted = !enabled || expired || quota.is_some_and(|limit| new_usage >= limit);
-        if restricted {
-            let marked: i64 = sqlx::query_scalar(
-                "SELECT COUNT(*) FROM users WHERE id = $1 AND access_kick_enqueued_at IS NOT NULL",
-            )
-            .bind(&user_id)
-            .fetch_one(&mut *tx)
-            .await?;
-            if marked == 0 {
-                let assignments = sqlx::query_scalar::<_, String>(
-                    "SELECT node_id FROM node_assignments WHERE user_id = $1",
-                )
-                .bind(&user_id)
-                .fetch_all(&mut *tx)
-                .await?;
-                sqlx::query(
-                    "UPDATE users SET access_kick_enqueued_at = $1, updated_at = $2 WHERE id = $3",
-                )
-                .bind(timestamp)
-                .bind(timestamp)
-                .bind(&user_id)
-                .execute(&mut *tx)
-                .await?;
-                for assignment_node in assignments {
-                    enqueue_job_with_payload_in_tx(
-                        &mut tx,
-                        "kick",
-                        Some(&assignment_node),
-                        None,
-                        json!({"user_id": user_id,"kick_reason":"access_restricted"}),
-                    )
-                    .await
-                    .map_err(|error| anyhow::anyhow!(error.message))?;
-                }
-            }
-        }
-        if let Some(reason) = delta.gap_reason {
-            record_gap_in_tx(&mut tx, node_id, reason, &timestamp).await?;
-        }
-    }
-    tx.commit().await?;
+    parse_counters(counters)?;
+    let id = Uuid::new_v4().to_string();
+    batches::reserve(pool, &id, node_id, None).await?;
+    batches::seal(pool, &id, instance_id, counters).await?;
+    batches::drain(pool, &id).await?;
     Ok(())
 }
 
@@ -355,56 +369,35 @@ fn parse_counters(counters: &Map<String, Value>) -> Result<Vec<(String, u64, u64
 }
 
 async fn schedule_expirations(pool: &PgPool) -> Result<()> {
-    let timestamp = now();
-    let rows = sqlx::query("SELECT id FROM users WHERE enabled = FALSE OR (expires_at IS NOT NULL AND expires_at <= $1) OR (quota_bytes IS NOT NULL AND usage_bytes >= quota_bytes)")
-        .bind(timestamp).fetch_all(pool).await?;
-    for row in rows {
-        let user_id: String = row.get("id");
-        let mut tx = db::begin_write(pool).await?;
-        let needs_kick: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM users WHERE id = $1 AND access_kick_enqueued_at IS NULL",
-        )
-        .bind(&user_id)
-        .fetch_one(&mut *tx)
+    let ids:Vec<String>=sqlx::query_scalar("SELECT id FROM users WHERE access_kick_enqueued_at IS NULL AND (NOT enabled OR expires_at<=clock_timestamp() OR usage_bytes>=quota_bytes) ORDER BY id")
+        .fetch_all(pool).await?;
+    for id in ids {
+        db::write(pool, move |tx| {
+            let id = id.clone();
+            Box::pin(async move {
+                sqlx::query("SELECT id FROM users WHERE id=$1 FOR NO KEY UPDATE")
+                    .bind(&id)
+                    .fetch_optional(&mut **tx)
+                    .await?;
+                batches::enforce_user(tx, &id).await
+            })
+        })
         .await?;
-        if needs_kick > 0 {
-            let node_ids = sqlx::query_scalar::<_, String>(
-                "SELECT node_id FROM node_assignments WHERE user_id = $1",
-            )
-            .bind(&user_id)
-            .fetch_all(&mut *tx)
-            .await?;
-            sqlx::query(
-                "UPDATE users SET access_kick_enqueued_at = $1, updated_at = $2 WHERE id = $3",
-            )
-            .bind(timestamp)
-            .bind(timestamp)
-            .bind(&user_id)
-            .execute(&mut *tx)
-            .await?;
-            for node_id in node_ids {
-                enqueue_job_with_payload_in_tx(
-                    &mut tx,
-                    "kick",
-                    Some(&node_id),
-                    None,
-                    json!({"user_id": user_id,"kick_reason":"access_restricted"}),
-                )
-                .await
-                .map_err(|error| anyhow::anyhow!(error.message))?;
-            }
-        }
-        tx.commit().await?;
     }
     Ok(())
 }
 
 async fn record_gap(pool: &PgPool, node_id: &str, reason: &str) -> Result<()> {
-    let timestamp = now();
-    let mut tx = db::begin_write(pool).await?;
-    record_gap_in_tx(&mut tx, node_id, reason, &timestamp).await?;
-    tx.commit().await?;
-    Ok(())
+    let (node, reason) = (node_id.to_owned(), reason.to_owned());
+    db::write(pool,move |tx| {
+        let (node,reason)=(node.clone(),reason.clone());
+        Box::pin(async move {
+            let active:Option<bool>=sqlx::query_scalar("SELECT true FROM nodes WHERE id=$1 AND state NOT IN ('deleting','delete_failed') FOR NO KEY UPDATE")
+                .bind(&node).fetch_optional(&mut **tx).await?;
+            if active.is_some() {record_gap_in_tx(tx,&node,&reason,&now()).await?;}
+            Ok(())
+        })
+    }).await
 }
 
 async fn record_gap_in_tx(
@@ -413,6 +406,10 @@ async fn record_gap_in_tx(
     reason: &str,
     timestamp: &chrono::DateTime<chrono::Utc>,
 ) -> Result<()> {
+    sqlx::query("SELECT id FROM nodes WHERE id=$1 FOR NO KEY UPDATE")
+        .bind(node_id)
+        .fetch_optional(&mut **tx)
+        .await?;
     let open: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM data_gaps WHERE node_id = $1 AND resolved_at IS NULL",
     )

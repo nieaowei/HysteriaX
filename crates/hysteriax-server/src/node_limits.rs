@@ -161,15 +161,18 @@ pub async fn save(
     package: &Package,
 ) -> Result<(), ApiError> {
     package.validate()?;
-    ensure(tx, id).await?;
-    let old: Value = sqlx::query_scalar("SELECT config FROM node_packages WHERE node_id = $1")
+    sqlx::query("SELECT id FROM nodes WHERE id=$1 FOR NO KEY UPDATE")
         .bind(id)
-        .fetch_one(&mut **tx)
+        .fetch_optional(&mut **tx)
         .await?;
+    ensure(tx, id).await?;
+    let old: Value =
+        sqlx::query_scalar("SELECT config FROM node_packages WHERE node_id = $1 FOR NO KEY UPDATE")
+            .bind(id)
+            .fetch_one(&mut **tx)
+            .await?;
     let previous: Package = serde_json::from_value(old).map_err(|_| ApiError::internal())?;
-    rollover(tx, id, Utc::now())
-        .await
-        .map_err(|_| ApiError::internal())?;
+    rollover(tx, id, Utc::now()).await.map_err(ApiError::from)?;
     let changed_meter = previous.interface != package.interface
         || previous.direction != package.direction
         || previous.quota_bytes.is_some() != package.quota_bytes.is_some();
@@ -178,16 +181,16 @@ pub async fn save(
         || previous.timezone != package.timezone;
     sqlx::query("UPDATE node_packages SET config = $1, generation = generation + 1, next_reset_at = CASE WHEN $2 THEN $3 ELSE next_reset_at END, boot_id = CASE WHEN $4 THEN NULL ELSE boot_id END, sampled_at = CASE WHEN $4 THEN NULL ELSE sampled_at END, gap_reason = CASE WHEN $4 THEN 'meter_configuration_changed' ELSE gap_reason END WHERE node_id = $5")
         .bind(json!(package)).bind(changed_cycle).bind(next_reset(package, Utc::now())).bind(changed_meter).bind(id).execute(&mut **tx).await?;
-    evaluate(tx, id, Utc::now())
-        .await
-        .map_err(|_| ApiError::internal())?;
+    evaluate(tx, id, Utc::now()).await.map_err(ApiError::from)?;
     Ok(())
 }
 async fn rollover(tx: &mut Transaction<'_, Postgres>, id: &str, now: DateTime<Utc>) -> Result<()> {
-    let row = sqlx::query("SELECT config, next_reset_at FROM node_packages WHERE node_id = $1")
-        .bind(id)
-        .fetch_one(&mut **tx)
-        .await?;
+    let row = sqlx::query(
+        "SELECT config, next_reset_at FROM node_packages WHERE node_id = $1 FOR NO KEY UPDATE",
+    )
+    .bind(id)
+    .fetch_one(&mut **tx)
+    .await?;
     let package: Package = serde_json::from_value(row.get("config"))?;
     let due: Option<DateTime<Utc>> = row.get("next_reset_at");
     if package.cycle == "monthly" && due.is_none_or(|x| x <= now) {
@@ -344,11 +347,12 @@ async fn evaluate(tx: &mut Transaction<'_, Postgres>, id: &str, now: DateTime<Ut
     }
     let blocked = !restrictions.is_empty();
     if blocked && !row.get::<bool, _>("restricted") {
-        let users: Vec<String> =
-            sqlx::query_scalar("SELECT user_id FROM node_assignments WHERE node_id = $1")
-                .bind(id)
-                .fetch_all(&mut **tx)
-                .await?;
+        let users: Vec<String> = sqlx::query_scalar(
+            "SELECT user_id FROM node_assignments WHERE node_id = $1 ORDER BY user_id",
+        )
+        .bind(id)
+        .fetch_all(&mut **tx)
+        .await?;
         for user in users {
             enqueue_job_with_payload_in_tx(
                 tx,
@@ -357,8 +361,7 @@ async fn evaluate(tx: &mut Transaction<'_, Postgres>, id: &str, now: DateTime<Ut
                 None,
                 json!({"user_id": user, "node_limit": true}),
             )
-            .await
-            .map_err(|e| anyhow::anyhow!(e.message))?;
+            .await?;
         }
     }
     if blocked != row.get::<bool, _>("restricted") {
@@ -402,11 +405,13 @@ pub async fn update_usage(
     if input.usage_bytes < 0 || input.expected_revision < 1 {
         return Err(ApiError::bad_request("usage and revision must be valid"));
     }
-    let mut tx = db::begin_write(&state.pool).await?;
+    let response=db::serializable::<_,ApiError,_>(&state.pool,move |tx| {
+        let id=id.clone();
+        Box::pin(async move {
     let revision: Option<(i64, String)> =
-        sqlx::query_as("SELECT desired_revision, state FROM nodes WHERE id = $1")
+        sqlx::query_as("SELECT desired_revision, state FROM nodes WHERE id = $1 FOR NO KEY UPDATE")
             .bind(&id)
-            .fetch_optional(&mut *tx)
+            .fetch_optional(&mut **tx)
             .await?;
     let (revision, status) = revision.ok_or_else(|| ApiError::not_found("node"))?;
     if revision != input.expected_revision
@@ -416,23 +421,23 @@ pub async fn update_usage(
             "node changed or is being deleted; reload",
         ));
     }
-    ensure(&mut tx, &id).await?;
-    rollover(&mut tx, &id, Utc::now())
+    ensure(tx, &id).await?;
+    rollover(tx, &id, Utc::now())
         .await
-        .map_err(|_| ApiError::internal())?;
+        .map_err(ApiError::from)?;
     sqlx::query("UPDATE node_packages SET usage_bytes = $1, generation = generation + 1, boot_id = NULL, sampled_at = NULL, gap_reason = 'usage_corrected', period_id = CASE WHEN $2 THEN $3 ELSE period_id END WHERE node_id = $4")
-        .bind(input.usage_bytes).bind(input.reset).bind(Uuid::new_v4().to_string()).bind(&id).execute(&mut *tx).await?;
+        .bind(input.usage_bytes).bind(input.reset).bind(Uuid::new_v4().to_string()).bind(&id).execute(&mut **tx).await?;
     sqlx::query(
         "UPDATE nodes SET desired_revision = desired_revision + 1, updated_at = $1 WHERE id = $2",
     )
     .bind(Utc::now())
     .bind(&id)
-    .execute(&mut *tx)
+    .execute(&mut **tx)
     .await?;
     sqlx::query("INSERT INTO config_versions(id,node_id,revision,config_enc,content_sha256,created_at) SELECT $1,node_id,$2,config_enc,content_sha256,$3 FROM config_versions WHERE node_id=$4 AND revision=$5")
-        .bind(Uuid::new_v4().to_string()).bind(revision+1).bind(Utc::now()).bind(&id).bind(revision).execute(&mut *tx).await?;
+        .bind(Uuid::new_v4().to_string()).bind(revision+1).bind(Utc::now()).bind(&id).bind(revision).execute(&mut **tx).await?;
     audit(
-        &mut tx,
+        tx,
         "admin",
         if input.reset {
             "node.usage_reset"
@@ -444,11 +449,13 @@ pub async fn update_usage(
         json!({"usage_bytes": input.usage_bytes}),
     )
     .await?;
-    evaluate(&mut tx, &id, Utc::now())
+    evaluate(tx, &id, Utc::now())
         .await
-        .map_err(|_| ApiError::internal())?;
-    tx.commit().await?;
-    Ok(Json(json!({"id": id, "revision": revision + 1})))
+        .map_err(ApiError::from)?;
+    Ok(json!({"id": id, "revision": revision + 1}))
+        })
+    }).await?;
+    Ok(Json(response))
 }
 
 pub async fn run(state: AppState) {
@@ -460,15 +467,22 @@ pub async fn run(state: AppState) {
     }
 }
 async fn check_all(pool: &PgPool) -> Result<()> {
-    let ids: Vec<String> =
-        sqlx::query_scalar("SELECT id FROM nodes WHERE state NOT IN ('deleting','delete_failed')")
-            .fetch_all(pool)
-            .await?;
+    let ids: Vec<String> = sqlx::query_scalar(
+        "SELECT id FROM nodes WHERE state NOT IN ('deleting','delete_failed') ORDER BY id",
+    )
+    .fetch_all(pool)
+    .await?;
     for id in ids {
-        let mut tx = db::begin_write(pool).await?;
-        ensure(&mut tx, &id).await?;
-        evaluate(&mut tx, &id, Utc::now()).await?;
-        tx.commit().await?;
+        db::write(pool,move |tx| {
+            let id=id.clone();
+            Box::pin(async move {
+                let active:Option<bool>=sqlx::query_scalar("SELECT true FROM nodes WHERE id=$1 AND state NOT IN ('deleting','delete_failed') FOR NO KEY UPDATE")
+                    .bind(&id).fetch_optional(&mut **tx).await?;
+                if active.is_none() {return Ok(());}
+                ensure(tx,&id).await?;
+                evaluate(tx,&id,Utc::now()).await
+            })
+        }).await?;
     }
     Ok(())
 }
@@ -489,14 +503,8 @@ pub async fn collect(state: AppState) {
                         let slots = slots.clone();
                         tasks.spawn(async move {
                             let _permit = slots.acquire_owned().await.expect("collector semaphore remains open");
-                            let result = tokio::time::timeout(Duration::from_secs(30), sample(&state, &id)).await;
-                            if !matches!(result, Ok(Ok(()))) {
-                                match &result {
-                                    Ok(Err(error)) => tracing::warn!(node_id = %id, %error, "whole-host network sampling failed"),
-                                    Err(_) => tracing::warn!(node_id = %id, "whole-host network sampling timed out"),
-                                    _ => {}
-                                }
-                                let _ = record_failure(&state.pool, &id).await;
+                            if let Err(error)=collect_one(&state,&id).await {
+                                tracing::warn!(node_id=%id,%error,"whole-host network sampling failed");
                             }
                             id
                         });
@@ -510,18 +518,59 @@ pub async fn collect(state: AppState) {
         }
     }
 }
-async fn record_failure(pool: &PgPool, id: &str) -> Result<()> {
-    let mut tx = db::begin_write(pool).await?;
-    sqlx::query("UPDATE node_packages SET gap_reason = 'network_sample_failed' WHERE node_id = $1")
-        .bind(id)
-        .execute(&mut *tx)
-        .await?;
-    sqlx::query("INSERT INTO node_network_samples(node_id,period_id,delta_tx,delta_rx,gap_reason,sampled_at) SELECT node_id,period_id,0,0,'network_sample_failed',$1 FROM node_packages WHERE node_id=$2")
-        .bind(Utc::now()).bind(id).execute(&mut *tx).await?;
-    tx.commit().await?;
-    Ok(())
+async fn collect_one(state: &AppState, id: &str) -> Result<()> {
+    let capture = sqlx::query(
+        "SELECT generation,clock_timestamp() AS captured_at FROM node_packages WHERE node_id=$1",
+    )
+    .bind(id)
+    .fetch_optional(&state.pool)
+    .await?;
+    let Some(capture) = capture else {
+        return Ok(());
+    };
+    let generation: i64 = capture.get("generation");
+    let captured_at: DateTime<Utc> = capture.get("captured_at");
+    let result = tokio::time::timeout(
+        Duration::from_secs(30),
+        sample(state, id, generation, captured_at),
+    )
+    .await
+    .unwrap_or_else(|_| Err(anyhow::anyhow!("whole-host network sampling timed out")));
+    if result.is_err() {
+        record_failure(&state.pool, id, generation, captured_at).await?;
+    }
+    result
 }
-#[derive(Debug)]
+
+async fn record_failure(
+    pool: &PgPool,
+    id: &str,
+    generation: i64,
+    captured_at: DateTime<Utc>,
+) -> Result<()> {
+    let id = id.to_owned();
+    db::write(pool,move |tx| {
+        let id=id.clone();
+        Box::pin(async move {
+            let active:Option<bool>=sqlx::query_scalar("SELECT true FROM nodes WHERE id=$1 AND state NOT IN ('deleting','delete_failed') FOR NO KEY UPDATE")
+                .bind(&id).fetch_optional(&mut **tx).await?;
+            if active.is_none() {return Ok(());}
+            let row=sqlx::query("SELECT generation,sampled_at,period_id FROM node_packages WHERE node_id=$1 FOR NO KEY UPDATE")
+                .bind(&id).fetch_optional(&mut **tx).await?;
+            let Some(row)=row else {return Ok(());};
+            if row.get::<i64,_>("generation")!=generation || row.get::<Option<DateTime<Utc>>,_>("sampled_at").is_some_and(|latest|latest>=captured_at) {return Ok(());}
+            let exists:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM node_network_samples WHERE node_id=$1 AND sampled_at=$2)")
+                .bind(&id).bind(captured_at).fetch_one(&mut **tx).await?;
+            if exists {return Ok(());}
+            sqlx::query("UPDATE node_packages SET gap_reason='network_sample_failed' WHERE node_id=$1")
+                .bind(&id).execute(&mut **tx).await?;
+            sqlx::query("INSERT INTO node_network_samples(node_id,period_id,delta_tx,delta_rx,gap_reason,sampled_at) VALUES($1,$2,0,0,'network_sample_failed',$3)")
+                .bind(&id).bind(row.get::<String,_>("period_id")).bind(captured_at).execute(&mut **tx).await?;
+            Ok(())
+        })
+    }).await
+}
+#[derive(Clone, Debug)]
 struct NetworkSample {
     boot: String,
     interface: String,
@@ -545,13 +594,18 @@ fn parse_sample(value: &str) -> Result<NetworkSample> {
         rx,
     })
 }
-async fn sample(state: &AppState, id: &str) -> Result<()> {
-    let row = sqlx::query("SELECT config, generation FROM node_packages WHERE node_id = $1")
+async fn sample(
+    state: &AppState,
+    id: &str,
+    generation: i64,
+    captured_at: DateTime<Utc>,
+) -> Result<()> {
+    let row = sqlx::query("SELECT config FROM node_packages WHERE node_id=$1 AND generation=$2")
         .bind(id)
+        .bind(generation)
         .fetch_one(&state.pool)
         .await?;
     let package: Package = serde_json::from_value(row.get("config"))?;
-    let generation: i64 = row.get("generation");
     let node = crate::deployment::load_ssh_node(&state.pool, &state.secrets, id).await?;
     let FingerprintResult::Trusted(session) = ssh::connect(&node).await? else {
         bail!("untrusted SSH fingerprint");
@@ -565,7 +619,7 @@ async fn sample(state: &AppState, id: &str) -> Result<()> {
         "set -eu; {select}; [ -n \"$iface\" ]; before=$(cat /proc/sys/kernel/random/boot_id); tx=$(cat \"/sys/class/net/$iface/statistics/tx_bytes\"); rx=$(cat \"/sys/class/net/$iface/statistics/rx_bytes\"); after=$(cat /proc/sys/kernel/random/boot_id); [ \"$before\" = \"$after\" ]; printf '%s %s %s %s\\n' \"$before\" \"$iface\" \"$tx\" \"$rx\""
     );
     let value = parse_sample(&session.execute_checked(&command).await?)?;
-    apply_sample(&state.pool, id, generation, value, Utc::now()).await
+    apply_sample(&state.pool, id, generation, value, captured_at).await
 }
 fn delta(row: &sqlx::postgres::PgRow, sample: &NetworkSample) -> (i64, i64, Option<&'static str>) {
     let boot: Option<String> = row.get("boot_id");
@@ -592,35 +646,30 @@ async fn apply_sample(
     sample: NetworkSample,
     now: DateTime<Utc>,
 ) -> Result<()> {
-    let mut tx = db::begin_write(pool).await?;
-    let row = sqlx::query("SELECT p.* FROM node_packages p JOIN nodes n ON n.id=p.node_id WHERE p.node_id = $1 AND n.state NOT IN ('deleting','delete_failed')")
-        .bind(id)
-        .fetch_optional(&mut *tx)
-        .await?;
-    let Some(row) = row else {
-        return Ok(());
-    };
-    if row.get::<i64, _>("generation") != generation {
-        return Ok(());
-    }
-    // Corrections invalidate in-flight samples and establish a fresh baseline.
-    rollover(&mut tx, id, now).await?;
-    let row = sqlx::query("SELECT * FROM node_packages WHERE node_id = $1")
-        .bind(id)
-        .fetch_one(&mut *tx)
-        .await?;
-    let package: Package = serde_json::from_value(row.get("config"))?;
-    let (tx_delta, rx_delta, gap) = delta(&row, &sample);
-    let usage = row
-        .get::<i64, _>("usage_bytes")
-        .saturating_add(package.charged(tx_delta, rx_delta));
-    sqlx::query("UPDATE node_packages SET usage_bytes=$1, boot_id=$2, interface=$3, tx_total=$4, rx_total=$5, sampled_at=$6, gap_reason=$7 WHERE node_id=$8")
-        .bind(usage).bind(sample.boot).bind(sample.interface).bind(sample.tx).bind(sample.rx).bind(now).bind(gap).bind(id).execute(&mut *tx).await?;
-    sqlx::query("INSERT INTO node_network_samples(node_id,period_id,delta_tx,delta_rx,gap_reason,sampled_at,baseline_only) VALUES ($1,$2,$3,$4,$5,$6,$7)")
-        .bind(id).bind(row.get::<String,_>("period_id")).bind(tx_delta).bind(rx_delta).bind(gap).bind(now).bind(row.get::<Option<String>,_>("boot_id").is_none()).execute(&mut *tx).await?;
-    evaluate(&mut tx, id, now).await?;
-    tx.commit().await?;
-    Ok(())
+    let id = id.to_owned();
+    db::write(pool,move |tx| {
+        let (id,sample)=(id.clone(),sample.clone());
+        Box::pin(async move {
+            let active:Option<bool>=sqlx::query_scalar("SELECT true FROM nodes WHERE id=$1 AND state NOT IN ('deleting','delete_failed') FOR NO KEY UPDATE")
+                .bind(&id).fetch_optional(&mut **tx).await?;
+            if active.is_none() {return Ok(());}
+            let row=sqlx::query("SELECT * FROM node_packages WHERE node_id=$1 FOR NO KEY UPDATE")
+                .bind(&id).fetch_optional(&mut **tx).await?;
+            let Some(row)=row else {return Ok(());};
+            if row.get::<i64,_>("generation")!=generation || row.get::<Option<DateTime<Utc>>,_>("sampled_at").is_some_and(|previous|previous>=now) {return Ok(());}
+            rollover(tx,&id,now).await?;
+            let row=sqlx::query("SELECT * FROM node_packages WHERE node_id=$1").bind(&id).fetch_one(&mut **tx).await?;
+            let package:Package=serde_json::from_value(row.get("config"))?;
+            let (tx_delta,rx_delta,gap)=delta(&row,&sample);
+            let charged=package.charged(tx_delta,rx_delta);
+            sqlx::query("UPDATE node_packages SET usage_bytes=usage_bytes+least($1,9223372036854775807-usage_bytes),boot_id=$2,interface=$3,tx_total=$4,rx_total=$5,sampled_at=$6,gap_reason=$7 WHERE node_id=$8")
+                .bind(charged).bind(sample.boot).bind(sample.interface).bind(sample.tx).bind(sample.rx).bind(now).bind(gap).bind(&id).execute(&mut **tx).await?;
+            sqlx::query("INSERT INTO node_network_samples(node_id,period_id,delta_tx,delta_rx,gap_reason,sampled_at,baseline_only) VALUES($1,$2,$3,$4,$5,$6,$7)")
+                .bind(&id).bind(row.get::<String,_>("period_id")).bind(tx_delta).bind(rx_delta).bind(gap).bind(now).bind(row.get::<Option<String>,_>("boot_id").is_none()).execute(&mut **tx).await?;
+            evaluate(tx,&id,now).await?;
+            Ok(())
+        })
+    }).await
 }
 
 #[cfg(test)]
@@ -1194,7 +1243,14 @@ mod tests {
         );
         assert_ne!(a.is_ok(), b.is_ok());
         let retained = usage(&state.pool, &id).await;
-        record_failure(&state.pool, &id).await.unwrap();
+        record_failure(
+            &state.pool,
+            &id,
+            generation(&state.pool, &id).await,
+            Utc::now(),
+        )
+        .await
+        .unwrap();
         assert_eq!(usage(&state.pool, &id).await, retained);
         assert_eq!(
             snapshot(&state.pool, &id).await.unwrap().1["gap_reason"],
@@ -1281,5 +1337,173 @@ mod tests {
             .unwrap();
         assert_eq!(count, 0);
         tx.commit().await.unwrap();
+    }
+    #[tokio::test]
+    async fn late_and_duplicate_network_results_never_regress_the_baseline_or_quality() {
+        let (state, id, _) = fixture().await;
+        set_package(
+            &state,
+            &id,
+            &Package {
+                quota_bytes: Some(1000),
+                ..Package::default()
+            },
+        )
+        .await;
+        let generation = generation(&state.pool, &id).await;
+        for (at, counter) in [
+            ("2026-01-01T00:00:10Z", 100),
+            ("2026-01-01T00:00:20Z", 200),
+            ("2026-01-01T00:00:15Z", 150),
+            ("2026-01-01T00:00:30Z", 250),
+            ("2026-01-01T00:00:30Z", 250),
+        ] {
+            apply_sample(
+                &state.pool,
+                &id,
+                generation,
+                sample_value(counter, 0),
+                instant(at),
+            )
+            .await
+            .unwrap();
+        }
+        assert_eq!(usage(&state.pool, &id).await, 150);
+        record_failure(
+            &state.pool,
+            &id,
+            generation,
+            instant("2026-01-01T00:00:25Z"),
+        )
+        .await
+        .unwrap();
+        let (counter, gap): (i64, Option<String>) =
+            sqlx::query_as("SELECT tx_total,gap_reason FROM node_packages WHERE node_id=$1")
+                .bind(&id)
+                .fetch_one(&state.pool)
+                .await
+                .unwrap();
+        assert_eq!(counter, 250);
+        assert!(gap.is_none());
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT count(*) FROM node_network_samples WHERE node_id=$1"
+            )
+            .bind(&id)
+            .fetch_one(&state.pool)
+            .await
+            .unwrap(),
+            3
+        );
+        for _ in 0..2 {
+            record_failure(
+                &state.pool,
+                &id,
+                generation,
+                instant("2026-01-01T00:00:35Z"),
+            )
+            .await
+            .unwrap();
+        }
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT count(*) FROM node_network_samples WHERE node_id=$1"
+            )
+            .bind(&id)
+            .fetch_one(&state.pool)
+            .await
+            .unwrap(),
+            4
+        );
+        apply_sample(
+            &state.pool,
+            &id,
+            generation,
+            sample_value(275, 0),
+            instant("2026-01-01T00:00:40Z"),
+        )
+        .await
+        .unwrap();
+        record_failure(
+            &state.pool,
+            &id,
+            generation,
+            instant("2026-01-01T00:00:37Z"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(usage(&state.pool, &id).await, 175);
+        let gap: Option<String> =
+            sqlx::query_scalar("SELECT gap_reason FROM node_packages WHERE node_id=$1")
+                .bind(&id)
+                .fetch_one(&state.pool)
+                .await
+                .unwrap();
+        assert!(gap.is_none());
+    }
+
+    #[tokio::test]
+    async fn correction_fences_failed_samples_as_well_as_successful_ones() {
+        let (state, id, _) = fixture().await;
+        set_package(
+            &state,
+            &id,
+            &Package {
+                quota_bytes: Some(1000),
+                ..Package::default()
+            },
+        )
+        .await;
+        let old = generation(&state.pool, &id).await;
+        apply_sample(
+            &state.pool,
+            &id,
+            old,
+            sample_value(100, 0),
+            instant("2026-01-01T00:00:10Z"),
+        )
+        .await
+        .unwrap();
+        let _ = update_usage(
+            State(state.clone()),
+            Path(id.clone()),
+            Json(UsageUpdate {
+                expected_revision: 1,
+                usage_bytes: 500,
+                reset: false,
+            }),
+        )
+        .await
+        .unwrap();
+        record_failure(&state.pool, &id, old, Utc::now())
+            .await
+            .unwrap();
+        apply_sample(
+            &state.pool,
+            &id,
+            old,
+            sample_value(200, 0),
+            instant("2026-01-01T00:00:20Z"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(usage(&state.pool, &id).await, 500);
+        let gap: Option<String> =
+            sqlx::query_scalar("SELECT gap_reason FROM node_packages WHERE node_id=$1")
+                .bind(&id)
+                .fetch_one(&state.pool)
+                .await
+                .unwrap();
+        assert_eq!(gap.as_deref(), Some("usage_corrected"));
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT count(*) FROM node_network_samples WHERE node_id=$1"
+            )
+            .bind(&id)
+            .fetch_one(&state.pool)
+            .await
+            .unwrap(),
+            1
+        );
     }
 }

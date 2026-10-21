@@ -33,31 +33,67 @@ pub async fn record_online(
     expected_nodes: i64,
     body: Option<&[u8]>,
 ) -> anyhow::Result<()> {
+    let (node, body) = (node.to_owned(), body.map(<[u8]>::to_vec));
+    crate::db::write(pool, move |tx| {
+        let (node, body) = (node.clone(), body.clone());
+        Box::pin(async move {
+            record_online_on(
+                &mut **tx,
+                &node,
+                cycle,
+                cycle_started,
+                expected_nodes,
+                body.as_deref(),
+            )
+            .await
+        })
+    })
+    .await
+}
+
+pub async fn record_online_on(
+    connection: &mut sqlx::PgConnection,
+    node: &str,
+    cycle: Uuid,
+    cycle_started: DateTime<Utc>,
+    expected_nodes: i64,
+    body: Option<&[u8]>,
+) -> anyhow::Result<()> {
+    let active:Option<bool>=sqlx::query_scalar("SELECT true FROM nodes WHERE id=$1 AND state NOT IN ('deleting','delete_failed') FOR NO KEY UPDATE")
+        .bind(node).fetch_optional(&mut *connection).await?;
+    if active.is_none() {
+        return Ok(());
+    }
     let ids: BTreeSet<String> =
         sqlx::query_scalar::<_, String>("SELECT user_id FROM node_assignments WHERE node_id=$1")
             .bind(node)
-            .fetch_all(pool)
+            .fetch_all(&mut *connection)
             .await?
             .into_iter()
             .collect();
     let parsed = body
-        .and_then(|b| serde_json::from_slice(b).ok())
-        .and_then(|v| real_connections(v, &ids));
+        .and_then(|body| serde_json::from_slice(body).ok())
+        .and_then(|value| real_connections(value, &ids));
     let status = if parsed.is_some() { "ok" } else { "failed" };
-    sqlx::query("INSERT INTO online_samples(cycle_id,node_id,sampled_at,status,connections,cycle_started_at,expected_nodes) VALUES($1,$2,now(),$3,$4,$5,$6) ON CONFLICT(cycle_id,node_id) DO NOTHING")
-        .bind(cycle).bind(node).bind(status).bind(json!(parsed.unwrap_or_default())).bind(cycle_started).bind(expected_nodes).execute(pool).await?;
+    sqlx::query("INSERT INTO online_samples(cycle_id,node_id,sampled_at,status,connections,cycle_started_at,expected_nodes) VALUES($1,$2,clock_timestamp(),$3,$4,$5,$6) ON CONFLICT(cycle_id,node_id) DO NOTHING")
+        .bind(cycle).bind(node).bind(status).bind(json!(parsed.unwrap_or_default())).bind(cycle_started).bind(expected_nodes).execute(connection).await?;
     Ok(())
 }
 
 pub async fn finish_traffic_sample(pool: &PgPool, node: &str, cycle: Uuid, status: &str) {
-    if let Err(error) =
-        sqlx::query("UPDATE online_samples SET traffic_status=$3 WHERE node_id=$1 AND cycle_id=$2")
-            .bind(node)
-            .bind(cycle)
-            .bind(status)
-            .execute(pool)
-            .await
-    {
+    let (owned, status) = (node.to_owned(), status.to_owned());
+    let result=crate::db::write::<_,anyhow::Error,_>(pool,move |tx| {
+        let (node,status)=(owned.clone(),status.clone());
+        Box::pin(async move {
+            let active:Option<bool>=sqlx::query_scalar("SELECT true FROM nodes WHERE id=$1 AND state NOT IN ('deleting','delete_failed') FOR NO KEY UPDATE")
+                .bind(&node).fetch_optional(&mut **tx).await?;
+            if active.is_none() {return Ok(());}
+            sqlx::query("UPDATE online_samples SET traffic_status=$3 WHERE node_id=$1 AND cycle_id=$2 AND ($3<>'failed' OR NOT EXISTS(SELECT 1 FROM traffic_sample_batches b WHERE b.node_id=$1 AND b.cycle_id=$2 AND b.payload_digest IS NOT NULL))")
+                .bind(&node).bind(cycle).bind(&status).execute(&mut **tx).await?;
+            Ok(())
+        })
+    }).await;
+    if let Err(error) = result {
         tracing::warn!(node_id=node,%error,"traffic monitoring quality could not be saved");
     }
 }

@@ -66,7 +66,7 @@ pub async fn check_instance_lock(connection: &mut PgConnection) -> Result<()> {
 
 pub async fn try_begin_write(
     pool: &PgPool,
-) -> Result<Option<Transaction<'_, Postgres>>, sqlx::Error> {
+) -> Result<Option<Transaction<'static, Postgres>>, sqlx::Error> {
     let mut transaction = pool.begin().await?;
     let acquired: bool = sqlx::query_scalar("SELECT pg_try_advisory_xact_lock($1)")
         .bind(WRITE_LOCK_KEY)
@@ -81,7 +81,7 @@ pub async fn try_begin_write(
     }
 }
 
-pub async fn begin_write(pool: &PgPool) -> Result<Transaction<'_, Postgres>, sqlx::Error> {
+pub async fn begin_write(pool: &PgPool) -> Result<Transaction<'static, Postgres>, sqlx::Error> {
     let deadline = tokio::time::Instant::now() + pool.options().get_acquire_timeout();
     loop {
         if let Some(transaction) = try_begin_write(pool).await? {
@@ -112,9 +112,14 @@ impl RetryableTransactionError for sqlx::Error {
 }
 impl RetryableTransactionError for anyhow::Error {
     fn retryable_transaction(&self) -> bool {
-        self.chain()
-            .filter_map(|error| error.downcast_ref::<sqlx::Error>())
-            .any(RetryableTransactionError::retryable_transaction)
+        self.chain().any(|error| {
+            error
+                .downcast_ref::<sqlx::Error>()
+                .is_some_and(RetryableTransactionError::retryable_transaction)
+                || error
+                    .downcast_ref::<crate::error::ApiError>()
+                    .is_some_and(RetryableTransactionError::retryable_transaction)
+        })
     }
 }
 
@@ -131,22 +136,73 @@ where
     >,
 {
     for attempt in 0..=5 {
-        let mut tx = pool.begin().await.map_err(E::from)?;
-        sqlx::query("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
-            .execute(&mut *tx)
-            .await
-            .map_err(E::from)?;
-        crate::execution::guard_current(&mut tx)
-            .await
-            .map_err(E::from)?;
-        let result = match operation(&mut tx).await {
-            Ok(value) => tx.commit().await.map(|()| value).map_err(E::from),
-            Err(error) => {
-                // Finish rollback before retrying or returning a connection.
-                tx.rollback().await.map_err(E::from)?;
-                Err(error)
+        let result = async {
+            let mut tx = pool.begin().await.map_err(E::from)?;
+            sqlx::query("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
+                .execute(&mut *tx)
+                .await
+                .map_err(E::from)?;
+            crate::execution::guard_current(&mut tx)
+                .await
+                .map_err(E::from)?;
+            match operation(&mut tx).await {
+                Ok(value) => tx.commit().await.map(|()| value).map_err(E::from),
+                Err(error) => {
+                    // Finish rollback before retrying or returning a connection.
+                    tx.rollback().await.map_err(E::from)?;
+                    Err(error)
+                }
             }
-        };
+        }
+        .await;
+        match result {
+            Err(error) if error.retryable_transaction() && attempt < 5 => {
+                let delay = rand::random_range(10..40) * (1_u64 << attempt);
+                tracing::debug!(
+                    attempt = attempt + 1,
+                    delay_ms = delay,
+                    "retrying database transaction"
+                );
+                tokio::time::sleep(Duration::from_millis(delay)).await;
+            }
+            result => return result,
+        }
+    }
+    unreachable!("bounded transaction attempts always return")
+}
+
+/// READ COMMITTED database work protected by explicit resource/row locks.
+/// The closure has the same side-effect prohibition and retry budget as
+/// `serializable`; callers must acquire resource rows in a fixed order.
+pub async fn write<T, E, F>(pool: &PgPool, mut operation: F) -> Result<T, E>
+where
+    E: RetryableTransactionError,
+    F: for<'connection> FnMut(
+        &'connection mut Transaction<'static, Postgres>,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<T, E>> + Send + 'connection>,
+    >,
+{
+    for attempt in 0..=5 {
+        let result = async {
+            let mut tx = pool.begin().await.map_err(E::from)?;
+            sqlx::query("SET TRANSACTION ISOLATION LEVEL READ COMMITTED")
+                .execute(&mut *tx)
+                .await
+                .map_err(E::from)?;
+            crate::execution::guard_current(&mut tx)
+                .await
+                .map_err(E::from)?;
+            match operation(&mut tx).await {
+                Ok(value) => tx.commit().await.map(|()| value).map_err(E::from),
+                Err(error) => {
+                    // Finish rollback before retrying or returning a connection.
+                    tx.rollback().await.map_err(E::from)?;
+                    Err(error)
+                }
+            }
+        }
+        .await;
         match result {
             Err(error) if error.retryable_transaction() && attempt < 5 => {
                 let delay = rand::random_range(10..40) * (1_u64 << attempt);
@@ -326,7 +382,7 @@ mod tests {
         .unwrap_err();
         assert_eq!(attempts, 6);
         assert_eq!(
-            ApiError::from(error).status,
+            ApiError::from(anyhow::Error::from(error)).status,
             axum::http::StatusCode::SERVICE_UNAVAILABLE
         );
         let mut attempts = 0;

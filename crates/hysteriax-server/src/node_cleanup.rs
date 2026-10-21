@@ -101,6 +101,20 @@ const HISTORY: &[History] = &[
         source: None,
     },
     History {
+        table: "traffic_sample_items",
+        time: "sampled_at",
+        id: "id",
+        id_type: "text",
+        source: None,
+    },
+    History {
+        table: "traffic_sample_batches",
+        time: "sampled_at",
+        id: "sample_id",
+        id_type: "text",
+        source: None,
+    },
+    History {
         table: "node_network_samples",
         time: "sampled_at",
         id: "id",
@@ -211,6 +225,27 @@ pub async fn purge_history(pool: &PgPool, job: &JobInput) -> Result<i64, sqlx::E
     let mut total = saved["result"]["removed_history_rows"]
         .as_i64()
         .unwrap_or(0);
+    let running: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM jobs WHERE id=$1 AND status='running')")
+            .bind(&job.id)
+            .fetch_one(pool)
+            .await?;
+    if !running {
+        return Ok(total);
+    }
+    let valid:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM nodes WHERE id=$1 AND state='deleting' AND desired_revision=$2)")
+        .bind(node).bind(job.target_revision).fetch_one(pool).await?;
+    if !valid {
+        return Err(sqlx::Error::Protocol(
+            "node removal was superseded; reload before retrying".into(),
+        ));
+    }
+    crate::traffic::finish_captured_for_removal(pool, node)
+        .await
+        .map_err(|error| match error.downcast::<sqlx::Error>() {
+            Ok(error) => error,
+            Err(error) => sqlx::Error::Protocol(error.to_string()),
+        })?;
     let checkpoint: Option<CleanupCursor> = saved
         .pointer("/result/cleanup_cursor")
         .and_then(|value| serde_json::from_value(value.clone()).ok());

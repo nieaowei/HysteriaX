@@ -5,7 +5,8 @@ use axum::{
 };
 use serde::Serialize;
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
+#[error("{message}")]
 pub struct ApiError {
     pub status: StatusCode,
     pub code: &'static str,
@@ -89,6 +90,13 @@ impl From<sqlx::Error> for ApiError {
 impl From<anyhow::Error> for ApiError {
     fn from(error: anyhow::Error) -> Self {
         tracing::error!(error = %error, "request operation failed");
+        if crate::db::RetryableTransactionError::retryable_transaction(&error) {
+            return Self::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "transaction_retry_exhausted",
+                "concurrent database changes; retry the request",
+            );
+        }
         Self::internal()
     }
 }

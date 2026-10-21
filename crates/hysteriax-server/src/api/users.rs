@@ -445,14 +445,16 @@ pub async fn reset_quota(
     Path(user_id): Path<String>,
     Json(input): Json<RevisionRequest>,
 ) -> Result<Json<Value>, ApiError> {
+    let response=db::serializable::<_,ApiError,_>(&state.pool,move |tx| {
+        let user_id=user_id.clone();
+        Box::pin(async move {
     let timestamp = now();
-    let mut tx = db::begin_write(&state.pool).await?;
     let result = sqlx::query("UPDATE users SET usage_bytes = 0, quota_reset_at = $1, access_kick_enqueued_at = NULL, revision = revision + 1, updated_at = $2 WHERE id = $3 AND revision = $4")
-        .bind(timestamp).bind(timestamp).bind(&user_id).bind(input.expected_revision).execute(&mut *tx).await?;
+        .bind(timestamp).bind(timestamp).bind(&user_id).bind(input.expected_revision).execute(&mut **tx).await?;
     if result.rows_affected() == 0 {
         let exists: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE id = $1")
             .bind(&user_id)
-            .fetch_one(&mut *tx)
+            .fetch_one(&mut **tx)
             .await?;
         return if exists == 0 {
             Err(ApiError::not_found("user"))
@@ -463,17 +465,17 @@ pub async fn reset_quota(
         };
     }
     let unrestricted: bool = sqlx::query_scalar("SELECT enabled AND (expires_at IS NULL OR expires_at>now()) AND (quota_bytes IS NULL OR usage_bytes<quota_bytes) FROM users WHERE id=$1")
-        .bind(&user_id).fetch_one(&mut *tx).await?;
+        .bind(&user_id).fetch_one(&mut **tx).await?;
     if unrestricted {
-        crate::kick_requests::clear_reason(&mut tx, None, Some(&user_id), "access_restricted")
+        crate::kick_requests::clear_reason(tx, None, Some(&user_id), "access_restricted")
             .await?;
     }
     sqlx::query("INSERT INTO audit_records (id, actor, action, entity_type, entity_id, detail_json, created_at) VALUES ($1, 'admin', 'user.quota_reset', 'user', $2, $3, $4)")
-        .bind(Uuid::new_v4().to_string()).bind(&user_id).bind(json!({"quota_reset_at": timestamp})).bind(timestamp).execute(&mut *tx).await?;
-    tx.commit().await?;
-    Ok(Json(
-        json!({"user_id": user_id, "usage_bytes": 0, "quota_reset_at": timestamp, "revision": input.expected_revision + 1}),
-    ))
+        .bind(Uuid::new_v4().to_string()).bind(&user_id).bind(json!({"quota_reset_at": timestamp})).bind(timestamp).execute(&mut **tx).await?;
+    Ok(json!({"user_id": user_id, "usage_bytes": 0, "quota_reset_at": timestamp, "revision": input.expected_revision + 1}))
+        })
+    }).await?;
+    Ok(Json(response))
 }
 
 async fn user_json(state: &AppState, row: &sqlx::postgres::PgRow) -> Result<Value, ApiError> {
