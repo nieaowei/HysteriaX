@@ -883,7 +883,7 @@ async fn load_preview(
     tx: &mut Transaction<'_, Postgres>,
     token: &str,
 ) -> Result<PreviewRow, ApiError> {
-    let row = sqlx::query("SELECT action,group_id,user_id,request_json,guard_json,result_json,expires_at,consumed_at,expires_at>clock_timestamp() AS unexpired FROM authorization_group_previews WHERE token=$1 FOR UPDATE")
+    let row = sqlx::query("WITH held AS MATERIALIZED (SELECT action,group_id,user_id,request_json,guard_json,result_json,expires_at,consumed_at FROM authorization_group_previews WHERE token=$1 FOR UPDATE) SELECT held.*,expires_at>clock_timestamp() AS unexpired FROM held")
         .bind(token)
         .fetch_optional(&mut **tx)
         .await?
@@ -942,6 +942,56 @@ async fn mark_preview_used(
     Ok(())
 }
 
+fn authorization_transaction_error(error: anyhow::Error) -> ApiError {
+    if crate::db::RetryableTransactionError::retryable_transaction(&error) {
+        ApiError::from(error)
+    } else {
+        ApiError::conflict(error.to_string())
+    }
+}
+
+/// Lock only the authorization graph touched by this request, in the same order
+/// as node/user deletion. New relationships are checked again by SERIALIZABLE.
+async fn lock_authorization_graph_on(
+    tx: &mut Transaction<'_, Postgres>,
+    users: &[String],
+    groups: &[String],
+    nodes: &[String],
+    prepared: &crate::credentials::authorization::Prepared,
+) -> Result<(), ApiError> {
+    let mut group_ids = groups.to_vec();
+    group_ids.extend(group_ids_for_users(tx, users).await?);
+    sort_dedup(&mut group_ids);
+    sqlx::query("SELECT id FROM authorization_groups WHERE id=ANY($1) ORDER BY id FOR UPDATE")
+        .bind(&group_ids)
+        .fetch_all(&mut **tx)
+        .await?;
+    let mut node_ids = nodes.to_vec();
+    node_ids.extend(sqlx::query_scalar::<_,String>("SELECT node_id FROM authorization_group_nodes WHERE group_id=ANY($1) UNION SELECT node_id FROM node_assignments WHERE user_id=ANY($2)").bind(&group_ids).bind(users).fetch_all(&mut **tx).await?);
+    sort_dedup(&mut node_ids);
+    sqlx::query("SELECT id FROM nodes WHERE id=ANY($1) ORDER BY id FOR NO KEY UPDATE")
+        .bind(&node_ids)
+        .fetch_all(&mut **tx)
+        .await?;
+    sqlx::query("SELECT id FROM users WHERE id=ANY($1) ORDER BY id FOR NO KEY UPDATE")
+        .bind(users)
+        .fetch_all(&mut **tx)
+        .await?;
+    let cas: Vec<String> = prepared
+        .plan
+        .identities
+        .iter()
+        .map(|identity| identity.ca_credential_id.clone())
+        .collect();
+    sqlx::query("SELECT id FROM credentials WHERE owner_user_id=ANY($1) OR id=ANY($2) ORDER BY id FOR UPDATE").bind(users).bind(&cas).fetch_all(&mut **tx).await?;
+    sqlx::query("SELECT credential_id FROM mtls_authorities WHERE credential_id=ANY($1) ORDER BY credential_id FOR UPDATE").bind(&cas).fetch_all(&mut **tx).await?;
+    sqlx::query("SELECT id FROM mtls_user_identities WHERE user_id=ANY($1) ORDER BY id FOR UPDATE")
+        .bind(users)
+        .fetch_all(&mut **tx)
+        .await?;
+    Ok(())
+}
+
 async fn commit_group_mutation(
     state: &AppState,
     action: &str,
@@ -957,8 +1007,70 @@ async fn commit_group_mutation(
     )
     .await
     .map_err(|e| ApiError::conflict(e.to_string()))?;
-    let mut tx = db::begin_write(&state.pool).await?;
-    let preview = load_preview(&mut tx, preview_token).await?;
+    let pool = state.pool.clone();
+    let (state, action, group_id, preview_token) = (
+        state.clone(),
+        action.to_owned(),
+        group_id.map(str::to_owned),
+        preview_token.to_owned(),
+    );
+    db::serializable(&pool, move |tx| {
+        let (state, action, group_id, preview_token, proposal, prepared) = (
+            state.clone(),
+            action.clone(),
+            group_id.clone(),
+            preview_token.clone(),
+            proposal.clone(),
+            prepared.clone(),
+        );
+        Box::pin(async move {
+            commit_group_on(
+                tx,
+                &state,
+                &action,
+                group_id.as_deref(),
+                expected_revision,
+                &preview_token,
+                proposal,
+                prepared,
+            )
+            .await
+        })
+    })
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn commit_group_on(
+    tx: &mut Transaction<'_, Postgres>,
+    state: &AppState,
+    action: &str,
+    group_id: Option<&str>,
+    expected_revision: Option<i64>,
+    preview_token: &str,
+    proposal: GroupProposal,
+    prepared: crate::credentials::authorization::Prepared,
+) -> Result<Value, ApiError> {
+    let mut users = proposal.user_ids.clone();
+    if let Some(group) = group_id {
+        users.extend(
+            sqlx::query_scalar::<_, String>(
+                "SELECT user_id FROM authorization_group_users WHERE group_id=$1",
+            )
+            .bind(group)
+            .fetch_all(&mut **tx)
+            .await?,
+        );
+    }
+    lock_authorization_graph_on(
+        tx,
+        &users,
+        &group_id.map(str::to_owned).into_iter().collect::<Vec<_>>(),
+        &proposal.node_ids,
+        &prepared,
+    )
+    .await?;
+    let preview = load_preview(tx, preview_token).await?;
     if preview.action != action
         || preview.group_id.as_deref() != group_id
         || preview.user_id.is_some()
@@ -969,7 +1081,7 @@ async fn commit_group_mutation(
     }
     let current = if let Some(group_id) = group_id {
         Some(
-            load_group_tx(&mut tx, group_id)
+            load_group_tx(tx, group_id)
                 .await?
                 .ok_or_else(|| ApiError::not_found("authorization group"))?,
         )
@@ -985,7 +1097,7 @@ async fn commit_group_mutation(
     }
 
     if action != "delete" {
-        validate_proposal_entities(&mut tx, &proposal).await?;
+        validate_proposal_entities(tx, &proposal).await?;
     }
     let mut affected_users = current
         .as_ref()
@@ -995,18 +1107,18 @@ async fn commit_group_mutation(
         affected_users.extend(proposal.user_ids.clone());
     }
     normalize_ids(&mut affected_users, "user_ids")?;
-    let old_pairs = effective_pairs(&mut tx, &affected_users, None).await?;
+    let old_pairs = effective_pairs(tx, &affected_users, None).await?;
     let mut planned_pairs = if action == "create" {
         old_pairs.clone()
     } else {
-        effective_pairs(&mut tx, &affected_users, group_id).await?
+        effective_pairs(tx, &affected_users, group_id).await?
     };
     if action != "delete" {
         add_group_pairs(&mut planned_pairs, &proposal.user_ids, &proposal.node_ids);
     }
     let (planned_additions, planned_removals) = pair_diff(&old_pairs, &planned_pairs);
     let guard = guard_snapshot(
-        &mut tx,
+        tx,
         &affected_users,
         group_id,
         &[],
@@ -1041,10 +1153,10 @@ async fn commit_group_mutation(
                 .bind(id)
                 .bind(&proposal.name)
                 .bind(timestamp)
-                .execute(&mut *tx)
+                .execute(&mut **tx)
                 .await?;
             write_group_relations(
-                &mut tx,
+                tx,
                 id,
                 &[],
                 &proposal.user_ids,
@@ -1059,7 +1171,7 @@ async fn commit_group_mutation(
             let current = current.as_ref().expect("update group exists");
             if group_changed {
                 write_group_relations(
-                    &mut tx,
+                    tx,
                     id,
                     &current.user_ids,
                     &proposal.user_ids,
@@ -1073,17 +1185,17 @@ async fn commit_group_mutation(
                     .bind(timestamp)
                     .bind(id)
                     .bind(current.revision)
-                    .execute(&mut *tx)
+                    .execute(&mut **tx)
                     .await?;
             }
         }
         "delete" => {
             let id = target_group_id.as_deref().expect("delete group ID");
-            mark_preview_used(&mut tx, preview_token).await?;
+            mark_preview_used(tx, preview_token).await?;
             sqlx::query("DELETE FROM authorization_groups WHERE id=$1 AND revision=$2")
                 .bind(id)
                 .bind(current.as_ref().expect("delete group exists").revision)
-                .execute(&mut *tx)
+                .execute(&mut **tx)
                 .await?;
         }
         _ => {
@@ -1093,7 +1205,7 @@ async fn commit_group_mutation(
         }
     }
 
-    let effective_after = effective_pairs(&mut tx, &affected_users, None).await?;
+    let effective_after = effective_pairs(tx, &affected_users, None).await?;
     let (actual_additions, actual_removals) = pair_diff(&old_pairs, &effective_after);
     if actual_additions != planned_additions
         || actual_removals != planned_removals
@@ -1104,27 +1216,26 @@ async fn commit_group_mutation(
         ));
     }
     let mut managed_identities = crate::credentials::authorization::commit_prepared(
-        &mut tx,
+        tx,
         &state.secrets,
         prepared,
         &actual_additions,
     )
     .await
-    .map_err(|e| ApiError::conflict(e.to_string()))?;
+    .map_err(authorization_transaction_error)?;
     let (created_credentials, revocation_job_ids, touched_users) =
-        reconcile_assignments(state, &mut tx, &affected_users, &effective_after).await?;
-    crate::credentials::authorization::annotate_results_on(&mut tx, &mut managed_identities)
-        .await?;
+        reconcile_assignments(state, tx, &affected_users, &effective_after).await?;
+    crate::credentials::authorization::annotate_results_on(tx, &mut managed_identities).await?;
     let mut revision_users: BTreeSet<String> = if group_changed {
         affected_users.iter().cloned().collect()
     } else {
         BTreeSet::new()
     };
     revision_users.extend(touched_users);
-    bump_user_revisions(&mut tx, &revision_users, timestamp).await?;
+    bump_user_revisions(tx, &revision_users, timestamp).await?;
     if action != "delete" {
         audit_group(
-            &mut tx,
+            tx,
             if action == "create" {
                 "authorization_group.created"
             } else {
@@ -1144,7 +1255,7 @@ async fn commit_group_mutation(
         .await?;
     } else {
         audit_group(
-            &mut tx,
+            tx,
             "authorization_group.deleted",
             group_id.expect("delete group ID"),
             json!({
@@ -1158,12 +1269,12 @@ async fn commit_group_mutation(
         .await?;
     }
     if action != "delete" {
-        mark_preview_used(&mut tx, preview_token).await?;
+        mark_preview_used(tx, preview_token).await?;
     }
     let group = if action == "delete" {
         Value::Null
     } else {
-        let row = load_group_tx(&mut tx, target_group_id.as_deref().expect("group ID"))
+        let row = load_group_tx(tx, target_group_id.as_deref().expect("group ID"))
             .await?
             .ok_or_else(|| ApiError::not_found("authorization group"))?;
         group_json(&row)
@@ -1176,7 +1287,6 @@ async fn commit_group_mutation(
         "created_credentials":created_credentials,
         "revocation_job_ids":revocation_job_ids,
     });
-    tx.commit().await?;
     Ok(response)
 }
 
@@ -1203,8 +1313,8 @@ async fn write_group_relations(
     new_nodes: &[String],
     timestamp: DateTime<Utc>,
 ) -> Result<(), ApiError> {
-    let old_users: HashSet<_> = old_users.iter().cloned().collect();
-    let new_users: HashSet<_> = new_users.iter().cloned().collect();
+    let old_users: BTreeSet<_> = old_users.iter().cloned().collect();
+    let new_users: BTreeSet<_> = new_users.iter().cloned().collect();
     for user in old_users.difference(&new_users) {
         sqlx::query("DELETE FROM authorization_group_users WHERE group_id=$1 AND user_id=$2")
             .bind(group_id)
@@ -1222,8 +1332,8 @@ async fn write_group_relations(
         .execute(&mut **tx)
         .await?;
     }
-    let old_nodes: HashSet<_> = old_nodes.iter().cloned().collect();
-    let new_nodes: HashSet<_> = new_nodes.iter().cloned().collect();
+    let old_nodes: BTreeSet<_> = old_nodes.iter().cloned().collect();
+    let new_nodes: BTreeSet<_> = new_nodes.iter().cloned().collect();
     for node in old_nodes.difference(&new_nodes) {
         sqlx::query("DELETE FROM authorization_group_nodes WHERE group_id=$1 AND node_id=$2")
             .bind(group_id)
@@ -1393,8 +1503,51 @@ async fn commit_membership(
     )
     .await
     .map_err(|e| ApiError::conflict(e.to_string()))?;
-    let mut tx = db::begin_write(&state.pool).await?;
-    let preview = load_preview(&mut tx, preview_token).await?;
+    let pool = state.pool.clone();
+    let (state, user_id, preview_token) =
+        (state.clone(), user_id.to_owned(), preview_token.to_owned());
+    db::serializable(&pool, move |tx| {
+        let (state, user_id, preview_token, proposal, prepared) = (
+            state.clone(),
+            user_id.clone(),
+            preview_token.clone(),
+            proposal.clone(),
+            prepared.clone(),
+        );
+        Box::pin(async move {
+            commit_membership_on(
+                tx,
+                &state,
+                &user_id,
+                expected_revision,
+                &preview_token,
+                proposal,
+                prepared,
+            )
+            .await
+        })
+    })
+    .await
+}
+
+async fn commit_membership_on(
+    tx: &mut Transaction<'_, Postgres>,
+    state: &AppState,
+    user_id: &str,
+    expected_revision: i64,
+    preview_token: &str,
+    proposal: MembershipProposal,
+    prepared: crate::credentials::authorization::Prepared,
+) -> Result<Value, ApiError> {
+    lock_authorization_graph_on(
+        tx,
+        &[user_id.to_owned()],
+        &proposal.group_ids,
+        &[],
+        &prepared,
+    )
+    .await?;
+    let preview = load_preview(tx, preview_token).await?;
     if preview.action != "update_memberships"
         || preview.group_id.is_some()
         || preview.user_id.as_deref() != Some(user_id)
@@ -1403,33 +1556,25 @@ async fn commit_membership(
             "preview does not match this change; preview the change again",
         ));
     }
-    let current_revision = user_revision(&mut tx, user_id).await?;
+    let current_revision = user_revision(tx, user_id).await?;
     check_revision(current_revision, Some(expected_revision))?;
-    validate_group_ids(&mut tx, &proposal.group_ids).await?;
+    validate_group_ids(tx, &proposal.group_ids).await?;
     let current_group_ids: Vec<String> = sqlx::query_scalar(
         "SELECT group_id FROM authorization_group_users WHERE user_id=$1 ORDER BY group_id",
     )
     .bind(user_id)
-    .fetch_all(&mut *tx)
+    .fetch_all(&mut **tx)
     .await?;
     let current_set: BTreeSet<_> = current_group_ids.iter().cloned().collect();
     let target_set: BTreeSet<_> = proposal.group_ids.iter().cloned().collect();
-    let old_pairs =
-        effective_pairs(&mut tx, std::slice::from_ref(&user_id.to_owned()), None).await?;
-    let planned_pairs = pairs_for_user_groups(&mut tx, user_id, &proposal.group_ids).await?;
+    let old_pairs = effective_pairs(tx, std::slice::from_ref(&user_id.to_owned()), None).await?;
+    let planned_pairs = pairs_for_user_groups(tx, user_id, &proposal.group_ids).await?;
     let (planned_additions, planned_removals) = pair_diff(&old_pairs, &planned_pairs);
     let request_json = json!({
         "expected_revision":expected_revision,
         "group_ids":proposal.group_ids,
     });
-    let guard = guard_snapshot(
-        &mut tx,
-        &[user_id.to_owned()],
-        None,
-        &proposal.group_ids,
-        &[],
-    )
-    .await?;
+    let guard = guard_snapshot(tx, &[user_id.to_owned()], None, &proposal.group_ids, &[]).await?;
     ensure_preview_matches(
         &preview,
         "update_memberships",
@@ -1444,14 +1589,14 @@ async fn commit_membership(
         sqlx::query("DELETE FROM authorization_group_users WHERE group_id=$1 AND user_id=$2")
             .bind(group_id)
             .bind(user_id)
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await?;
         sqlx::query(
             "UPDATE authorization_groups SET revision=revision+1,updated_at=$2 WHERE id=$1",
         )
         .bind(group_id)
         .bind(timestamp)
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?;
     }
     for group_id in target_set.difference(&current_set) {
@@ -1461,17 +1606,17 @@ async fn commit_membership(
         .bind(group_id)
         .bind(user_id)
         .bind(timestamp)
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?;
         sqlx::query(
             "UPDATE authorization_groups SET revision=revision+1,updated_at=$2 WHERE id=$1",
         )
         .bind(group_id)
         .bind(timestamp)
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?;
     }
-    let effective_after = effective_pairs(&mut tx, &[user_id.to_owned()], None).await?;
+    let effective_after = effective_pairs(tx, &[user_id.to_owned()], None).await?;
     let (actual_additions, actual_removals) = pair_diff(&old_pairs, &effective_after);
     if actual_additions != planned_additions
         || actual_removals != planned_removals
@@ -1482,22 +1627,21 @@ async fn commit_membership(
         ));
     }
     let mut managed_identities = crate::credentials::authorization::commit_prepared(
-        &mut tx,
+        tx,
         &state.secrets,
         prepared,
         &actual_additions,
     )
     .await
-    .map_err(|e| ApiError::conflict(e.to_string()))?;
+    .map_err(authorization_transaction_error)?;
     let (created_credentials, revocation_job_ids, touched_users) =
-        reconcile_assignments(state, &mut tx, &[user_id.to_owned()], &effective_after).await?;
-    crate::credentials::authorization::annotate_results_on(&mut tx, &mut managed_identities)
-        .await?;
+        reconcile_assignments(state, tx, &[user_id.to_owned()], &effective_after).await?;
+    crate::credentials::authorization::annotate_results_on(tx, &mut managed_identities).await?;
     if current_set != target_set || !touched_users.is_empty() {
-        bump_user_revisions(&mut tx, &BTreeSet::from([user_id.to_owned()]), timestamp).await?;
+        bump_user_revisions(tx, &BTreeSet::from([user_id.to_owned()]), timestamp).await?;
     }
     audit_group(
-        &mut tx,
+        tx,
         "authorization_group.user_membership_updated",
         user_id,
         json!({
@@ -1510,13 +1654,13 @@ async fn commit_membership(
         timestamp,
     )
     .await?;
-    mark_preview_used(&mut tx, preview_token).await?;
+    mark_preview_used(tx, preview_token).await?;
     let revision = if current_set != target_set || !touched_users.is_empty() {
         current_revision + 1
     } else {
         current_revision
     };
-    let assignments = assignments_json(&mut tx, user_id).await?;
+    let assignments = assignments_json(tx, user_id).await?;
     let response = json!({
         "user_id":user_id,
         "revision":revision,
@@ -1526,7 +1670,6 @@ async fn commit_membership(
         "managed_identities":managed_identities,
         "revocation_job_ids":revocation_job_ids,
     });
-    tx.commit().await?;
     Ok(response)
 }
 

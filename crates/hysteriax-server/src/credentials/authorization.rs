@@ -139,6 +139,7 @@ pub async fn guard_on(
     Ok(value)
 }
 
+#[derive(Clone)]
 pub struct Prepared {
     pub plan: Plan,
     identities: Vec<Vec<PreparedIdentity>>,

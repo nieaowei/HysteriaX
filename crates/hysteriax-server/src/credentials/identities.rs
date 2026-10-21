@@ -12,6 +12,7 @@ use super::{
 };
 use crate::security::SecretBox;
 
+#[derive(Clone)]
 pub struct PreparedIdentity {
     id: String,
     user_id: String,

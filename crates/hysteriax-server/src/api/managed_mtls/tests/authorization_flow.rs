@@ -467,3 +467,42 @@ async fn ordinary_ssh_state_updates_do_not_invalidate_permission_preview() {
         .unwrap();
     assert_eq!(identity_count(&state).await, 1);
 }
+
+#[tokio::test]
+async fn retried_grant_preserves_one_prepared_managed_identity_and_version() {
+    let state = state().await;
+    let ca = generated(&state).await;
+    user(&state, "alice", true).await;
+    let node = managed_node(&state, &ca).await;
+    let n = node["id"].as_str().unwrap();
+    let p = preview(&state, "Retry grant", &["alice"], &[n]).await;
+    sqlx::raw_sql("DO $$ DECLARE entry record; BEGIN FOR entry IN SELECT c.relname,tr.tgname FROM pg_trigger tr JOIN pg_class c ON c.oid=tr.tgrelid JOIN pg_proc p ON p.oid=tr.tgfoid WHERE c.relnamespace=current_schema()::regnamespace AND p.proname='hysteriax_serialize_writes' LOOP EXECUTE format('ALTER TABLE %I DISABLE TRIGGER %I',entry.relname,entry.tgname); END LOOP; END $$; CREATE SEQUENCE managed_grant_attempts; CREATE FUNCTION retry_managed_grant_audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.action='authorization_group.created' AND nextval('managed_grant_attempts')=1 THEN RAISE EXCEPTION 'injected conflict' USING ERRCODE='40001'; END IF; RETURN NEW; END $$; CREATE TRIGGER retry_managed_grant_audit BEFORE INSERT ON audit_records FOR EACH ROW EXECUTE FUNCTION retry_managed_grant_audit();").execute(&state.pool).await.unwrap();
+    let result = commit(&state, "Retry grant", &["alice"], &[n], &p)
+        .await
+        .unwrap();
+    assert_eq!(identity_count(&state).await, 1);
+    assert_eq!(version_count(&state).await, 1);
+    assert_eq!(result["managed_identities"][0]["issued"], true);
+    let id: String =
+        sqlx::query_scalar("SELECT id FROM mtls_user_identities WHERE user_id='alice'")
+            .fetch_one(&state.pool)
+            .await
+            .unwrap();
+    assert_eq!(result["managed_identities"][0]["identity_id"], id);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM audit_records WHERE action='authorization_group.created'"
+        )
+        .fetch_one(&state.pool)
+        .await
+        .unwrap(),
+        1
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT last_value FROM managed_grant_attempts")
+            .fetch_one(&state.pool)
+            .await
+            .unwrap(),
+        2
+    );
+}

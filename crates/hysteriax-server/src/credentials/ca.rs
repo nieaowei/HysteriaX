@@ -45,6 +45,7 @@ impl Policy {
     }
 }
 
+#[derive(Clone)]
 pub struct Material {
     pub certificate: String,
     pub private_key: String,
@@ -306,6 +307,7 @@ impl Authority {
     }
 }
 
+#[derive(Clone)]
 pub struct Issued {
     pub material: Material,
     pub not_before: DateTime<Utc>,
