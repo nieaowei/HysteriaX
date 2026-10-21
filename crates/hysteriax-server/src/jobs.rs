@@ -14,6 +14,10 @@ use tokio::task::JoinSet;
 const MAX_PARALLEL_NODES: usize = 4;
 const MAX_ATTEMPTS: i64 = 3;
 
+#[cfg(test)]
+#[path = "node_cleanup_tests.rs"]
+mod node_cleanup_tests;
+
 pub async fn run(state: AppState) {
     while let Err(error) = recover_interrupted(&state.pool).await {
         tracing::error!(%error, "failed to recover interrupted HysteriaX jobs");
@@ -177,7 +181,20 @@ async fn execute_one(state: AppState, job: JobInput) {
     };
     match result {
         Ok(output) => {
+            let removed = output.delete_node;
             retry_persistence(|| succeed(&state.pool, &job, output.clone())).await;
+            if removed && let Some(node) = &job.node_id {
+                let absent = sqlx::query_scalar::<_, bool>(
+                    "SELECT NOT EXISTS(SELECT 1 FROM nodes WHERE id=$1)",
+                )
+                .bind(node)
+                .fetch_one(&state.pool)
+                .await
+                .unwrap_or(false);
+                if absent {
+                    let _ = state.removed_nodes.send(node.clone());
+                }
+            }
         }
         Err(error) => {
             let message = safe_error(&state.pool, &state.secrets, &job, &error).await;
@@ -185,7 +202,8 @@ async fn execute_one(state: AppState, job: JobInput) {
             if let Some(delay) = crate::dns::provider::retry_delay(&error) {
                 job.payload["dns_retry_after"] = json!(delay);
             }
-            let retry = deployment::retryable(&error)
+            let retry = (deployment::retryable(&error)
+                || (job.kind == "record-remove" && crate::node_cleanup::retryable(&error)))
                 && if job.kind == "kick" {
                     crate::kick_requests::retry_delay(job.attempts).is_some()
                 } else {
@@ -232,7 +250,16 @@ where
     }
 }
 
-async fn succeed(pool: &PgPool, job: &JobInput, output: JobOutput) -> Result<(), sqlx::Error> {
+async fn succeed(pool: &PgPool, job: &JobInput, mut output: JobOutput) -> Result<(), sqlx::Error> {
+    if output.delete_node && output.result["history_cleaned"] != true {
+        let removed = crate::node_cleanup::purge_history(pool, job).await?;
+        output.result["removed_history_rows"] = json!(removed);
+    }
+    if output.delete_node
+        && let Some(node) = &job.node_id
+    {
+        crate::node_cleanup::prepare_final_delete(pool, node).await?;
+    }
     let timestamp = now();
     let result = json!({"stage": output.stage, "result": output.result});
     let mut tx = db::begin_write(pool).await?;
@@ -374,10 +401,36 @@ async fn succeed(pool: &PgPool, job: &JobInput, output: JobOutput) -> Result<(),
                 .execute(&mut *tx)
                 .await?;
         }
-        sqlx::query("INSERT INTO audit_records (id, actor, action, entity_type, entity_id, detail_json, created_at) VALUES ($1, 'admin', 'node.deleted', 'node', $2, $3, $4)")
-                .bind(uuid::Uuid::new_v4().to_string()).bind(node_id).bind(json!({"job_id": job.id, "remote_uninstall": true})).bind(timestamp).execute(&mut *tx).await?;
+        let record_only = job.kind == "record-remove";
+        let mut detail = if record_only {
+            job.payload["removal_detail"].clone()
+        } else {
+            json!({})
+        };
+        detail["job_id"] = json!(job.id);
+        detail["remote_uninstall"] = json!(!record_only);
+        detail["removed_history_rows"] = output.result["removed_history_rows"].clone();
+        sqlx::query("INSERT INTO audit_records (id, actor, action, entity_type, entity_id, detail_json, created_at) VALUES ($1, $5, $6, 'node', $2, $3, $4)")
+                .bind(uuid::Uuid::new_v4().to_string()).bind(node_id).bind(detail).bind(timestamp)
+                .bind(job.payload["actor_id"].as_str().unwrap_or("admin"))
+                .bind(if record_only { "node.record_removed" } else { "node.deleted" }).execute(&mut *tx).await?;
         crate::api::authorization_groups::before_node_delete(&mut tx, node_id, timestamp).await?;
         crate::dns::binding::before_node_delete(&mut tx, node_id).await?;
+        // History is empty now. Cached FK plans must not sequentially rescan
+        // large child tables using statistics from before the purge.
+        sqlx::query("SET LOCAL enable_seqscan=off")
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("SET LOCAL enable_bitmapscan=off")
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("SET LOCAL jit=off").execute(&mut *tx).await?;
+        sqlx::query("SET LOCAL plan_cache_mode=force_custom_plan")
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("SET LOCAL statement_timeout='2s'")
+            .execute(&mut *tx)
+            .await?;
         sqlx::query("DELETE FROM nodes WHERE id = $1 AND state = 'deleting'")
             .bind(node_id)
             .execute(&mut *tx)
@@ -481,6 +534,8 @@ async fn fail(
             Some("rolled_back")
         } else if rollback_failed {
             Some("rollback_failed")
+        } else if job.kind == "record-remove" {
+            if retry { None } else { Some("delete_failed") }
         } else if job.kind == "uninstall" {
             Some("delete_failed")
         } else if message.contains("confirm this SSH host fingerprint") {

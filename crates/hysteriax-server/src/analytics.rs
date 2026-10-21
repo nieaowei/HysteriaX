@@ -1,35 +1,49 @@
 //! Transactional flow totals and idempotently rebuilt online-cycle analytics.
 use crate::{db, error::ApiError, state::AppState};
 use sqlx::PgPool;
-pub async fn refresh(pool: &PgPool) -> Result<(), ApiError> {
-    let dirty: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM analytics_dirty_cycles) OR EXISTS(SELECT 1 FROM traffic_dirty_hours) OR EXISTS(SELECT 1 FROM online_dirty_minutes) OR EXISTS(SELECT 1 FROM job_retry_state_dirty)")
-        .fetch_one(pool)
-        .await?;
-    if !dirty {
-        return Ok(());
+pub async fn refresh(pool: &PgPool) -> Result<(), sqlx::Error> {
+    let mut committed = false;
+    loop {
+        let dirty: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM analytics_dirty_cycles) OR EXISTS(SELECT 1 FROM traffic_dirty_hours) OR EXISTS(SELECT 1 FROM online_dirty_minutes) OR EXISTS(SELECT 1 FROM job_retry_state_dirty)")
+            .fetch_one(pool).await?;
+        if !dirty {
+            return Ok(());
+        }
+        if committed {
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+        let mut tx = db::begin_write(pool).await?;
+        refresh_on(&mut tx, Some(256)).await?;
+        tx.commit().await?;
+        committed = true;
     }
-    let mut tx = db::begin_write(pool).await?;
-    refresh_on(&mut tx).await?;
-    tx.commit().await?;
-    Ok(())
 }
 pub async fn run(state: AppState) {
     let mut interval = tokio::time::interval(std::time::Duration::from_secs(10));
     loop {
         interval.tick().await;
         if let Err(error) = refresh(&state.pool).await {
-            tracing::error!(code = error.code, "analytics refresh failed");
+            tracing::error!(%error, "analytics refresh failed");
         }
     }
 }
 
-async fn refresh_on(connection: &mut sqlx::PgConnection) -> Result<(), ApiError> {
-    let cycles: Vec<uuid::Uuid> =
-        sqlx::query_scalar("SELECT cycle_id FROM analytics_dirty_cycles ORDER BY cycle_id")
-            .fetch_all(&mut *connection)
-            .await?;
+async fn refresh_on(
+    connection: &mut sqlx::PgConnection,
+    max_cycles: Option<i64>,
+) -> Result<(), sqlx::Error> {
+    // Stale dirty-queue estimates can trigger JIT for tiny indexed refreshes.
+    sqlx::query("SET LOCAL jit=off")
+        .execute(&mut *connection)
+        .await?;
+    let cycles: Vec<uuid::Uuid> = sqlx::query_scalar(
+        "SELECT cycle_id FROM analytics_dirty_cycles ORDER BY cycle_id LIMIT $1",
+    )
+    .bind(max_cycles)
+    .fetch_all(&mut *connection)
+    .await?;
     if !cycles.is_empty() {
-        sqlx::query("DELETE FROM online_cycle_metrics WHERE cycle_id=ANY($1)")
+        sqlx::query("DELETE FROM online_cycle_metrics m WHERE m.cycle_id=ANY($1) AND NOT EXISTS(SELECT 1 FROM online_samples s WHERE s.cycle_id=m.cycle_id AND (m.scope_node_id='' OR s.node_id=m.scope_node_id))")
             .bind(&cycles)
             .execute(&mut *connection)
             .await?;
@@ -97,7 +111,7 @@ pub async fn snapshot(
         refresh(pool).await?;
     }
     let mut tx = db::begin_write(pool).await?;
-    refresh_on(&mut tx).await?;
+    refresh_on(&mut tx, None).await?;
     Ok(tx)
 }
 
@@ -218,3 +232,6 @@ mod tests {
 #[cfg(test)]
 #[path = "analytics/followup_tests.rs"]
 mod followup_tests;
+
+#[cfg(test)]
+mod node_deletion_tests;

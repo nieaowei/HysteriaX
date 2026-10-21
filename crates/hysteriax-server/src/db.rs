@@ -22,6 +22,16 @@ pub fn pool_options() -> PgPoolOptions {
     PgPoolOptions::new()
         .max_connections(10)
         .acquire_timeout(Duration::from_secs(5))
+        .after_connect(|connection, _| {
+            Box::pin(async move {
+                // Collectors also issue writes outside begin_write. Bound their
+                // row/trigger lock waits so they cannot consume the whole pool.
+                sqlx::query("SET lock_timeout = '1s'")
+                    .execute(connection)
+                    .await?;
+                Ok(())
+            })
+        })
 }
 
 pub async fn acquire_instance_lock(database_url: &str) -> Result<PgConnection> {
@@ -54,20 +64,64 @@ pub async fn check_instance_lock(connection: &mut PgConnection) -> Result<()> {
     Ok(())
 }
 
-pub async fn begin_write(pool: &PgPool) -> Result<Transaction<'_, Postgres>, sqlx::Error> {
+pub async fn try_begin_write(
+    pool: &PgPool,
+) -> Result<Option<Transaction<'_, Postgres>>, sqlx::Error> {
     let mut transaction = pool.begin().await?;
-    sqlx::query("SELECT pg_advisory_xact_lock($1)")
+    let acquired: bool = sqlx::query_scalar("SELECT pg_try_advisory_xact_lock($1)")
         .bind(WRITE_LOCK_KEY)
-        .execute(&mut *transaction)
+        .fetch_one(&mut *transaction)
         .await?;
-    Ok(transaction)
+    if acquired {
+        Ok(Some(transaction))
+    } else {
+        transaction.rollback().await?;
+        Ok(None)
+    }
+}
+
+pub async fn begin_write(pool: &PgPool) -> Result<Transaction<'_, Postgres>, sqlx::Error> {
+    let deadline = tokio::time::Instant::now() + pool.options().get_acquire_timeout();
+    loop {
+        if let Some(transaction) = try_begin_write(pool).await? {
+            return Ok(transaction);
+        }
+        // Finish BEGIN/ROLLBACK before applying our contention deadline.
+        // Cancelling an in-flight BEGIN can return a server-side transaction
+        // to the pool before SQLx has recorded its transaction depth.
+        if tokio::time::Instant::now() >= deadline {
+            return Err(sqlx::Error::PoolTimedOut);
+        }
+        // Waiting writers release their connections before retrying.
+        tokio::time::sleep(Duration::from_millis(rand::random_range(25..75))).await;
+    }
 }
 
 pub async fn run_migrations(pool: &PgPool) -> Result<()> {
-    MIGRATOR
-        .run(pool)
-        .await
-        .context("run PostgreSQL migrations")
+    migrate_with(pool, &MIGRATOR).await
+}
+
+async fn migrate_with(pool: &PgPool, migrator: &Migrator) -> Result<()> {
+    // Startup migrations may legitimately wait on DDL or the migration lock.
+    // Apply the short lock deadline only to normal application queries.
+    let mut connection = pool.acquire().await?;
+    let previous: String = sqlx::query_scalar("SHOW lock_timeout")
+        .fetch_one(&mut *connection)
+        .await?;
+    sqlx::query("SET lock_timeout='0'")
+        .execute(&mut *connection)
+        .await?;
+    let result = migrator.run(&mut *connection).await;
+    let restored = sqlx::query("SELECT set_config('lock_timeout',$1,false)")
+        .bind(previous)
+        .execute(&mut *connection)
+        .await;
+    if restored.is_err() {
+        connection.close().await?;
+    }
+    result.context("run PostgreSQL migrations")?;
+    restored?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -82,7 +136,6 @@ pub async fn test_pool_with_max_connections(max_connections: u32) -> PgPool {
 
 #[cfg(test)]
 pub async fn test_pool_through_version(max_connections: u32, through_version: i64) -> PgPool {
-    use sqlx::postgres::PgPoolOptions;
     use uuid::Uuid;
 
     let database_url = std::env::var("TEST_DATABASE_URL")
@@ -99,12 +152,15 @@ pub async fn test_pool_through_version(max_connections: u32, through_version: i6
     admin.close().await.expect("close schema setup connection");
 
     let connection_schema = schema.clone();
-    let pool = PgPoolOptions::new()
+    let pool = pool_options()
         .max_connections(max_connections)
         .after_connect(move |connection, _| {
             let schema = connection_schema.clone();
             Box::pin(async move {
                 sqlx::query(&format!("SET search_path TO {schema}"))
+                    .execute(&mut *connection)
+                    .await?;
+                sqlx::query("SET lock_timeout = '1s'")
                     .execute(connection)
                     .await?;
                 Ok(())
@@ -124,8 +180,7 @@ pub async fn test_pool_through_version(max_connections: u32, through_version: i6
         locking: true,
         no_tx: false,
     };
-    migrator
-        .run(&pool)
+    migrate_with(&pool, &migrator)
         .await
         .expect("run PostgreSQL migrations in isolated test schema");
     pool
@@ -138,11 +193,12 @@ mod tests {
         test_pool_with_max_connections,
     };
     use sqlx::Connection;
+    use std::time::Duration;
 
     #[tokio::test]
     async fn fresh_database_has_postgresql_native_columns_and_repeatable_migrations() {
         let pool = test_pool().await;
-        MIGRATOR.run(&pool).await.unwrap();
+        super::run_migrations(&pool).await.unwrap();
         let version: i64 = sqlx::query_scalar("SELECT MAX(version) FROM _sqlx_migrations")
             .fetch_one(&pool)
             .await
@@ -203,6 +259,68 @@ mod tests {
             .close()
             .await
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn waiting_writers_leave_connections_available_for_reads() {
+        let pool = test_pool_with_max_connections(3).await;
+        let holder = begin_write(&pool).await.unwrap();
+        let mut writers = tokio::task::JoinSet::new();
+        let barrier = std::sync::Arc::new(tokio::sync::Barrier::new(13));
+        for _ in 0..12 {
+            let pool = pool.clone();
+            let barrier = barrier.clone();
+            writers.spawn(async move {
+                barrier.wait().await;
+                begin_write(&pool).await.unwrap().commit().await.unwrap();
+            });
+        }
+        barrier.wait().await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        for _ in 0..10 {
+            let value = tokio::time::timeout(
+                Duration::from_millis(500),
+                sqlx::query_scalar::<_, i64>("SELECT 1::bigint").fetch_one(&pool),
+            )
+            .await
+            .expect("waiting writers must not starve readiness queries")
+            .unwrap();
+            assert_eq!(value, 1);
+        }
+        assert_eq!(writers.len(), 12);
+        holder.commit().await.unwrap();
+        while let Some(result) = writers.join_next().await {
+            result.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn direct_writes_have_bounded_lock_waits() {
+        let pool = test_pool_with_max_connections(2).await;
+        let mut holder = pool.begin().await.unwrap();
+        sqlx::query("SELECT * FROM cache_generation FOR UPDATE")
+            .execute(&mut *holder)
+            .await
+            .unwrap();
+        let error = tokio::time::timeout(
+            Duration::from_secs(3),
+            sqlx::query("UPDATE cache_generation SET generation=generation+1").execute(&pool),
+        )
+        .await
+        .expect("direct writers must release their connection after a bounded wait")
+        .unwrap_err();
+        assert_eq!(
+            error.as_database_error().unwrap().code().as_deref(),
+            Some("55P03")
+        );
+        holder.rollback().await.unwrap();
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT 1::bigint")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            1
+        );
     }
 
     #[tokio::test]

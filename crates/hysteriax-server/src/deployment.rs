@@ -44,6 +44,9 @@ pub struct JobOutput {
 }
 
 pub async fn run_job(pool: &PgPool, secrets: &SecretBox, job: &JobInput) -> Result<JobOutput> {
+    if job.kind == "record-remove" {
+        return crate::node_cleanup::run_job(pool, job).await;
+    }
     crate::credentials::rotations::validate_job_on(&mut *pool.acquire().await?, job).await?;
     if let (Some(id), Some(version)) = (
         job.payload.get("credential_id").and_then(Value::as_str),
@@ -87,7 +90,12 @@ pub fn retryable(error: &anyhow::Error) -> bool {
     })
 }
 
-async fn report_progress(pool: &PgPool, job: &JobInput, stage: &str, message: &str) -> Result<()> {
+pub(crate) async fn report_progress(
+    pool: &PgPool,
+    job: &JobInput,
+    stage: &str,
+    message: &str,
+) -> Result<()> {
     let timestamp = now();
     let mut tx = db::begin_write(pool).await?;
     let Some(row) = sqlx::query("SELECT logs_json FROM jobs WHERE id = $1 AND status = 'running'")

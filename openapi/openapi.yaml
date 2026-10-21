@@ -1120,7 +1120,7 @@ paths:
     delete:
       operationId: removeNodeRecord
       summary: Remove only the management record without SSH or remote uninstall
-      description: Removes node assignments, configuration and pending revocations, cancels queued and cancellable running jobs, and retains job history and audit. The remote service may remain running. Conflicts while a remote deployment, uninstall or credential update is running; wait for that operation to finish. Requires the node_record_removal feature.
+      description: Removes node assignments, configuration and pending revocations, cancels queued and cancellable running jobs, and retains job history and audit. Large histories are removed by a durable record-remove job in bounded transactions; the node remains in deleting state until completion, and interrupted jobs resume after restart. Repeated requests reuse an active removal. The remote service may remain running. Conflicts while a remote deployment, uninstall or credential update is running; wait for that operation to finish. Requires the node_record_removal feature.
       parameters:
         - name: expected_revision
           in: query
@@ -1128,6 +1128,7 @@ paths:
           schema: { type: integer, minimum: 1 }
       responses:
         '204': { description: Management record removed; remote uninstall was not performed }
+        '202': { description: Background record removal accepted; follow the node's record-remove job for progress and completion }
         '400': { $ref: '#/components/responses/Error' }
         '404': { $ref: '#/components/responses/Error' }
         '409': { $ref: '#/components/responses/Error' }

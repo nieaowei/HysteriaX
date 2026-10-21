@@ -335,10 +335,20 @@ async fn require_admin(
     };
     let id: String = actor.get("id");
     let last_used: Option<DateTime<Utc>> = actor.get("last_used_at");
-    if last_used.is_none_or(|at|now()-at>=chrono::Duration::seconds(60))
-        && let Err(error)=sqlx::query("UPDATE admin_tokens SET last_used_at=$1 WHERE id=$2 AND revoked_at IS NULL AND (last_used_at IS NULL OR last_used_at<$3)")
-            .bind(now()).bind(&id).bind(now()-chrono::Duration::seconds(60)).execute(&state.pool).await {
-        return ApiError::from(error).into_response();
+    if last_used.is_none_or(|at| now() - at >= chrono::Duration::seconds(60)) {
+        // Usage metadata must not turn a read request into a blocking writer.
+        // Authentication and revocation are checked by the SELECT above.
+        let touched: Result<(), sqlx::Error> = async {
+            if let Some(mut tx) = db::try_begin_write(&state.pool).await? {
+                sqlx::query("UPDATE admin_tokens SET last_used_at=$1 WHERE id=$2 AND revoked_at IS NULL AND (last_used_at IS NULL OR last_used_at<$3)")
+                    .bind(now()).bind(&id).bind(now()-chrono::Duration::seconds(60)).execute(&mut *tx).await?;
+                tx.commit().await?;
+            }
+            Ok(())
+        }.await;
+        if let Err(error) = touched {
+            tracing::warn!(error = %error, "administrator token usage timestamp not updated");
+        }
     }
     request
         .extensions_mut()
@@ -1200,3 +1210,6 @@ mod backend_cache_tests;
 
 #[cfg(test)]
 mod query_optimizer_tests;
+
+#[cfg(test)]
+mod auth_contention_tests;

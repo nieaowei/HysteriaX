@@ -718,6 +718,11 @@ pub async fn remove_record(
             "node revision changed; reload before removing its record",
         ));
     }
+    let removing: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM jobs WHERE node_id=$1 AND kind='record-remove' AND status IN ('queued','running'))")
+        .bind(&id).fetch_one(&mut *tx).await?;
+    if removing {
+        return Ok(StatusCode::ACCEPTED);
+    }
     // Cancelling the local future cannot retract an already-issued remote script.
     // Wait for these operations before promising a record-only removal.
     let mutating: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM jobs WHERE node_id=$1 AND status='running' AND (kind IN ('deploy','sync','rollback','uninstall','credential-apply') OR kind LIKE 'dns-%'))")
@@ -752,6 +757,15 @@ pub async fn remove_record(
             .bind(&id)
             .fetch_one(&mut *tx)
             .await?;
+    if crate::node_cleanup::needs_background_cleanup(&mut tx, &id).await? {
+        queue_record_removal(&mut tx, &id, expected, json!({
+            "node_name":node.get::<String,_>("name"),"expected_revision":expected,
+            "remote_uninstall":false,"remote_service_may_be_running":true,
+            "cancelled_jobs":cancelled.len(),"removed_assignments":assignments,"removed_pending_kicks":pending
+        })).await?;
+        tx.commit().await?;
+        return Ok(StatusCode::ACCEPTED);
+    }
     crate::api::authorization_groups::before_node_delete(&mut tx, &id, now()).await?;
     crate::dns::binding::before_node_delete(&mut tx, &id).await?;
     // Child configuration, assignments, monitoring data and kick obligations
@@ -765,6 +779,42 @@ pub async fn remove_record(
     tx.commit().await?;
     let _ = state.removed_nodes.send(id);
     Ok(StatusCode::NO_CONTENT)
+}
+
+async fn queue_record_removal(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    id: &str,
+    revision: i64,
+    detail: Value,
+) -> Result<String, ApiError> {
+    let retry_of = sqlx::query("SELECT j.id,CASE WHEN n.state='delete_failed' AND j.target_revision=$2 THEN j.result_json END AS checkpoint FROM jobs j JOIN nodes n ON n.id=j.node_id WHERE j.node_id=$1 AND j.kind='record-remove' AND j.status='failed' AND NOT EXISTS(SELECT 1 FROM jobs child WHERE child.retry_of_job_id=j.id) ORDER BY j.created_at DESC LIMIT 1")
+        .bind(id).bind(revision).fetch_optional(&mut **tx).await?;
+    sqlx::query("UPDATE nodes SET state='deleting',updated_at=now() WHERE id=$1")
+        .bind(id)
+        .execute(&mut **tx)
+        .await?;
+    let job = super::enqueue_job_with_payload_in_tx(
+        tx,
+        "record-remove",
+        Some(id),
+        Some(revision),
+        json!({
+            "actor_id":super::audit_actor(),"removal_detail":detail
+        }),
+    )
+    .await?;
+    if let Some(parent) = retry_of {
+        sqlx::query("UPDATE jobs SET retry_of_job_id=$1,result_json=$3 WHERE id=$2")
+            .bind(parent.get::<String, _>("id"))
+            .bind(&job)
+            .bind(parent.get::<Option<Value>, _>("checkpoint"))
+            .execute(&mut **tx)
+            .await?;
+    }
+    sqlx::query("INSERT INTO audit_records(id,actor,action,entity_type,entity_id,detail_json,created_at) VALUES($1,$2,'node.record_removal_requested','node',$3,$4,now())")
+        .bind(Uuid::new_v4().to_string()).bind(super::audit_actor()).bind(id)
+        .bind(json!({"job_id":job,"remote_uninstall":false})).execute(&mut **tx).await?;
+    Ok(job)
 }
 
 async fn managed_remote_trust(
@@ -808,7 +858,7 @@ pub async fn delete(
         .fetch_one(&mut *tx)
         .await?;
     if node_state == "deleting" {
-        let existing: Option<String> = sqlx::query_scalar("SELECT id FROM jobs WHERE node_id = $1 AND kind = 'uninstall' AND status IN ('queued', 'running') ORDER BY created_at DESC LIMIT 1")
+        let existing: Option<String> = sqlx::query_scalar("SELECT id FROM jobs WHERE node_id = $1 AND kind IN ('uninstall','record-remove') AND status IN ('queued', 'running') ORDER BY created_at DESC LIMIT 1")
             .bind(&id).fetch_optional(&mut *tx).await?;
         if let Some(job_id) = existing {
             tx.rollback().await?;
@@ -830,6 +880,14 @@ pub async fn delete(
     if never_installed {
         cancel_queued_node_jobs_in_tx(&mut tx, &id).await?;
         cancel_running_node_jobs_in_tx(&mut tx, &id).await?;
+        if crate::node_cleanup::needs_background_cleanup(&mut tx, &id).await? {
+            let job = queue_record_removal(&mut tx, &id, expected, json!({"expected_revision":expected,"remote_uninstall":false,"remote_install":false})).await?;
+            tx.commit().await?;
+            return Ok((
+                StatusCode::ACCEPTED,
+                Json(json!({"job_id":job,"status":"queued"})),
+            ));
+        }
         crate::api::authorization_groups::before_node_delete(&mut tx, &id, now()).await?;
         crate::dns::binding::before_node_delete(&mut tx, &id).await?;
         sqlx::query("DELETE FROM nodes WHERE id = $1 AND desired_revision = $2")

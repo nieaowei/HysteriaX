@@ -14,6 +14,7 @@ mod jobs;
 mod kick_requests;
 mod monitoring;
 mod node_acme;
+mod node_cleanup;
 mod node_limits;
 mod overview;
 mod proxy_monitor;
@@ -77,7 +78,7 @@ async fn main() -> Result<()> {
         .map_err(|error| anyhow::anyhow!("initialize reference index: {}", error.message))?;
     analytics::refresh(&pool)
         .await
-        .map_err(|e| anyhow::anyhow!("initialize analytics: {}", e.message))?;
+        .context("initialize analytics")?;
     if migrate_only {
         tracing::info!("database and credential migration completed; workers were not started");
         return Ok(());

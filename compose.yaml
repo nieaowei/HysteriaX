@@ -1,6 +1,8 @@
 services:
   postgres:
     image: postgres:18-bookworm
+    init: true
+    stop_grace_period: 1m
     restart: unless-stopped
     environment:
       POSTGRES_DB: hysteriax
@@ -12,7 +14,7 @@ services:
       - postgres_data:/var/lib/postgresql
       - ./scripts/provision-postgres.sh:/docker-entrypoint-initdb.d/10-provision-hysteriax.sh:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      test: ["CMD-SHELL", "exec pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
       interval: 5s
       timeout: 5s
       retries: 12
