@@ -193,12 +193,13 @@ pub async fn event(
 // Called after trusted SSH has actually recovered. Permanent failures are left
 // for an explicit operator action, rather than retried on every monitoring pass.
 pub async fn resume_node(pool: &PgPool, node: &str) -> Result<()> {
-    let mut tx = db::begin_write(pool).await?;
-    schedule(&mut tx, Some(node), true)
-        .await
-        .map_err(|e| anyhow::anyhow!(e.message))?;
-    tx.commit().await?;
-    Ok(())
+    let node = node.to_owned();
+    db::serializable::<_, ApiError, _>(pool, move |tx| {
+        let node = node.clone();
+        Box::pin(async move { schedule(tx, Some(&node), true).await })
+    })
+    .await
+    .map_err(|error| anyhow::anyhow!(error.message))
 }
 
 pub async fn schedule(
@@ -206,8 +207,36 @@ pub async fn schedule(
     node: Option<&str>,
     recovered: bool,
 ) -> Result<(), ApiError> {
-    let rows=sqlx::query("SELECT r.* FROM kick_requests r JOIN nodes n ON n.id=r.node_id WHERE ($1::text IS NULL OR r.node_id=$1) AND (r.state='active' OR ($2 AND r.state='waiting_recovery')) AND n.state NOT IN ('deleting','delete_failed') AND NOT EXISTS(SELECT 1 FROM jobs j WHERE j.kind='kick' AND j.node_id=r.node_id AND j.payload_json->>'user_id'=r.user_id AND j.status IN ('queued','running')) ORDER BY r.updated_at LIMIT 100")
-        .bind(node).bind(recovered).fetch_all(&mut **tx).await?;
+    schedule_batch(tx, node, recovered).await.map(|_| ())
+}
+
+pub struct SchedulePage {
+    pub count: usize,
+    pub next_node: Option<String>,
+    pub more: bool,
+}
+pub async fn schedule_batch(
+    tx: &mut Transaction<'_, Postgres>,
+    node: Option<&str>,
+    recovered: bool,
+) -> Result<usize, ApiError> {
+    schedule_page(tx, node, recovered, None)
+        .await
+        .map(|page| page.count)
+}
+pub async fn schedule_page(
+    tx: &mut Transaction<'_, Postgres>,
+    node: Option<&str>,
+    recovered: bool,
+    after: Option<&str>,
+) -> Result<SchedulePage, ApiError> {
+    // Bound and claim parent nodes first. SKIP LOCKED before each LIMIT lets
+    // busy parents and obligations yield to unrelated resources in this page.
+    let nodes:Vec<String>=sqlx::query_scalar("SELECT n.id FROM nodes n WHERE ($1::text IS NULL OR n.id=$1) AND ($3::text IS NULL OR n.id>$3) AND n.state NOT IN ('deleting','delete_failed') AND EXISTS(SELECT 1 FROM kick_requests r WHERE r.node_id=n.id AND r.state IN ('active','waiting_recovery') AND (r.state='active' OR $2) AND NOT EXISTS(SELECT 1 FROM jobs j WHERE j.kind='kick' AND j.node_id=r.node_id AND j.payload_json->>'user_id'=r.user_id AND j.status IN ('queued','running'))) ORDER BY n.id LIMIT 100 FOR SHARE OF n SKIP LOCKED")
+        .bind(node).bind(recovered).bind(after).fetch_all(&mut **tx).await?;
+    let rows=sqlx::query("SELECT r.* FROM kick_requests r WHERE r.node_id=ANY($1::text[]) AND r.state IN ('active','waiting_recovery') AND (r.state='active' OR $2) AND NOT EXISTS(SELECT 1 FROM jobs j WHERE j.kind='kick' AND j.node_id=r.node_id AND j.payload_json->>'user_id'=r.user_id AND j.status IN ('queued','running')) ORDER BY r.node_id,r.user_id LIMIT 100 FOR UPDATE OF r SKIP LOCKED")
+        .bind(&nodes).bind(recovered).fetch_all(&mut **tx).await?;
+    let count = rows.len();
     for row in rows {
         let node: String = row.get("node_id");
         let user: String = row.get("user_id");
@@ -220,7 +249,13 @@ pub async fn schedule(
             .bind(&node).bind(&user).bind(&id).execute(&mut **tx).await?;
         event(tx,&id,"job.queued",json!({"id":id,"kind":"kick","node_id":node,"status":"queued","stage":"queued","recovery_of_job_id":parent})).await?;
     }
-    Ok(())
+    let more:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM kick_requests r JOIN nodes n ON n.id=r.node_id WHERE ($1::text IS NULL OR r.node_id=$1) AND r.state IN ('active','waiting_recovery') AND (r.state='active' OR $2) AND n.state NOT IN ('deleting','delete_failed') AND NOT EXISTS(SELECT 1 FROM jobs j WHERE j.kind='kick' AND j.node_id=r.node_id AND j.payload_json->>'user_id'=r.user_id AND j.status IN ('queued','running')))")
+        .bind(node).bind(recovered).fetch_one(&mut **tx).await?;
+    Ok(SchedulePage {
+        count,
+        next_node: nodes.last().cloned(),
+        more,
+    })
 }
 
 #[cfg(test)]

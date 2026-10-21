@@ -20,7 +20,8 @@ mod node_cleanup_tests;
 
 pub async fn run(state: AppState) {
     let mut tasks = JoinSet::new();
-    let mut reconciliation = tokio::time::interval(Duration::from_secs(10));
+    let mut reconciliation = tokio::time::interval(Duration::from_secs(1));
+    reconciliation.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
         while tasks.len() < MAX_PARALLEL_NODES {
             match claim_next_for(&state.pool, Some(&state.instance_id)).await {
@@ -43,11 +44,8 @@ pub async fn run(state: AppState) {
                 }
             }
             _ = reconciliation.tick() => {
-                if let Err(error) = recover_interrupted(&state.pool).await {
-                    tracing::error!(%error, "failed to recover expired executions");
-                }
-                if let Err(error) = reconcile_kicks(&state.pool).await {
-                    tracing::error!(%error, "failed to reconcile durable kick requests");
+                if let Err(error) = maintenance_pass(&state).await {
+                    tracing::error!(%error, "job maintenance deferred");
                 }
             }
             _ = tokio::time::sleep(Duration::from_secs(1)) => {}
@@ -55,10 +53,57 @@ pub async fn run(state: AppState) {
     }
 }
 
-async fn reconcile_kicks(pool: &PgPool) -> anyhow::Result<()> {
-    db::serializable::<_, crate::error::ApiError, _>(pool, |connection| {
+async fn maintenance_pass(state: &AppState) -> anyhow::Result<()> {
+    use crate::background::maintenance;
+    for operation in ["recovery", "kick_schedule"] {
+        maintenance::ensure(
+            &state.pool,
+            &format!("jobs:{operation}"),
+            "jobs-maintenance",
+            json!({"operation":operation}),
+        )
+        .await?;
+    }
+    for _ in 0..2 {
+        let Some(work) =
+            maintenance::claim(&state.pool, "jobs-maintenance", &state.instance_id).await?
+        else {
+            break;
+        };
+        crate::execution::supervise(state.pool.clone(), work.leases.clone(), async {
+            if let Err(error) = maintenance_work(state, &work).await {
+                tracing::warn!(%error,"job maintenance batch deferred");
+                work.retry(&state.pool).await?;
+            }
+            Ok::<_, anyhow::Error>(())
+        })
+        .await
+        .transpose()?;
+    }
+    Ok(())
+}
+async fn maintenance_work(
+    state: &AppState,
+    work: &crate::background::maintenance::Work,
+) -> anyhow::Result<()> {
+    let work = work.clone();
+    db::serializable::<_, crate::error::ApiError, _>(&state.pool, move |tx| {
+        let work = work.clone();
         Box::pin(async move {
-            crate::kick_requests::schedule(connection, None, false).await?;
+            work.guard_on(tx)
+                .await
+                .map_err(crate::error::ApiError::from)?;
+            let delay=match work.payload["operation"].as_str() {
+                Some("recovery")=>if recover_interrupted_on(tx).await?==256 {1}else{10},
+                Some("kick_schedule")=>{
+                    let page=crate::kick_requests::schedule_page(tx,None,false,work.payload["node_after"].as_str()).await?;
+                    sqlx::query("UPDATE background_work SET payload=jsonb_set(payload,'{node_after}',$2) WHERE id=$1")
+                        .bind(&work.id).bind(json!(page.next_node)).execute(&mut **tx).await?;
+                    if page.more {1}else{10}
+                },
+                _=>return Err(crate::error::ApiError::internal()),
+            };
+            work.finish_on(tx,false,delay,None).await.map_err(crate::error::ApiError::from)?;
             Ok(())
         })
     })
@@ -66,20 +111,33 @@ async fn reconcile_kicks(pool: &PgPool) -> anyhow::Result<()> {
     .map_err(|error| anyhow::anyhow!(error.message))
 }
 
+#[cfg(test)]
 async fn recover_interrupted(pool: &PgPool) -> Result<(), sqlx::Error> {
-    let mut tx = db::begin_write(pool).await?;
+    db::write(pool, |tx| {
+        Box::pin(async move { recover_interrupted_on(tx).await.map(|_| ()) })
+    })
+    .await
+}
+async fn recover_interrupted_on(
+    tx: &mut sqlx::Transaction<'static, sqlx::Postgres>,
+) -> Result<usize, sqlx::Error> {
+    let cutoff: chrono::DateTime<chrono::Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
+        .fetch_one(&mut **tx)
+        .await?;
     let rows = sqlx::query(
-        "SELECT id, kind, node_id, resource_key, attempts, payload_json, EXISTS(SELECT 1 FROM resource_leases l WHERE l.work_id=j.id) AS managed FROM jobs j WHERE (status='running' OR EXISTS(SELECT 1 FROM execution_operations o WHERE o.work_id=j.id AND (o.state='dispatching' OR (j.stage NOT IN ('reconciling','needs_attention') AND o.state IN ('reconciling','needs_attention'))))) AND NOT EXISTS (SELECT 1 FROM resource_leases l WHERE l.work_id=j.id AND l.owner IS NOT NULL AND l.expires_at>clock_timestamp()) FOR UPDATE OF j SKIP LOCKED",
+        "WITH candidates AS (SELECT id FROM jobs WHERE status='running' UNION SELECT j.id FROM execution_operations o JOIN jobs j ON j.id=o.work_id WHERE o.state='dispatching' OR (j.stage NOT IN ('reconciling','needs_attention') AND o.state IN ('reconciling','needs_attention'))) SELECT j.id,j.kind,j.node_id,j.resource_key,j.attempts,j.payload_json,EXISTS(SELECT 1 FROM resource_leases l WHERE l.work_id=j.id) AS managed FROM jobs j JOIN candidates c ON c.id=j.id WHERE NOT EXISTS(SELECT 1 FROM resource_leases l WHERE l.work_id=j.id AND l.owner IS NOT NULL AND l.expires_at>$1) ORDER BY j.updated_at,j.id LIMIT 256 FOR UPDATE OF j SKIP LOCKED",
     )
-    .fetch_all(&mut *tx)
+    .bind(cutoff)
+    .fetch_all(&mut **tx)
     .await?;
+    let count = rows.len();
     for row in rows {
         let id: String = row.get("id");
         let kind: String = row.get("kind");
         let node_id: Option<String> = row.get("node_id");
         let timestamp = now();
         let uncertain: bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM execution_operations WHERE work_id=$1 AND state IN ('dispatching','reconciling','needs_attention'))")
-            .bind(&id).fetch_one(&mut *tx).await?;
+            .bind(&id).fetch_one(&mut **tx).await?;
         let legacy_remote = !row.get::<bool, _>("managed") && kind != "record-remove";
         if uncertain || legacy_remote {
             let stage = if legacy_remote {
@@ -98,12 +156,12 @@ async fn recover_interrupted(pool: &PgPool) -> Result<(), sqlx::Error> {
             resources.dedup();
             for resource in resources {
                 sqlx::query("INSERT INTO resource_leases(resource_key,work_id,blocked) VALUES($1,$2,true) ON CONFLICT(resource_key) DO UPDATE SET blocked=true")
-                    .bind(&resource).bind(&id).execute(&mut *tx).await?;
+                    .bind(&resource).bind(&id).execute(&mut **tx).await?;
             }
             sqlx::query("UPDATE execution_operations SET state=$2,updated_at=clock_timestamp() WHERE work_id=$1 AND state='dispatching'")
-                .bind(&id).bind(stage).execute(&mut *tx).await?;
+                .bind(&id).bind(stage).execute(&mut **tx).await?;
             sqlx::query("UPDATE jobs SET status='failed',stage=$2,error_message='Execution interrupted; remote outcome requires verification before recovery',updated_at=clock_timestamp(),finished_at=clock_timestamp() WHERE id=$1")
-                .bind(&id).bind(stage).execute(&mut *tx).await?;
+                .bind(&id).bind(stage).execute(&mut **tx).await?;
             let interrupted = JobInput {
                 id: id.clone(),
                 kind: kind.clone(),
@@ -112,9 +170,9 @@ async fn recover_interrupted(pool: &PgPool) -> Result<(), sqlx::Error> {
                 payload: row.get("payload_json"),
                 attempts: row.get("attempts"),
             };
-            crate::kick_requests::finish(&mut tx, &interrupted, "needs_attention").await?;
+            crate::kick_requests::finish(tx, &interrupted, "needs_attention").await?;
             crate::kick_requests::event(
-                &mut tx,
+                tx,
                 &id,
                 "job.reconciliation_required",
                 json!({"id":id,"kind":kind,"node_id":node_id,"status":"failed","stage":stage}),
@@ -132,21 +190,21 @@ async fn recover_interrupted(pool: &PgPool) -> Result<(), sqlx::Error> {
                 attempts: row.get("attempts"),
             };
             sqlx::query("UPDATE jobs SET status='failed',stage='needs_attention',error_message='Kick interrupted after exhausting its execution budget',finished_at=now(),updated_at=now() WHERE id=$1")
-                .bind(&id).execute(&mut *tx).await?;
-            crate::kick_requests::finish(&mut tx, &job, "needs_attention").await?;
-            crate::kick_requests::event(&mut tx,&id,"job.failed",json!({"id":id,"kind":kind,"node_id":node_id,"status":"failed","stage":"needs_attention"})).await?;
+                .bind(&id).execute(&mut **tx).await?;
+            crate::kick_requests::finish(tx, &job, "needs_attention").await?;
+            crate::kick_requests::event(tx,&id,"job.failed",json!({"id":id,"kind":kind,"node_id":node_id,"status":"failed","stage":"needs_attention"})).await?;
             continue;
         }
         sqlx::query("UPDATE jobs SET status = 'queued', stage = 'recovered', available_at = $1, updated_at = $2, finished_at = NULL WHERE id = $3 AND status = 'running'")
-            .bind(timestamp).bind(timestamp).bind(&id).execute(&mut *tx).await?;
+            .bind(timestamp).bind(timestamp).bind(&id).execute(&mut **tx).await?;
         sqlx::query("INSERT INTO job_events (job_id, event_type, payload_json, created_at) VALUES ($1, 'job.recovered', $2, $3)")
             .bind(&id)
             .bind(json!({"id": id, "kind": kind, "node_id": node_id, "status": "queued", "stage": "recovered"}))
             .bind(timestamp)
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await?;
     }
-    tx.commit().await
+    Ok(count)
 }
 
 struct ClaimedJob {
@@ -1143,7 +1201,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(request, "completed");
-        super::reconcile_kicks(&state.pool).await.unwrap();
+        super::maintenance_pass(&state).await.unwrap();
         assert!(super::claim_next(&state.pool).await.unwrap().is_none());
         let events: i64 = sqlx::query_scalar(
             "SELECT count(*) FROM job_events WHERE job_id=$1 AND event_type='job.succeeded'",
@@ -1605,3 +1663,7 @@ mod dns_job_tests {
 #[cfg(test)]
 #[path = "ssh_confirmation_tests.rs"]
 mod ssh_confirmation_tests;
+
+#[cfg(test)]
+#[path = "jobs/maintenance_tests.rs"]
+mod maintenance_tests;
