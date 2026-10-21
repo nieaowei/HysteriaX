@@ -173,6 +173,16 @@ impl SshSession {
             .await
     }
 
+    /// Only for fixed observation commands that cannot change the remote node.
+    /// These reads may be retried after ownership loss; mutations use execute.
+    pub async fn execute_read_only(&self, command: &str) -> Result<CommandOutput> {
+        crate::execution::check_current().await?;
+        self.execute_remote(command, Duration::from_secs(60), 4 * 1024 * 1024)
+            .await
+    }
+    pub async fn execute_read_only_checked(&self, command: &str) -> Result<String> {
+        Self::check_output(self.execute_read_only(command).await?)
+    }
     async fn execute_with_limits(
         &self,
         command: &str,

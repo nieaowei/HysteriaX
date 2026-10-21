@@ -260,11 +260,23 @@ pub async fn guard_current(connection: &mut PgConnection) -> Result<(), sqlx::Er
         let running: Option<bool> =
             sqlx::query_scalar("SELECT true FROM jobs WHERE id=$1 AND status='running' FOR UPDATE")
                 .bind(&job.work)
-                .fetch_optional(connection)
+                .fetch_optional(&mut *connection)
                 .await?;
         if running.is_none() {
             return Err(sqlx::Error::Protocol(
                 "job was cancelled or no longer belongs to a running execution".into(),
+            ));
+        }
+    }
+    if let Some(work) = leases
+        .iter()
+        .find(|lease| lease.resource.starts_with("work:"))
+    {
+        let running:Option<bool>=sqlx::query_scalar("SELECT true FROM background_work w WHERE w.id=$1 AND w.owner=$2 AND w.generation=$3 AND w.state='running' AND EXISTS(SELECT 1 FROM nodes n WHERE n.id=w.node_id AND n.state NOT IN ('deleting','delete_failed')) FOR UPDATE OF w")
+            .bind(&work.work).bind(&work.owner).bind(work.generation).fetch_optional(&mut *connection).await?;
+        if running.is_none() {
+            return Err(sqlx::Error::Protocol(
+                "background execution was cancelled or ownership changed".into(),
             ));
         }
     }
@@ -284,6 +296,12 @@ pub async fn supervise<T>(
         sequence: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
     };
     CURRENT.scope(scope.clone(), async move {
+        // Validate before polling the work future at all; the renewal future's
+        // first database await otherwise lets a stale worker start local work.
+        if let Err(error)=check_current().await {
+            tracing::warn!(%error,"execution ownership was lost before work started");
+            return None;
+        }
         let renew=async {
             loop {
                 for lease in &scope.leases {
@@ -294,6 +312,10 @@ pub async fn supervise<T>(
                             return;
                         }
                     }
+                }
+                if let Err(error)=check_current().await {
+                    tracing::warn!(%error,"execution was cancelled; stopping local work");
+                    return;
                 }
                 tokio::time::sleep(std::time::Duration::from_secs(RENEW_SECONDS)).await;
             }

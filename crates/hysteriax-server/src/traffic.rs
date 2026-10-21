@@ -16,7 +16,7 @@ use crate::{
 
 #[cfg(test)]
 mod batch_tests;
-mod batches;
+pub(crate) mod batches;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CounterDelta {
@@ -69,14 +69,7 @@ pub async fn run(state: AppState) {
 }
 
 async fn sampling_loop(state: &AppState) {
-    let mut tick = tokio::time::interval(Duration::from_secs(10));
-    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    loop {
-        tick.tick().await;
-        if let Err(error) = collect_all(state).await {
-            tracing::error!(%error, "traffic collection pass failed");
-        }
-    }
+    crate::background::run_sampling(state.clone(), "traffic").await;
 }
 
 async fn expiration_loop(pool: &PgPool) {
@@ -133,39 +126,32 @@ async fn billing_loop(pool: &PgPool) {
     }
 }
 
-async fn collect_all(state: &AppState) -> Result<()> {
-    let ids: Vec<String> = sqlx::query_scalar("SELECT id FROM nodes WHERE deployed_revision IS NOT NULL AND state NOT IN ('deleting', 'delete_failed') ORDER BY id")
-        .fetch_all(&state.pool).await?;
-    let cycle = Uuid::new_v4();
-    let cycle_started = chrono::Utc::now();
-    let expected_nodes = ids.len() as i64;
-    collect_nodes(ids, |node_id| {
-        let state = state.clone();
-        async move {
-            let pool = &state.pool;
-            let result = tokio::time::timeout(
-                Duration::from_secs(45),
-                sample_node(
-                    pool,
-                    &state.secrets,
-                    &node_id,
-                    cycle,
-                    cycle_started,
-                    expected_nodes,
-                ),
-            )
-            .await
-            .unwrap_or_else(|_| Err(anyhow::anyhow!("traffic sample timed out")));
-            if let Err(error) = result {
-                tracing::warn!(node_id, %error, "traffic sample failed");
-                record_failed_sample(pool, &node_id, cycle, cycle_started, expected_nodes, &error)
-                    .await?;
-            }
-            Ok(())
-        }
-    })
-    .await;
-    Ok(())
+pub(crate) async fn sample_work(state: &AppState, work: &crate::background::Work) -> Result<()> {
+    let result = tokio::time::timeout(
+        Duration::from_secs(45),
+        sample_node(
+            &state.pool,
+            &state.secrets,
+            &work.node,
+            work.cycle,
+            work.period_start,
+            work.expected,
+        ),
+    )
+    .await
+    .unwrap_or_else(|_| Err(anyhow::anyhow!("traffic sample timed out")));
+    if let Err(error) = &result {
+        record_failed_sample(
+            &state.pool,
+            &work.node,
+            work.cycle,
+            work.period_start,
+            work.expected,
+            error,
+        )
+        .await?;
+    }
+    result
 }
 
 async fn record_failed_sample(
@@ -205,6 +191,7 @@ async fn record_failed_sample(
     }).await
 }
 
+#[cfg(test)]
 async fn collect_nodes<F, Fut>(ids: Vec<String>, mut sample: F)
 where
     F: FnMut(String) -> Fut,
@@ -312,13 +299,13 @@ async fn sample_node(
 
 async fn systemd_instance(session: &ssh::SshSession) -> Result<String> {
     let direct = session
-        .execute("systemctl show hysteriax.service --property=InvocationID --value")
+        .execute_read_only("systemctl show hysteriax.service --property=InvocationID --value")
         .await?;
     let value = if direct.code == 0 {
         direct.stdout
     } else {
         session
-            .execute_checked(
+            .execute_read_only_checked(
                 "sudo -n systemctl show hysteriax.service --property=InvocationID --value",
             )
             .await?

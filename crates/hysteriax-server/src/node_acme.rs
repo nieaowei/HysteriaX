@@ -109,12 +109,12 @@ pub async fn sample(
     let expected = component_config(&resolved)?.context("missing ACME policy")?;
     let command = "/opt/hysteriax/hysteriax-acme status /etc/hysteriax/acme.json";
     // status requires the private config; sudo uses a fixed command without secrets.
-    let output = session.execute(command).await?;
+    let output = session.execute_read_only(command).await?;
     let output = if output.code == 0 {
         output.stdout
     } else {
         session
-            .execute_checked(&format!("sudo -n {command}"))
+            .execute_read_only_checked(&format!("sudo -n {command}"))
             .await?
     };
     ensure!(output.len() <= 65536, "ACME status response is too large");
@@ -155,7 +155,7 @@ pub async fn sample(
         );
     }
     let service = session
-        .execute("systemctl is-active hysteriax-acme.service")
+        .execute_read_only("systemctl is-active hysteriax-acme.service")
         .await?;
     status["service_state"] = json!(match service.stdout.trim() {
         "active" => "active",
@@ -167,8 +167,15 @@ pub async fn sample(
     status["collected_at"] = json!(now);
     let revision: Option<i64> = row.get("deployed_revision");
     let digest: Option<String> = row.get("deployed_content_sha256");
+    let node = node.to_owned();
+    crate::db::write(pool,move |tx| {
+        let (node,status,expected,digest)=(node.clone(),status.clone(),expected.clone(),digest.clone());
+        Box::pin(async move {
     sqlx::query("INSERT INTO node_acme_observations(node_id,revision,deployment_digest,policy_id,status,sampled_at) SELECT id,$2,$3,$4,$5,$6 FROM nodes WHERE id=$1 AND deployed_revision=$2 AND deployed_content_sha256=$3 AND state NOT IN ('deleting','delete_failed') ON CONFLICT(node_id) DO UPDATE SET revision=excluded.revision,deployment_digest=excluded.deployment_digest,policy_id=excluded.policy_id,status=excluded.status,sampled_at=excluded.sampled_at WHERE node_acme_observations.sampled_at<excluded.sampled_at")
-        .bind(node).bind(revision).bind(digest).bind(expected["policy_id"].as_str()).bind(status).bind(now).execute(pool).await?;
+        .bind(node).bind(revision).bind(digest).bind(expected["policy_id"].as_str()).bind(status).bind(now).execute(&mut **tx).await?;
+            Ok::<_,anyhow::Error>(())
+        })
+    }).await?;
     Ok(())
 }
 

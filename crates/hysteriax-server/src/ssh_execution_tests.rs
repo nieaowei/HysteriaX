@@ -112,5 +112,32 @@ async fn commands_bound_active_output_and_execution_time() {
     ));
     assert!(!crate::deployment::retryable(&timeout));
     assert_eq!(session.execute("ok").await.unwrap().stdout, "hello");
+    let pool = crate::db::test_pool_with_max_connections(3).await;
+    let mut tx = pool.begin().await.unwrap();
+    let lease =
+        crate::execution::acquire(&mut tx, "node:observation", "observer", "observation-work")
+            .await
+            .unwrap()
+            .unwrap();
+    tx.commit().await.unwrap();
+    crate::execution::supervise(pool.clone(), vec![lease], async {
+        assert_eq!(
+            session.execute_read_only("ok").await.unwrap().stdout,
+            "hello"
+        );
+        assert_eq!(
+            session.execute_read_only_checked("ok").await.unwrap(),
+            "hello"
+        );
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM execution_operations")
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+        0
+    );
     server.abort();
 }

@@ -1,6 +1,7 @@
 mod analytics;
 mod api;
 mod artifact_cache;
+mod background;
 mod bootstrap;
 mod cache;
 mod cache_domains;

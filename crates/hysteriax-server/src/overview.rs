@@ -75,7 +75,7 @@ pub async fn record_online_on(
         .and_then(|body| serde_json::from_slice(body).ok())
         .and_then(|value| real_connections(value, &ids));
     let status = if parsed.is_some() { "ok" } else { "failed" };
-    sqlx::query("INSERT INTO online_samples(cycle_id,node_id,sampled_at,status,connections,cycle_started_at,expected_nodes) VALUES($1,$2,clock_timestamp(),$3,$4,$5,$6) ON CONFLICT(cycle_id,node_id) DO NOTHING")
+    sqlx::query("INSERT INTO online_samples(cycle_id,node_id,sampled_at,status,connections,cycle_started_at,expected_nodes) VALUES($1,$2,clock_timestamp(),$3,$4,$5,$6) ON CONFLICT(cycle_id,node_id) DO UPDATE SET sampled_at=excluded.sampled_at,status=excluded.status,connections=excluded.connections,pending=false WHERE online_samples.pending")
         .bind(cycle).bind(node).bind(status).bind(json!(parsed.unwrap_or_default())).bind(cycle_started).bind(expected_nodes).execute(connection).await?;
     Ok(())
 }

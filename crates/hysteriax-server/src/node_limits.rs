@@ -1,7 +1,7 @@
 //! Provider package metadata and independent whole-host network accounting.
 use std::time::Duration;
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use axum::{
     Json,
     extract::{Path, State},
@@ -491,56 +491,36 @@ async fn check_all(pool: &PgPool) -> Result<()> {
 }
 
 pub async fn collect(state: AppState) {
-    let mut tasks = tokio::task::JoinSet::new();
-    let slots = std::sync::Arc::new(tokio::sync::Semaphore::new(4));
-    let mut inflight = std::collections::HashSet::new();
-    let mut tick = tokio::time::interval(Duration::from_secs(10));
-    loop {
-        tokio::select! {
-            _ = tick.tick() => {
-                let ids = sqlx::query_scalar::<_, String>("SELECT n.id FROM nodes n JOIN node_packages p ON n.id = p.node_id WHERE (n.deployed_revision IS NOT NULL OR p.config->>'quota_bytes' IS NOT NULL) AND n.state NOT IN ('deleting','delete_failed')").fetch_all(&state.pool).await;
-                match ids {
-                    Ok(ids) => for id in ids {
-                        if !inflight.insert(id.clone()) { continue; }
-                        let state = state.clone();
-                        let slots = slots.clone();
-                        tasks.spawn(async move {
-                            let _permit = slots.acquire_owned().await.expect("collector semaphore remains open");
-                            if let Err(error)=collect_one(&state,&id).await {
-                                tracing::warn!(node_id=%id,%error,"whole-host network sampling failed");
-                            }
-                            id
-                        });
-                    },
-                    Err(error) => tracing::error!(%error, "network collector query failed"),
-                }
-            }
-            Some(result) = tasks.join_next(), if !tasks.is_empty() => {
-                if let Ok(id) = result { inflight.remove(&id); }
-            }
-        }
-    }
+    crate::background::run_sampling(state, "network").await;
 }
-async fn collect_one(state: &AppState, id: &str) -> Result<()> {
-    let capture = sqlx::query(
-        "SELECT generation,clock_timestamp() AS captured_at FROM node_packages WHERE node_id=$1",
+pub(crate) async fn sample_work(state: &AppState, work: &crate::background::Work) -> Result<()> {
+    let generation = work.payload["capture_generation"]
+        .as_i64()
+        .context("missing network capture generation")?;
+    let captured_at: DateTime<Utc> = serde_json::from_value(work.payload["captured_at"].clone())?;
+    // A process may die after committing the sample but before acknowledging
+    // its work item. Recovery must not perform a second read at the same time.
+    if let Some(gap) = sqlx::query_scalar::<_, Option<String>>(
+        "SELECT gap_reason FROM node_network_samples WHERE node_id=$1 AND sampled_at=$2 LIMIT 1",
     )
-    .bind(id)
+    .bind(&work.node)
+    .bind(captured_at)
     .fetch_optional(&state.pool)
-    .await?;
-    let Some(capture) = capture else {
+    .await?
+    {
+        if gap.as_deref() == Some("network_sample_failed") {
+            bail!("network sample was already recorded as failed");
+        }
         return Ok(());
-    };
-    let generation: i64 = capture.get("generation");
-    let captured_at: DateTime<Utc> = capture.get("captured_at");
+    }
     let result = tokio::time::timeout(
         Duration::from_secs(30),
-        sample(state, id, generation, captured_at),
+        sample(state, &work.node, generation, captured_at),
     )
     .await
     .unwrap_or_else(|_| Err(anyhow::anyhow!("whole-host network sampling timed out")));
     if result.is_err() {
-        record_failure(&state.pool, id, generation, captured_at).await?;
+        record_failure(&state.pool, &work.node, generation, captured_at).await?;
     }
     result
 }
@@ -621,7 +601,7 @@ async fn sample(
     let command = format!(
         "set -eu; {select}; [ -n \"$iface\" ]; before=$(cat /proc/sys/kernel/random/boot_id); tx=$(cat \"/sys/class/net/$iface/statistics/tx_bytes\"); rx=$(cat \"/sys/class/net/$iface/statistics/rx_bytes\"); after=$(cat /proc/sys/kernel/random/boot_id); [ \"$before\" = \"$after\" ]; printf '%s %s %s %s\\n' \"$before\" \"$iface\" \"$tx\" \"$rx\""
     );
-    let value = parse_sample(&session.execute_checked(&command).await?)?;
+    let value = parse_sample(&session.execute_read_only_checked(&command).await?)?;
     apply_sample(&state.pool, id, generation, value, captured_at).await
 }
 fn delta(row: &sqlx::postgres::PgRow, sample: &NetworkSample) -> (i64, i64, Option<&'static str>) {
