@@ -156,7 +156,8 @@ async fn network_snapshot_is_read_only_and_does_not_drain_cycle_queue() {
             .fetch_one(&pool)
             .await
             .unwrap(),
-        0
+        1,
+        "online snapshots use the source overlay without draining another worker's queue"
     );
 }
 
@@ -343,6 +344,18 @@ async fn rollup_refresh_reads_only_dirty_ranges_and_skips_empty_queues() {
             .await
             .unwrap();
         }
+        let hours: serde_json::Value = sqlx::query_scalar(
+            "SELECT coalesce(jsonb_agg(to_jsonb(d)),'[]'::jsonb) FROM traffic_dirty_hours d",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let minutes: serde_json::Value = sqlx::query_scalar(
+            "SELECT coalesce(jsonb_agg(to_jsonb(d)),'[]'::jsonb) FROM online_dirty_minutes d",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
         for statement in include_str!("refresh_rollups.sql")
             .split(';')
             .filter(|s| s.contains("ctid=ANY"))
@@ -358,6 +371,11 @@ async fn rollup_refresh_reads_only_dirty_ranges_and_skips_empty_queues() {
                 .await
                 .unwrap();
             let row = sqlx::query(&format!("EXPLAIN (ANALYZE,FORMAT JSON) {statement}"))
+                .bind(if table.starts_with("traffic_") {
+                    &hours
+                } else {
+                    &minutes
+                })
                 .fetch_one(&mut *tx)
                 .await
                 .unwrap();
@@ -369,9 +387,11 @@ async fn rollup_refresh_reads_only_dirty_ranges_and_skips_empty_queues() {
         }
         for statement in include_str!("refresh_rollups.sql")
             .split(';')
-            .filter(|s| s.trim().starts_with("INSERT"))
+            .filter(|s| s.contains("INSERT INTO"))
         {
-            let (_, select) = statement.trim().split_once('\n').unwrap();
+            let select = statement
+                .replace("INSERT INTO traffic_hour_totals\n", "")
+                .replace("INSERT INTO online_minute_totals\n", "");
             let table = if select.contains("traffic_minute_totals") {
                 "traffic_minute_totals"
             } else {
@@ -383,6 +403,11 @@ async fn rollup_refresh_reads_only_dirty_ranges_and_skips_empty_queues() {
                 .await
                 .unwrap();
             let row = sqlx::query(&format!("EXPLAIN (ANALYZE,FORMAT JSON) {select}"))
+                .bind(if table.starts_with("traffic_") {
+                    &hours
+                } else {
+                    &minutes
+                })
                 .fetch_one(&mut *tx)
                 .await
                 .unwrap();

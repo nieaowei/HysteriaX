@@ -56,13 +56,14 @@ pub async fn ensure_on(connection: &mut PgConnection, secrets: &SecretBox) -> Re
         .execute(&mut *connection)
         .await?;
     let dirty = sqlx::query(
-        "SELECT kind,source_id FROM credential_reference_dirty ORDER BY kind,source_id",
+        "SELECT kind,source_id,generation FROM credential_reference_dirty ORDER BY kind,source_id FOR UPDATE",
     )
     .fetch_all(&mut *connection)
     .await?;
     for source in dirty {
         let kind: String = source.get("kind");
         let id: String = source.get("source_id");
+        let generation: i64 = source.get("generation");
         sqlx::query("DELETE FROM credential_reference_edges WHERE kind=$1 AND source_id=$2")
             .bind(&kind)
             .bind(&id)
@@ -107,9 +108,9 @@ pub async fn ensure_on(connection: &mut PgConnection, secrets: &SecretBox) -> Re
             )
             .await?;
         }
-        sqlx::query("DELETE FROM credential_reference_dirty WHERE kind=$1 AND source_id=$2")
+        sqlx::query("DELETE FROM credential_reference_dirty WHERE kind=$1 AND source_id=$2 AND generation=$3")
             .bind(&kind)
-            .bind(&id)
+            .bind(&id).bind(generation)
             .execute(&mut *connection)
             .await?;
     }

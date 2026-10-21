@@ -1,5 +1,6 @@
 //! Transactional flow totals and idempotently rebuilt online-cycle analytics.
 use crate::{db, error::ApiError, state::AppState};
+use serde_json::Value;
 use sqlx::PgPool;
 pub async fn refresh(pool: &PgPool) -> Result<(), sqlx::Error> {
     let mut committed = false;
@@ -12,9 +13,13 @@ pub async fn refresh(pool: &PgPool) -> Result<(), sqlx::Error> {
         if committed {
             tokio::time::sleep(std::time::Duration::from_millis(25)).await;
         }
-        let mut tx = db::begin_write(pool).await?;
-        refresh_on(&mut tx, Some(256)).await?;
-        tx.commit().await?;
+        let processed = db::write(pool, |tx| {
+            Box::pin(async move { refresh_on(tx, Some(256)).await })
+        })
+        .await?;
+        if processed == 0 {
+            return Ok(());
+        } // Other refreshers own the remaining keys.
         committed = true;
     }
 }
@@ -31,44 +36,81 @@ pub async fn run(state: AppState) {
 async fn refresh_on(
     connection: &mut sqlx::PgConnection,
     max_cycles: Option<i64>,
-) -> Result<(), sqlx::Error> {
-    // Stale dirty-queue estimates can trigger JIT for tiny indexed refreshes.
+) -> Result<usize, sqlx::Error> {
+    let limit = max_cycles.unwrap_or(256).clamp(1, 256);
     sqlx::query("SET LOCAL jit=off")
         .execute(&mut *connection)
         .await?;
-    let cycles: Vec<uuid::Uuid> = sqlx::query_scalar(
-        "SELECT cycle_id FROM analytics_dirty_cycles ORDER BY cycle_id LIMIT $1",
-    )
-    .bind(max_cycles)
-    .fetch_all(&mut *connection)
-    .await?;
+    let claimed:Vec<(uuid::Uuid,i64)>=sqlx::query_as("SELECT cycle_id,generation FROM analytics_dirty_cycles ORDER BY cycle_id LIMIT $1 FOR UPDATE SKIP LOCKED")
+        .bind(limit).fetch_all(&mut *connection).await?;
+    let cycles: Vec<_> = claimed.iter().map(|(id, _)| *id).collect();
+    let generations: Vec<_> = claimed.iter().map(|(_, generation)| *generation).collect();
     if !cycles.is_empty() {
         sqlx::query("DELETE FROM online_cycle_metrics m WHERE m.cycle_id=ANY($1) AND NOT EXISTS(SELECT 1 FROM online_samples s WHERE s.cycle_id=m.cycle_id AND (m.scope_node_id='' OR s.node_id=m.scope_node_id))")
-            .bind(&cycles)
-            .execute(&mut *connection)
-            .await?;
+            .bind(&cycles).execute(&mut *connection).await?;
         sqlx::query(include_str!("analytics/refresh_cycles.sql"))
             .bind(&cycles)
             .execute(&mut *connection)
             .await?;
-        sqlx::query("DELETE FROM analytics_dirty_cycles WHERE cycle_id=ANY($1)")
-            .bind(&cycles)
-            .execute(&mut *connection)
-            .await?;
+        sqlx::query("DELETE FROM analytics_dirty_cycles d USING unnest($1::uuid[],$2::bigint[]) c(id,generation) WHERE d.cycle_id=c.id AND d.generation=c.generation")
+            .bind(&cycles).bind(&generations).execute(&mut *connection).await?;
     }
+    // Rollup inserts carry a node foreign key. Take parent key-share locks
+    // before queue rows, so deletion never waits on a queue whose refresher
+    // is itself waiting for the deleting node. Missing parents need no lock.
+    let candidates: Vec<String> = sqlx::query_scalar(
+        "SELECT DISTINCT node_id FROM traffic_dirty_hours ORDER BY node_id LIMIT $1",
+    )
+    .bind(limit)
+    .fetch_all(&mut *connection)
+    .await?;
+    let parents: Vec<String> = sqlx::query_scalar(
+        "SELECT id FROM nodes WHERE id=ANY($1::text[]) ORDER BY id FOR KEY SHARE SKIP LOCKED",
+    )
+    .bind(&candidates)
+    .fetch_all(&mut *connection)
+    .await?;
+    let hours:Vec<Value>=sqlx::query_scalar("SELECT jsonb_build_object('source',source,'node_id',node_id,'hour',hour,'generation',generation) FROM traffic_dirty_hours d WHERE d.node_id=ANY($2::text[]) OR (d.node_id=ANY($3::text[]) AND NOT EXISTS(SELECT 1 FROM nodes n WHERE n.id=d.node_id)) ORDER BY source,node_id,hour LIMIT $1 FOR UPDATE SKIP LOCKED")
+        .bind(limit).bind(&parents).bind(&candidates).fetch_all(&mut *connection).await?;
+    let minutes:Vec<Value>=sqlx::query_scalar("SELECT jsonb_build_object('scope_node_id',scope_node_id,'minute',minute,'generation',generation) FROM online_dirty_minutes ORDER BY scope_node_id,minute LIMIT $1 FOR UPDATE SKIP LOCKED")
+        .bind(limit).fetch_all(&mut *connection).await?;
+    let count = cycles.len() + hours.len() + minutes.len();
+    let (hours, minutes) = (Value::Array(hours), Value::Array(minutes));
     for statement in include_str!("analytics/refresh_rollups.sql")
         .split(';')
         .filter(|s| !s.trim().is_empty())
     {
-        sqlx::query(statement).execute(&mut *connection).await?;
+        let batch = if statement.contains("traffic_hour_totals") {
+            &hours
+        } else {
+            &minutes
+        };
+        if batch.as_array().is_some_and(|rows| !rows.is_empty()) {
+            sqlx::query(statement)
+                .bind(batch)
+                .execute(&mut *connection)
+                .await?;
+        }
     }
-    let dirty: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM job_retry_state_dirty)")
-        .fetch_one(&mut *connection)
-        .await?;
-    if dirty {
+    sqlx::query("DELETE FROM traffic_dirty_hours d USING jsonb_to_recordset($1::jsonb) c(source text,node_id text,hour timestamptz,generation bigint) WHERE (d.source,d.node_id,d.hour,d.generation)=(c.source,c.node_id,c.hour,c.generation)")
+        .bind(&hours).execute(&mut *connection).await?;
+    sqlx::query("DELETE FROM online_dirty_minutes d USING jsonb_to_recordset($1::jsonb) c(scope_node_id text,minute timestamptz,generation bigint) WHERE (d.scope_node_id,d.minute,d.generation)=(c.scope_node_id,c.minute,c.generation)")
+        .bind(&minutes).execute(&mut *connection).await?;
+    let jobs:Vec<(String,i64)>=sqlx::query_as("SELECT job_id,generation FROM job_retry_state_dirty ORDER BY job_id LIMIT $1 FOR UPDATE SKIP LOCKED")
+        .bind(limit).fetch_all(&mut *connection).await?;
+    if !jobs.is_empty() {
+        let ids: Vec<_> = jobs.iter().map(|(id, _)| id.clone()).collect();
+        let versions: Vec<_> = jobs.iter().map(|(_, generation)| *generation).collect();
         let roots: Vec<String> = sqlx::query_scalar(include_str!("analytics/retry_roots.sql"))
+            .bind(&ids)
             .fetch_all(&mut *connection)
             .await?;
+        // Different dirty jobs can belong to the same retry chain. Coordinate
+        // that derived resource, without a lock shared by unrelated chains.
+        sqlx::query("INSERT INTO analytics_retry_guards(root_id) SELECT id FROM unnest($1::text[]) id ORDER BY id ON CONFLICT DO NOTHING")
+            .bind(&roots).execute(&mut *connection).await?;
+        sqlx::query("SELECT root_id FROM analytics_retry_guards WHERE root_id=ANY($1::text[]) ORDER BY root_id FOR UPDATE")
+            .bind(&roots).fetch_all(&mut *connection).await?;
         sqlx::query("DELETE FROM job_retry_chain_state WHERE root_id=ANY($1)")
             .bind(&roots)
             .execute(&mut *connection)
@@ -81,12 +123,10 @@ async fn refresh_on(
             .bind(&roots)
             .execute(&mut *connection)
             .await?;
-        sqlx::query("DELETE FROM job_retry_state_dirty")
-            .execute(&mut *connection)
-            .await?;
+        sqlx::query("DELETE FROM job_retry_state_dirty d USING unnest($1::text[],$2::bigint[]) c(id,generation) WHERE d.job_id=c.id AND d.generation=c.generation")
+            .bind(&ids).bind(&versions).execute(&mut *connection).await?;
     }
-
-    Ok(())
+    Ok(count + jobs.len())
 }
 
 pub async fn snapshot(
@@ -104,28 +144,12 @@ pub async fn snapshot(
 
 pub(crate) async fn snapshot_transaction(
     pool: &PgPool,
-    end: chrono::DateTime<chrono::Utc>,
-    needs_cycles: bool,
+    _end: chrono::DateTime<chrono::Utc>,
+    _needs_cycles: bool,
 ) -> Result<sqlx::Transaction<'static, sqlx::Postgres>, ApiError> {
-    for _ in 0..3 {
-        let mut tx = pool.begin().await?;
-        sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
-            .execute(&mut *tx)
-            .await?;
-        let dirty = if needs_cycles {
-            sqlx::query_scalar::<_,bool>("SELECT EXISTS(SELECT 1 FROM analytics_dirty_cycles d WHERE EXISTS(SELECT 1 FROM online_samples s WHERE s.cycle_id=d.cycle_id AND s.cycle_started_at<$1) OR EXISTS(SELECT 1 FROM online_cycle_metrics m WHERE m.cycle_id=d.cycle_id AND m.started_at<$1))").bind(end).fetch_one(&mut *tx).await?
-        } else {
-            false
-        };
-        if !dirty {
-            return Ok(tx);
-        }
-        tx.rollback().await?;
-        refresh(pool).await?;
-    }
-    let mut tx = db::begin_write(pool).await?;
-    refresh_on(&mut tx, None).await?;
-    Ok(tx)
+    // History overlays dirty source keys inside this same snapshot. A reader
+    // neither drains another worker's queue nor falls back to a global writer.
+    Ok(crate::read_snapshot::transaction(pool).await?)
 }
 
 #[cfg(test)]
@@ -248,3 +272,7 @@ mod followup_tests;
 
 #[cfg(test)]
 mod node_deletion_tests;
+
+#[cfg(test)]
+#[path = "analytics/dirty_queue_tests.rs"]
+mod dirty_queue_tests;
