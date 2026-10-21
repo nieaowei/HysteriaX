@@ -27,7 +27,7 @@ pub struct CreateUser {
     quota_bytes: Option<i64>,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 pub struct PatchUser {
     expected_revision: i64,
     name: Option<String>,
@@ -139,20 +139,17 @@ pub async fn create(
     let expires_at = normalize_expiry(input.expires_at)?;
     let id = Uuid::new_v4().to_string();
     let timestamp = now();
-    sqlx::query("INSERT INTO users (id, name, enabled, expires_at, quota_bytes, usage_bytes, revision, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, 0, 1, $6, $7)")
-        .bind(&id).bind(input.name.trim()).bind(input.enabled).bind(expires_at)
-        .bind(input.quota_bytes).bind(timestamp).bind(timestamp).execute(&state.pool).await?;
-    audit(
-        &state,
-        "user.created",
-        &id,
-        json!({"name": input.name.trim()}),
-    )
-    .await?;
-    Ok((
-        StatusCode::CREATED,
-        Json(json!({"id": id, "name": input.name.trim(), "enabled": input.enabled, "revision": 1})),
-    ))
+    let response = json!({"id":id,"name":input.name.trim(),"enabled":input.enabled,"revision":1});
+    let actor = super::audit_actor();
+    db::serializable::<_, ApiError, _>(&state.pool,move |tx| {
+        let (id,name,actor)=(id.clone(),input.name.trim().to_owned(),actor.clone());
+        Box::pin(async move {
+            sqlx::query("INSERT INTO users(id,name,enabled,expires_at,quota_bytes,usage_bytes,revision,created_at,updated_at) VALUES($1,$2,$3,$4,$5,0,1,$6,$6)")
+                .bind(&id).bind(&name).bind(input.enabled).bind(expires_at).bind(input.quota_bytes).bind(timestamp).execute(&mut **tx).await?;
+            super::audit_on(tx,&actor,"user.created","user",&id,json!({"name":name})).await
+        })
+    }).await?;
+    Ok((StatusCode::CREATED, Json(response)))
 }
 
 pub async fn patch(
@@ -163,83 +160,82 @@ pub async fn patch(
     if input.expected_revision < 1 {
         return Err(ApiError::bad_request("expected_revision must be positive"));
     }
-    let current = sqlx::query("SELECT * FROM users WHERE id = $1")
-        .bind(&id)
-        .fetch_optional(&state.pool)
-        .await?
-        .ok_or_else(|| ApiError::not_found("user"))?;
-    let revision: i64 = current.get("revision");
-    if revision != input.expected_revision {
-        return Err(ApiError::conflict(format!(
-            "user revision is {revision}; reload before editing"
-        )));
-    }
-    let name = input.name.unwrap_or_else(|| current.get("name"));
-    let enabled = input
-        .enabled
-        .unwrap_or_else(|| current.get::<bool, _>("enabled"));
-    let expires_at = match input.expires_at {
-        Some(Some(value)) => normalize_expiry(Some(value))?,
-        Some(None) => None,
-        None => current.get("expires_at"),
-    };
-    let quota_bytes = input
-        .quota_bytes
-        .unwrap_or_else(|| current.get("quota_bytes"));
-    validate_name(&name)?;
-    validate_quota(quota_bytes)?;
-    validate_expiry(expires_at.as_ref())?;
-    let next_revision = revision + 1;
-    let timestamp = now();
-    let was_enabled = current.get::<bool, _>("enabled");
-    let usage_bytes: i64 = current.get("usage_bytes");
-    let expired_now = expires_at.is_some_and(|expiration| expiration <= Utc::now());
-    let over_quota = quota_bytes.is_some_and(|limit| limit <= usage_bytes);
-    let access_restricted = (was_enabled && !enabled) || expired_now || over_quota;
-    let previous_marker: Option<DateTime<Utc>> = current.get("access_kick_enqueued_at");
-    let kick_marker = if access_restricted {
-        Some(timestamp)
-    } else if enabled && !expired_now && !over_quota {
-        None
-    } else {
-        previous_marker
-    };
-    let mut tx = db::begin_write(&state.pool).await?;
-    let result = sqlx::query("UPDATE users SET name = $1, enabled = $2, expires_at = $3, quota_bytes = $4, access_kick_enqueued_at = $5, revision = $6, updated_at = $7 WHERE id = $8 AND revision = $9")
-        .bind(name.trim()).bind(enabled).bind(expires_at).bind(quota_bytes)
-        .bind(kick_marker).bind(next_revision).bind(timestamp).bind(&id).bind(revision).execute(&mut *tx).await?;
-    if result.rows_affected() == 0 {
-        return Err(ApiError::conflict(
-            "user changed while saving; reload before editing",
-        ));
-    }
-    if access_restricted {
-        let node_ids = sqlx::query_scalar::<_, String>(
-            "SELECT node_id FROM node_assignments WHERE user_id = $1",
-        )
-        .bind(&id)
-        .fetch_all(&mut *tx)
-        .await?;
-        for node_id in node_ids {
-            enqueue_job_with_payload_in_tx(
-                &mut tx,
-                "kick",
-                Some(&node_id),
-                None,
-                json!({"user_id": id,"kick_reason":"access_restricted"}),
-            )
-            .await?;
-        }
-    }
-    if enabled && !expired_now && !over_quota {
-        crate::kick_requests::clear_reason(&mut tx, None, Some(&id), "access_restricted").await?;
-    }
-    sqlx::query("INSERT INTO audit_records (id, actor, action, entity_type, entity_id, detail_json, created_at) VALUES ($1, 'admin', 'user.updated', 'user', $2, $3, $4)")
-        .bind(Uuid::new_v4().to_string()).bind(&id).bind(json!({"revision": next_revision, "enabled": enabled})).bind(timestamp).execute(&mut *tx).await?;
-    tx.commit().await?;
-    Ok(Json(
-        json!({"id": id, "name": name.trim(), "enabled": enabled, "expires_at": expires_at, "quota_bytes": quota_bytes, "revision": next_revision}),
-    ))
+    let actor = super::audit_actor();
+    db::serializable::<_, ApiError, _>(&state.pool, move |tx| {
+        let (id,input,actor)=(id.clone(),input.clone(),actor.clone());
+        Box::pin(async move {
+            let current = lock_user_graph_on(tx, &id, false).await?;
+            let revision: i64 = current.get("revision");
+            if revision != input.expected_revision {
+                return Err(ApiError::conflict(format!(
+                    "user revision is {revision}; reload before editing"
+                )));
+            }
+            let name = input.name.unwrap_or_else(|| current.get("name"));
+            let enabled = input
+                .enabled
+                .unwrap_or_else(|| current.get::<bool, _>("enabled"));
+            let expires_at = match input.expires_at {
+                Some(Some(value)) => normalize_expiry(Some(value))?,
+                Some(None) => None,
+                None => current.get("expires_at"),
+            };
+            let quota_bytes = input
+                .quota_bytes
+                .unwrap_or_else(|| current.get("quota_bytes"));
+            validate_name(&name)?;
+            validate_quota(quota_bytes)?;
+            validate_expiry(expires_at.as_ref())?;
+            let next_revision = revision + 1;
+            let timestamp = now();
+            let was_enabled = current.get::<bool, _>("enabled");
+            let usage_bytes: i64 = current.get("usage_bytes");
+            let expired_now = expires_at.is_some_and(|expiration| expiration <= Utc::now());
+            let over_quota = quota_bytes.is_some_and(|limit| limit <= usage_bytes);
+            let access_restricted = (was_enabled && !enabled) || expired_now || over_quota;
+            let previous_marker: Option<DateTime<Utc>> = current.get("access_kick_enqueued_at");
+            let kick_marker = if access_restricted {
+                Some(timestamp)
+            } else if enabled && !expired_now && !over_quota {
+                None
+            } else {
+                previous_marker
+            };
+            let result = sqlx::query("UPDATE users SET name = $1, enabled = $2, expires_at = $3, quota_bytes = $4, access_kick_enqueued_at = $5, revision = $6, updated_at = $7 WHERE id = $8 AND revision = $9")
+                .bind(name.trim()).bind(enabled).bind(expires_at).bind(quota_bytes)
+                .bind(kick_marker).bind(next_revision).bind(timestamp).bind(&id).bind(revision).execute(&mut **tx).await?;
+            if result.rows_affected() == 0 {
+                return Err(ApiError::conflict(
+                    "user changed while saving; reload before editing",
+                ));
+            }
+            if access_restricted {
+                let node_ids = sqlx::query_scalar::<_, String>(
+                    "SELECT node_id FROM node_assignments WHERE user_id = $1 ORDER BY node_id",
+                )
+                .bind(&id)
+                .fetch_all(&mut **tx)
+                .await?;
+                for node_id in node_ids {
+                    enqueue_job_with_payload_in_tx(
+                        tx,
+                        "kick",
+                        Some(&node_id),
+                        None,
+                        json!({"user_id": id,"kick_reason":"access_restricted"}),
+                    )
+                    .await?;
+                }
+            }
+            if enabled && !expired_now && !over_quota {
+                crate::kick_requests::clear_reason(tx, None, Some(&id), "access_restricted").await?;
+            }
+            super::audit_on(tx,&actor,"user.updated","user",&id,json!({"revision":next_revision,"enabled":enabled})).await?;
+            Ok(Json(
+                json!({"id": id, "name": name.trim(), "enabled": enabled, "expires_at": expires_at, "quota_bytes": quota_bytes, "revision": next_revision}),
+            ))
+        })
+    }).await
 }
 
 pub async fn delete(
@@ -250,48 +246,49 @@ pub async fn delete(
     let expected = query
         .expected_revision
         .ok_or_else(|| ApiError::bad_request("expected_revision query parameter is required"))?;
-    let mut tx = db::begin_write(&state.pool).await?;
-    let row = sqlx::query("SELECT revision FROM users WHERE id = $1")
-        .bind(&id)
-        .fetch_optional(&mut *tx)
-        .await?
-        .ok_or_else(|| ApiError::not_found("user"))?;
-    let revision: i64 = row.get("revision");
-    if revision != expected {
-        return Err(ApiError::conflict(
-            "user revision changed; reload before deleting",
-        ));
-    }
-    sqlx::query("UPDATE authorization_groups SET revision=revision+1,updated_at=$2 WHERE id IN (SELECT group_id FROM authorization_group_users WHERE user_id=$1)")
-        .bind(&id)
-        .bind(now())
-        .execute(&mut *tx)
-        .await?;
-    let node_ids =
-        sqlx::query_scalar::<_, String>("SELECT node_id FROM node_assignments WHERE user_id = $1")
-            .bind(&id)
-            .fetch_all(&mut *tx)
-            .await?;
-    for node_id in node_ids {
-        enqueue_job_with_payload_in_tx(
-            &mut tx,
-            "kick",
-            Some(&node_id),
-            None,
-            json!({"user_id": id,"kick_reason":"user_deleted"}),
-        )
-        .await?;
-    }
-    sqlx::query("UPDATE credentials SET archived=TRUE,revision=revision+1,updated_at=$1 WHERE owner_user_id=$2 AND archived=FALSE").bind(now()).bind(&id).execute(&mut *tx).await?;
-    sqlx::query("UPDATE mtls_user_identities SET archived=TRUE,next_action_at=NULL,revision=revision+1,authorization_revision=authorization_revision+1,updated_at=$2 WHERE user_id=$1").bind(&id).bind(now()).execute(&mut *tx).await?;
-    sqlx::query("DELETE FROM users WHERE id = $1")
-        .bind(&id)
-        .execute(&mut *tx)
-        .await?;
-    sqlx::query("INSERT INTO audit_records (id, actor, action, entity_type, entity_id, detail_json, created_at) VALUES ($1, 'admin', 'user.deleted', 'user', $2, $3, $4)")
-        .bind(Uuid::new_v4().to_string()).bind(&id).bind(json!({"revision": expected})).bind(now()).execute(&mut *tx).await?;
-    tx.commit().await?;
-    Ok(StatusCode::NO_CONTENT)
+    let actor = super::audit_actor();
+    db::serializable::<_, ApiError, _>(&state.pool,move |tx| {
+        let (id,actor)=(id.clone(),actor.clone());
+        Box::pin(async move {
+            let row=lock_user_graph_on(tx,&id,true).await?;
+            let revision: i64 = row.get("revision");
+            if revision != expected {
+                return Err(ApiError::conflict(
+                    "user revision changed; reload before deleting",
+                ));
+            }
+            sqlx::query("UPDATE authorization_groups SET revision=revision+1,updated_at=$2 WHERE id IN (SELECT group_id FROM authorization_group_users WHERE user_id=$1)")
+                .bind(&id)
+                .bind(now())
+                .execute(&mut **tx)
+                .await?;
+            let node_ids =
+                sqlx::query_scalar::<_, String>("SELECT node_id FROM node_assignments WHERE user_id = $1 ORDER BY node_id")
+                    .bind(&id)
+                    .fetch_all(&mut **tx)
+                    .await?;
+            for node_id in node_ids {
+                enqueue_job_with_payload_in_tx(
+                    tx,
+                    "kick",
+                    Some(&node_id),
+                    None,
+                    json!({"user_id": id,"kick_reason":"user_deleted"}),
+                )
+                .await?;
+            }
+            sqlx::query("SELECT id FROM credentials WHERE owner_user_id=$1 ORDER BY id FOR UPDATE").bind(&id).fetch_all(&mut **tx).await?;
+            sqlx::query("SELECT id FROM mtls_user_identities WHERE user_id=$1 ORDER BY id FOR UPDATE").bind(&id).fetch_all(&mut **tx).await?;
+            sqlx::query("UPDATE credentials SET archived=TRUE,revision=revision+1,updated_at=$1 WHERE owner_user_id=$2 AND archived=FALSE").bind(now()).bind(&id).execute(&mut **tx).await?;
+            sqlx::query("UPDATE mtls_user_identities SET archived=TRUE,next_action_at=NULL,revision=revision+1,authorization_revision=authorization_revision+1,updated_at=$2 WHERE user_id=$1").bind(&id).bind(now()).execute(&mut **tx).await?;
+            sqlx::query("DELETE FROM users WHERE id = $1")
+                .bind(&id)
+                .execute(&mut **tx)
+                .await?;
+            super::audit_on(tx,&actor,"user.deleted","user",&id,json!({"revision":expected})).await?;
+            Ok(StatusCode::NO_CONTENT)
+        })
+    }).await
 }
 
 pub async fn rotate_credentials(
@@ -299,54 +296,75 @@ pub async fn rotate_credentials(
     Path(user_id): Path<String>,
     Json(input): Json<RevisionRequest>,
 ) -> Result<Json<Value>, ApiError> {
-    let mut tx = db::begin_write(&state.pool).await?;
-    let user = sqlx::query("SELECT revision FROM users WHERE id = $1")
-        .bind(&user_id)
-        .fetch_optional(&mut *tx)
+    let actor = super::audit_actor();
+    let secrets = state.secrets.clone();
+    let expected = input.expected_revision;
+    db::serializable::<_, ApiError, _>(&state.pool,move |tx| {
+        let (user_id,actor,secrets)=(user_id.clone(),actor.clone(),secrets.clone());
+        Box::pin(async move {
+            let user=lock_user_graph_on(tx,&user_id,false).await?;
+            let revision: i64 = user.get("revision");
+            if revision != expected {
+                return Err(ApiError::conflict(format!(
+                    "user revision is {revision}; reload before editing"
+                )));
+            }
+            let rows =
+                sqlx::query("SELECT node_id FROM node_assignments WHERE user_id = $1 ORDER BY node_id")
+                    .bind(&user_id)
+                    .fetch_all(&mut **tx)
+                    .await?;
+            let timestamp = now();
+            let next_revision = revision + 1;
+            let mut credentials = Vec::with_capacity(rows.len());
+            for row in rows {
+                let node_id: String = row.get("node_id");
+                let credential = generate_token();
+                sqlx::query("UPDATE node_assignments SET credential_hash = $1, credential_enc = $2 WHERE user_id = $3 AND node_id = $4")
+                    .bind(token_digest(&credential)).bind(secrets.encrypt(&credential)?).bind(&user_id).bind(&node_id).execute(&mut **tx).await?;
+                enqueue_job_with_payload_in_tx(
+                    tx,
+                    "kick",
+                    Some(&node_id),
+                    None,
+                    json!({"user_id": user_id}),
+                )
+                .await?;
+                credentials.push(json!({"node_id": node_id, "credential": credential}));
+            }
+            sqlx::query("UPDATE users SET revision = $1, updated_at = $2 WHERE id = $3 AND revision = $4")
+                .bind(next_revision)
+                .bind(timestamp)
+                .bind(&user_id)
+                .bind(revision)
+                .execute(&mut **tx)
+                .await?;
+            super::audit_on(tx,&actor,"user.credentials_rotated","user",&user_id,json!({"revision":next_revision,"nodes":credentials.len()})).await?;
+            Ok(Json(
+                json!({"user_id": user_id, "revision": next_revision, "credentials": credentials, "note": "Save these credentials now; this response is the only plaintext copy."}),
+            ))
+        })
+    }).await
+}
+
+/// Match billing's node-before-user order. Deletion additionally owns the
+/// affected authorization groups before touching their membership cascades.
+async fn lock_user_graph_on(
+    tx: &mut sqlx::PgConnection,
+    user: &str,
+    groups: bool,
+) -> Result<sqlx::postgres::PgRow, ApiError> {
+    if groups {
+        sqlx::query("SELECT g.id FROM authorization_groups g JOIN authorization_group_users m ON m.group_id=g.id WHERE m.user_id=$1 ORDER BY g.id FOR UPDATE OF g")
+            .bind(user).fetch_all(&mut *tx).await?;
+    }
+    sqlx::query("SELECT n.id FROM nodes n JOIN node_assignments a ON a.node_id=n.id WHERE a.user_id=$1 ORDER BY n.id FOR NO KEY UPDATE OF n")
+        .bind(user).fetch_all(&mut *tx).await?;
+    sqlx::query("SELECT * FROM users WHERE id=$1 FOR NO KEY UPDATE")
+        .bind(user)
+        .fetch_optional(tx)
         .await?
-        .ok_or_else(|| ApiError::not_found("user"))?;
-    let revision: i64 = user.get("revision");
-    if revision != input.expected_revision {
-        return Err(ApiError::conflict(format!(
-            "user revision is {revision}; reload before editing"
-        )));
-    }
-    let rows =
-        sqlx::query("SELECT node_id FROM node_assignments WHERE user_id = $1 ORDER BY node_id")
-            .bind(&user_id)
-            .fetch_all(&mut *tx)
-            .await?;
-    let timestamp = now();
-    let next_revision = revision + 1;
-    let mut credentials = Vec::with_capacity(rows.len());
-    for row in rows {
-        let node_id: String = row.get("node_id");
-        let credential = generate_token();
-        sqlx::query("UPDATE node_assignments SET credential_hash = $1, credential_enc = $2 WHERE user_id = $3 AND node_id = $4")
-            .bind(token_digest(&credential)).bind(state.secrets.encrypt(&credential)?).bind(&user_id).bind(&node_id).execute(&mut *tx).await?;
-        enqueue_job_with_payload_in_tx(
-            &mut tx,
-            "kick",
-            Some(&node_id),
-            None,
-            json!({"user_id": user_id}),
-        )
-        .await?;
-        credentials.push(json!({"node_id": node_id, "credential": credential}));
-    }
-    sqlx::query("UPDATE users SET revision = $1, updated_at = $2 WHERE id = $3 AND revision = $4")
-        .bind(next_revision)
-        .bind(timestamp)
-        .bind(&user_id)
-        .bind(revision)
-        .execute(&mut *tx)
-        .await?;
-    sqlx::query("INSERT INTO audit_records (id, actor, action, entity_type, entity_id, detail_json, created_at) VALUES ($1, 'admin', 'user.credentials_rotated', 'user', $2, $3, $4)")
-        .bind(Uuid::new_v4().to_string()).bind(&user_id).bind(json!({"revision": next_revision, "nodes": credentials.len()})).bind(timestamp).execute(&mut *tx).await?;
-    tx.commit().await?;
-    Ok(Json(
-        json!({"user_id": user_id, "revision": next_revision, "credentials": credentials, "note": "Save these credentials now; this response is the only plaintext copy."}),
-    ))
+        .ok_or_else(|| ApiError::not_found("user"))
 }
 
 pub async fn usage(
@@ -536,12 +554,6 @@ async fn users_json_on(
     }).collect())
 }
 
-async fn audit(state: &AppState, action: &str, id: &str, detail: Value) -> Result<(), ApiError> {
-    sqlx::query("INSERT INTO audit_records (id, actor, action, entity_type, entity_id, detail_json, created_at) VALUES ($1, 'admin', $2, 'user', $3, $4, $5)")
-        .bind(Uuid::new_v4().to_string()).bind(action).bind(id).bind(detail).bind(now()).execute(&state.pool).await?;
-    Ok(())
-}
-
 fn validate_name(value: &str) -> Result<(), ApiError> {
     let value = value.trim();
     if value.is_empty() || value.len() > 100 || value.chars().any(char::is_control) {
@@ -648,3 +660,6 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod transaction_tests;
