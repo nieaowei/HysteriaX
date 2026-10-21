@@ -45,7 +45,7 @@ pub(crate) async fn resolve_config_resources(
         )
         .bind(node_id)
         .bind(ids.iter().cloned().collect::<Vec<_>>())
-        .fetch_all(pool)
+        .fetch_all(&mut *crate::read_snapshot::begin(pool).await?)
         .await?;
         let mut kinds = BTreeMap::new();
         for row in rows {
@@ -205,7 +205,7 @@ pub async fn list(
 ) -> Result<Json<Vec<Value>>, ApiError> {
     ensure_node(&state, &node_id).await?;
     let rows = sqlx::query("SELECT id, name, resource_kind, content_sha256, size_bytes, created_at FROM config_resources WHERE node_id = $1 ORDER BY lower(name) COLLATE \"C\", name COLLATE \"C\", id")
-        .bind(&node_id).fetch_all(&state.pool).await?;
+        .bind(&node_id).fetch_all(&mut *crate::read_snapshot::begin(&state.pool).await?).await?;
     Ok(Json(rows.iter().map(|row| json!({
         "id": row.get::<String, _>("id"), "name": row.get::<String, _>("name"),
         "resource_kind": row.get::<String, _>("resource_kind"), "content_sha256": row.get::<String, _>("content_sha256"),
@@ -341,7 +341,7 @@ pub async fn delete(
 async fn ensure_node(state: &AppState, node_id: &str) -> Result<(), ApiError> {
     let exists: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM nodes WHERE id = $1")
         .bind(node_id)
-        .fetch_one(&state.pool)
+        .fetch_one(&mut *crate::read_snapshot::begin(&state.pool).await?)
         .await?;
     if exists == 0 {
         return Err(ApiError::not_found("node"));

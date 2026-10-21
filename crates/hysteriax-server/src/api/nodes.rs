@@ -131,10 +131,7 @@ pub(crate) async fn list(
         .filter(|state| !state.is_empty())
         .collect();
     let filter = "($1 = '' OR strpos(lower(n.name), lower($1)) > 0 OR strpos(lower(n.ssh_host), lower($1)) > 0 OR strpos(lower(n.id), lower($1)) > 0 OR strpos(lower(n.state), lower($1)) > 0 OR n.state = ANY($2))";
-    let mut tx = state.pool.begin().await?;
-    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
-        .execute(&mut *tx)
-        .await?;
+    let mut tx = crate::read_snapshot::begin(&state.pool).await?;
     let total: i64 = sqlx::query_scalar(&format!("SELECT count(*) FROM nodes n WHERE {filter}"))
         .bind(search)
         .bind(&states)
@@ -227,9 +224,15 @@ pub async fn get(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
+    crate::read_snapshot::scope(&state.pool, get_snapshot(State(state.clone()), Path(id))).await
+}
+async fn get_snapshot(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, ApiError> {
     let row = sqlx::query("SELECT * FROM nodes WHERE id = $1")
         .bind(&id)
-        .fetch_optional(&state.pool)
+        .fetch_optional(&mut *crate::read_snapshot::begin(&state.pool).await?)
         .await?
         .ok_or_else(|| ApiError::not_found("node"))?;
     Ok(Json(node_json(&state, &row).await?))
@@ -1136,7 +1139,7 @@ async fn node_json(state: &AppState, row: &sqlx::postgres::PgRow) -> Result<Valu
     )
     .bind(&node_id)
     .bind(&node_id)
-    .fetch_one(&state.pool)
+    .fetch_one(&mut *crate::read_snapshot::begin(&state.pool).await?)
     .await?;
     let traffic_stats_port = row.get::<i32, _>("traffic_stats_port") as u16;
     let version =
@@ -1181,7 +1184,7 @@ async fn node_json(state: &AppState, row: &sqlx::postgres::PgRow) -> Result<Valu
         .map_err(|_| ApiError::internal())?;
     let credential_kind: String = sqlx::query_scalar("SELECT kind FROM credentials WHERE id=$1")
         .bind(row.get::<String, _>("ssh_credential_id"))
-        .fetch_one(&state.pool)
+        .fetch_one(&mut *crate::read_snapshot::begin(&state.pool).await?)
         .await?;
     let deployed_mtls = row
         .get::<Option<String>, _>("deployed_config_enc")
@@ -1194,7 +1197,7 @@ async fn node_json(state: &AppState, row: &sqlx::postgres::PgRow) -> Result<Valu
         .transpose()?
         .map(|value| crate::credentials::node_mtls::Settings::from_config(&value))
         .transpose()?;
-    let trust=sqlx::query("SELECT ca_id,ca_version,desired,deployed FROM mtls_node_trust WHERE node_id=$1 ORDER BY ca_id,ca_version").bind(&node_id).fetch_all(&state.pool).await?;
+    let trust=sqlx::query("SELECT ca_id,ca_version,desired,deployed FROM mtls_node_trust WHERE node_id=$1 ORDER BY ca_id,ca_version").bind(&node_id).fetch_all(&mut *crate::read_snapshot::begin(&state.pool).await?).await?;
     let mtls_status = json!({"target":crate::credentials::node_mtls::Settings::from_config(&config)?,"deployed":deployed_mtls,"trust":trust.into_iter().map(|row|json!({"ca_credential_id":row.get::<String,_>("ca_id"),"ca_credential_version":row.get::<i64,_>("ca_version"),"desired":row.get::<bool,_>("desired"),"deployed":row.get::<bool,_>("deployed")})).collect::<Vec<_>>()});
     Ok(json!({
         "mtls":mtls_status,

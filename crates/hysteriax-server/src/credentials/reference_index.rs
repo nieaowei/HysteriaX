@@ -6,18 +6,29 @@ use sqlx::{PgConnection, PgPool, Postgres, Row, Transaction};
 
 /// Return one consistent snapshot with up-to-date reference edges. Readers never
 /// wait for the write lock when the snapshot contains no dirty sources.
-pub async fn begin_read<'a>(
-    pool: &'a PgPool,
+pub async fn begin_read(
+    pool: &PgPool,
     secrets: &SecretBox,
-) -> Result<Transaction<'a, Postgres>, ApiError> {
+) -> Result<crate::read_snapshot::Reader, ApiError> {
+    if let Some(reader) = crate::read_snapshot::current().await {
+        return Ok(reader);
+    }
+    Ok(crate::read_snapshot::Reader::owned(
+        begin_read_transaction(pool, secrets).await?,
+    ))
+}
+pub(crate) async fn begin_read_transaction(
+    pool: &PgPool,
+    secrets: &SecretBox,
+) -> Result<Transaction<'static, Postgres>, ApiError> {
     begin_read_with_retries(pool, secrets, 2).await
 }
 
-async fn begin_read_with_retries<'a>(
-    pool: &'a PgPool,
+async fn begin_read_with_retries(
+    pool: &PgPool,
     secrets: &SecretBox,
     retries: usize,
-) -> Result<Transaction<'a, Postgres>, ApiError> {
+) -> Result<Transaction<'static, Postgres>, ApiError> {
     for _ in 0..retries {
         let mut tx = pool.begin().await?;
         sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")

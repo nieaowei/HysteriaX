@@ -21,6 +21,7 @@ mod node_limits;
 mod overview;
 mod proxy_monitor;
 mod quota_rank;
+mod read_snapshot;
 mod redis_cache;
 mod security;
 mod ssh;

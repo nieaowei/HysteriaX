@@ -275,7 +275,7 @@ pub(crate) async fn load_many(
     let ids: Vec<_> = keys.iter().map(|(id, _)| id.clone()).collect();
     let versions: Vec<_> = keys.iter().map(|(_, version)| *version).collect();
     let rows=sqlx::query("SELECT c.id,c.kind,c.owner_user_id,c.archived,v.version,v.payload_enc,v.artifact_names FROM unnest($1::text[],$2::bigint[]) requested(id,version) JOIN credentials c ON c.id=requested.id JOIN credential_versions v ON v.credential_id=c.id AND v.version=requested.version")
-        .bind(ids).bind(versions).fetch_all(pool).await?;
+        .bind(ids).bind(versions).fetch_all(&mut *crate::read_snapshot::begin(pool).await?).await?;
     let mut loaded = BTreeMap::new();
     for row in rows {
         let payload =

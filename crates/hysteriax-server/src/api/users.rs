@@ -82,10 +82,7 @@ pub(crate) async fn list(
     let (requested_page, page_size, sort, order) = query.validate()?;
     let search = query.q.as_deref().unwrap_or("").trim();
     let filter = "($1 = '' OR strpos(lower(u.name), lower($1)) > 0 OR strpos(lower(u.id), lower($1)) > 0 OR EXISTS (SELECT 1 FROM node_assignments na WHERE na.user_id=u.id AND strpos(lower(na.node_id), lower($1)) > 0))";
-    let mut tx = state.pool.begin().await?;
-    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
-        .execute(&mut *tx)
-        .await?;
+    let mut tx = crate::read_snapshot::begin(&state.pool).await?;
     let total: i64 = sqlx::query_scalar(&format!("SELECT count(*) FROM users u WHERE {filter}"))
         .bind(search)
         .fetch_one(&mut *tx)
@@ -122,7 +119,7 @@ pub async fn get(
 ) -> Result<Json<Value>, ApiError> {
     let row = sqlx::query("SELECT * FROM users WHERE id = $1")
         .bind(&id)
-        .fetch_optional(&state.pool)
+        .fetch_optional(&mut *crate::read_snapshot::begin(&state.pool).await?)
         .await?
         .ok_or_else(|| ApiError::not_found("user"))?;
     let mut result = user_json(&state, &row).await?;
@@ -360,7 +357,7 @@ pub async fn usage(
         "SELECT id, name, enabled, expires_at, usage_bytes, quota_bytes, quota_reset_at FROM users WHERE id = $1",
     )
     .bind(&user_id)
-    .fetch_optional(&state.pool)
+    .fetch_optional(&mut *crate::read_snapshot::begin(&state.pool).await?)
     .await?
     .ok_or_else(|| ApiError::not_found("user"))?;
     let rows = sqlx::query(
@@ -374,7 +371,7 @@ pub async fn usage(
         FROM user_nodes n LEFT JOIN user_node_usage t ON t.node_id=n.node_id AND t.user_id=$1
         LEFT JOIN traffic_baselines b ON b.node_id=n.node_id AND b.user_id=$1 ORDER BY n.node_id",
     ).bind(&user_id)
-    .fetch_all(&state.pool)
+    .fetch_all(&mut *crate::read_snapshot::begin(&state.pool).await?)
     .await?;
     let by_node: Vec<Value> = rows.iter().map(|row| json!({
         "node_id": row.get::<String, _>("node_id"), "tx_bytes": row.get::<Option<i64>, _>("tx").unwrap_or(0),
@@ -406,7 +403,7 @@ pub async fn usage(
         "fresh"
     };
     let gap_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM data_gaps g JOIN node_assignments a ON a.node_id = g.node_id WHERE a.user_id = $1 AND g.resolved_at IS NULL")
-        .bind(&user_id).fetch_one(&state.pool).await?;
+        .bind(&user_id).fetch_one(&mut *crate::read_snapshot::begin(&state.pool).await?).await?;
     let is_restricted = !user.get::<bool, _>("enabled")
         || user
             .get::<Option<DateTime<Utc>>, _>("expires_at")
@@ -417,7 +414,7 @@ pub async fn usage(
     let pending_rows = sqlx::query("SELECT id, node_id, status, stage, updated_at FROM jobs WHERE kind = 'kick' AND node_id IS NOT NULL AND (status IN ('queued', 'running') OR (status = 'failed' AND $1 = TRUE)) AND payload_json->>'user_id' = $2 ORDER BY created_at")
         .bind(is_restricted)
         .bind(&user_id)
-        .fetch_all(&state.pool)
+        .fetch_all(&mut *crate::read_snapshot::begin(&state.pool).await?)
         .await?;
     let pending_revocations: Vec<Value> = pending_rows
         .iter()
@@ -479,7 +476,7 @@ pub async fn reset_quota(
 }
 
 async fn user_json(state: &AppState, row: &sqlx::postgres::PgRow) -> Result<Value, ApiError> {
-    let mut connection = state.pool.acquire().await?;
+    let mut connection = crate::read_snapshot::begin(&state.pool).await?;
     user_json_on(&mut connection, row).await
 }
 

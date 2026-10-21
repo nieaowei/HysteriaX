@@ -478,10 +478,7 @@ pub(crate) async fn list_nodes(
     let pattern = crate::api::literal_search_pattern(search);
     let filter =
         "($1='' OR hysteriax_search_text(id,name,public_host,ssh_host) LIKE lower($1) ESCAPE '\\')";
-    let mut tx = state.pool.begin().await?;
-    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
-        .execute(&mut *tx)
-        .await?;
+    let mut tx = crate::read_snapshot::begin(&state.pool).await?;
     sqlx::query("SET LOCAL plan_cache_mode=force_custom_plan")
         .execute(&mut *tx)
         .await?;

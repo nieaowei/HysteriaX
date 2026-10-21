@@ -3,7 +3,7 @@ use crate::{error::ApiError, state::AppState};
 use sqlx::{PgPool, Row};
 use std::time::Duration;
 pub async fn version(pool: &PgPool, domains: &[&str]) -> Result<String, ApiError> {
-    let mut connection = pool.acquire().await?;
+    let mut connection = crate::read_snapshot::begin(pool).await?;
     version_on(&mut connection, domains).await
 }
 
@@ -155,7 +155,7 @@ pub async fn policy(
     if let Some(id) = path.strip_prefix("/api/v1/jobs/")
         && !id.contains('/')
     {
-        let row=sqlx::query("SELECT j.status,(SELECT generation FROM job_cache_versions WHERE job_id=j.id) revision,md5(((to_jsonb(j)-ARRAY['lease_owner','lease_expires_at'])||jsonb_build_object('retry_job_id',(SELECT child.id FROM jobs child WHERE child.retry_of_job_id=j.id)))::text) digest FROM jobs j WHERE j.id=$1").bind(id).fetch_optional(&state.pool).await?;
+        let row=sqlx::query("SELECT j.status,(SELECT generation FROM job_cache_versions WHERE job_id=j.id) revision,md5(((to_jsonb(j)-ARRAY['lease_owner','lease_expires_at'])||jsonb_build_object('retry_job_id',(SELECT child.id FROM jobs child WHERE child.retry_of_job_id=j.id)))::text) digest FROM jobs j WHERE j.id=$1").bind(id).fetch_optional(&mut *crate::read_snapshot::begin(&state.pool).await?).await?;
         if let Some(row) = row
             && matches!(
                 row.get::<String, _>("status").as_str(),
@@ -178,7 +178,7 @@ pub async fn policy(
     {
         let row = sqlx::query(include_str!("cache_batch_version.sql"))
             .bind(id)
-            .fetch_optional(&state.pool)
+            .fetch_optional(&mut *crate::read_snapshot::begin(&state.pool).await?)
             .await?;
         if let Some(row) = row
             && row.get::<bool, _>("terminal")
@@ -221,7 +221,7 @@ pub async fn policy(
         )
         .bind(kind)
         .bind(id)
-        .fetch_optional(&state.pool)
+        .fetch_optional(&mut *crate::read_snapshot::begin(&state.pool).await?)
         .await?;
         revision.push_str(&format!(";entity={kind}:{id}:{entity:?}"));
     }

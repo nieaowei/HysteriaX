@@ -446,7 +446,7 @@ pub(crate) async fn published(
     format: Option<&str>,
 ) -> Result<(String, i64, String, Document), ApiError> {
     let row=sqlx::query("SELECT t.id,t.format,t.published_version,v.document_enc FROM subscription_templates t JOIN subscription_template_versions v ON v.template_id=t.id AND v.version=t.published_version WHERE NOT t.archived AND (($1::text IS NOT NULL AND t.id=$1) OR ($1::text IS NULL AND t.is_default AND t.format=$2))")
-        .bind(id).bind(format).fetch_optional(&state.pool).await?.ok_or_else(||ApiError::not_found("published template"))?;
+        .bind(id).bind(format).fetch_optional(&mut *crate::read_snapshot::begin(&state.pool).await?).await?.ok_or_else(||ApiError::not_found("published template"))?;
     Ok((
         row.get("id"),
         row.get("published_version"),

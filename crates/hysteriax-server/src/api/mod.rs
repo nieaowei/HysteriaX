@@ -596,10 +596,7 @@ async fn list_jobs(
     let pattern = literal_search_pattern(search);
     // A literal substring search: '%' and '_' must not become SQL wildcards.
     let filter = "($1 = '' OR hysteriax_search_text(j.id,j.kind,j.stage,j.status,j.node_name,j.node_id,j.resource_name,j.resource_id,j.error_message) LIKE lower($1) ESCAPE '\\')";
-    let mut tx = state.pool.begin().await?;
-    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
-        .execute(&mut *tx)
-        .await?;
+    let mut tx = crate::read_snapshot::begin(&state.pool).await?;
     sqlx::query("SET LOCAL plan_cache_mode=force_custom_plan")
         .execute(&mut *tx)
         .await?;
@@ -636,7 +633,7 @@ pub(crate) async fn get_job(
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
     let row = sqlx::query("SELECT j.*, (SELECT child.id FROM jobs child WHERE child.retry_of_job_id=j.id) retry_job_id FROM jobs j WHERE j.id = $1")
-        .bind(&id).fetch_optional(&state.pool).await?.ok_or_else(|| ApiError::not_found("job"))?;
+        .bind(&id).fetch_optional(&mut *crate::read_snapshot::begin(&state.pool).await?).await?.ok_or_else(|| ApiError::not_found("job"))?;
     let summary = job_summary(&row);
     let result: Option<Value> = row.get("result_json");
     let logs: Value = row.get("logs_json");
@@ -751,10 +748,7 @@ async fn list_audit_records(
     let actors = audit_matches(query.actor_matches.as_deref());
     // The client resolves localized display labels to raw codes. All values remain bound.
     let filter = "($1 = '' OR hysteriax_search_text(a.id,a.action,a.actor,a.entity_type,a.entity_id) LIKE lower($1) ESCAPE '\\' OR a.action = ANY($2) OR a.entity_type = ANY($3) OR a.actor = ANY($4))";
-    let mut tx = state.pool.begin().await?;
-    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
-        .execute(&mut *tx)
-        .await?;
+    let mut tx = crate::read_snapshot::begin(&state.pool).await?;
     sqlx::query("SET LOCAL plan_cache_mode=force_custom_plan")
         .execute(&mut *tx)
         .await?;

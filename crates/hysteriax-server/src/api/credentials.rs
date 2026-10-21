@@ -735,10 +735,7 @@ pub async fn batch(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
-    let mut tx = state.pool.begin().await?;
-    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
-        .execute(&mut *tx)
-        .await?;
+    let mut tx = crate::read_snapshot::begin(&state.pool).await?;
     let value = batch_values_on(&mut tx, &[id])
         .await?
         .into_iter()

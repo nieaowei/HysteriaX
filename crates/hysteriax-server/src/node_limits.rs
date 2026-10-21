@@ -263,7 +263,7 @@ pub async fn restricted(pool: &PgPool, id: &str) -> Result<bool> {
         "SELECT config, usage_bytes, next_reset_at FROM node_packages WHERE node_id = $1",
     )
     .bind(id)
-    .fetch_optional(pool)
+    .fetch_optional(&mut *crate::read_snapshot::begin(pool).await?)
     .await?
     else {
         return Ok(false);
@@ -279,24 +279,24 @@ pub async fn restricted(pool: &PgPool, id: &str) -> Result<bool> {
 }
 pub async fn snapshot(pool: &PgPool, id: &str) -> Result<(Value, Value)> {
     let row = sqlx::query_as::<_, PackageReading>("SELECT config, usage_bytes, next_reset_at, interface, sampled_at, gap_reason FROM node_packages WHERE node_id = $1")
-        .bind(id).fetch_optional(pool).await?;
+        .bind(id).fetch_optional(&mut *crate::read_snapshot::begin(pool).await?).await?;
     if row.is_none() {
         return snapshot_from_reading(None, vec![], 0, 0, Utc::now());
     }
     let now = Utc::now();
-    let alerts = sqlx::query("SELECT id, kind, created_at FROM node_alerts WHERE node_id = $1 AND active ORDER BY created_at, id").bind(id).fetch_all(pool).await?;
+    let alerts = sqlx::query("SELECT id, kind, created_at FROM node_alerts WHERE node_id = $1 AND active ORDER BY created_at, id").bind(id).fetch_all(&mut *crate::read_snapshot::begin(pool).await?).await?;
     let alerts: Vec<Value> = alerts.iter().map(|r| json!({"id": r.get::<String,_>("id"), "kind": r.get::<String,_>("kind"), "created_at": r.get::<DateTime<Utc>,_>("created_at")})).collect();
     let failed: i64 = sqlx::query_scalar(
         "SELECT coalesce((SELECT failed_limit FROM job_node_kick_totals WHERE node_id=$1),0)",
     )
     .bind(id)
-    .fetch_one(pool)
+    .fetch_one(&mut *crate::read_snapshot::begin(pool).await?)
     .await?;
     let pending: i64 = sqlx::query_scalar(
         "SELECT coalesce((SELECT pending_limit FROM job_node_kick_totals WHERE node_id=$1),0)",
     )
     .bind(id)
-    .fetch_one(pool)
+    .fetch_one(&mut *crate::read_snapshot::begin(pool).await?)
     .await?;
     snapshot_from_reading(row.as_ref(), alerts, failed, pending, now)
 }

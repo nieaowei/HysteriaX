@@ -98,10 +98,7 @@ pub(super) async fn load(
     pool: &PgPool,
     quota_rank: &crate::quota_rank::QuotaRank,
 ) -> Result<SummaryData, ApiError> {
-    let mut tx = pool.begin().await?;
-    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
-        .execute(&mut *tx)
-        .await?;
+    let mut tx = crate::read_snapshot::begin(pool).await?;
     let now = Utc::now();
     let rows = sqlx::query("SELECT state, count(*)::bigint AS count FROM nodes GROUP BY state")
         .fetch_all(&mut *tx)

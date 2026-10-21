@@ -166,7 +166,7 @@ pub async fn desired_trust(
         return Ok(vec![]);
     };
     let rows=sqlx::query("SELECT g.ca_version FROM mtls_ca_generations g WHERE g.ca_id=$1 AND (g.ca_version=$2 OR g.state IN ('published','preparing') OR EXISTS(SELECT 1 FROM mtls_user_versions v WHERE v.ca_id=g.ca_id AND v.ca_version=g.ca_version AND v.expires_at>now()-interval '5 minutes') OR EXISTS(SELECT 1 FROM mtls_probe_versions p WHERE p.ca_id=g.ca_id AND p.ca_version=g.ca_version AND p.expires_at>now()-interval '5 minutes') OR EXISTS(SELECT 1 FROM mtls_node_trust t WHERE t.node_id=$3 AND t.ca_id=g.ca_id AND t.ca_version=g.ca_version AND t.deployed) OR EXISTS(SELECT 1 FROM mtls_live_activation_trust a WHERE a.node_id=$3 AND a.ca_id=g.ca_id AND a.ca_version=g.ca_version)) ORDER BY g.ca_version")
-        .bind(id).bind(version).bind(node).fetch_all(pool).await?;
+        .bind(id).bind(version).bind(node).fetch_all(&mut *crate::read_snapshot::begin(pool).await?).await?;
     ensure!(!rows.is_empty(), "managed CA generation is unavailable");
     Ok(rows
         .into_iter()
@@ -195,7 +195,7 @@ pub async fn materialize(
     let mut pem = String::new();
     for item in trust {
         let metadata:Value=sqlx::query_scalar("SELECT metadata FROM credential_versions v JOIN credentials c ON c.id=v.credential_id WHERE v.credential_id=$1 AND v.version=$2 AND c.kind='ca_identity'")
-            .bind(&item.ca_id).bind(item.version).fetch_one(pool).await?;
+            .bind(&item.ca_id).bind(item.version).fetch_one(&mut *crate::read_snapshot::begin(pool).await?).await?;
         pem.push_str(
             metadata["trust_anchor_certificate"]
                 .as_str()

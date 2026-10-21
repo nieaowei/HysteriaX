@@ -173,7 +173,7 @@ pub async fn sample(
 }
 
 pub async fn observed(pool: &sqlx::PgPool, node: &str) -> Result<Option<Value>> {
-    Ok(sqlx::query_scalar("SELECT o.status FROM node_acme_observations o JOIN nodes n ON n.id=o.node_id AND n.deployed_revision=o.revision AND n.deployed_content_sha256=o.deployment_digest WHERE n.id=$1").bind(node).fetch_optional(pool).await?)
+    Ok(sqlx::query_scalar("SELECT o.status FROM node_acme_observations o JOIN nodes n ON n.id=o.node_id AND n.deployed_revision=o.revision AND n.deployed_content_sha256=o.deployment_digest WHERE n.id=$1").bind(node).fetch_optional(&mut *crate::read_snapshot::begin(pool).await?).await?)
 }
 
 #[cfg(test)]

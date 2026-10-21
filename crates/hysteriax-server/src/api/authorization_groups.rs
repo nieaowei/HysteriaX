@@ -99,6 +99,9 @@ struct GroupInfo {
 type Pair = (String, String);
 
 pub async fn list(State(state): State<AppState>) -> Result<Json<Vec<Value>>, ApiError> {
+    crate::read_snapshot::scope(&state.pool, list_snapshot(State(state.clone()))).await
+}
+async fn list_snapshot(State(state): State<AppState>) -> Result<Json<Vec<Value>>, ApiError> {
     let version =
         crate::cache_domains::version(&state.pool, &["groups", "user_config", "node_config"])
             .await?;
@@ -118,10 +121,7 @@ pub async fn list(State(state): State<AppState>) -> Result<Json<Vec<Value>>, Api
 }
 
 async fn read_directory(state: &AppState) -> Result<Vec<Value>, ApiError> {
-    let mut tx = state.pool.begin().await?;
-    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
-        .execute(&mut *tx)
-        .await?;
+    let mut tx = crate::read_snapshot::begin(&state.pool).await?;
     let rows=sqlx::query("SELECT id,name,revision,created_at,updated_at FROM authorization_groups ORDER BY lower(name) COLLATE \"C\",name COLLATE \"C\",id").fetch_all(&mut *tx).await?;
     let users =
         sqlx::query("SELECT group_id,user_id FROM authorization_group_users ORDER BY user_id")
@@ -469,21 +469,21 @@ fn check_revision(current: i64, expected: Option<i64>) -> Result<(), ApiError> {
 }
 
 async fn load_group(pool: &sqlx::PgPool, group_id: &str) -> Result<Option<GroupInfo>, sqlx::Error> {
-    let mut tx = pool.begin().await?;
+    let mut tx = crate::read_snapshot::begin(pool).await?;
     let group = load_group_tx(&mut tx, group_id).await?;
     tx.commit().await?;
     Ok(group)
 }
 
 async fn load_group_tx(
-    tx: &mut Transaction<'_, Postgres>,
+    tx: &mut sqlx::PgConnection,
     group_id: &str,
 ) -> Result<Option<GroupInfo>, sqlx::Error> {
     let Some(row) = sqlx::query(
         "SELECT id,name,revision,created_at,updated_at FROM authorization_groups WHERE id=$1",
     )
     .bind(group_id)
-    .fetch_optional(&mut **tx)
+    .fetch_optional(&mut *tx)
     .await?
     else {
         return Ok(None);
@@ -492,13 +492,13 @@ async fn load_group_tx(
         "SELECT user_id FROM authorization_group_users WHERE group_id=$1 ORDER BY user_id",
     )
     .bind(group_id)
-    .fetch_all(&mut **tx)
+    .fetch_all(&mut *tx)
     .await?;
     let node_ids = sqlx::query_scalar::<_, String>(
         "SELECT node_id FROM authorization_group_nodes WHERE group_id=$1 ORDER BY node_id",
     )
     .bind(group_id)
-    .fetch_all(&mut **tx)
+    .fetch_all(&mut *tx)
     .await?;
     Ok(Some(GroupInfo {
         id: row.get("id"),

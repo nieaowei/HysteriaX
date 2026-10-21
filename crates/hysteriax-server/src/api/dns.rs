@@ -73,7 +73,7 @@ fn valid_name(name: &str) -> Result<&str, ApiError> {
 
 pub async fn list_connections(State(state): State<AppState>) -> Result<Json<Vec<Value>>, ApiError> {
     let rows = sqlx::query("SELECT * FROM dns_connections ORDER BY lower(name),id")
-        .fetch_all(&state.pool)
+        .fetch_all(&mut *crate::read_snapshot::begin(&state.pool).await?)
         .await?;
     Ok(Json(rows.iter().map(dns::connection_json).collect()))
 }
@@ -83,7 +83,7 @@ pub async fn get_connection(
 ) -> Result<Json<Value>, ApiError> {
     let row = sqlx::query("SELECT * FROM dns_connections WHERE id=$1")
         .bind(id)
-        .fetch_optional(&state.pool)
+        .fetch_optional(&mut *crate::read_snapshot::begin(&state.pool).await?)
         .await?
         .ok_or_else(|| ApiError::not_found("DNS connection"))?;
     Ok(Json(dns::connection_json(&row)))
@@ -218,7 +218,7 @@ pub async fn refresh_connection(
 
 pub async fn list_zones(State(state): State<AppState>) -> Result<Json<Vec<Value>>, ApiError> {
     let rows = sqlx::query("SELECT * FROM dns_zones ORDER BY name,id")
-        .fetch_all(&state.pool)
+        .fetch_all(&mut *crate::read_snapshot::begin(&state.pool).await?)
         .await?;
     Ok(Json(rows.iter().map(dns::zone_json).collect()))
 }
@@ -346,10 +346,7 @@ pub(crate) async fn list_records(
         .filter(|value| !value.is_empty());
     let search = query.q.as_deref().unwrap_or("").trim();
     let filter = "($1::text IS NULL OR r.zone_id=$1) AND ($2::text IS NULL OR z.connection_id=$2) AND ($3 = '' OR strpos(lower(r.name),lower($3)) > 0 OR strpos(lower(r.content),lower($3)) > 0 OR strpos(lower(r.id),lower($3)) > 0) AND (r.deleted_at IS NULL OR EXISTS(SELECT 1 FROM dns_bindings b WHERE b.record_ids ? r.id))";
-    let mut tx = state.pool.begin().await?;
-    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
-        .execute(&mut *tx)
-        .await?;
+    let mut tx = crate::read_snapshot::begin(&state.pool).await?;
     let total: i64 = sqlx::query_scalar(&format!(
         "SELECT count(*) FROM dns_records r JOIN dns_zones z ON z.id=r.zone_id WHERE {filter}"
     ))
@@ -393,7 +390,7 @@ pub async fn get_record(
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
     let row=sqlx::query("SELECT r.*,(SELECT n.id FROM nodes n WHERE EXISTS(SELECT 1 FROM dns_bindings b WHERE b.node_id=n.id AND b.record_ids ? r.id) OR n.published_connection->>'public_host'=r.name LIMIT 1) AS bound_node_id FROM dns_records r WHERE r.id=$1")
-        .bind(id).fetch_optional(&state.pool).await?.ok_or_else(||ApiError::not_found("DNS record"))?;
+        .bind(id).fetch_optional(&mut *crate::read_snapshot::begin(&state.pool).await?).await?.ok_or_else(||ApiError::not_found("DNS record"))?;
     let mut v = dns::record_json(&row);
     v["bound_node_id"] = json!(row.get::<Option<String>, _>("bound_node_id"));
     Ok(Json(v))
@@ -578,7 +575,7 @@ pub struct Unbind {
 }
 
 pub async fn binding_summary(pool: &sqlx::PgPool, node: &str) -> Result<Value, ApiError> {
-    let mut connection = pool.acquire().await?;
+    let mut connection = crate::read_snapshot::begin(pool).await?;
     Ok(bindings_on(&mut connection, &[node.to_owned()])
         .await?
         .remove(node)
@@ -632,7 +629,7 @@ pub async fn get_binding(
 ) -> Result<Json<Value>, ApiError> {
     let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM nodes WHERE id=$1)")
         .bind(&node)
-        .fetch_one(&state.pool)
+        .fetch_one(&mut *crate::read_snapshot::begin(&state.pool).await?)
         .await?;
     if !exists {
         return Err(ApiError::not_found("node"));

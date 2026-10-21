@@ -129,7 +129,7 @@ impl<T: serde::Serialize + serde::de::DeserializeOwned> Cache<T> {
         F: FnOnce() -> Fut,
         Fut: Future<Output = Result<T, E>>,
     {
-        if deadline.is_some_and(|at| at <= Instant::now()) {
+        if !crate::read_snapshot::cacheable() || deadline.is_some_and(|at| at <= Instant::now()) {
             return compute().await.map(Arc::new);
         }
         let remote_key = self.redis.as_ref().map(|(r, kind)| r.key(kind, &key));
@@ -404,6 +404,43 @@ fn ttl(path: &str) -> Option<Duration> {
     }))
 }
 pub async fn middleware(State(state): State<AppState>, request: Request, next: Next) -> Response {
+    if request.method() != Method::GET || ttl(request.uri().path()).is_none() {
+        return next.run(request).await;
+    }
+    let path = request.uri().path();
+    let prepared = if path.starts_with("/api/v1/credentials") {
+        crate::credentials::reference_index::begin_read_transaction(&state.pool, &state.secrets)
+            .await
+    } else if path == "/api/v1/overview/history" {
+        let query: std::collections::BTreeMap<_, _> =
+            url::form_urlencoded::parse(request.uri().query().unwrap_or("").as_bytes()).collect();
+        let source = query.get("source").map(|v| v.as_ref()).unwrap_or("users");
+        let metrics = query.get("metrics").map(|v| v.as_ref()).unwrap_or("all");
+        crate::analytics::snapshot_transaction(
+            &state.pool,
+            chrono::Utc::now(),
+            metrics != "traffic" || source == "users",
+        )
+        .await
+    } else {
+        crate::read_snapshot::transaction(&state.pool)
+            .await
+            .map_err(Into::into)
+    };
+    let tx = match prepared {
+        Ok(tx) => tx,
+        Err(error) => return error.into_response(),
+    };
+    match crate::read_snapshot::scope_with(tx, async {
+        Ok(cached_middleware(state, request, next).await)
+    })
+    .await
+    {
+        Ok(response) => response,
+        Err(error) => error.into_response(),
+    }
+}
+async fn cached_middleware(state: AppState, request: Request, next: Next) -> Response {
     if request.method() != Method::GET {
         return next.run(request).await;
     }

@@ -2,10 +2,7 @@
 use super::*;
 
 pub async fn get(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
-    let mut tx = state.pool.begin().await?;
-    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
-        .execute(&mut *tx)
-        .await?;
+    let mut tx = crate::read_snapshot::begin(&state.pool).await?;
     let now = Utc::now();
     let users = sqlx::query("SELECT count(*)::bigint total, count(*) FILTER (WHERE enabled)::bigint enabled, count(*) FILTER (WHERE expires_at <= $1)::bigint expired, count(*) FILTER (WHERE expires_at > $1 AND expires_at <= $1 + interval '7 days')::bigint expiring, count(*) FILTER (WHERE usage_bytes >= quota_bytes)::bigint depleted FROM users").bind(now).fetch_one(&mut *tx).await?;
     let node_count: i64 = sqlx::query_scalar("SELECT count(*) FROM nodes")

@@ -268,7 +268,7 @@ pub async fn for_node(
 ) -> Result<Option<(String, String)>> {
     let now = Utc::now();
     let row = sqlx::query("SELECT v.credential_id,v.credential_version FROM mtls_user_identities i JOIN mtls_user_versions v ON v.identity_id=i.id JOIN mtls_node_trust t ON t.ca_id=v.ca_id AND t.ca_version=v.ca_version JOIN mtls_authorities a ON a.credential_id=i.ca_id WHERE i.user_id=$1 AND i.ca_id=$2 AND NOT i.archived AND t.node_id=$3 AND t.deployed AND v.released AND NOT v.discarded AND v.not_before<=$4 AND v.expires_at>$4 ORDER BY (v.ca_version=a.published_version) DESC,v.ca_version DESC,v.credential_version DESC LIMIT 1")
-        .bind(user).bind(ca).bind(node).bind(now).fetch_optional(pool).await?;
+        .bind(user).bind(ca).bind(node).bind(now).fetch_optional(&mut *crate::read_snapshot::begin(pool).await?).await?;
     let Some(row) = row else { return Ok(None) };
     let (kind, owner, _, payload, _) = load(
         pool,

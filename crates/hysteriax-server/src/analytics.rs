@@ -93,7 +93,20 @@ pub async fn snapshot(
     pool: &PgPool,
     end: chrono::DateTime<chrono::Utc>,
     needs_cycles: bool,
-) -> Result<sqlx::Transaction<'_, sqlx::Postgres>, ApiError> {
+) -> Result<crate::read_snapshot::Reader, ApiError> {
+    if let Some(reader) = crate::read_snapshot::current().await {
+        return Ok(reader);
+    }
+    Ok(crate::read_snapshot::Reader::owned(
+        snapshot_transaction(pool, end, needs_cycles).await?,
+    ))
+}
+
+pub(crate) async fn snapshot_transaction(
+    pool: &PgPool,
+    end: chrono::DateTime<chrono::Utc>,
+    needs_cycles: bool,
+) -> Result<sqlx::Transaction<'static, sqlx::Postgres>, ApiError> {
     for _ in 0..3 {
         let mut tx = pool.begin().await?;
         sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")

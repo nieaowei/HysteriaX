@@ -167,7 +167,7 @@ pub async fn download_auto(
     RawQuery(query): RawQuery,
     headers: HeaderMap,
 ) -> Response {
-    let result = async {
+    let result = crate::read_snapshot::scope(&state.pool, async {
         let user_id = validate_subscription(&state, &token).await?;
         let requested = formats::requested_format(query.as_deref())?;
         let mut client = ClientInfo::detect(
@@ -227,7 +227,7 @@ pub async fn download_auto(
             return template_selection(&state, &token, Some(&published.0), client.platform).await;
         }
         cached_template(&state, &user_id, selected, &client, Some(&published)).await
-    }
+    })
     .await;
     subscription_response(result, true)
 }
@@ -244,7 +244,7 @@ async fn template_selection(
             .replace('\"', "&quot;")
             .replace('\'', "&#39;")
     }
-    let rows=sqlx::query("SELECT id,name,format FROM subscription_templates WHERE NOT archived AND published_version IS NOT NULL AND ($1::text IS NULL OR id=$1) ORDER BY name,id").bind(id).fetch_all(&state.pool).await?;
+    let rows=sqlx::query("SELECT id,name,format FROM subscription_templates WHERE NOT archived AND published_version IS NOT NULL AND ($1::text IS NULL OR id=$1) ORDER BY name,id").bind(id).fetch_all(&mut *crate::read_snapshot::begin(&state.pool).await?).await?;
     let mut html = String::from(
         "<!doctype html><html lang=\"zh-CN\"><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width\"><title>HysteriaX 订阅</title><h1>选择模板与目标平台</h1><p>复制下面对应设备的明确平台地址。</p>",
     );
@@ -314,7 +314,7 @@ async fn validate_subscription(state: &AppState, token: &str) -> Result<String, 
         "SELECT user_id FROM subscription_credentials WHERE token_hash = $1 AND revoked_at IS NULL",
     )
     .bind(token_hash)
-    .fetch_optional(&state.pool)
+    .fetch_optional(&mut *crate::read_snapshot::begin(&state.pool).await?)
     .await?
     .ok_or_else(|| ApiError::not_found("subscription"))?;
     let user_id: String = credential.get("user_id");
@@ -327,7 +327,7 @@ async fn validate_user(state: &AppState, user_id: &str) -> Result<(), ApiError> 
         "SELECT enabled, expires_at, quota_bytes, usage_bytes FROM users WHERE id = $1",
     )
     .bind(user_id)
-    .fetch_optional(&state.pool)
+    .fetch_optional(&mut *crate::read_snapshot::begin(&state.pool).await?)
     .await?
     .ok_or_else(|| ApiError::not_found("subscription"))?;
     let enabled: bool = user.get("enabled");
@@ -347,7 +347,7 @@ async fn validate_user(state: &AppState, user_id: &str) -> Result<(), ApiError> 
 
 async fn eligible_nodes(state: &AppState, user_id: &str) -> Result<Vec<String>, ApiError> {
     let rows=sqlx::query("SELECT n.id,p.config,coalesce(p.usage_bytes,0) usage_bytes,p.next_reset_at FROM node_assignments a JOIN nodes n ON n.id=a.node_id LEFT JOIN node_packages p ON p.node_id=n.id WHERE a.user_id=$1 AND n.state NOT IN ('deleting','delete_failed') AND n.mtls_state='ready' AND n.deployed_revision IS NOT NULL AND n.deployed_config_enc IS NOT NULL ORDER BY lower(n.name) COLLATE \"C\",n.name COLLATE \"C\",n.id")
-        .bind(user_id).fetch_all(&state.pool).await?;
+        .bind(user_id).fetch_all(&mut *crate::read_snapshot::begin(&state.pool).await?).await?;
     let now = Utc::now();
     let mut eligible = Vec::<String>::new();
     for row in rows {
@@ -392,7 +392,7 @@ async fn cached_template(
     )
     .await?;
     let boundaries = sqlx::query("SELECT min(boundary) FILTER(WHERE boundary>$2) AS boundary,coalesce(jsonb_agg(jsonb_build_array(v.identity_id,v.credential_version,v.ca_version) ORDER BY v.identity_id,v.credential_version) FILTER(WHERE v.not_before<=$2 AND v.expires_at>$2),'[]'::jsonb) AS valid_versions FROM mtls_user_identities i JOIN mtls_user_versions v ON v.identity_id=i.id CROSS JOIN LATERAL (VALUES (v.not_before),(v.expires_at)) b(boundary) WHERE i.user_id=$1 AND NOT i.archived AND v.released AND NOT v.discarded")
-        .bind(user_id).bind(now).fetch_one(&state.pool).await?;
+        .bind(user_id).bind(now).fetch_one(&mut *crate::read_snapshot::begin(&state.pool).await?).await?;
     let boundary: Option<DateTime<Utc>> = boundaries.get("boundary");
     let key = format!(
         "subscription:v4-template:{user_id}:{version}:{format:?}:{}:{:?}:{:?}:{}:{}:{:?}",
@@ -447,8 +447,19 @@ async fn load_subscription_nodes_eligible(
     user_id: &str,
     eligible: Option<&[String]>,
 ) -> Result<Vec<SubscriptionNode>, ApiError> {
+    crate::read_snapshot::scope(
+        &state.pool,
+        load_subscription_nodes_snapshot(state, user_id, eligible),
+    )
+    .await
+}
+async fn load_subscription_nodes_snapshot(
+    state: &AppState,
+    user_id: &str,
+    eligible: Option<&[String]>,
+) -> Result<Vec<SubscriptionNode>, ApiError> {
     let rows = sqlx::query("SELECT n.id, n.name, n.public_host, n.public_port, n.listen_addr, n.tls_sni, n.tls_skip_verify, n.state, n.deployed_config_enc, n.published_connection, a.credential_enc, a.user_id FROM node_assignments a JOIN nodes n ON n.id = a.node_id WHERE a.user_id = $1 AND n.state NOT IN ('deleting', 'delete_failed') AND n.mtls_state='ready' AND n.deployed_revision IS NOT NULL AND n.deployed_config_enc IS NOT NULL AND ($2::text[] IS NULL OR n.id=ANY($2)) ORDER BY lower(n.name) COLLATE \"C\", n.name COLLATE \"C\", n.id")
-        .bind(user_id).bind(eligible).fetch_all(&state.pool).await?;
+        .bind(user_id).bind(eligible).fetch_all(&mut *crate::read_snapshot::begin(&state.pool).await?).await?;
     let projection_version =
         crate::cache_domains::version(&state.pool, &["node_config", "credentials", "resources"])
             .await?;
