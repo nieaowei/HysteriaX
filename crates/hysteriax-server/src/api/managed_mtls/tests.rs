@@ -627,6 +627,13 @@ async fn referenced_ca_publication_keeps_old_generation_until_all_nodes_are_prep
 
 #[tokio::test]
 async fn maintenance_renews_once_pauses_inactive_and_recovers_pending_identities() {
+    async fn run_due_maintenance(state: &AppState) {
+        // Each call represents the next scheduled scan. Advance its persisted
+        // deadline while retaining all original pause/recovery/signature checks.
+        sqlx::query("UPDATE background_work SET available_at=clock_timestamp()-interval '1 second' WHERE kind='mtls-identity-admission'")
+            .execute(&state.pool).await.unwrap();
+        credentials::maintenance::maintain(state).await.unwrap();
+    }
     let state = state().await;
     let ca = generated(&state).await;
     user(&state, "alice", true).await;
@@ -639,8 +646,8 @@ async fn maintenance_renews_once_pauses_inactive_and_recovers_pending_identities
     .execute(&state.pool)
     .await
     .unwrap();
-    credentials::maintenance::maintain(&state).await.unwrap();
-    credentials::maintenance::maintain(&state).await.unwrap();
+    run_due_maintenance(&state).await;
+    run_due_maintenance(&state).await;
     let count: i64 =
         sqlx::query_scalar("SELECT count(*) FROM mtls_user_versions WHERE identity_id=$1")
             .bind(&original.0)
@@ -664,7 +671,7 @@ async fn maintenance_renews_once_pauses_inactive_and_recovers_pending_identities
     .execute(&state.pool)
     .await
     .unwrap();
-    credentials::maintenance::maintain(&state).await.unwrap();
+    run_due_maintenance(&state).await;
     let paused: bool =
         sqlx::query_scalar("SELECT next_action_at IS NULL FROM mtls_user_identities WHERE id=$1")
             .bind(&original.0)
@@ -679,7 +686,7 @@ async fn maintenance_renews_once_pauses_inactive_and_recovers_pending_identities
         .execute(&state.pool)
         .await
         .unwrap();
-    credentials::maintenance::maintain(&state).await.unwrap();
+    run_due_maintenance(&state).await;
     let count: i64 =
         sqlx::query_scalar("SELECT count(*) FROM mtls_user_versions WHERE identity_id=$1")
             .bind(&pending.0)

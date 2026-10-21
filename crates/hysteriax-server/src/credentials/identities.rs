@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use super::{
     ca::{Authority, Issued, Policy},
-    insert, load,
+    load,
 };
 use crate::security::SecretBox;
 
@@ -26,6 +26,7 @@ pub struct PreparedIdentity {
     issued: Option<Issued>,
     existing_version: Option<i64>,
     needs_ca_update: bool,
+    prepared_material: Option<(String, Value, String)>,
 }
 
 impl PreparedIdentity {
@@ -54,10 +55,12 @@ async fn prepare_user_with_identity(
     force: bool,
     identity_id: Option<&str>,
 ) -> Result<PreparedIdentity> {
-    let now = Utc::now();
     let mut tx = pool.begin().await?;
     sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
         .execute(&mut *tx)
+        .await?;
+    let now: DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
+        .fetch_one(&mut *tx)
         .await?;
     let row = sqlx::query("SELECT a.policy_revision,a.client_validity_days,a.renew_before_hours,g.state,c.archived,u.revision AS user_revision,u.enabled,u.expires_at,u.quota_bytes,u.usage_bytes FROM mtls_authorities a JOIN mtls_ca_generations g ON g.ca_id=a.credential_id AND g.ca_version=$3 JOIN credentials c ON c.id=a.credential_id CROSS JOIN users u WHERE a.credential_id=$2 AND u.id=$1")
         .bind(user_id).bind(ca_id).bind(ca_version).fetch_one(&mut *tx).await?;
@@ -132,6 +135,22 @@ async fn prepare_user_with_identity(
     } else {
         None
     };
+    let prepared_material = if let Some(issued) = &issued {
+        let payload = issued.material.payload();
+        let mut metadata = super::validate_payload("tls_identity", &payload)?;
+        metadata["managed"] = json!(true);
+        metadata["identity_id"] = json!(id);
+        metadata["ca_id"] = json!(ca_id);
+        metadata["ca_version"] = json!(ca_version);
+        metadata["policy_revision"] = json!(policy_revision);
+        Some((
+            secrets.encrypt(&payload.to_string())?,
+            metadata,
+            Uuid::new_v4().to_string(),
+        ))
+    } else {
+        None
+    };
     Ok(PreparedIdentity {
         id,
         user_id: user_id.into(),
@@ -145,6 +164,7 @@ async fn prepare_user_with_identity(
         issued,
         existing_version: existing,
         needs_ca_update,
+        prepared_material,
     })
 }
 
@@ -152,10 +172,12 @@ async fn prepare_user_with_identity(
 /// commits this in the same transaction as its authorization change.
 pub async fn commit_user(
     tx: &mut Transaction<'_, Postgres>,
-    secrets: &SecretBox,
+    _secrets: &SecretBox,
     candidate: PreparedIdentity,
 ) -> Result<(String, Option<i64>)> {
-    let now = Utc::now();
+    let now: DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
+        .fetch_one(&mut **tx)
+        .await?;
     let ca = sqlx::query("SELECT a.policy_revision,g.state,c.archived FROM mtls_authorities a JOIN mtls_ca_generations g ON g.ca_id=a.credential_id AND g.ca_version=$2 JOIN credentials c ON c.id=a.credential_id WHERE a.credential_id=$1")
         .bind(&candidate.ca_id).bind(candidate.ca_version).fetch_one(&mut **tx).await?;
     ensure!(
@@ -215,13 +237,9 @@ pub async fn commit_user(
         issued.expires_at > now,
         "prepared certificate expired; retry"
     );
-    let payload = issued.material.payload();
-    let mut metadata = super::validate_payload("tls_identity", &payload)?;
-    metadata["managed"] = json!(true);
-    metadata["identity_id"] = json!(candidate.id);
-    metadata["ca_id"] = json!(candidate.ca_id);
-    metadata["ca_version"] = json!(candidate.ca_version);
-    metadata["policy_revision"] = json!(candidate.policy_revision);
+    let (payload_enc, metadata, new_credential) = candidate
+        .prepared_material
+        .context("prepared identity material is missing")?;
     let credential: Option<String> = identity.as_ref().and_then(|r| r.get("credential_id"));
     let (credential, version) = if let Some(credential) = credential {
         let version: i64 =
@@ -230,24 +248,15 @@ pub async fn commit_user(
                 .fetch_one(&mut **tx)
                 .await?;
         sqlx::query("INSERT INTO credential_versions(credential_id,version,payload_enc,metadata,created_at) VALUES($1,$2,$3,$4,$5)")
-            .bind(&credential).bind(version).bind(secrets.encrypt(&payload.to_string())?).bind(&metadata).bind(now).execute(&mut **tx).await?;
+            .bind(&credential).bind(version).bind(payload_enc).bind(&metadata).bind(now).execute(&mut **tx).await?;
         sqlx::query("UPDATE credentials SET latest_version=$2,revision=revision+1,archived=FALSE,updated_at=$3 WHERE id=$1").bind(&credential).bind(version).bind(now).execute(&mut **tx).await?;
         (credential, version)
     } else {
-        (
-            insert(
-                tx,
-                secrets,
-                &format!("Managed mTLS · {}", candidate.id),
-                "tls_identity",
-                Some(&candidate.user_id),
-                &payload,
-                &metadata,
-                &json!({}),
-            )
-            .await?,
-            1,
-        )
+        sqlx::query("INSERT INTO credentials(id,name,kind,owner_user_id,created_at,updated_at) VALUES($1,$2,'tls_identity',$3,$4,$4)")
+            .bind(&new_credential).bind(format!("Managed mTLS · {}",candidate.id)).bind(&candidate.user_id).bind(now).execute(&mut **tx).await?;
+        sqlx::query("INSERT INTO credential_versions(credential_id,version,payload_enc,metadata,created_at) VALUES($1,1,$2,$3,$4)")
+            .bind(&new_credential).bind(payload_enc).bind(&metadata).bind(now).execute(&mut **tx).await?;
+        (new_credential, 1)
     };
     let released = candidate.generation_state == "published";
     sqlx::query("UPDATE mtls_user_identities SET credential_id=$2,revision=revision+1,archived=FALSE,next_action_at=CASE WHEN $3 AND $4<=$5 THEN $5+interval '1 hour' WHEN $3 THEN $4 ELSE next_action_at END,maintenance_error=CASE WHEN $3 AND $4<=$5 THEN 'CA update required: cannot extend the existing certificate' WHEN $3 THEN NULL ELSE maintenance_error END,updated_at=$5 WHERE id=$1")

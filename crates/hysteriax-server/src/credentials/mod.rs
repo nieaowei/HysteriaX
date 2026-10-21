@@ -2,6 +2,7 @@ pub mod activation;
 pub mod authorization;
 pub mod ca;
 pub mod identities;
+mod identity_maintenance;
 mod legacy_reset;
 pub mod maintenance;
 pub mod migration;

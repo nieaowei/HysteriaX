@@ -4,7 +4,6 @@ use anyhow::Result;
 use chrono::{DateTime, Duration, Utc};
 use sqlx::Row;
 
-use super::identities;
 use crate::{db, state::AppState};
 
 const PAGE: i64 = 100;
@@ -12,7 +11,8 @@ const PAGE: i64 = 100;
 pub async fn run(state: AppState) {
     tokio::join!(
         maintenance_loop(state.clone()),
-        super::retention::run(state)
+        super::retention::run(state.clone()),
+        super::identity_maintenance::run(state)
     );
 }
 
@@ -32,101 +32,14 @@ async fn maintenance_loop(state: AppState) {
 }
 
 pub async fn maintain(state: &AppState) -> Result<()> {
-    let now = Utc::now();
-    let mut cursor = (
-        DateTime::<Utc>::from_timestamp(0, 0).expect("Unix epoch"),
-        String::new(),
-    );
-    loop {
-        let rows = sqlx::query("SELECT id,user_id,ca_id,next_action_at FROM mtls_user_identities WHERE NOT archived AND next_action_at<=$1 AND (next_action_at,id)>($2,$3) ORDER BY next_action_at,id LIMIT $4")
-            .bind(now).bind(cursor.0).bind(&cursor.1).bind(PAGE).fetch_all(&state.pool).await?;
-        if rows.is_empty() {
-            break;
-        }
-        for row in rows {
-            cursor = (row.get("next_action_at"), row.get("id"));
-            renew_user(
-                state,
-                &row.get::<String, _>("id"),
-                &row.get::<String, _>("user_id"),
-                &row.get::<String, _>("ca_id"),
-            )
-            .await?;
-        }
-    }
-    // Paused and first-time pending identities carry no due time. Eligibility is
-    // checked live so quota resets and the passage of time need no write event.
-    let mut pending_cursor = String::new();
-    loop {
-        let rows=sqlx::query("SELECT i.id,i.user_id,i.ca_id FROM mtls_user_identities i JOIN users u ON u.id=i.user_id WHERE NOT i.archived AND i.next_action_at IS NULL AND i.id>$1 AND u.enabled AND (u.expires_at IS NULL OR u.expires_at>$2) AND (u.quota_bytes IS NULL OR u.usage_bytes<u.quota_bytes) ORDER BY i.id LIMIT $3")
-            .bind(&pending_cursor).bind(now).bind(PAGE).fetch_all(&state.pool).await?;
-        if rows.is_empty() {
-            break;
-        }
-        for row in rows {
-            pending_cursor = row.get("id");
-            renew_user(
-                state,
-                &pending_cursor,
-                &row.get::<String, _>("user_id"),
-                &row.get::<String, _>("ca_id"),
-            )
-            .await?;
-        }
-    }
+    super::identity_maintenance::pass(state).await?;
+    let now: DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
+        .fetch_one(&state.pool)
+        .await?;
     renew_probes(state, now).await?;
     rotate_authorities(state, now).await?;
     super::rotations::run_pass(state).await?;
     super::retention::prune(state).await?;
-    Ok(())
-}
-
-async fn renew_user(state: &AppState, id: &str, user: &str, ca: &str) -> Result<()> {
-    let row=sqlx::query("SELECT a.published_version,u.enabled,u.expires_at,u.quota_bytes,u.usage_bytes,i.revision FROM mtls_authorities a JOIN mtls_user_identities i ON i.ca_id=a.credential_id JOIN users u ON u.id=i.user_id WHERE a.credential_id=$1 AND u.id=$2 AND i.id=$3")
-        .bind(ca).bind(user).bind(id).fetch_optional(&state.pool).await?;
-    let Some(row) = row else { return Ok(()) };
-    let now = Utc::now();
-    let eligible = row.get::<bool, _>("enabled")
-        && row
-            .get::<Option<DateTime<Utc>>, _>("expires_at")
-            .is_none_or(|t| t > now)
-        && row
-            .get::<Option<i64>, _>("quota_bytes")
-            .is_none_or(|q| row.get::<i64, _>("usage_bytes") < q);
-    let revision: i64 = row.get("revision");
-    if !eligible {
-        let mut tx = db::begin_write(&state.pool).await?;
-        sqlx::query(
-            "UPDATE mtls_user_identities SET next_action_at=NULL WHERE id=$1 AND revision=$2",
-        )
-        .bind(id)
-        .bind(revision)
-        .execute(&mut *tx)
-        .await?;
-        tx.commit().await?;
-        return Ok(());
-    }
-    let result = async {
-        let candidate = identities::prepare_user(
-            &state.pool,
-            &state.secrets,
-            user,
-            ca,
-            row.get("published_version"),
-            false,
-        )
-        .await?;
-        let mut tx = db::begin_write(&state.pool).await?;
-        identities::commit_user(&mut tx, &state.secrets, candidate).await?;
-        tx.commit().await?;
-        Ok::<_, anyhow::Error>(())
-    }
-    .await;
-    if let Err(error) = result {
-        let mut tx = db::begin_write(&state.pool).await?;
-        sqlx::query("UPDATE mtls_user_identities SET maintenance_error=$3,next_action_at=$4 WHERE id=$1 AND revision=$2").bind(id).bind(revision).bind(error.to_string()).bind(now+Duration::hours(1)).execute(&mut *tx).await?;
-        tx.commit().await?;
-    }
     Ok(())
 }
 
