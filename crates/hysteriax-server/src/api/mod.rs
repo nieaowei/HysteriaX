@@ -796,30 +796,39 @@ async fn create_admin_token(
     State(state): State<AppState>,
     Json(input): Json<CreateAdminToken>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
-    let label = validate_admin_token_label(&input.label)?;
+    let label = validate_admin_token_label(&input.label)?.to_owned();
+    // Stable across database retries; no successful secret is replaced on retry.
     let token = generate_token();
     let id = Uuid::new_v4().to_string();
-    sqlx::query(
-        "INSERT INTO admin_tokens (id, token_hash, label, created_at) VALUES ($1, $2, $3, $4)",
-    )
-    .bind(&id)
-    .bind(token_digest(&token))
-    .bind(label)
-    .bind(now())
-    .execute(&state.pool)
+    let response = json!({"id": id, "label": label, "token": token});
+    let token_hash = token_digest(&token);
+    let actor = audit_actor();
+    db::serializable::<_, ApiError, _>(&state.pool, move |tx| {
+        let (id, label, token_hash, actor) =
+            (id.clone(), label.clone(), token_hash.clone(), actor.clone());
+        Box::pin(async move {
+            sqlx::query(
+                "INSERT INTO admin_tokens(id,token_hash,label,created_at) VALUES($1,$2,$3,$4)",
+            )
+            .bind(&id)
+            .bind(token_hash)
+            .bind(&label)
+            .bind(now())
+            .execute(&mut **tx)
+            .await?;
+            audit_on(
+                tx,
+                &actor,
+                "admin_token.created",
+                "admin_token",
+                &id,
+                json!({"label":label}),
+            )
+            .await
+        })
+    })
     .await?;
-    audit(
-        &state.pool,
-        "admin_token.created",
-        "admin_token",
-        &id,
-        json!({"label": label}),
-    )
-    .await?;
-    Ok((
-        StatusCode::CREATED,
-        Json(json!({"id": id, "label": label, "token": token})),
-    ))
+    Ok((StatusCode::CREATED, Json(response)))
 }
 
 fn validate_admin_token_label(label: &str) -> Result<&str, ApiError> {
@@ -842,31 +851,57 @@ async fn revoke_admin_token(
             "cannot revoke the token used by this request",
         ));
     }
-    let mut tx = db::begin_write(&state.pool).await?;
-    let count: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM admin_tokens WHERE revoked_at IS NULL")
-            .fetch_one(&mut *tx)
-            .await?;
-    if count <= 1 {
-        return Err(ApiError::conflict(
-            "cannot revoke the last active administrator token",
-        ));
-    }
-    let result =
-        sqlx::query("UPDATE admin_tokens SET revoked_at=$1 WHERE id=$2 AND revoked_at IS NULL")
+    db::serializable::<_, ApiError, _>(&state.pool, move |tx| {
+        let (id, actor) = (id.clone(), actor.clone());
+        Box::pin(async move {
+            let count: i64 =
+                sqlx::query_scalar("SELECT COUNT(*) FROM admin_tokens WHERE revoked_at IS NULL")
+                    .fetch_one(&mut **tx)
+                    .await?;
+            if count <= 1 {
+                return Err(ApiError::conflict(
+                    "cannot revoke the last active administrator token",
+                ));
+            }
+            let result = sqlx::query(
+                "UPDATE admin_tokens SET revoked_at=$1 WHERE id=$2 AND revoked_at IS NULL",
+            )
             .bind(now())
             .bind(&id)
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await?;
-    if result.rows_affected() != 1 {
-        return Err(ApiError::not_found("active administrator token"));
-    }
-    sqlx::query("INSERT INTO audit_records(id,actor,action,entity_type,entity_id,detail_json,created_at) VALUES($1,$2,'admin_token.revoked','admin_token',$3,'{}',$4)").bind(Uuid::new_v4().to_string()).bind(actor.id).bind(&id).bind(now()).execute(&mut *tx).await?;
-    tx.commit().await?;
+            if result.rows_affected() != 1 {
+                return Err(ApiError::not_found("active administrator token"));
+            }
+            audit_on(
+                tx,
+                &actor.id,
+                "admin_token.revoked",
+                "admin_token",
+                &id,
+                json!({}),
+            )
+            .await
+        })
+    })
+    .await?;
     state
         .admin_tokens_changed
         .send_modify(|version| *version = version.wrapping_add(1));
     Ok(StatusCode::NO_CONTENT)
+}
+
+pub(crate) async fn audit_on(
+    connection: &mut sqlx::PgConnection,
+    actor: &str,
+    action: &str,
+    entity_type: &str,
+    entity_id: &str,
+    detail: Value,
+) -> Result<(), ApiError> {
+    sqlx::query("INSERT INTO audit_records(id,actor,action,entity_type,entity_id,detail_json,created_at) VALUES($1,$2,$3,$4,$5,$6,$7)")
+        .bind(Uuid::new_v4().to_string()).bind(actor).bind(action).bind(entity_type).bind(entity_id).bind(detail).bind(now()).execute(connection).await?;
+    Ok(())
 }
 
 pub(crate) async fn audit(
@@ -1207,3 +1242,6 @@ mod query_optimizer_tests;
 
 #[cfg(test)]
 mod auth_contention_tests;
+
+#[cfg(test)]
+mod management_transaction_tests;
