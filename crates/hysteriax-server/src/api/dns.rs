@@ -15,14 +15,14 @@ use crate::{
     state::AppState,
 };
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConnectionInput {
     pub name: String,
     pub credential_id: String,
     pub credential_version: i64,
 }
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConnectionPatch {
     pub expected_revision: i64,
@@ -54,7 +54,7 @@ pub struct UpdateRecord {
     pub idempotency_key: String,
     pub record: RecordInput,
 }
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 pub struct RevisionQuery {
     pub expected_revision: i64,
 }
@@ -92,7 +92,7 @@ pub async fn create_connection(
     State(state): State<AppState>,
     Json(input): Json<ConnectionInput>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
-    let name = valid_name(&input.name)?;
+    let name = valid_name(&input.name)?.to_owned();
     dns::cloudflare_credential(
         &state.pool,
         &state.secrets,
@@ -102,65 +102,83 @@ pub async fn create_connection(
     )
     .await
     .map_err(|_| ApiError::bad_request("select an active Cloudflare DNS credential"))?;
-    let mut tx = db::begin_write(&state.pool).await?;
-    let active: bool =
-        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM credentials WHERE id=$1 AND NOT archived)")
-            .bind(&input.credential_id)
-            .fetch_one(&mut *tx)
-            .await?;
-    if !active {
-        return Err(ApiError::conflict("credential was archived"));
-    }
-    let row=sqlx::query("INSERT INTO dns_connections(id,name,provider,credential_id,credential_version) VALUES($1,$2,'cloudflare',$3,$4) RETURNING *")
-        .bind(Uuid::new_v4().to_string()).bind(name).bind(&input.credential_id).bind(input.credential_version).fetch_one(&mut *tx).await?;
-    dns::audit(
-        &mut tx,
-        "connection.created",
-        &row.get::<String, _>("id"),
-        json!({"name":name}),
-    )
-    .await?;
-    tx.commit().await?;
-    Ok((StatusCode::CREATED, Json(dns::connection_json(&row))))
+    let actor = super::audit_actor();
+    db::serializable::<_,ApiError,_>(&state.pool,move |tx| {
+        let (input,name)=(input.clone(),name.clone());
+        let actor=actor.clone();
+        Box::pin(async move {
+            let active:Option<(String,Option<String>,bool)>=sqlx::query_as("SELECT c.kind,c.owner_user_id,c.archived FROM credentials c JOIN credential_versions v ON v.credential_id=c.id WHERE c.id=$1 AND v.version=$2 FOR KEY SHARE OF c,v")
+                .bind(&input.credential_id).bind(input.credential_version).fetch_optional(&mut **tx).await?;
+            if !matches!(active,Some((ref kind,None,false)) if kind=="dns") {
+                return Err(ApiError::conflict("DNS credential changed or was archived"));
+            }
+            let row=sqlx::query("INSERT INTO dns_connections(id,name,provider,credential_id,credential_version) VALUES($1,$2,'cloudflare',$3,$4) RETURNING *")
+                .bind(Uuid::new_v4().to_string()).bind(&name).bind(&input.credential_id).bind(input.credential_version).fetch_one(&mut **tx).await?;
+            super::audit_on(tx,&actor,"dns.connection.created","dns",&row.get::<String,_>("id"),json!({"name":name})).await?;
+            Ok((StatusCode::CREATED, Json(dns::connection_json(&row))))
+        })
+    }).await
 }
+
 pub async fn patch_connection(
     State(state): State<AppState>,
     Path(id): Path<String>,
     Json(input): Json<ConnectionPatch>,
 ) -> Result<Json<Value>, ApiError> {
-    let name = valid_name(&input.name)?;
-    let mut tx = db::begin_write(&state.pool).await?;
-    let row=sqlx::query("UPDATE dns_connections SET name=$1,revision=revision+1,updated_at=now() WHERE id=$2 AND revision=$3 RETURNING *")
-        .bind(name).bind(&id).bind(input.expected_revision).fetch_optional(&mut *tx).await?.ok_or_else(||ApiError::conflict("DNS connection changed; reload"))?;
-    dns::audit(&mut tx, "connection.updated", &id, json!({"name":name})).await?;
-    tx.commit().await?;
-    Ok(Json(dns::connection_json(&row)))
+    let name = valid_name(&input.name)?.to_owned();
+    let actor = super::audit_actor();
+    db::serializable::<_,ApiError,_>(&state.pool,move |tx| {
+        let (id,input,name)=(id.clone(),input.clone(),name.clone());
+        let actor=actor.clone();
+        Box::pin(async move {
+            let row=sqlx::query("UPDATE dns_connections SET name=$1,revision=revision+1,updated_at=now() WHERE id=$2 AND revision=$3 RETURNING *")
+                .bind(&name).bind(&id).bind(input.expected_revision).fetch_optional(&mut **tx).await?.ok_or_else(||ApiError::conflict("DNS connection changed; reload"))?;
+            super::audit_on(tx, &actor, "dns.connection.updated", "dns", &id, json!({"name":name})).await?;
+            Ok(Json(dns::connection_json(&row)))
+        })
+    }).await
 }
+
 pub async fn delete_connection(
     State(state): State<AppState>,
     Path(id): Path<String>,
     Query(input): Query<RevisionQuery>,
 ) -> Result<StatusCode, ApiError> {
-    let mut tx = db::begin_write(&state.pool).await?;
-    let referenced:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM dns_zones WHERE connection_id=$1) OR EXISTS(SELECT 1 FROM dns_operations WHERE connection_id=$1) OR EXISTS(SELECT 1 FROM dns_credential_batch_items WHERE connection_id=$1)")
-        .bind(&id).fetch_one(&mut *tx).await?;
-    if referenced {
-        return Err(ApiError::conflict(
-            "DNS connection has zones or operation history and cannot be deleted",
-        ));
-    }
-    let changed = sqlx::query("DELETE FROM dns_connections WHERE id=$1 AND revision=$2")
-        .bind(&id)
-        .bind(input.expected_revision)
-        .execute(&mut *tx)
-        .await?;
-    if changed.rows_affected() != 1 {
-        return Err(ApiError::conflict("DNS connection changed; reload"));
-    }
-    dns::audit(&mut tx, "connection.deleted", &id, json!({})).await?;
-    tx.commit().await?;
-    Ok(StatusCode::NO_CONTENT)
+    let actor = super::audit_actor();
+    db::serializable::<_,ApiError,_>(&state.pool,move |tx| {
+        let (id,input)=(id.clone(),input.clone());
+        let actor=actor.clone();
+        Box::pin(async move {
+            sqlx::query("SELECT id FROM dns_connections WHERE id=$1 FOR UPDATE").bind(&id).fetch_optional(&mut **tx).await?;
+            let referenced:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM dns_zones WHERE connection_id=$1) OR EXISTS(SELECT 1 FROM dns_operations WHERE connection_id=$1) OR EXISTS(SELECT 1 FROM dns_credential_batch_items WHERE connection_id=$1)")
+                .bind(&id).fetch_one(&mut **tx).await?;
+            if referenced {
+                return Err(ApiError::conflict(
+                    "DNS connection has zones or operation history and cannot be deleted",
+                ));
+            }
+            let changed = sqlx::query("DELETE FROM dns_connections WHERE id=$1 AND revision=$2")
+                .bind(&id)
+                .bind(input.expected_revision)
+                .execute(&mut **tx)
+                .await
+                .map_err(|error| {
+                    if error.as_database_error().is_some_and(|e| {
+                        e.code().as_deref()==Some("23503") && e.constraint().is_some_and(|name| matches!(name,
+                            "dns_zones_connection_id_fkey"|"dns_operations_connection_id_fkey"|"dns_credential_batch_items_connection_id_fkey"))
+                    }) {
+                        ApiError::conflict("DNS connection has zones or operation history and cannot be deleted")
+                    } else {ApiError::from(error)}
+                })?;
+            if changed.rows_affected() != 1 {
+                return Err(ApiError::conflict("DNS connection changed; reload"));
+            }
+            super::audit_on(tx, &actor, "dns.connection.deleted", "dns", &id, json!({})).await?;
+            Ok(StatusCode::NO_CONTENT)
+        })
+    }).await
 }
+
 async fn connection_action(
     state: &AppState,
     id: &str,
@@ -730,3 +748,6 @@ pub async fn unbind(
     tx.commit().await?;
     Ok(Json(json!({"node_id":node,"records_retained":true})))
 }
+
+#[cfg(test)]
+mod transaction_tests;
