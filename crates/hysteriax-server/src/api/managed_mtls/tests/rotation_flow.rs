@@ -1106,7 +1106,13 @@ async fn retention_removes_only_expired_superseded_unpinned_private_material() {
         .execute(&state.pool)
         .await
         .unwrap();
+    // Advance only this persisted maintenance deadline. Both calls execute
+    // actual owned pages, preserving the old material/pin assertions.
+    sqlx::query("UPDATE background_work SET available_at=clock_timestamp()-interval '1 second' WHERE kind='credential-retention'")
+        .execute(&state.pool).await.unwrap();
     assert_eq!(credentials::retention::prune(&state).await.unwrap(), 1);
+    sqlx::query("UPDATE background_work SET available_at=clock_timestamp()-interval '1 second' WHERE kind='credential-retention'")
+        .execute(&state.pool).await.unwrap();
     assert_eq!(credentials::retention::prune(&state).await.unwrap(), 0);
     let retained: Vec<i64> = sqlx::query_scalar("SELECT credential_version FROM mtls_user_versions WHERE credential_id=$1 ORDER BY credential_version").bind(&credential).fetch_all(&state.pool).await.unwrap();
     assert_eq!(retained, vec![3]);

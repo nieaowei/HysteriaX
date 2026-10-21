@@ -12,6 +12,13 @@ use crate::{db, state::AppState};
 const PAGE: i64 = 100;
 
 pub async fn run(state: AppState) {
+    tokio::join!(
+        maintenance_loop(state.clone()),
+        super::retention::run(state)
+    );
+}
+
+async fn maintenance_loop(state: AppState) {
     let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut shutdown = state.shutdown.subscribe();
