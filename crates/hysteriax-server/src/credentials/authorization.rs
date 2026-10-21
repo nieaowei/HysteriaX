@@ -144,8 +144,8 @@ pub struct Prepared {
     identities: Vec<Vec<PreparedIdentity>>,
 }
 pub async fn prepare_preview(pool: &PgPool, secrets: &SecretBox, token: &str) -> Result<Prepared> {
-    let row=sqlx::query("SELECT result_json FROM authorization_group_previews WHERE token=$1 AND consumed_at IS NULL AND expires_at>$2")
-        .bind(token).bind(Utc::now()).fetch_optional(pool).await?.context("preview expired or was consumed; preview again")?;
+    let row=sqlx::query("SELECT result_json FROM authorization_group_previews WHERE token=$1 AND consumed_at IS NULL AND expires_at>clock_timestamp()")
+        .bind(token).fetch_optional(pool).await?.context("preview expired or was consumed; preview again")?;
     let result: Value = row.get("result_json");
     let plan: Plan = serde_json::from_value(result["mtls_plan"].clone())
         .context("preview predates managed identities; preview again")?;

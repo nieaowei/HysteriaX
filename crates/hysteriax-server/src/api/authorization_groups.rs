@@ -191,19 +191,25 @@ pub(crate) async fn preview_create(
         ));
     }
     let proposal = proposal_from_preview(input)?;
-    let mut tx = db::begin_write(&state.pool).await?;
-    validate_proposal_entities(&mut tx, &proposal).await?;
-    let affected = proposal.user_ids.clone();
-    let old_pairs = effective_pairs(&mut tx, &affected, None).await?;
-    let mut new_pairs = old_pairs.clone();
-    add_group_pairs(&mut new_pairs, &proposal.user_ids, &proposal.node_ids);
-    let (guard, result, request_json) = preview_data(
-        &state, &mut tx, "create", None, None, &affected, &proposal, &old_pairs, &new_pairs,
-    )
-    .await?;
-    let token = store_preview(&mut tx, "create", None, None, request_json, guard, &result).await?;
-    tx.commit().await?;
-    Ok(Json(preview_json("create", token, result)))
+    let pool = state.pool.clone();
+    db::serializable(&pool, move |tx| {
+        let (state, proposal) = (state.clone(), proposal.clone());
+        Box::pin(async move {
+            validate_proposal_entities(tx, &proposal).await?;
+            let affected = proposal.user_ids.clone();
+            let old_pairs = effective_pairs(tx, &affected, None).await?;
+            let mut new_pairs = old_pairs.clone();
+            add_group_pairs(&mut new_pairs, &proposal.user_ids, &proposal.node_ids);
+            let (guard, result, request_json) = preview_data(
+                &state, tx, "create", None, None, &affected, &proposal, &old_pairs, &new_pairs,
+            )
+            .await?;
+            let token =
+                store_preview(tx, "create", None, None, request_json, guard, &result).await?;
+            Ok(Json(preview_json("create", token, result)))
+        })
+    })
+    .await
 }
 
 pub(crate) async fn preview_group(
@@ -231,53 +237,63 @@ pub(crate) async fn preview_group(
         }
         None
     };
-    let mut tx = db::begin_write(&state.pool).await?;
-    let current = load_group_tx(&mut tx, &group_id)
-        .await?
-        .ok_or_else(|| ApiError::not_found("authorization group"))?;
-    check_revision(current.revision, expected_revision)?;
-    if let Some(proposal) = &proposal {
-        validate_proposal_entities(&mut tx, proposal).await?;
-    }
-    let mut affected = current.user_ids.clone();
-    if let Some(proposal) = &proposal {
-        affected.extend(proposal.user_ids.clone());
-    }
-    sort_dedup(&mut affected);
-    let old_pairs = effective_pairs(&mut tx, &affected, None).await?;
-    let mut new_pairs = effective_pairs(&mut tx, &affected, Some(&group_id)).await?;
-    if let Some(proposal) = &proposal {
-        add_group_pairs(&mut new_pairs, &proposal.user_ids, &proposal.node_ids);
-    }
-    let proposal_for_snapshot = proposal.unwrap_or(GroupProposal {
-        name: current.name.clone(),
-        user_ids: Vec::new(),
-        node_ids: Vec::new(),
-    });
-    let (guard, result, request_json) = preview_data(
-        &state,
-        &mut tx,
-        &action,
-        Some(&group_id),
-        Some(expected_revision.unwrap_or_default()),
-        &affected,
-        &proposal_for_snapshot,
-        &old_pairs,
-        &new_pairs,
-    )
-    .await?;
-    let token = store_preview(
-        &mut tx,
-        &action,
-        Some(&group_id),
-        None,
-        request_json,
-        guard,
-        &result,
-    )
-    .await?;
-    tx.commit().await?;
-    Ok(Json(preview_json(&action, token, result)))
+    let pool = state.pool.clone();
+    db::serializable(&pool, move |tx| {
+        let (state, group_id, action, proposal) = (
+            state.clone(),
+            group_id.clone(),
+            action.clone(),
+            proposal.clone(),
+        );
+        Box::pin(async move {
+            let current = load_group_tx(tx, &group_id)
+                .await?
+                .ok_or_else(|| ApiError::not_found("authorization group"))?;
+            check_revision(current.revision, expected_revision)?;
+            if let Some(proposal) = &proposal {
+                validate_proposal_entities(tx, proposal).await?;
+            }
+            let mut affected = current.user_ids.clone();
+            if let Some(proposal) = &proposal {
+                affected.extend(proposal.user_ids.clone());
+            }
+            sort_dedup(&mut affected);
+            let old_pairs = effective_pairs(tx, &affected, None).await?;
+            let mut new_pairs = effective_pairs(tx, &affected, Some(&group_id)).await?;
+            if let Some(proposal) = &proposal {
+                add_group_pairs(&mut new_pairs, &proposal.user_ids, &proposal.node_ids);
+            }
+            let proposal_for_snapshot = proposal.unwrap_or(GroupProposal {
+                name: current.name.clone(),
+                user_ids: Vec::new(),
+                node_ids: Vec::new(),
+            });
+            let (guard, result, request_json) = preview_data(
+                &state,
+                tx,
+                &action,
+                Some(&group_id),
+                Some(expected_revision.unwrap_or_default()),
+                &affected,
+                &proposal_for_snapshot,
+                &old_pairs,
+                &new_pairs,
+            )
+            .await?;
+            let token = store_preview(
+                tx,
+                &action,
+                Some(&group_id),
+                None,
+                request_json,
+                guard,
+                &result,
+            )
+            .await?;
+            Ok(Json(preview_json(&action, token, result)))
+        })
+    })
+    .await
 }
 
 pub(crate) async fn create(
@@ -349,41 +365,47 @@ pub(crate) async fn preview_memberships(
     let proposal = normalized_membership(MembershipProposal {
         group_ids: input.group_ids,
     })?;
-    let mut tx = db::begin_write(&state.pool).await?;
-    let revision = user_revision(&mut tx, &user_id).await?;
-    check_revision(revision, Some(input.expected_revision))?;
-    validate_group_ids(&mut tx, &proposal.group_ids).await?;
-    let old_pairs = effective_pairs(&mut tx, std::slice::from_ref(&user_id), None).await?;
-    let new_pairs = pairs_for_user_groups(&mut tx, &user_id, &proposal.group_ids).await?;
-    let guard = guard_snapshot(
-        &mut tx,
-        std::slice::from_ref(&user_id),
-        None,
-        &proposal.group_ids,
-        &[],
-    )
-    .await?;
-    let (additions, removals) = pair_diff(&old_pairs, &new_pairs);
-    let request_json = json!({
-        "expected_revision": input.expected_revision,
-        "group_ids": proposal.group_ids,
-    });
-    let result = with_plan(
-        diff_json(&additions, &removals),
-        crate::credentials::authorization::plan_on(&mut tx, &additions).await?,
-    );
-    let token = store_preview(
-        &mut tx,
-        "update_memberships",
-        None,
-        Some(&user_id),
-        request_json,
-        guard,
-        &result,
-    )
-    .await?;
-    tx.commit().await?;
-    Ok(Json(preview_json("update_memberships", token, result)))
+    let expected_revision = input.expected_revision;
+    let pool = state.pool.clone();
+    db::serializable(&pool, move |tx| {
+        let (_state, user_id, proposal) = (state.clone(), user_id.clone(), proposal.clone());
+        Box::pin(async move {
+            let revision = user_revision(tx, &user_id).await?;
+            check_revision(revision, Some(expected_revision))?;
+            validate_group_ids(tx, &proposal.group_ids).await?;
+            let old_pairs = effective_pairs(tx, std::slice::from_ref(&user_id), None).await?;
+            let new_pairs = pairs_for_user_groups(tx, &user_id, &proposal.group_ids).await?;
+            let guard = guard_snapshot(
+                tx,
+                std::slice::from_ref(&user_id),
+                None,
+                &proposal.group_ids,
+                &[],
+            )
+            .await?;
+            let (additions, removals) = pair_diff(&old_pairs, &new_pairs);
+            let request_json = json!({
+                "expected_revision": expected_revision,
+                "group_ids": proposal.group_ids,
+            });
+            let result = with_plan(
+                diff_json(&additions, &removals),
+                crate::credentials::authorization::plan_on(tx, &additions).await?,
+            );
+            let token = store_preview(
+                tx,
+                "update_memberships",
+                None,
+                Some(&user_id),
+                request_json,
+                guard,
+                &result,
+            )
+            .await?;
+            Ok(Json(preview_json("update_memberships", token, result)))
+        })
+    })
+    .await
 }
 
 pub(crate) async fn update_memberships(
@@ -824,8 +846,10 @@ async fn store_preview(
     result_json: &Value,
 ) -> Result<String, ApiError> {
     let token = Uuid::new_v4().to_string();
-    let timestamp = now();
-    sqlx::query("DELETE FROM authorization_group_previews WHERE expires_at <= $1")
+    let timestamp: DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
+        .fetch_one(&mut **tx)
+        .await?;
+    sqlx::query("DELETE FROM authorization_group_previews WHERE token IN (SELECT token FROM authorization_group_previews WHERE expires_at <= $1 ORDER BY expires_at,token LIMIT 256 FOR UPDATE SKIP LOCKED)")
         .bind(timestamp)
         .execute(&mut **tx)
         .await?;
@@ -852,7 +876,6 @@ struct PreviewRow {
     request_json: Value,
     guard_json: Value,
     result_json: Value,
-    expires_at: DateTime<Utc>,
     consumed_at: Option<DateTime<Utc>>,
 }
 
@@ -860,7 +883,7 @@ async fn load_preview(
     tx: &mut Transaction<'_, Postgres>,
     token: &str,
 ) -> Result<PreviewRow, ApiError> {
-    let row = sqlx::query("SELECT action,group_id,user_id,request_json,guard_json,result_json,expires_at,consumed_at FROM authorization_group_previews WHERE token=$1 FOR UPDATE")
+    let row = sqlx::query("SELECT action,group_id,user_id,request_json,guard_json,result_json,expires_at,consumed_at,expires_at>clock_timestamp() AS unexpired FROM authorization_group_previews WHERE token=$1 FOR UPDATE")
         .bind(token)
         .fetch_optional(&mut **tx)
         .await?
@@ -872,10 +895,9 @@ async fn load_preview(
         request_json: row.get("request_json"),
         guard_json: row.get("guard_json"),
         result_json: row.get("result_json"),
-        expires_at: row.get("expires_at"),
         consumed_at: row.get("consumed_at"),
     };
-    if preview.consumed_at.is_some() || preview.expires_at <= now() {
+    if preview.consumed_at.is_some() || !row.get::<bool, _>("unexpired") {
         return Err(ApiError::conflict(
             "preview token has expired or was already used; preview the change again",
         ));
@@ -1544,7 +1566,7 @@ async fn assignments_json(
 mod tests {
     use super::*;
 
-    async fn fixture() -> AppState {
+    pub(super) async fn fixture() -> AppState {
         let state = crate::kick_requests::tests::fixture().await;
         sqlx::query("UPDATE nodes SET desired_config_enc=$1 WHERE id='node'")
             .bind(state.secrets.encrypt("{}").unwrap())
@@ -1814,3 +1836,6 @@ mod tests {
         assert_eq!(normalized_proposal(proposal).unwrap().user_ids.len(), 601);
     }
 }
+
+#[cfg(test)]
+mod transaction_tests;
