@@ -100,8 +100,8 @@ async fn receipt(
     digest: &str,
     result: &Value,
 ) -> Result<(), ApiError> {
-    sqlx::query("INSERT INTO mtls_operations(actor_id,idempotency_key,operation,request_digest,receipt,created_at) VALUES($1,$2,$3,$4,$5,$6)")
-        .bind(&actor.id).bind(key).bind(operation).bind(digest).bind(result).bind(Utc::now()).execute(&mut **tx).await?;
+    sqlx::query("INSERT INTO mtls_operations(actor_id,idempotency_key,operation,request_digest,receipt,created_at) VALUES($1,$2,$3,$4,$5,clock_timestamp())")
+        .bind(&actor.id).bind(key).bind(operation).bind(digest).bind(result).execute(&mut **tx).await?;
     Ok(())
 }
 
@@ -387,32 +387,57 @@ pub struct PublishAuthority {
     pub idempotency_key: String,
 }
 
-async fn publish_inner(
-    State(state): State<AppState>,
-    Extension(actor): Extension<AdminActor>,
-    Path(id): Path<String>,
-    Json(input): Json<PublishAuthority>,
-) -> Result<(StatusCode, Json<Value>), ApiError> {
+#[derive(Clone)]
+struct PreparedAuthorityMaterial {
+    payload_enc: String,
+    metadata: Value,
+    expires_at: DateTime<Utc>,
+    batch_id: String,
+    rotation_id: String,
+}
+
+#[derive(Clone)]
+pub(crate) struct PreparedAuthorityPublication {
+    actor: AdminActor,
+    id: String,
+    input: PublishAuthority,
+    digest: String,
+    source: Option<String>,
+    material: Option<PreparedAuthorityMaterial>,
+    replay: Option<Value>,
+}
+
+pub(crate) async fn prepare_authority_publication(
+    state: &AppState,
+    actor: AdminActor,
+    id: String,
+    input: PublishAuthority,
+) -> Result<PreparedAuthorityPublication, ApiError> {
     validate_key(&input.idempotency_key)?;
     let digest = digest(&(&id, &input))?;
-    if let Some(value) = existing(
+    let replay = existing(
         &mut *state.pool.acquire().await?,
         &actor,
         &input.idempotency_key,
         "ca.publish",
         &digest,
     )
-    .await?
-    {
-        return Ok((StatusCode::ACCEPTED, Json(value)));
+    .await?;
+    if replay.is_some() {
+        return Ok(PreparedAuthorityPublication {
+            actor,
+            id,
+            input,
+            digest,
+            source: None,
+            material: None,
+            replay,
+        });
     }
-    let source: String =
-        sqlx::query_scalar("SELECT source FROM mtls_authorities WHERE credential_id=$1")
-            .bind(&id)
-            .fetch_optional(&state.pool)
-            .await?
-            .ok_or_else(|| ApiError::not_found("CA identity"))?;
-    let now = Utc::now();
+    let row=sqlx::query("SELECT source,clock_timestamp() AS database_now FROM mtls_authorities WHERE credential_id=$1")
+        .bind(&id).fetch_optional(&state.pool).await?.ok_or_else(||ApiError::not_found("CA identity"))?;
+    let source: String = row.get("source");
+    let now: DateTime<Utc> = row.get("database_now");
     let authority = if source == "generated" {
         if input.certificate.is_some() || input.private_key.is_some() {
             return Err(ApiError::bad_request(
@@ -439,26 +464,59 @@ async fn publish_inner(
             .map_err(|_| ApiError::internal())?
             .map_err(bad)?
     };
-    let authority = std::sync::Arc::new(authority);
-    let pool = state.pool.clone();
-    let (request_actor, request_key, request_digest) =
-        (actor.clone(), input.idempotency_key.clone(), digest.clone());
-    let result=managed_transaction(&pool,&request_actor,&request_key,"ca.publish",&request_digest,move |tx| {
-        let (state,actor,input,digest,id,source,authority)=(state.clone(),actor.clone(),input.clone(),digest.clone(),id.clone(),source.clone(),authority.clone());
-        Box::pin(async move {
+    let mut metadata = authority.metadata.clone();
+    metadata["source"] = json!(source);
+    metadata["trust_anchor_certificate"] = json!(authority.trust_anchor().map_err(bad)?);
+    let material = PreparedAuthorityMaterial {
+        payload_enc: state
+            .secrets
+            .encrypt(&authority.payload().to_string())
+            .map_err(ApiError::from)?,
+        metadata,
+        expires_at: authority.expires_at,
+        batch_id: uuid::Uuid::new_v4().to_string(),
+        rotation_id: uuid::Uuid::new_v4().to_string(),
+    };
+    Ok(PreparedAuthorityPublication {
+        actor,
+        id,
+        input,
+        digest,
+        source: Some(source),
+        material: Some(material),
+        replay: None,
+    })
+}
 
-    if let Some(value) = existing(
-        tx,
-        &actor,
-        &input.idempotency_key,
-        "ca.publish",
-        &digest,
-    )
-    .await?
+pub(crate) async fn publish_authority_on(
+    tx: &mut Transaction<'_, Postgres>,
+    prepared: PreparedAuthorityPublication,
+) -> Result<Value, ApiError> {
+    let PreparedAuthorityPublication {
+        actor,
+        id,
+        input,
+        digest,
+        source,
+        material,
+        ..
+    } = prepared;
+
+    if let Some(value) = existing(tx, &actor, &input.idempotency_key, "ca.publish", &digest).await?
     {
         return Ok(value);
     }
-    lock_ca_on(tx,&id,true).await?;
+    let material = material.ok_or_else(ApiError::internal)?;
+    let source = source.ok_or_else(ApiError::internal)?;
+    lock_ca_on(tx, &id, true).await?;
+    let now: DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
+        .fetch_one(&mut **tx)
+        .await?;
+    if material.expires_at <= now {
+        return Err(ApiError::conflict(
+            "prepared CA expired; prepare the publication again",
+        ));
+    }
     let row = sqlx::query("SELECT c.revision,c.latest_version,c.archived,a.source,a.published_version FROM credentials c JOIN mtls_authorities a ON a.credential_id=c.id WHERE c.id=$1").bind(&id).fetch_optional(&mut **tx).await?.ok_or_else(|| ApiError::not_found("CA identity"))?;
     if row.get::<i64, _>("revision") != input.expected_revision
         || row.get::<bool, _>("archived")
@@ -473,7 +531,7 @@ async fn publish_inner(
         let previous: i64 = pending.get("ca_version");
         let unpublished = matches!(phase.as_str(), "trust" | "identities" | "publish");
         let expired_publication =
-            phase == "probes" && pending.get::<DateTime<Utc>, _>("expires_at") <= Utc::now();
+            phase == "probes" && pending.get::<DateTime<Utc>, _>("expires_at") <= now;
         if input.replace_rotation_id.as_deref() != Some(previous_id.as_str())
             || !(unpublished || expired_publication)
         {
@@ -485,13 +543,13 @@ async fn publish_inner(
             sqlx::query("UPDATE mtls_ca_generations SET state='retired' WHERE ca_id=$1 AND ca_version=$2 AND state='preparing'").bind(&id).bind(previous).execute(&mut **tx).await?;
             sqlx::query("UPDATE mtls_user_versions SET discarded=TRUE WHERE ca_id=$1 AND ca_version=$2 AND NOT released").bind(&id).bind(previous).execute(&mut **tx).await?;
             let deadline:Option<DateTime<Utc>>=sqlx::query_scalar("SELECT max(expires_at)+interval '5 minutes' FROM(SELECT expires_at FROM mtls_user_versions WHERE ca_id=$1 AND ca_version=$2 UNION ALL SELECT expires_at FROM mtls_probe_versions WHERE ca_id=$1 AND ca_version=$2) materials").bind(&id).bind(previous).fetch_one(&mut **tx).await?;
-            sqlx::query("INSERT INTO mtls_trust_cleanup(ca_id,ca_version,next_action_at) VALUES($1,$2,$3) ON CONFLICT DO NOTHING").bind(&id).bind(previous).bind(deadline.unwrap_or_else(Utc::now)).execute(&mut **tx).await?;
+            sqlx::query("INSERT INTO mtls_trust_cleanup(ca_id,ca_version,next_action_at) VALUES($1,$2,$3) ON CONFLICT DO NOTHING").bind(&id).bind(previous).bind(deadline.unwrap_or(now)).execute(&mut **tx).await?;
         }
-        let cancelled=sqlx::query("UPDATE jobs j SET status='cancelled',stage='ca_target_superseded',updated_at=$2,finished_at=$2 FROM mtls_node_operations o WHERE o.job_id=j.id AND o.rotation_id=$1 AND j.status IN ('queued','waiting_confirmation') RETURNING j.id,j.kind,j.node_id").bind(&previous_id).bind(Utc::now()).fetch_all(&mut **tx).await?;
+        let cancelled=sqlx::query("UPDATE jobs j SET status='cancelled',stage='ca_target_superseded',updated_at=$2,finished_at=$2 FROM mtls_node_operations o WHERE o.job_id=j.id AND o.rotation_id=$1 AND j.status IN ('queued','waiting_confirmation') RETURNING j.id,j.kind,j.node_id").bind(&previous_id).bind(now).fetch_all(&mut **tx).await?;
         for job in cancelled {
             crate::kick_requests::event(tx,&job.get::<String,_>("id"),"job.cancelled",json!({"id":job.get::<String,_>("id"),"kind":job.get::<String,_>("kind"),"node_id":job.get::<Option<String>,_>("node_id"),"status":"cancelled","stage":"ca_target_superseded"})).await?;
         }
-        sqlx::query("UPDATE mtls_rotations SET phase='complete',outcome=$3,error_message='Target was replaced by an explicit publication request',updated_at=$2 WHERE id=$1").bind(&previous_id).bind(Utc::now()).bind(if unpublished{"superseded_unpublished_target"}else{"superseded_expired_publication"}).execute(&mut **tx).await?;
+        sqlx::query("UPDATE mtls_rotations SET phase='complete',outcome=$3,error_message='Target was replaced by an explicit publication request',updated_at=$2 WHERE id=$1").bind(&previous_id).bind(now).bind(if unpublished{"superseded_unpublished_target"}else{"superseded_expired_publication"}).execute(&mut **tx).await?;
         super::credentials::record(
             tx,
             &actor,
@@ -506,11 +564,8 @@ async fn publish_inner(
         ));
     }
     let version = row.get::<i64, _>("latest_version") + 1;
-    let mut metadata = authority.metadata.clone();
-    metadata["source"] = json!(source);
-    metadata["trust_anchor_certificate"] = json!(authority.trust_anchor().map_err(bad)?);
     sqlx::query("INSERT INTO credential_versions(credential_id,version,payload_enc,metadata,created_at) VALUES($1,$2,$3,$4,$5)")
-        .bind(&id).bind(version).bind(state.secrets.encrypt(&authority.payload().to_string())?).bind(metadata).bind(now).execute(&mut **tx).await?;
+        .bind(&id).bind(version).bind(material.payload_enc).bind(material.metadata).bind(now).execute(&mut **tx).await?;
     sqlx::query(
         "UPDATE credentials SET latest_version=$2,revision=revision+1,updated_at=$3 WHERE id=$1",
     )
@@ -519,7 +574,7 @@ async fn publish_inner(
     .bind(now)
     .execute(&mut **tx)
     .await?;
-    let batch = uuid::Uuid::new_v4().to_string();
+    let batch = material.batch_id;
     sqlx::query(
         "INSERT INTO credential_batches(id,credential_id,version,created_at) VALUES($1,$2,$3,$4)",
     )
@@ -532,8 +587,8 @@ async fn publish_inner(
     // A historical or deferred user identity also needs a coordinated transition.
     let referenced: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM mtls_node_trust WHERE ca_id=$1 UNION ALL SELECT 1 FROM mtls_user_identities WHERE ca_id=$1)").bind(&id).fetch_one(&mut **tx).await?;
     let rotation = if referenced {
-        sqlx::query("INSERT INTO mtls_ca_generations(ca_id,ca_version,state,expires_at) VALUES($1,$2,'preparing',$3)").bind(&id).bind(version).bind(authority.expires_at).execute(&mut **tx).await?;
-        let rotation = uuid::Uuid::new_v4().to_string();
+        sqlx::query("INSERT INTO mtls_ca_generations(ca_id,ca_version,state,expires_at) VALUES($1,$2,'preparing',$3)").bind(&id).bind(version).bind(material.expires_at).execute(&mut **tx).await?;
+        let rotation = material.rotation_id;
         sqlx::query("INSERT INTO mtls_rotations(id,ca_id,ca_version,phase,batch_id,next_action_at,created_at,updated_at) VALUES($1,$2,$3,'trust',$4,$5,$5,$5)")
             .bind(&rotation).bind(&id).bind(version).bind(&batch).bind(now).execute(&mut **tx).await?;
         sqlx::query("INSERT INTO mtls_rotation_nodes(rotation_id,node_id,expected_revision) SELECT DISTINCT $1,t.node_id,n.desired_revision FROM mtls_node_trust t JOIN nodes n ON n.id=t.node_id WHERE t.ca_id=$2 AND (t.desired OR t.deployed)")
@@ -546,9 +601,9 @@ async fn publish_inner(
         .bind(&id)
         .execute(&mut **tx)
         .await?;
-        sqlx::query("INSERT INTO mtls_ca_generations(ca_id,ca_version,state,expires_at,published_at) VALUES($1,$2,'published',$3,$4)").bind(&id).bind(version).bind(authority.expires_at).bind(now).execute(&mut **tx).await?;
+        sqlx::query("INSERT INTO mtls_ca_generations(ca_id,ca_version,state,expires_at,published_at) VALUES($1,$2,'published',$3,$4)").bind(&id).bind(version).bind(material.expires_at).bind(now).execute(&mut **tx).await?;
         sqlx::query("UPDATE mtls_authorities SET published_version=$2,next_action_at=$3,maintenance_error=NULL WHERE credential_id=$1")
-            .bind(&id).bind(version).bind((source=="generated").then_some(authority.expires_at - Duration::days(365))).execute(&mut **tx).await?;
+            .bind(&id).bind(version).bind((source=="generated").then_some(material.expires_at - Duration::days(365))).execute(&mut **tx).await?;
         None
     };
     if let Some(rotation) = &rotation {
@@ -578,8 +633,35 @@ async fn publish_inner(
     )
     .await?;
     Ok(result)
-        })
-    }).await?;
+}
+
+async fn publish_inner(
+    State(state): State<AppState>,
+    Extension(actor): Extension<AdminActor>,
+    Path(id): Path<String>,
+    Json(input): Json<PublishAuthority>,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    let prepared = prepare_authority_publication(&state, actor, id, input).await?;
+    if let Some(value) = prepared.replay.clone() {
+        return Ok((StatusCode::ACCEPTED, Json(value)));
+    }
+    let (actor, key, digest) = (
+        prepared.actor.clone(),
+        prepared.input.idempotency_key.clone(),
+        prepared.digest.clone(),
+    );
+    let result = managed_transaction(
+        &state.pool,
+        &actor,
+        &key,
+        "ca.publish",
+        &digest,
+        move |tx| {
+            let prepared = prepared.clone();
+            Box::pin(async move { publish_authority_on(tx, prepared).await })
+        },
+    )
+    .await?;
     Ok((StatusCode::ACCEPTED, Json(result)))
 }
 
