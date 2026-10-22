@@ -17,6 +17,7 @@ use uuid::Uuid;
 
 const PAGE: i64 = 100;
 
+mod cleanup;
 mod metadata;
 mod probes;
 mod publication;
@@ -31,12 +32,18 @@ pub(super) async fn run_preparation(state: AppState) {
         publication::run(state.clone()),
         metadata::run(state.clone()),
         release::run(state.clone()),
-        probes::run(state)
+        probes::run(state.clone()),
+        cleanup::run(state)
     );
 }
 
 pub async fn members_on(connection: &mut sqlx::PgConnection, ca: &str) -> Result<Vec<String>> {
     Ok(sqlx::query_scalar("SELECT DISTINCT node_id FROM (SELECT node_id FROM mtls_node_trust WHERE ca_id=$1 AND (desired OR deployed) UNION SELECT node_id FROM mtls_live_activation_trust WHERE ca_id=$1) members ORDER BY node_id").bind(ca).fetch_all(connection).await?)
+}
+
+async fn member_on(connection: &mut sqlx::PgConnection, node: &str, ca: &str) -> Result<bool> {
+    Ok(sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM mtls_node_trust WHERE node_id=$1 AND ca_id=$2 AND (desired OR deployed) UNION ALL SELECT 1 FROM mtls_live_activation_trust WHERE node_id=$1 AND ca_id=$2)")
+        .bind(node).bind(ca).fetch_one(connection).await?)
 }
 
 async fn proof_on(
@@ -215,70 +222,7 @@ async fn retention_deadline(
 }
 
 async fn cleanup_pass(state: &AppState) -> Result<()> {
-    let now = Utc::now();
-    let mut cursor = (
-        DateTime::<Utc>::from_timestamp(0, 0).expect("Unix epoch"),
-        String::new(),
-        0_i64,
-    );
-    loop {
-        let rows:Vec<(String,i64,DateTime<Utc>)>=sqlx::query_as("SELECT ca_id,ca_version,next_action_at FROM mtls_trust_cleanup WHERE completed_at IS NULL AND next_action_at<=$1 AND (next_action_at,ca_id,ca_version)>($2,$3,$4) ORDER BY next_action_at,ca_id,ca_version LIMIT $5").bind(now).bind(cursor.0).bind(&cursor.1).bind(cursor.2).bind(PAGE).fetch_all(&state.pool).await?;
-        if rows.is_empty() {
-            break;
-        }
-        for (ca, version, due) in rows {
-            cursor = (due, ca.clone(), version);
-            let mut tx = db::begin_write(&state.pool).await?;
-            let deadline = retention_deadline(&mut tx, &ca, version).await?;
-            if deadline > Utc::now() {
-                sqlx::query(
-                "UPDATE mtls_trust_cleanup SET next_action_at=$3 WHERE ca_id=$1 AND ca_version=$2",
-            )
-            .bind(&ca)
-            .bind(version)
-            .bind(deadline)
-            .execute(&mut *tx)
-            .await?;
-                tx.commit().await?;
-                continue;
-            }
-            let nodes:Vec<String>=sqlx::query_scalar("SELECT node_id FROM mtls_node_trust WHERE ca_id=$1 AND ca_version=$2 AND deployed UNION SELECT node_id FROM mtls_live_activation_trust WHERE ca_id=$1 AND ca_version=$2 ORDER BY node_id").bind(&ca).bind(version).fetch_all(&mut *tx).await?;
-            for node in &nodes {
-                sqlx::query("INSERT INTO mtls_cleanup_nodes(ca_id,ca_version,node_id) VALUES($1,$2,$3) ON CONFLICT DO NOTHING").bind(&ca).bind(version).bind(node).execute(&mut *tx).await?;
-                let prior:Option<(String,String)>=sqlx::query_as("SELECT j.id,j.status FROM mtls_cleanup_nodes c JOIN jobs j ON j.id=c.job_id WHERE c.ca_id=$1 AND c.ca_version=$2 AND c.node_id=$3").bind(&ca).bind(version).bind(node).fetch_optional(&mut *tx).await?;
-                if let Some((job, status)) = prior
-                    && (matches!(
-                        status.as_str(),
-                        "queued" | "running" | "waiting_confirmation"
-                    ) || !operation_stale_on(&mut tx, &job).await?)
-                {
-                    continue;
-                }
-                let ready: bool =
-                    sqlx::query_scalar("SELECT mtls_state='ready' FROM nodes WHERE id=$1")
-                        .bind(node)
-                        .fetch_one(&mut *tx)
-                        .await?;
-                if !ready {
-                    continue;
-                }
-                let job = enqueue_node(&mut tx, node, &ca, version, None, "cleanup").await?;
-                sqlx::query("UPDATE mtls_cleanup_nodes SET job_id=$4,completed=FALSE,error_message=NULL WHERE ca_id=$1 AND ca_version=$2 AND node_id=$3").bind(&ca).bind(version).bind(node).bind(job).execute(&mut *tx).await?;
-            }
-            if nodes.is_empty() {
-                sqlx::query(
-                "UPDATE mtls_trust_cleanup SET completed_at=$3 WHERE ca_id=$1 AND ca_version=$2",
-            )
-            .bind(&ca)
-            .bind(version)
-            .bind(Utc::now())
-            .execute(&mut *tx)
-            .await?;
-            }
-            tx.commit().await?;
-        }
-    }
-    Ok(())
+    cleanup::pass(state).await
 }
 
 pub struct JobContext {
@@ -312,13 +256,13 @@ pub async fn validate_job_on(connection: &mut sqlx::PgConnection, job: &JobInput
             "cleanup generation is no longer pending"
         );
         ensure!(
-            retention_deadline(
+            cleanup::retention_due_on(
                 connection,
                 &row.get::<String, _>("ca_id"),
                 row.get("ca_version")
             )
             .await?
-                <= Utc::now(),
+            .0,
             "historical certificates still require the old trust anchor"
         );
     }
@@ -345,9 +289,12 @@ pub async fn validate_job_on(connection: &mut sqlx::PgConnection, job: &JobInput
         );
     }
     ensure!(
-        members_on(connection, &row.get::<String, _>("ca_id"))
-            .await?
-            .contains(&row.get::<String, _>("node_id")),
+        member_on(
+            connection,
+            &row.get::<String, _>("node_id"),
+            &row.get::<String, _>("ca_id")
+        )
+        .await?,
         "node no longer participates in this CA identity"
     );
     Ok(true)
@@ -446,7 +393,7 @@ pub async fn operation_completed(tx: &mut Transaction<'_, Postgres>, job: &JobIn
         );
         sqlx::query("UPDATE mtls_rotation_nodes SET trust_prepared=TRUE,error_message=NULL WHERE rotation_id=$1 AND node_id=$2 AND job_id=$3").bind(row.get::<Option<String>,_>("rotation_id")).bind(&node).bind(&job.id).execute(&mut **tx).await?;
     } else {
-        let remains:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM mtls_node_trust WHERE node_id=$1 AND ca_id=$2 AND ca_version=$3 AND deployed)").bind(&node).bind(&ca).bind(version).fetch_one(&mut **tx).await?;
+        let remains = cleanup::member_on(tx, &node, &ca, version).await?;
         ensure!(!remains, "old CA trust was not actually removed");
         sqlx::query("UPDATE mtls_cleanup_nodes SET completed=TRUE,error_message=NULL WHERE ca_id=$1 AND ca_version=$2 AND node_id=$3 AND job_id=$4").bind(ca).bind(version).bind(node).bind(&job.id).execute(&mut **tx).await?;
     }
@@ -473,7 +420,7 @@ pub async fn retry_node_job(
     let stage: String = row.get("stage");
     let rotation: Option<String> = row.get("rotation_id");
     ensure!(
-        members_on(tx, &ca).await?.contains(&node),
+        member_on(tx, &node, &ca).await?,
         "node no longer uses this CA identity"
     );
     if let Some(id) = &rotation {

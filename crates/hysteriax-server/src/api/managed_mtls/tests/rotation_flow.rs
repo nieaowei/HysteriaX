@@ -377,6 +377,10 @@ async fn continuous_publications_do_not_wait_for_old_certificates_and_cleanup_pr
     .await
     .unwrap();
     assert_eq!(trust, vec![2, 3, 4]);
+    // Advance the durable cleanup schedule as well as the retained-leaf time.
+    // The recurring worker deliberately waits between pages and acknowledgments.
+    sqlx::query("UPDATE mtls_trust_cleanup SET next_action_at=clock_timestamp() WHERE ca_id=$1 AND ca_version=1").bind(&ca).execute(&state.pool).await.unwrap();
+    sqlx::query("UPDATE background_work SET available_at=clock_timestamp() WHERE kind='mtls-trust-cleanup-page' AND payload->>'ca_id'=$1 AND payload->>'ca_version'='1' AND state='queued'").bind(&ca).execute(&state.pool).await.unwrap();
     rotations::run_pass(&state).await.unwrap();
     let completed: bool = sqlx::query_scalar(
         "SELECT completed_at IS NOT NULL FROM mtls_trust_cleanup WHERE ca_id=$1 AND ca_version=1",
@@ -1530,4 +1534,8 @@ pub(crate) async fn probe_switch_fixture() -> (AppState, String, String, Vec<Str
     assert_eq!(published(&state, &ca).await, 2);
     sqlx::raw_sql("DO $$ DECLARE r record; BEGIN FOR r IN SELECT c.relname,t.tgname FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_proc p ON p.oid=t.tgfoid WHERE c.relnamespace=current_schema()::regnamespace AND p.proname='hysteriax_serialize_writes' LOOP EXECUTE format('ALTER TABLE %I DISABLE TRIGGER %I',r.relname,r.tgname); END LOOP; END $$").execute(&state.pool).await.unwrap();
     (state, ca, rotation, nodes)
+}
+
+pub(crate) async fn complete_cleanup_fixture(state: &AppState, job: &str) {
+    complete_operation(state, job).await;
 }
