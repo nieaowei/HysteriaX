@@ -17,6 +17,12 @@ use uuid::Uuid;
 
 const PAGE: i64 = 100;
 
+mod trust;
+
+pub(super) async fn run_trust(state: AppState) {
+    trust::run(state).await;
+}
+
 pub async fn members_on(connection: &mut sqlx::PgConnection, ca: &str) -> Result<Vec<String>> {
     Ok(sqlx::query_scalar("SELECT DISTINCT node_id FROM (SELECT node_id FROM mtls_node_trust WHERE ca_id=$1 AND (desired OR deployed) UNION SELECT node_id FROM mtls_live_activation_trust WHERE ca_id=$1) members ORDER BY node_id").bind(ca).fetch_all(connection).await?)
 }
@@ -27,8 +33,8 @@ async fn proof_on(
     ca: &str,
     version: i64,
 ) -> Result<bool> {
-    Ok(sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM nodes n JOIN mtls_activations a ON a.id=n.mtls_activation_id JOIN mtls_probe_versions p ON p.node_id=n.id AND p.credential_id=a.probe_credential_id AND p.credential_version=a.probe_credential_version JOIN mtls_node_trust t ON t.node_id=n.id AND t.ca_id=p.ca_id AND t.ca_version=p.ca_version WHERE n.id=$1 AND n.mtls_state='ready' AND a.phase='committed' AND n.deployed_content_sha256=a.target_digest AND p.ca_id=$2 AND p.ca_version=$3 AND NOT p.discarded AND p.expires_at>$4 AND t.deployed)")
-        .bind(node).bind(ca).bind(version).bind(Utc::now()).fetch_one(connection).await?)
+    Ok(sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM nodes n JOIN mtls_activations a ON a.id=n.mtls_activation_id JOIN mtls_probe_versions p ON p.node_id=n.id AND p.credential_id=a.probe_credential_id AND p.credential_version=a.probe_credential_version JOIN mtls_node_trust t ON t.node_id=n.id AND t.ca_id=p.ca_id AND t.ca_version=p.ca_version WHERE n.id=$1 AND n.mtls_state='ready' AND a.phase='committed' AND n.deployed_content_sha256=a.target_digest AND p.ca_id=$2 AND p.ca_version=$3 AND NOT p.discarded AND p.expires_at>clock_timestamp() AND t.deployed)")
+        .bind(node).bind(ca).bind(version).fetch_one(connection).await?)
 }
 
 pub async fn run_pass(state: &AppState) -> Result<()> {
@@ -109,54 +115,20 @@ pub async fn advance(state: &AppState, id: &str) -> Result<()> {
     if phase == "complete" {
         return Ok(());
     }
-    let mut tx = db::begin_write(&state.pool).await?;
-    let members = refresh_members(&mut tx, id, &ca, version).await?;
-    let mut waiting = Vec::new();
-    if phase != "probes" {
-        for node in &members {
-            if proof_on(&mut tx, node, &ca, version).await? {
-                continue;
-            }
-            waiting.push(node.clone());
-            let item=sqlx::query("SELECT p.job_id,j.status FROM mtls_rotation_nodes p LEFT JOIN jobs j ON j.id=p.job_id WHERE p.rotation_id=$1 AND p.node_id=$2").bind(id).bind(node).fetch_one(&mut *tx).await?;
-            let status: Option<String> = item.get("status");
-            if status
-                .as_deref()
-                .is_some_and(|s| matches!(s, "queued" | "running" | "waiting_confirmation"))
-            {
-                continue;
-            }
-            let retry: bool = row.get("retry_requested");
-            if let Some(previous) = item.get::<Option<String>, _>("job_id")
-                && status.as_deref() != Some("succeeded")
-                && !retry
-                && !operation_stale_on(&mut tx, &previous).await?
-            {
-                continue;
-            }
-            let access: String = sqlx::query_scalar("SELECT mtls_state FROM nodes WHERE id=$1")
-                .bind(node)
-                .fetch_one(&mut *tx)
-                .await?;
-            if access != "ready" {
-                continue;
-            }
-            let job = enqueue_node(&mut tx, node, &ca, version, Some(id), "trust").await?;
-            sqlx::query("UPDATE mtls_rotation_nodes SET job_id=$3,error_message=NULL WHERE rotation_id=$1 AND node_id=$2").bind(id).bind(node).bind(job).execute(&mut *tx).await?;
-        }
-        if !waiting.is_empty() {
-            sqlx::query("UPDATE mtls_rotations SET phase='trust',error_message=$2,next_action_at=$3,retry_requested=FALSE,updated_at=$4 WHERE id=$1")
-                .bind(id).bind(format!("Waiting for trust preparation on nodes: {}",waiting.join(", "))).bind(Utc::now()+Duration::minutes(1)).bind(Utc::now()).execute(&mut *tx).await?;
-            tx.commit().await?;
-            return Ok(());
-        }
-    }
-    sqlx::query("INSERT INTO mtls_user_identities(id,user_id,ca_id,created_at,updated_at) SELECT gen_random_uuid()::text,a.user_id,$1,$3,$3 FROM (SELECT DISTINCT user_id FROM node_assignments WHERE node_id=ANY($2)) a ON CONFLICT(user_id,ca_id) DO NOTHING").bind(&ca).bind(&members).bind(Utc::now()).execute(&mut *tx).await?;
-    sqlx::query("UPDATE mtls_rotations SET phase=CASE WHEN phase='trust' THEN 'identities' ELSE phase END,error_message=NULL,retry_requested=FALSE,updated_at=$2 WHERE id=$1").bind(id).bind(Utc::now()).execute(&mut *tx).await?;
-    tx.commit().await?;
     if phase == "probes" {
         return switch_probes(state, id, &ca, version).await;
     }
+    if !trust::pass(state, id, &ca, version).await? {
+        return Ok(());
+    }
+    let mut tx = db::begin_write(&state.pool).await?;
+    let current: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM mtls_rotations r JOIN credentials c ON c.id=r.ca_id WHERE r.id=$1 AND r.ca_id=$2 AND r.ca_version=$3 AND r.phase IN ('identities','publish') AND NOT c.archived)")
+        .bind(id).bind(&ca).bind(version).fetch_one(&mut *tx).await?;
+    ensure!(current, "rotation changed before identity admission");
+    let members = members_on(&mut tx, &ca).await?;
+    sqlx::query("INSERT INTO mtls_user_identities(id,user_id,ca_id,created_at,updated_at) SELECT gen_random_uuid()::text,a.user_id,$1,$3,$3 FROM (SELECT DISTINCT user_id FROM node_assignments WHERE node_id=ANY($2)) a ON CONFLICT(user_id,ca_id) DO NOTHING").bind(&ca).bind(&members).bind(Utc::now()).execute(&mut *tx).await?;
+    sqlx::query("UPDATE mtls_rotations SET phase=CASE WHEN phase='trust' THEN 'identities' ELSE phase END,error_message=NULL,retry_requested=FALSE,updated_at=$2 WHERE id=$1").bind(id).bind(Utc::now()).execute(&mut *tx).await?;
+    tx.commit().await?;
 
     let users:Vec<String>=sqlx::query_scalar("SELECT i.user_id FROM mtls_user_identities i JOIN users u ON u.id=i.user_id WHERE i.ca_id=$1 AND NOT i.archived AND u.enabled AND (u.expires_at IS NULL OR u.expires_at>$3) AND (u.quota_bytes IS NULL OR u.usage_bytes<u.quota_bytes) AND NOT EXISTS(SELECT 1 FROM mtls_user_versions v WHERE v.identity_id=i.id AND v.ca_version=$2 AND NOT v.discarded AND v.not_before<=$3 AND v.expires_at>$3) ORDER BY i.user_id LIMIT $4")
         .bind(&ca).bind(version).bind(Utc::now()).bind(PAGE).fetch_all(&state.pool).await?;
@@ -303,7 +275,8 @@ async fn enqueue_node(
     rotation: Option<&str>,
     stage: &str,
 ) -> Result<String> {
-    let row=sqlx::query("SELECT desired_revision,deployed_revision,mtls_activation_id,deployed_content_sha256 FROM nodes WHERE id=$1").bind(node).fetch_one(&mut **tx).await?;
+    let row=sqlx::query("SELECT desired_revision,deployed_revision,mtls_activation_id,deployed_content_sha256,clock_timestamp() AS database_now FROM nodes WHERE id=$1").bind(node).fetch_one(&mut **tx).await?;
+    let now: DateTime<Utc> = row.get("database_now");
     let base: Option<i64> = row.get("deployed_revision");
     let desired: i64 = row.get("desired_revision");
     let deployed_ca: bool = sqlx::query_scalar(
@@ -328,7 +301,7 @@ async fn enqueue_node(
     .await
     .map_err(anyhow::Error::new)?;
     sqlx::query("INSERT INTO mtls_node_operations(job_id,node_id,ca_id,ca_version,rotation_id,stage,desired_revision,base_revision,base_activation_id,base_digest,use_desired,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)")
-        .bind(&job).bind(node).bind(ca).bind(version).bind(rotation).bind(stage).bind(desired).bind(base).bind(row.get::<Option<String>,_>("mtls_activation_id")).bind(row.get::<Option<String>,_>("deployed_content_sha256")).bind(use_desired).bind(Utc::now()).execute(&mut **tx).await?;
+        .bind(&job).bind(node).bind(ca).bind(version).bind(rotation).bind(stage).bind(desired).bind(base).bind(row.get::<Option<String>,_>("mtls_activation_id")).bind(row.get::<Option<String>,_>("deployed_content_sha256")).bind(use_desired).bind(now).execute(&mut **tx).await?;
     Ok(job)
 }
 

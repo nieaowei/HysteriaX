@@ -30,13 +30,28 @@ pub async fn ensure(pool: &PgPool, key: &str, kind: &str, payload: Value) -> Res
 }
 
 pub async fn claim(pool: &PgPool, kind: &str, owner: &str) -> Result<Option<Work>> {
+    claim_selected(pool, kind, owner, None).await
+}
+
+/// Claim an exact durable work without consuming another operation's candidate.
+/// Uses the same resource acquisition, exclusion and takeover rules as `claim`.
+pub async fn claim_id(pool: &PgPool, kind: &str, owner: &str, id: &str) -> Result<Option<Work>> {
+    claim_selected(pool, kind, owner, Some(id.to_owned())).await
+}
+
+async fn claim_selected(
+    pool: &PgPool,
+    kind: &str,
+    owner: &str,
+    id: Option<String>,
+) -> Result<Option<Work>> {
     let (kind, owner) = (kind.to_owned(), owner.to_owned());
     db::write(pool,move |tx| {
-        let (kind,owner)=(kind.clone(),owner.clone());
+        let (kind,owner,id)=(kind.clone(),owner.clone(),id.clone());
         Box::pin(async move {
             let now:chrono::DateTime<chrono::Utc>=sqlx::query_scalar("SELECT clock_timestamp()").fetch_one(&mut **tx).await?;
-            let rows=sqlx::query("SELECT id,payload FROM background_work w WHERE kind=$1 AND cycle_id IS NULL AND node_id IS NULL AND state IN ('queued','running') AND available_at<=$2 AND NOT EXISTS(SELECT 1 FROM resource_leases l WHERE l.resource_key=ANY(ARRAY['work:'||w.id] || ARRAY(SELECT jsonb_array_elements_text(coalesce(w.payload->'lease_resources','[]'::jsonb)))) AND (l.blocked OR (l.owner IS NOT NULL AND l.expires_at>clock_timestamp()) OR EXISTS(SELECT 1 FROM execution_operations o WHERE o.resource_key=l.resource_key AND o.state IN ('dispatching','reconciling','needs_attention')))) ORDER BY available_at,id LIMIT 32 FOR UPDATE OF w SKIP LOCKED")
-                .bind(&kind).bind(now).fetch_all(&mut **tx).await?;
+            let rows=sqlx::query("SELECT id,payload FROM background_work w WHERE kind=$1 AND ($3::text IS NULL OR w.id=$3) AND cycle_id IS NULL AND node_id IS NULL AND state IN ('queued','running') AND available_at<=$2 AND NOT EXISTS(SELECT 1 FROM resource_leases l WHERE l.resource_key=ANY(ARRAY['work:'||w.id] || ARRAY(SELECT jsonb_array_elements_text(coalesce(w.payload->'lease_resources','[]'::jsonb)))) AND (l.blocked OR (l.owner IS NOT NULL AND l.expires_at>clock_timestamp()) OR EXISTS(SELECT 1 FROM execution_operations o WHERE o.resource_key=l.resource_key AND o.state IN ('dispatching','reconciling','needs_attention')))) ORDER BY available_at,id LIMIT 32 FOR UPDATE OF w SKIP LOCKED")
+                .bind(&kind).bind(now).bind(id).fetch_all(&mut **tx).await?;
             for row in rows {
                 let id:String=row.get("id");
                 let payload:Value=row.get("payload");
