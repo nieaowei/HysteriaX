@@ -17,6 +17,7 @@ use uuid::Uuid;
 
 const PAGE: i64 = 100;
 
+mod metadata;
 mod publication;
 mod trust;
 mod users;
@@ -25,7 +26,8 @@ pub(super) async fn run_preparation(state: AppState) {
     tokio::join!(
         trust::run(state.clone()),
         users::run(state.clone()),
-        publication::run(state)
+        publication::run(state.clone()),
+        metadata::run(state)
     );
 }
 
@@ -123,6 +125,10 @@ pub async fn advance(state: &AppState, id: &str) -> Result<()> {
     }
     if phase == "probes" {
         publication::pass(state, id).await?;
+        metadata::pass(state, id).await?;
+        if metadata::pending_on(&state.pool, id).await? {
+            return Ok(());
+        }
         return switch_probes(state, id, &ca, version).await;
     }
     if !trust::pass(state, id, &ca, version).await? {
@@ -184,7 +190,7 @@ async fn publish_ready(state: &AppState, id: &str, ca: &str, version: i64) -> Re
     sqlx::query("UPDATE mtls_authorities SET published_version=$2,maintenance_error=NULL,next_action_at=CASE WHEN source='generated' THEN (SELECT expires_at-interval '365 days' FROM mtls_ca_generations WHERE ca_id=$1 AND ca_version=$2) ELSE NULL END WHERE credential_id=$1").bind(ca).bind(version).execute(&mut *tx).await?;
     let deadline = retention_deadline(&mut tx, ca, old).await?;
     sqlx::query("INSERT INTO mtls_trust_cleanup(ca_id,ca_version,next_action_at) VALUES($1,$2,$3) ON CONFLICT DO NOTHING").bind(ca).bind(old).bind(deadline).execute(&mut *tx).await?;
-    update_node_metadata(&mut tx, &state.secrets, ca, version).await?;
+    metadata::enqueue_on(&mut tx, id, ca, version).await?;
     sqlx::query("UPDATE mtls_rotations SET phase='probes',published_at=$2,error_message=NULL,next_action_at=$2,updated_at=$2 WHERE id=$1").bind(id).bind(Utc::now()).execute(&mut *tx).await?;
     audit(
         &mut tx,
@@ -196,6 +202,7 @@ async fn publish_ready(state: &AppState, id: &str, ca: &str, version: i64) -> Re
     publication::enqueue_on(&mut tx, id, ca, version).await?;
     tx.commit().await?;
     publication::pass(state, id).await?;
+    metadata::pass(state, id).await?;
     Ok(())
 }
 
@@ -524,107 +531,6 @@ pub async fn configure_job(
                     && row.get::<DateTime<Utc>, _>("published_expires")
                         <= Utc::now() + Duration::minutes(5)),
     }))
-}
-
-async fn update_node_metadata(
-    tx: &mut Transaction<'_, Postgres>,
-    secrets: &SecretBox,
-    ca: &str,
-    version: i64,
-) -> Result<()> {
-    let nodes = members_on(tx, ca).await?;
-    for node in nodes {
-        let row = sqlx::query("SELECT * FROM nodes WHERE id=$1")
-            .bind(&node)
-            .fetch_one(&mut **tx)
-            .await?;
-        let desired: i64 = row.get("desired_revision");
-        let mut desired_options: Value =
-            serde_json::from_str(&secrets.decrypt(&row.get::<String, _>("desired_config_enc"))?)?;
-        let desired_matches = Settings::from_config(&desired_options)?
-            .authority()
-            .is_some_and(|(id, _)| id == ca);
-        let live = row
-            .get::<Option<String>, _>("deployed_config_enc")
-            .map(|v| {
-                secrets
-                    .decrypt(&v)
-                    .and_then(|v| Ok(serde_json::from_str::<Value>(&v)?))
-            })
-            .transpose()?;
-        let live_matches = live.as_ref().is_some_and(|v| {
-            Settings::from_config(v)
-                .ok()
-                .and_then(|p| p.authority().map(|(id, _)| id.to_owned()))
-                .as_deref()
-                == Some(ca)
-        });
-        if desired_matches {
-            desired_options["mtls"]["ca_credential_version"] = json!(version);
-        }
-        let mut next = desired;
-        if live_matches {
-            next += 1;
-            let activation: String = row
-                .get::<Option<String>, _>("mtls_activation_id")
-                .context("published node proof is missing")?;
-            let cipher: String = sqlx::query_scalar(
-                "SELECT snapshot_enc FROM mtls_activations WHERE id=$1 AND phase='committed'",
-            )
-            .bind(&activation)
-            .fetch_one(&mut **tx)
-            .await?;
-            let mut snapshot: Value = serde_json::from_str(&secrets.decrypt(&cipher)?)?;
-            snapshot["server_config"]["mtls"]["ca_credential_version"] = json!(version);
-            save_snapshot(tx, secrets, &node, next, &snapshot, true).await?;
-            sqlx::query("INSERT INTO mtls_deployment_snapshots(node_id,revision,activation_id,snapshot_enc,created_at) VALUES($1,$2,$3,$4,$5)")
-                .bind(&node).bind(next).bind(&activation).bind(secrets.encrypt(&snapshot.to_string())?).bind(Utc::now()).execute(&mut **tx).await?;
-            sqlx::query("UPDATE nodes SET deployed_revision=$2,deployed_config_enc=$3 WHERE id=$1")
-                .bind(&node)
-                .bind(next)
-                .bind(secrets.encrypt(&snapshot["server_config"].to_string())?)
-                .execute(&mut **tx)
-                .await?;
-        }
-        if desired_matches || live_matches {
-            if !live_matches || row.get::<Option<i64>, _>("deployed_revision") != Some(desired) {
-                next += 1;
-                let cipher: String = sqlx::query_scalar(
-                    "SELECT config_enc FROM config_versions WHERE node_id=$1 AND revision=$2",
-                )
-                .bind(&node)
-                .bind(desired)
-                .fetch_one(&mut **tx)
-                .await?;
-                let mut snapshot: Value = serde_json::from_str(&secrets.decrypt(&cipher)?)?;
-                snapshot["server_config"] = desired_options.clone();
-                save_snapshot(tx, secrets, &node, next, &snapshot, false).await?;
-            }
-            sqlx::query("UPDATE nodes SET desired_revision=$2,desired_config_enc=$3,updated_at=$4 WHERE id=$1").bind(&node).bind(next).bind(secrets.encrypt(&desired_options.to_string())?).bind(Utc::now()).execute(&mut **tx).await?;
-            super::node_mtls::save_target(
-                tx,
-                &node,
-                next,
-                &Settings::from_config(&desired_options)?,
-            )
-            .await?;
-        }
-        super::reference_index::flush_node_on(tx, secrets, &node).await?;
-    }
-    Ok(())
-}
-
-async fn save_snapshot(
-    tx: &mut Transaction<'_, Postgres>,
-    secrets: &SecretBox,
-    node: &str,
-    revision: i64,
-    snapshot: &Value,
-    deployed: bool,
-) -> Result<()> {
-    let plain = snapshot.to_string();
-    sqlx::query("INSERT INTO config_versions(id,node_id,revision,config_enc,content_sha256,deployed_success,created_at) VALUES($1,$2,$3,$4,$5,$6,$7)").bind(Uuid::new_v4().to_string()).bind(node).bind(revision).bind(secrets.encrypt(&plain)?).bind(hex::encode(Sha256::digest(plain.as_bytes()))).bind(deployed).bind(Utc::now()).execute(&mut **tx).await?;
-    Ok(())
 }
 
 pub async fn operation_completed(tx: &mut Transaction<'_, Postgres>, job: &JobInput) -> Result<()> {

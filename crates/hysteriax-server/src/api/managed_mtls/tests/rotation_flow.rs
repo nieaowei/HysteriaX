@@ -1389,3 +1389,73 @@ async fn record_removal_and_never_installed_delete_cannot_forget_uncertain_manag
         .unwrap();
     assert!(exists);
 }
+
+// Shared real API / activation fixture for publication metadata transaction
+// tests. The node lease keeps asynchronous metadata pending until the fixture
+// returns; it never bypasses the publication trust proof.
+pub(crate) async fn metadata_fixture(pending_edit: bool) -> (AppState, String, String, String) {
+    metadata_fixture_with_pool(
+        crate::db::test_pool_with_max_connections(4).await,
+        pending_edit,
+    )
+    .await
+}
+pub(crate) async fn metadata_fixture_with_pool(
+    pool: sqlx::PgPool,
+    pending_edit: bool,
+) -> (AppState, String, String, String) {
+    let state = super::state_with_pool(pool).await;
+    let ca = generated(&state).await;
+    let node = managed_node(&state, &ca).await;
+    let id = node["id"].as_str().unwrap().to_owned();
+    initial_deployment(&state, &node, &ca).await;
+    if pending_edit {
+        let _ = crate::api::nodes::patch(
+            State(state.clone()),
+            Path(id.clone()),
+            Json(
+                serde_json::from_value(json!({"expected_revision":1,"name":"Pending name"}))
+                    .unwrap(),
+            ),
+        )
+        .await
+        .unwrap();
+    }
+    let (_, Json(receipt)) = publish(
+        State(state.clone()),
+        actor(),
+        Path(ca.clone()),
+        Json(publish_request(1, "metadata-fixture")),
+    )
+    .await
+    .unwrap();
+    let rotation = receipt["rotation_id"].as_str().unwrap().to_owned();
+    rotations::advance(&state, &rotation).await.unwrap();
+    complete_operation(&state, &rotation_job(&state, &rotation, &id).await).await;
+    let resource = format!("node:{id}");
+    let lease = db::write::<_, anyhow::Error, _>(&state.pool, move |tx| {
+        let resource = resource.clone();
+        Box::pin(async move {
+            Ok(
+                crate::execution::acquire(tx, &resource, "fixture", "metadata-fixture-hold")
+                    .await?
+                    .unwrap(),
+            )
+        })
+    })
+    .await
+    .unwrap();
+    rotations::advance(&state, &rotation).await.unwrap();
+    assert_eq!(published(&state, &ca).await, 2);
+    db::write::<_, anyhow::Error, _>(&state.pool, move |tx| {
+        let lease = lease.clone();
+        Box::pin(async move {
+            lease.release(tx).await?;
+            Ok(())
+        })
+    })
+    .await
+    .unwrap();
+    sqlx::raw_sql("DO $$ DECLARE r record; BEGIN FOR r IN SELECT c.relname,t.tgname FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_proc p ON p.oid=t.tgfoid WHERE c.relnamespace=current_schema()::regnamespace AND p.proname='hysteriax_serialize_writes' LOOP EXECUTE format('ALTER TABLE %I DISABLE TRIGGER %I',r.relname,r.tgname); END LOOP; END $$").execute(&state.pool).await.unwrap();
+    (state, ca, rotation, id)
+}

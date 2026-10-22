@@ -434,10 +434,32 @@ async fn interrupted_removal_resumes_committed_batches_after_recovery() {
     assert_eq!(checkpoint["table"], "traffic_records");
     assert!(checkpoint["at"].is_string());
     assert!(checkpoint["id"].is_string());
-    recover_interrupted(&state.pool).await.unwrap();
-    let job = claim_next(&state.pool).await.unwrap().unwrap();
+    // Cancelling the Rust future starts an asynchronous PostgreSQL rollback.
+    // Recovery intentionally skips a job whose last batch still holds its row
+    // lock, so poll as the recurring recovery worker does until rollback ends.
+    let job = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            recover_interrupted(&state.pool).await.unwrap();
+            if let Some(job) = claim_next(&state.pool).await.unwrap() {
+                break job;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("committed cleanup must become recoverable after cancellation rollback");
     assert_eq!(job.id, id);
     assert_eq!(job.attempts, 2);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM job_events WHERE job_id=$1 AND event_type='job.recovered'",
+        )
+        .bind(&id)
+        .fetch_one(&state.pool)
+        .await
+        .unwrap(),
+        1
+    );
     tokio::time::timeout(Duration::from_secs(30), execute_one(state.clone(), job))
         .await
         .unwrap();

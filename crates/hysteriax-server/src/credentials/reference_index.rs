@@ -69,6 +69,31 @@ pub async fn flush_node_on(
     Ok(())
 }
 
+/// Flush only sources created by one bounded node mutation. Other historical
+/// dirty entries remain owned by the independent reference maintenance queue.
+pub(crate) async fn flush_node_sources_on(
+    connection: &mut PgConnection,
+    secrets: &SecretBox,
+    node: &str,
+    histories: &[String],
+) -> Result<(), sqlx::Error> {
+    if histories.len() > 8 {
+        return Err(sqlx::Error::Protocol(
+            "too many owned history sources".into(),
+        ));
+    }
+    sqlx::query("SELECT id FROM nodes WHERE id=$1 FOR NO KEY UPDATE")
+        .bind(node)
+        .fetch_optional(&mut *connection)
+        .await?;
+    let sources:Vec<(String,String,i64)>=sqlx::query_as("SELECT d.kind,d.source_id,d.generation FROM credential_reference_dirty d LEFT JOIN config_versions v ON d.kind='history' AND v.id=d.source_id WHERE (d.kind='node' AND d.source_id=$1) OR (d.kind='history' AND d.source_id=ANY($2::text[]) AND v.node_id=$1) ORDER BY d.kind,d.source_id FOR UPDATE OF d")
+        .bind(node).bind(histories).fetch_all(&mut *connection).await?;
+    for (kind, id, generation) in sources {
+        sync_source_on(connection, secrets, &kind, &id, generation).await?;
+    }
+    Ok(())
+}
+
 async fn sync_source_on(
     connection: &mut PgConnection,
     secrets: &SecretBox,

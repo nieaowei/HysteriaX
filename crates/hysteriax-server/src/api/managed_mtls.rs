@@ -911,4 +911,4 @@ pub(super) async fn user_identities(state: &AppState, user: &str) -> Result<Vec<
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

@@ -2,7 +2,10 @@ use super::*;
 use crate::{api::credentials as api, security::SecretBox};
 
 async fn state() -> AppState {
-    let pool = crate::db::test_pool_with_max_connections(4).await;
+    state_with_pool(crate::db::test_pool_with_max_connections(4).await).await
+}
+
+async fn state_with_pool(pool: sqlx::PgPool) -> AppState {
     let secrets = SecretBox::from_base64("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA").unwrap();
     credentials::migration::migrate(&pool, &secrets)
         .await
@@ -927,7 +930,7 @@ mod node_flow;
 
 mod authorization_flow;
 
-mod rotation_flow;
+pub(crate) mod rotation_flow;
 
 #[tokio::test]
 async fn failed_ca_requests_are_audited_with_actor_and_without_input_material() {
