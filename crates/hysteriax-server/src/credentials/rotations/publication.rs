@@ -20,13 +20,18 @@ pub(super) async fn run(state: AppState) {
     let mut shutdown = state.shutdown.subscribe();
     loop {
         tokio::select! {_=shutdown.wait_for(|stop|*stop)=>return,_=interval.tick()=>{}}
-        match maintenance::claim(&state.pool, KIND, &state.instance_id).await {
-            Ok(Some(work)) => execute(&state.pool, &work).await,
-            Ok(None) => {}
-            Err(error) => tracing::warn!(%error,"identity publication scheduling deferred"),
+        if let Err(error) = scheduled_pass(&state).await {
+            tracing::warn!(%error,"identity publication scheduling deferred");
         }
     }
 }
+pub(super) async fn scheduled_pass(state: &AppState) -> Result<()> {
+    if let Some(work) = maintenance::claim(&state.pool, KIND, &state.instance_id).await? {
+        execute(&state.pool, &work).await;
+    }
+    Ok(())
+}
+#[cfg(test)]
 pub(super) async fn pass(state: &AppState, rotation: &str) -> Result<()> {
     if let Some(work) = maintenance::claim_id(
         &state.pool,

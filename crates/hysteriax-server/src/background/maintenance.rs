@@ -35,6 +35,7 @@ pub async fn claim(pool: &PgPool, kind: &str, owner: &str) -> Result<Option<Work
 
 /// Claim an exact durable work without consuming another operation's candidate.
 /// Uses the same resource acquisition, exclusion and takeover rules as `claim`.
+#[cfg(test)]
 pub async fn claim_id(pool: &PgPool, kind: &str, owner: &str, id: &str) -> Result<Option<Work>> {
     claim_selected(pool, kind, owner, Some(id.to_owned())).await
 }

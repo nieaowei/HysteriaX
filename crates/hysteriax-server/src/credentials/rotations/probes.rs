@@ -5,6 +5,7 @@ const ADMIT: &str = "mtls-rotation-probe-admission";
 const CHILD: &str = "mtls-rotation-probe-switch";
 const SCAN: &str = "mtls-rotation-probe-scan";
 const SCAN_KEY: &str = "mtls:rotation-probes";
+#[cfg(test)]
 const CHILD_DUE: &str = "SELECT id FROM background_work WHERE kind=$1 AND payload->>'rotation_id'=$2 AND cycle_id IS NULL AND node_id IS NULL AND state IN ('queued','running') AND available_at<=$3 ORDER BY available_at,id LIMIT $4";
 const MEMBERS: &str = "SELECT node_id FROM mtls_node_trust WHERE ca_id=$1 AND (desired OR deployed) UNION SELECT node_id FROM mtls_live_activation_trust WHERE ca_id=$1";
 const ACTIVE: &str = "EXISTS(SELECT 1 FROM mtls_active_probes ap JOIN mtls_probe_versions p ON p.node_id=ap.node_id AND p.credential_id=ap.credential_id AND p.credential_version=ap.credential_version WHERE ap.node_id=n.id AND ap.ca_id=$1 AND ap.ca_version=$2 AND p.ca_id=$1 AND p.ca_version=$2 AND NOT p.discarded AND p.expires_at>clock_timestamp())";
@@ -39,7 +40,7 @@ pub(super) async fn run(state: AppState) {
         }
     }
 }
-async fn scheduled_pass(state: &AppState) -> Result<()> {
+pub(super) async fn scheduled_pass(state: &AppState) -> Result<()> {
     maintenance::ensure(&state.pool, SCAN_KEY, SCAN, json!({})).await?;
     if let Some(w) = maintenance::claim(&state.pool, SCAN, &state.instance_id).await? {
         execute(&state.pool, &w, Action::Scan).await?;
@@ -73,6 +74,7 @@ async fn execute(pool: &PgPool, work: &Work, operation: Action) -> Result<()> {
     }
     Ok(())
 }
+#[cfg(test)]
 pub(super) async fn pass(state: &AppState, rotation: &str, ca: &str, version: i64) -> Result<()> {
     let (r, c) = (rotation.to_owned(), ca.to_owned());
     db::write::<_, anyhow::Error, _>(&state.pool, move |tx| {

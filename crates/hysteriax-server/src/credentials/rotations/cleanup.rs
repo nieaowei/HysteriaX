@@ -18,7 +18,7 @@ pub(super) async fn run(state: AppState) {
         }
     }
 }
-async fn scheduled_pass(state: &AppState) -> Result<()> {
+pub(super) async fn scheduled_pass(state: &AppState) -> Result<()> {
     scan_pass(state).await?;
     if let Some(work) = maintenance::claim(&state.pool, KIND, &state.instance_id).await? {
         execute(&state.pool, &work, false).await?;
@@ -32,6 +32,7 @@ async fn scan_pass(state: &AppState) -> Result<()> {
     }
     Ok(())
 }
+#[cfg(test)]
 pub(super) async fn pass(state: &AppState) -> Result<()> {
     scan_pass(state).await?;
     let now: DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")

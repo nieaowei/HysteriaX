@@ -37,6 +37,7 @@ pub(super) async fn run_preparation(state: AppState) {
     );
 }
 
+#[cfg(test)]
 pub async fn members_on(connection: &mut sqlx::PgConnection, ca: &str) -> Result<Vec<String>> {
     Ok(sqlx::query_scalar("SELECT DISTINCT node_id FROM (SELECT node_id FROM mtls_node_trust WHERE ca_id=$1 AND (desired OR deployed) UNION SELECT node_id FROM mtls_live_activation_trust WHERE ca_id=$1) members ORDER BY node_id").bind(ca).fetch_all(connection).await?)
 }
@@ -56,53 +57,20 @@ async fn proof_on(
         .bind(node).bind(ca).bind(version).fetch_one(connection).await?)
 }
 
+/// One bounded attempt per stage, shared with the independent workers. All
+/// mutations and error persistence belong to claimed work and its resources.
 pub async fn run_pass(state: &AppState) -> Result<()> {
-    let now = Utc::now();
-    let mut cursor = (
-        DateTime::<Utc>::from_timestamp(0, 0).expect("Unix epoch"),
-        String::new(),
-    );
-    loop {
-        let rows:Vec<(String,String,DateTime<Utc>)>=sqlx::query_as("SELECT id,ca_id,next_action_at FROM mtls_rotations WHERE phase<>'complete' AND next_action_at<=$1 AND (next_action_at,id)>($2,$3) ORDER BY next_action_at,id LIMIT $4").bind(now).bind(cursor.0).bind(&cursor.1).bind(PAGE).fetch_all(&state.pool).await?;
-        if rows.is_empty() {
-            break;
-        }
-        for (id, ca, due) in rows {
-            cursor = (due, id.clone());
-            // Session lock is independent of the global transaction write lock.
-            // Closing on drop also releases it if this future is cancelled.
-            let mut lease = state.pool.acquire().await?;
-            lease.close_on_drop();
-            let locked: bool =
-                sqlx::query_scalar("SELECT pg_try_advisory_lock(hashtextextended($1,0))")
-                    .bind(format!("hysteriax:mtls-ca:{ca}"))
-                    .fetch_one(&mut *lease)
-                    .await?;
-            if !locked {
-                continue;
-            }
-            let result = advance(state, &id).await;
-            let _ = sqlx::query("SELECT pg_advisory_unlock(hashtextextended($1,0))")
-                .bind(format!("hysteriax:mtls-ca:{ca}"))
-                .execute(&mut *lease)
-                .await;
-            if let Err(error) = result {
-                record_error(&state.pool, &id, &error.to_string()).await?;
-            }
-        }
-    }
-    cleanup_pass(state).await?;
+    trust::scheduled_pass(state).await?;
+    users::scheduled_pass(state).await?;
+    release::scheduled_pass(state).await?;
+    publication::scheduled_pass(state).await?;
+    metadata::scheduled_pass(state).await?;
+    probes::scheduled_pass(state).await?;
+    cleanup::scheduled_pass(state).await?;
     Ok(())
 }
 
-async fn record_error(pool: &PgPool, id: &str, error: &str) -> Result<()> {
-    let mut tx = db::begin_write(pool).await?;
-    sqlx::query("UPDATE mtls_rotations SET error_message=$2,next_action_at=$3,updated_at=$4 WHERE id=$1 AND phase<>'complete'").bind(id).bind(error).bind(Utc::now()+Duration::minutes(1)).bind(Utc::now()).execute(&mut *tx).await?;
-    audit(&mut tx, id, "ca.rotation_failed", json!({"reason":error})).await?;
-    tx.commit().await?;
-    Ok(())
-}
-
+#[cfg(test)]
 pub async fn advance(state: &AppState, id: &str) -> Result<()> {
     let row = sqlx::query("SELECT * FROM mtls_rotations WHERE id=$1")
         .bind(id)
@@ -131,6 +99,7 @@ pub async fn advance(state: &AppState, id: &str) -> Result<()> {
     publish_ready(state, id, &ca, version).await
 }
 
+#[cfg(test)]
 async fn publish_ready(state: &AppState, id: &str, ca: &str, version: i64) -> Result<()> {
     if release::pass(state, id, ca, version).await? {
         publication::pass(state, id).await?;
@@ -139,6 +108,7 @@ async fn publish_ready(state: &AppState, id: &str, ca: &str, version: i64) -> Re
     Ok(())
 }
 
+#[cfg(test)]
 async fn switch_probes(state: &AppState, id: &str, ca: &str, version: i64) -> Result<()> {
     probes::pass(state, id, ca, version).await
 }
@@ -219,10 +189,6 @@ async fn retention_deadline(
         .bind(version)
         .fetch_one(connection)
         .await?)
-}
-
-async fn cleanup_pass(state: &AppState) -> Result<()> {
-    cleanup::pass(state).await
 }
 
 pub struct JobContext {
@@ -548,3 +514,7 @@ pub async fn maintenance_notifications_on(
     }
     Ok(output)
 }
+
+#[cfg(test)]
+#[path = "rotations/coordinator_tests.rs"]
+mod coordinator_tests;

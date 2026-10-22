@@ -6,6 +6,7 @@ const ADMIT: &str = "mtls-rotation-user-admission";
 const ISSUE: &str = "mtls-rotation-user-issuance";
 const SCAN: &str = "mtls-rotation-user-scan";
 const SCAN_KEY: &str = "mtls:rotation-users";
+#[cfg(test)]
 const ISSUE_DUE: &str = "SELECT id FROM background_work WHERE kind=$1 AND payload->>'rotation_id'=$2 AND cycle_id IS NULL AND node_id IS NULL AND state IN ('queued','running') AND available_at<=$4 ORDER BY available_at,id LIMIT $3";
 const MEMBERS: &str = "SELECT node_id FROM mtls_node_trust WHERE ca_id=$1 AND (desired OR deployed) UNION SELECT node_id FROM mtls_live_activation_trust WHERE ca_id=$1";
 const ELIGIBLE: &str = "u.enabled AND (u.expires_at IS NULL OR u.expires_at>$3) AND (u.quota_bytes IS NULL OR u.usage_bytes<u.quota_bytes)";
@@ -22,7 +23,7 @@ pub(super) async fn run(state: AppState) {
         }
     }
 }
-async fn scheduled_pass(state: &AppState) -> Result<()> {
+pub(super) async fn scheduled_pass(state: &AppState) -> Result<()> {
     maintenance::ensure(&state.pool, SCAN_KEY, SCAN, json!({})).await?;
     if let Some(work) = maintenance::claim(&state.pool, SCAN, &state.instance_id).await? {
         crate::execution::supervise(state.pool.clone(), work.leases.clone(), async {
@@ -64,6 +65,7 @@ async fn admit_rotations(pool: &PgPool, work: &Work) -> Result<()> {
     })}).await
 }
 
+#[cfg(test)]
 pub(super) async fn pass(state: &AppState, rotation: &str, ca: &str, version: i64) -> Result<bool> {
     let key = format!("rotation-users:{rotation}");
     maintenance::ensure(

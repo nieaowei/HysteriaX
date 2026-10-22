@@ -24,7 +24,7 @@ pub(super) async fn run(state: AppState) {
         }
     }
 }
-async fn scheduled_pass(state: &AppState) -> Result<()> {
+pub(super) async fn scheduled_pass(state: &AppState) -> Result<()> {
     maintenance::ensure(&state.pool, SCAN_KEY, SCAN_KIND, json!({})).await?;
     if let Some(work) = maintenance::claim(&state.pool, SCAN_KIND, &state.instance_id).await? {
         crate::execution::supervise(state.pool.clone(), work.leases.clone(), async {
@@ -81,6 +81,7 @@ async fn execute(pool: &PgPool, work: &Work) -> Option<bool> {
     }
 }
 
+#[cfg(test)]
 pub(super) async fn pass(state: &AppState, rotation: &str, ca: &str, version: i64) -> Result<bool> {
     let key = format!("rotation-trust:{rotation}");
     maintenance::ensure(&state.pool, &key, KIND, json!({"rotation_id":rotation,"ca_id":ca,"ca_version":version,"cursor":"","lease_resources":[format!("ca:{ca}")]})).await?;

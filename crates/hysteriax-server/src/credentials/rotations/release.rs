@@ -20,7 +20,7 @@ pub(super) async fn run(state: AppState) {
         }
     }
 }
-async fn scheduled_pass(state: &AppState) -> Result<()> {
+pub(super) async fn scheduled_pass(state: &AppState) -> Result<()> {
     maintenance::ensure(&state.pool, SCAN_KEY, SCAN, json!({})).await?;
     if let Some(work) = maintenance::claim(&state.pool, SCAN, &state.instance_id).await? {
         crate::execution::supervise(state.pool.clone(), work.leases.clone(), async {
@@ -54,6 +54,7 @@ async fn admit(pool: &PgPool, work: &Work) -> Result<()> {
         work.finish_on(tx,false,1,None).await
     })}).await
 }
+#[cfg(test)]
 pub(super) async fn pass(state: &AppState, rotation: &str, ca: &str, version: i64) -> Result<bool> {
     let key = format!("rotation-publication:{rotation}");
     maintenance::ensure(&state.pool, &key, KIND, payload(rotation, ca, version)).await?;

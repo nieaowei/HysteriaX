@@ -28,7 +28,7 @@ pub(super) async fn run(state: AppState) {
         }
     }
 }
-async fn scheduled_pass(state: &AppState) -> Result<()> {
+pub(super) async fn scheduled_pass(state: &AppState) -> Result<()> {
     if let Some(work) = maintenance::claim(&state.pool, ADMIT, &state.instance_id).await? {
         execute_admit(&state.pool, &work).await;
     }
@@ -37,6 +37,7 @@ async fn scheduled_pass(state: &AppState) -> Result<()> {
     }
     Ok(())
 }
+#[cfg(test)]
 pub(super) async fn pass(state: &AppState, rotation: &str) -> Result<()> {
     if let Some(work) = maintenance::claim_id(
         &state.pool,
