@@ -1,4 +1,5 @@
 pub mod activation;
+mod authority_maintenance;
 pub mod authorization;
 pub mod ca;
 pub mod identities;

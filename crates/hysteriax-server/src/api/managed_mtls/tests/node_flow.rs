@@ -4,7 +4,11 @@ use credentials::{
     node_mtls::{self, Settings},
 };
 
-async fn node_request(state: &AppState, ca: &str, version: i64) -> crate::api::nodes::CreateNode {
+pub(super) async fn node_request(
+    state: &AppState,
+    ca: &str,
+    version: i64,
+) -> crate::api::nodes::CreateNode {
     let (_, Json(ssh)) = api::create(
         State(state.clone()),
         actor(),

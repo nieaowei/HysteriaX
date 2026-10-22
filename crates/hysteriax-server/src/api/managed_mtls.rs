@@ -407,6 +407,16 @@ pub(crate) struct PreparedAuthorityPublication {
     replay: Option<Value>,
 }
 
+impl PreparedAuthorityPublication {
+    pub(crate) fn matches_automatic_scope(&self, ca: &str, revision: i64, key: &str) -> bool {
+        self.id == ca
+            && self.actor.id == "system:mtls-maintenance"
+            && self.input.expected_revision == revision
+            && self.input.replace_rotation_id.is_none()
+            && self.input.idempotency_key == key
+    }
+}
+
 pub(crate) async fn prepare_authority_publication(
     state: &AppState,
     actor: AdminActor,
@@ -508,7 +518,10 @@ pub(crate) async fn publish_authority_on(
     }
     let material = material.ok_or_else(ApiError::internal)?;
     let source = source.ok_or_else(ApiError::internal)?;
-    lock_ca_on(tx, &id, true).await?;
+    // Ordinary publication changes CA-owned rows; rotation work discovers
+    // members from authoritative trust before it can publish the new version.
+    // Explicit replacement still protects the graph it modifies.
+    lock_ca_on(tx, &id, input.replace_rotation_id.is_some()).await?;
     let now: DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
         .fetch_one(&mut **tx)
         .await?;
@@ -591,8 +604,6 @@ pub(crate) async fn publish_authority_on(
         let rotation = material.rotation_id;
         sqlx::query("INSERT INTO mtls_rotations(id,ca_id,ca_version,phase,batch_id,next_action_at,created_at,updated_at) VALUES($1,$2,$3,'trust',$4,$5,$5,$5)")
             .bind(&rotation).bind(&id).bind(version).bind(&batch).bind(now).execute(&mut **tx).await?;
-        sqlx::query("INSERT INTO mtls_rotation_nodes(rotation_id,node_id,expected_revision) SELECT DISTINCT $1,t.node_id,n.desired_revision FROM mtls_node_trust t JOIN nodes n ON n.id=t.node_id WHERE t.ca_id=$2 AND (t.desired OR t.deployed)")
-            .bind(&rotation).bind(&id).execute(&mut **tx).await?;
         Some(rotation)
     } else {
         sqlx::query(

@@ -222,6 +222,13 @@ async fn referenced_publication_native_conflict_commits_one_rotation_and_batch()
     assert_eq!(receipt["version"], 2);
     assert_eq!(receipt["published"], false);
     assert_eq!(
+        count(&state, "SELECT count(*) FROM mtls_rotation_nodes").await,
+        0
+    );
+    crate::credentials::rotations::advance(&state, receipt["rotation_id"].as_str().unwrap())
+        .await
+        .unwrap();
+    assert_eq!(
         count(&state, "SELECT count(*) FROM credential_batches").await,
         1
     );

@@ -586,6 +586,21 @@ async fn referenced_ca_publication_keeps_old_generation_until_all_nodes_are_prep
             .await
             .unwrap();
     assert_eq!(current, 1);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM mtls_rotation_nodes WHERE rotation_id=$1"
+        )
+        .bind(result["rotation_id"].as_str().unwrap())
+        .fetch_one(&state.pool)
+        .await
+        .unwrap(),
+        0
+    );
+    // Membership is discovered by rotation work, while the old publication
+    // remains authoritative until all live members have their proof.
+    credentials::rotations::advance(&state, result["rotation_id"].as_str().unwrap())
+        .await
+        .unwrap();
     let participants: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM mtls_rotation_nodes WHERE rotation_id=$1 AND NOT trust_prepared",
     )
@@ -1203,3 +1218,5 @@ async fn ca_display_status_tracks_published_generation_during_blocked_rotation()
 mod transaction_tests;
 
 mod publication_preparation;
+
+mod publication_admission;
