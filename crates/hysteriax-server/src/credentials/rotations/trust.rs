@@ -181,8 +181,7 @@ async fn page(pool: &PgPool, work: &Work) -> Result<bool> {
             let last = members.last().map(String::as_str).unwrap_or(&target.cursor);
             let more: bool = sqlx::query_scalar(&format!("SELECT EXISTS(SELECT 1 FROM ({MEMBERS}) m WHERE node_id>$2)"))
                 .bind(&target.ca).bind(last).fetch_one(&mut **tx).await?;
-            let missing: bool = sqlx::query_scalar(&format!("SELECT EXISTS(SELECT 1 FROM nodes n WHERE n.id IN ({MEMBERS}) AND NOT {PROOF})"))
-                .bind(&target.ca).bind(target.version).bind(now).fetch_one(&mut **tx).await?;
+            let missing = missing_proof_on(tx, &target.ca, target.version, now).await?;
             let ready = !missing;
             let next = if ready {0} else if more {1} else {60};
             sqlx::query("UPDATE mtls_rotations SET phase=$2,error_message=$3,next_action_at=clock_timestamp()+make_interval(secs=>$4::double precision),retry_requested=CASE WHEN $5 THEN retry_requested ELSE false END,updated_at=clock_timestamp() WHERE id=$1")
@@ -196,6 +195,22 @@ async fn page(pool: &PgPool, work: &Work) -> Result<bool> {
             Ok(ready)
         })
     }).await
+}
+
+pub(super) async fn missing_proof_on(
+    tx: &mut Transaction<'_, Postgres>,
+    ca: &str,
+    version: i64,
+    now: DateTime<Utc>,
+) -> Result<bool> {
+    Ok(sqlx::query_scalar(&format!(
+        "SELECT EXISTS(SELECT 1 FROM nodes n WHERE n.id IN ({MEMBERS}) AND NOT {PROOF})"
+    ))
+    .bind(ca)
+    .bind(version)
+    .bind(now)
+    .fetch_one(&mut **tx)
+    .await?)
 }
 
 #[cfg(test)]

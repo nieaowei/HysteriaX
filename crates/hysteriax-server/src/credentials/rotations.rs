@@ -19,6 +19,7 @@ const PAGE: i64 = 100;
 
 mod metadata;
 mod publication;
+mod release;
 mod trust;
 mod users;
 
@@ -27,7 +28,8 @@ pub(super) async fn run_preparation(state: AppState) {
         trust::run(state.clone()),
         users::run(state.clone()),
         publication::run(state.clone()),
-        metadata::run(state)
+        metadata::run(state.clone()),
+        release::run(state)
     );
 }
 
@@ -141,68 +143,10 @@ pub async fn advance(state: &AppState, id: &str) -> Result<()> {
 }
 
 async fn publish_ready(state: &AppState, id: &str, ca: &str, version: i64) -> Result<()> {
-    let mut tx = db::begin_write(&state.pool).await?;
-    let current = refresh_members(&mut tx, id, ca, version).await?;
-    for node in current {
-        if !proof_on(&mut tx, &node, ca, version).await? {
-            tx.rollback().await?;
-            return Ok(());
-        }
+    if release::pass(state, id, ca, version).await? {
+        publication::pass(state, id).await?;
+        metadata::pass(state, id).await?;
     }
-    // A user assigned while an earlier identity page was being processed must
-    // not be omitted merely because it has no identity row yet.
-    if users::missing_identity_on(&mut tx, ca).await? {
-        tx.rollback().await?;
-        return Ok(());
-    }
-    let missing:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM mtls_user_identities i JOIN users u ON u.id=i.user_id WHERE i.ca_id=$1 AND NOT i.archived AND u.enabled AND (u.expires_at IS NULL OR u.expires_at>$3) AND (u.quota_bytes IS NULL OR u.usage_bytes<u.quota_bytes) AND NOT EXISTS(SELECT 1 FROM mtls_user_versions v WHERE v.identity_id=i.id AND v.ca_version=$2 AND NOT v.discarded AND v.not_before<=$3 AND v.expires_at>$3))")
-        .bind(ca).bind(version).bind(Utc::now()).fetch_one(&mut *tx).await?;
-    if missing {
-        tx.commit().await?;
-        return Ok(());
-    }
-    let phase: Option<String> = sqlx::query_scalar("SELECT phase FROM mtls_rotations WHERE id=$1")
-        .bind(id)
-        .fetch_optional(&mut *tx)
-        .await?;
-    ensure!(
-        phase
-            .as_deref()
-            .is_some_and(|s| matches!(s, "identities" | "publish")),
-        "rotation no longer ready for publication"
-    );
-    let old: i64 =
-        sqlx::query_scalar("SELECT published_version FROM mtls_authorities WHERE credential_id=$1")
-            .bind(ca)
-            .fetch_one(&mut *tx)
-            .await?;
-    sqlx::query(
-        "UPDATE mtls_ca_generations SET state='retired' WHERE ca_id=$1 AND state='published'",
-    )
-    .bind(ca)
-    .execute(&mut *tx)
-    .await?;
-    let changed=sqlx::query("UPDATE mtls_ca_generations SET state='published',published_at=$3 WHERE ca_id=$1 AND ca_version=$2 AND state='preparing' AND expires_at>$3").bind(ca).bind(version).bind(Utc::now()).execute(&mut *tx).await?;
-    ensure!(
-        changed.rows_affected() == 1,
-        "target CA is no longer valid or preparing"
-    );
-    sqlx::query("UPDATE mtls_authorities SET published_version=$2,maintenance_error=NULL,next_action_at=CASE WHEN source='generated' THEN (SELECT expires_at-interval '365 days' FROM mtls_ca_generations WHERE ca_id=$1 AND ca_version=$2) ELSE NULL END WHERE credential_id=$1").bind(ca).bind(version).execute(&mut *tx).await?;
-    let deadline = retention_deadline(&mut tx, ca, old).await?;
-    sqlx::query("INSERT INTO mtls_trust_cleanup(ca_id,ca_version,next_action_at) VALUES($1,$2,$3) ON CONFLICT DO NOTHING").bind(ca).bind(old).bind(deadline).execute(&mut *tx).await?;
-    metadata::enqueue_on(&mut tx, id, ca, version).await?;
-    sqlx::query("UPDATE mtls_rotations SET phase='probes',published_at=$2,error_message=NULL,next_action_at=$2,updated_at=$2 WHERE id=$1").bind(id).bind(Utc::now()).execute(&mut *tx).await?;
-    audit(
-        &mut tx,
-        id,
-        "ca.published",
-        json!({"version":version,"retired_version":old,"cleanup_after":deadline}),
-    )
-    .await?;
-    publication::enqueue_on(&mut tx, id, ca, version).await?;
-    tx.commit().await?;
-    publication::pass(state, id).await?;
-    metadata::pass(state, id).await?;
     Ok(())
 }
 
@@ -313,12 +257,20 @@ async fn audit(
     Ok(())
 }
 
+const RETENTION_DEADLINE: &str = "SELECT coalesce(greatest((SELECT expires_at FROM mtls_user_versions WHERE ca_id=$1 AND ca_version=$2 ORDER BY expires_at DESC LIMIT 1),(SELECT expires_at FROM mtls_probe_versions WHERE ca_id=$1 AND ca_version=$2 ORDER BY expires_at DESC LIMIT 1))+interval '5 minutes',clock_timestamp())";
+
 async fn retention_deadline(
     connection: &mut sqlx::PgConnection,
     ca: &str,
     version: i64,
 ) -> Result<DateTime<Utc>> {
-    Ok(sqlx::query_scalar::<_,Option<DateTime<Utc>>>("SELECT max(expires_at)+interval '5 minutes' FROM (SELECT expires_at FROM mtls_user_versions WHERE ca_id=$1 AND ca_version=$2 UNION ALL SELECT expires_at FROM mtls_probe_versions WHERE ca_id=$1 AND ca_version=$2) leaves").bind(ca).bind(version).fetch_one(connection).await?.unwrap_or_else(Utc::now))
+    // Each existing CA/expiry index contributes at most one row, including
+    // archived/discarded leaves whose private history still protects retention.
+    Ok(sqlx::query_scalar(RETENTION_DEADLINE)
+        .bind(ca)
+        .bind(version)
+        .fetch_one(connection)
+        .await?)
 }
 
 async fn cleanup_pass(state: &AppState) -> Result<()> {

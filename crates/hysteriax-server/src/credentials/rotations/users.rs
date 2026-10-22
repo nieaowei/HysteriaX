@@ -151,7 +151,7 @@ pub(super) async fn missing_identity_on(
     Ok(sqlx::query_scalar(&format!("SELECT EXISTS(SELECT 1 FROM users u WHERE EXISTS(SELECT 1 FROM node_assignments a WHERE a.user_id=u.id AND a.node_id IN ({MEMBERS})) AND NOT EXISTS(SELECT 1 FROM mtls_user_identities i WHERE i.user_id=u.id AND i.ca_id=$1))"))
         .bind(ca).fetch_one(&mut **tx).await?)
 }
-async fn missing_leaf_on(
+pub(super) async fn missing_leaf_on(
     tx: &mut Transaction<'_, Postgres>,
     ca: &str,
     version: i64,

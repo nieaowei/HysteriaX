@@ -1447,6 +1447,19 @@ pub(crate) async fn metadata_fixture_with_pool(
     .unwrap();
     rotations::advance(&state, &rotation).await.unwrap();
     assert_eq!(published(&state, &ca).await, 2);
+    // Direct advancement is best effort: a transiently unavailable CA/work
+    // claim can leave admission queued. Keep the node fenced until its child
+    // actually exists, as required by this fixture's returned contract.
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            let admitted: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM background_work WHERE kind='mtls-node-publication-metadata' AND payload->>'rotation_id'=$1 AND payload->>'node_id'=$2)")
+                .bind(&rotation).bind(&id).fetch_one(&state.pool).await.unwrap();
+            if admitted { break; }
+            rotations::advance(&state, &rotation).await.unwrap();
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    }).await.expect("metadata fixture must admit its fenced node before returning");
+
     db::write::<_, anyhow::Error, _>(&state.pool, move |tx| {
         let lease = lease.clone();
         Box::pin(async move {
@@ -1456,6 +1469,29 @@ pub(crate) async fn metadata_fixture_with_pool(
     })
     .await
     .unwrap();
+    sqlx::raw_sql("DO $$ DECLARE r record; BEGIN FOR r IN SELECT c.relname,t.tgname FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_proc p ON p.oid=t.tgfoid WHERE c.relnamespace=current_schema()::regnamespace AND p.proname='hysteriax_serialize_writes' LOOP EXECUTE format('ALTER TABLE %I DISABLE TRIGGER %I',r.relname,r.tgname); END LOOP; END $$").execute(&state.pool).await.unwrap();
+    (state, ca, rotation, id)
+}
+
+// Return a real verified trust activation before the final CA publication.
+pub(crate) async fn release_fixture() -> (AppState, String, String, String) {
+    let state = state().await;
+    let ca = generated(&state).await;
+    let node = managed_node(&state, &ca).await;
+    let id = node["id"].as_str().unwrap().to_owned();
+    initial_deployment(&state, &node, &ca).await;
+    let (_, Json(receipt)) = publish(
+        State(state.clone()),
+        actor(),
+        Path(ca.clone()),
+        Json(publish_request(1, "release-fixture")),
+    )
+    .await
+    .unwrap();
+    let rotation = receipt["rotation_id"].as_str().unwrap().to_owned();
+    rotations::advance(&state, &rotation).await.unwrap();
+    complete_operation(&state, &rotation_job(&state, &rotation, &id).await).await;
+    assert_eq!(published(&state, &ca).await, 1);
     sqlx::raw_sql("DO $$ DECLARE r record; BEGIN FOR r IN SELECT c.relname,t.tgname FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_proc p ON p.oid=t.tgfoid WHERE c.relnamespace=current_schema()::regnamespace AND p.proname='hysteriax_serialize_writes' LOOP EXECUTE format('ALTER TABLE %I DISABLE TRIGGER %I',r.relname,r.tgname); END LOOP; END $$").execute(&state.pool).await.unwrap();
     (state, ca, rotation, id)
 }

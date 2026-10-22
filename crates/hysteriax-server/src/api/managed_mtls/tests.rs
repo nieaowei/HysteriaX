@@ -1223,3 +1223,11 @@ mod transaction_tests;
 mod publication_preparation;
 
 mod publication_admission;
+
+pub(crate) async fn release_late_binding(state: &AppState, ca: &str) -> String {
+    let input = node_flow::node_request(state, ca, 1).await;
+    let (_, Json(node)) = crate::api::nodes::create(State(state.clone()), Json(input))
+        .await
+        .unwrap();
+    node["node"]["id"].as_str().unwrap().to_owned()
+}

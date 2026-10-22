@@ -366,6 +366,10 @@ async fn publication_outbox_and_logical_visibility_roll_back_when_the_publicatio
         .execute(&state.pool)
         .await
         .unwrap();
+    // Publication now has durable retry state; advance database time for this
+    // fixture without changing the failure/rollback or visibility assertions.
+    sqlx::query("UPDATE background_work SET available_at='2000-01-01' WHERE kind='mtls-rotation-publication' AND state='queued'")
+        .execute(&state.pool).await.unwrap();
     publish(&state, &ca, &rotation).await;
     assert_eq!(
         count(
