@@ -1495,3 +1495,39 @@ pub(crate) async fn release_fixture() -> (AppState, String, String, String) {
     sqlx::raw_sql("DO $$ DECLARE r record; BEGIN FOR r IN SELECT c.relname,t.tgname FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_proc p ON p.oid=t.tgfoid WHERE c.relnamespace=current_schema()::regnamespace AND p.proname='hysteriax_serialize_writes' LOOP EXECUTE format('ALTER TABLE %I DISABLE TRIGGER %I',r.relname,r.tgname); END LOOP; END $$").execute(&state.pool).await.unwrap();
     (state, ca, rotation, id)
 }
+
+pub(crate) async fn probe_switch_fixture() -> (AppState, String, String, Vec<String>) {
+    let state = state().await;
+    let ca = generated(&state).await;
+    let mut nodes = Vec::new();
+    for _ in 0..2 {
+        let node = managed_node(&state, &ca).await;
+        initial_deployment(&state, &node, &ca).await;
+        nodes.push(node["id"].as_str().unwrap().to_owned());
+    }
+    let (_, Json(receipt)) = publish(
+        State(state.clone()),
+        actor(),
+        Path(ca.clone()),
+        Json(publish_request(1, "probe-switch-fixture")),
+    )
+    .await
+    .unwrap();
+    let rotation = receipt["rotation_id"].as_str().unwrap().to_owned();
+    rotations::advance(&state, &rotation).await.unwrap();
+    for node in &nodes {
+        complete_operation(&state, &rotation_job(&state, &rotation, node).await).await;
+    }
+    rotations::advance(&state, &rotation).await.unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        while published(&state, &ca).await != 2 {
+            rotations::advance(&state, &rotation).await.unwrap();
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("probe fixture must publish after both actual activations");
+    assert_eq!(published(&state, &ca).await, 2);
+    sqlx::raw_sql("DO $$ DECLARE r record; BEGIN FOR r IN SELECT c.relname,t.tgname FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_proc p ON p.oid=t.tgfoid WHERE c.relnamespace=current_schema()::regnamespace AND p.proname='hysteriax_serialize_writes' LOOP EXECUTE format('ALTER TABLE %I DISABLE TRIGGER %I',r.relname,r.tgname); END LOOP; END $$").execute(&state.pool).await.unwrap();
+    (state, ca, rotation, nodes)
+}

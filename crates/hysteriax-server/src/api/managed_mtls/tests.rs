@@ -1231,3 +1231,11 @@ pub(crate) async fn release_late_binding(state: &AppState, ca: &str) -> String {
         .unwrap();
     node["node"]["id"].as_str().unwrap().to_owned()
 }
+
+pub(crate) async fn probe_late_binding(state: &AppState, ca: &str) -> String {
+    let input = node_flow::node_request(state, ca, 2).await;
+    let (_, Json(value)) = crate::api::nodes::create(State(state.clone()), Json(input))
+        .await
+        .unwrap();
+    value["node"]["id"].as_str().unwrap().to_owned()
+}

@@ -18,6 +18,7 @@ use uuid::Uuid;
 const PAGE: i64 = 100;
 
 mod metadata;
+mod probes;
 mod publication;
 mod release;
 mod trust;
@@ -29,7 +30,8 @@ pub(super) async fn run_preparation(state: AppState) {
         users::run(state.clone()),
         publication::run(state.clone()),
         metadata::run(state.clone()),
-        release::run(state)
+        release::run(state.clone()),
+        probes::run(state)
     );
 }
 
@@ -94,26 +96,6 @@ async fn record_error(pool: &PgPool, id: &str, error: &str) -> Result<()> {
     Ok(())
 }
 
-async fn refresh_members(
-    tx: &mut Transaction<'_, Postgres>,
-    id: &str,
-    ca: &str,
-    version: i64,
-) -> Result<Vec<String>> {
-    let members = members_on(tx, ca).await?;
-    sqlx::query("DELETE FROM mtls_rotation_nodes WHERE rotation_id=$1 AND NOT(node_id=ANY($2))")
-        .bind(id)
-        .bind(&members)
-        .execute(&mut **tx)
-        .await?;
-    for node in &members {
-        let proof = proof_on(tx, node, ca, version).await?;
-        sqlx::query("INSERT INTO mtls_rotation_nodes(rotation_id,node_id,expected_revision,trust_prepared) SELECT $1,id,desired_revision,$3 FROM nodes WHERE id=$2 ON CONFLICT(rotation_id,node_id) DO UPDATE SET expected_revision=excluded.expected_revision,trust_prepared=$3")
-            .bind(id).bind(node).bind(proof).execute(&mut **tx).await?;
-    }
-    Ok(members)
-}
-
 pub async fn advance(state: &AppState, id: &str) -> Result<()> {
     let row = sqlx::query("SELECT * FROM mtls_rotations WHERE id=$1")
         .bind(id)
@@ -151,48 +133,7 @@ async fn publish_ready(state: &AppState, id: &str, ca: &str, version: i64) -> Re
 }
 
 async fn switch_probes(state: &AppState, id: &str, ca: &str, version: i64) -> Result<()> {
-    let mut tx = db::begin_write(&state.pool).await?;
-    let members = refresh_members(&mut tx, id, ca, version).await?;
-    let mut all = true;
-    let mut waiting = Vec::new();
-    for node in members {
-        let switched = switch_probe_on(&mut tx, &node, ca, version).await?;
-        all &= switched;
-        if !switched {
-            waiting.push(node.clone());
-        }
-        sqlx::query(
-            "UPDATE mtls_rotation_nodes SET probe_switched=$3 WHERE rotation_id=$1 AND node_id=$2",
-        )
-        .bind(id)
-        .bind(node)
-        .bind(switched)
-        .execute(&mut *tx)
-        .await?;
-    }
-    if all {
-        sqlx::query("UPDATE mtls_rotations SET phase='complete',error_message=NULL,updated_at=$2 WHERE id=$1").bind(id).bind(Utc::now()).execute(&mut *tx).await?;
-        audit(
-            &mut tx,
-            id,
-            "ca.rotation_completed",
-            json!({"version":version}),
-        )
-        .await?;
-    }
-    if !all {
-        sqlx::query("UPDATE mtls_rotations SET error_message=$2,next_action_at=$3 WHERE id=$1")
-            .bind(id)
-            .bind(format!(
-                "Waiting for probe activation on nodes: {}",
-                waiting.join(", ")
-            ))
-            .bind(Utc::now() + Duration::minutes(1))
-            .execute(&mut *tx)
-            .await?;
-    }
-    tx.commit().await?;
-    Ok(())
+    probes::pass(state, id, ca, version).await
 }
 
 pub async fn switch_probe_on(

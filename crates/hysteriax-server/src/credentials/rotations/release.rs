@@ -115,7 +115,7 @@ async fn commit_on(
     audit_id: &str,
 ) -> Result<bool> {
     work.guard_on(tx).await?;
-    let (rotation, ca, version) = target(&work)?;
+    let (rotation, ca, version) = target(work)?;
     sqlx::query("SELECT id FROM credentials WHERE id=$1 FOR UPDATE")
         .bind(&ca)
         .fetch_optional(&mut **tx)
@@ -162,6 +162,7 @@ async fn commit_on(
     sqlx::query("INSERT INTO mtls_trust_cleanup(ca_id,ca_version,next_action_at) VALUES($1,$2,$3) ON CONFLICT DO NOTHING").bind(&ca).bind(old).bind(deadline).execute(&mut **tx).await?;
     publication::enqueue_on(tx, &rotation, &ca, version).await?;
     metadata::enqueue_on(tx, &rotation, &ca, version).await?;
+    probes::enqueue_on(tx, &rotation, &ca, version).await?;
     sqlx::query("UPDATE mtls_rotations SET phase='probes',published_at=$2,error_message=NULL,next_action_at=$2,updated_at=$2 WHERE id=$1").bind(&rotation).bind(now).execute(&mut **tx).await?;
     sqlx::query("INSERT INTO audit_records(id,actor,action,entity_type,entity_id,detail_json,created_at) SELECT $1,actor_id,'ca.published','ca_rotation',id,jsonb_build_object('ca_credential_id',ca_id,'ca_version',ca_version,'version',ca_version,'retired_version',$2::bigint,'cleanup_after',$3::timestamptz),$4 FROM mtls_rotations WHERE id=$5")
             .bind(audit_id).bind(old).bind(deadline).bind(now).bind(&rotation).execute(&mut **tx).await?;

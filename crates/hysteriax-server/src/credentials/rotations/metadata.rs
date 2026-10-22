@@ -62,7 +62,10 @@ pub(super) async fn pass(state: &AppState, rotation: &str) -> Result<()> {
     }
     Ok(())
 }
-pub(super) async fn pending_on(pool: &PgPool, rotation: &str) -> Result<bool> {
+pub(super) async fn pending_on<'e, E>(pool: E, rotation: &str) -> Result<bool>
+where
+    E: sqlx::Executor<'e, Database = Postgres>,
+{
     Ok(sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM background_work WHERE kind=ANY($1::text[]) AND payload->>'rotation_id'=$2 AND cycle_id IS NULL AND node_id IS NULL AND state<>'complete')")
         .bind([ADMIT,KIND]).bind(rotation).fetch_one(pool).await?)
 }
