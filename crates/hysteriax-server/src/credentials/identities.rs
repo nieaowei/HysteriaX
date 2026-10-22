@@ -242,8 +242,8 @@ pub async fn commit_user(
                 "shared certificate expired or was discarded during preparation; retry"
             );
         }
-        sqlx::query("UPDATE mtls_user_identities i SET archived=FALSE,maintenance_error=CASE WHEN $3 THEN 'CA update required: cannot extend the existing certificate' ELSE maintenance_error END,next_action_at=CASE WHEN $3 THEN $2+interval '1 hour' WHEN $4 THEN (SELECT next_action_at FROM mtls_user_versions WHERE identity_id=i.id AND credential_version=$5) ELSE next_action_at END,updated_at=$2 WHERE i.id=$1")
-            .bind(&candidate.id).bind(now) .bind(candidate.needs_ca_update && candidate.generation_state=="published").bind(candidate.generation_state=="published").bind(candidate.existing_version).execute(&mut **tx).await?;
+        sqlx::query("UPDATE mtls_user_identities i SET archived=FALSE,scheduled_ca_version=CASE WHEN $4 THEN $6 ELSE scheduled_ca_version END,maintenance_error=CASE WHEN $3 THEN 'CA update required: cannot extend the existing certificate' ELSE maintenance_error END,next_action_at=CASE WHEN $3 THEN $2+interval '1 hour' WHEN $4 THEN (SELECT next_action_at FROM mtls_user_versions WHERE identity_id=i.id AND credential_version=$5) ELSE next_action_at END,updated_at=$2 WHERE i.id=$1")
+            .bind(&candidate.id).bind(now) .bind(candidate.needs_ca_update && candidate.generation_state=="published").bind(candidate.generation_state=="published").bind(candidate.existing_version).bind(candidate.ca_version).execute(&mut **tx).await?;
         return Ok((candidate.id, candidate.existing_version));
     };
     ensure!(
@@ -272,8 +272,8 @@ pub async fn commit_user(
         (new_credential, 1)
     };
     let released = candidate.generation_state == "published";
-    sqlx::query("UPDATE mtls_user_identities SET credential_id=$2,revision=revision+1,archived=FALSE,next_action_at=CASE WHEN $3 AND $4<=$5 THEN $5+interval '1 hour' WHEN $3 THEN $4 ELSE next_action_at END,maintenance_error=CASE WHEN $3 AND $4<=$5 THEN 'CA update required: cannot extend the existing certificate' WHEN $3 THEN NULL ELSE maintenance_error END,updated_at=$5 WHERE id=$1")
-        .bind(&candidate.id).bind(&credential).bind(released).bind(issued.next_action_at).bind(now).execute(&mut **tx).await?;
+    sqlx::query("UPDATE mtls_user_identities SET credential_id=$2,revision=revision+1,archived=FALSE,scheduled_ca_version=CASE WHEN $3 THEN $6 ELSE scheduled_ca_version END,next_action_at=CASE WHEN $3 AND $4<=$5 THEN $5+interval '1 hour' WHEN $3 THEN $4 ELSE next_action_at END,maintenance_error=CASE WHEN $3 AND $4<=$5 THEN 'CA update required: cannot extend the existing certificate' WHEN $3 THEN NULL ELSE maintenance_error END,updated_at=$5 WHERE id=$1")
+        .bind(&candidate.id).bind(&credential).bind(released).bind(issued.next_action_at).bind(now).bind(candidate.ca_version).execute(&mut **tx).await?;
     sqlx::query("INSERT INTO mtls_user_versions(identity_id,credential_id,credential_version,ca_id,ca_version,not_before,expires_at,next_action_at,released,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)")
         .bind(&candidate.id).bind(&credential).bind(version).bind(&candidate.ca_id).bind(candidate.ca_version).bind(issued.not_before).bind(issued.expires_at).bind(issued.next_action_at).bind(released).bind(now).execute(&mut **tx).await?;
     Ok((candidate.id, Some(version)))
@@ -289,9 +289,13 @@ pub async fn for_node(
     node: &str,
     ca: &str,
 ) -> Result<Option<(String, String)>> {
-    let now = Utc::now();
-    let row = sqlx::query("SELECT v.credential_id,v.credential_version FROM mtls_user_identities i JOIN mtls_user_versions v ON v.identity_id=i.id JOIN mtls_node_trust t ON t.ca_id=v.ca_id AND t.ca_version=v.ca_version JOIN mtls_authorities a ON a.credential_id=i.ca_id WHERE i.user_id=$1 AND i.ca_id=$2 AND NOT i.archived AND t.node_id=$3 AND t.deployed AND v.released AND NOT v.discarded AND v.not_before<=$4 AND v.expires_at>$4 ORDER BY (v.ca_version=a.published_version) DESC,v.ca_version DESC,v.credential_version DESC LIMIT 1")
-        .bind(user).bind(ca).bind(node).bind(now).fetch_optional(&mut *crate::read_snapshot::begin(pool).await?).await?;
+    let mut connection = crate::read_snapshot::begin(pool).await?;
+    let now: DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
+        .fetch_one(&mut *connection)
+        .await?;
+    let row = sqlx::query("SELECT v.credential_id,v.credential_version FROM mtls_user_identities i JOIN mtls_user_version_publication v ON v.identity_id=i.id JOIN mtls_node_trust t ON t.ca_id=v.ca_id AND t.ca_version=v.ca_version JOIN mtls_authorities a ON a.credential_id=i.ca_id WHERE i.user_id=$1 AND i.ca_id=$2 AND NOT i.archived AND t.node_id=$3 AND t.deployed AND v.released AND NOT v.discarded AND v.not_before<=$4 AND v.expires_at>$4 ORDER BY (v.ca_version=a.published_version) DESC,v.ca_version DESC,v.credential_version DESC LIMIT 1")
+        .bind(user).bind(ca).bind(node).bind(now).fetch_optional(&mut *connection).await?;
+    drop(connection);
     let Some(row) = row else { return Ok(None) };
     let (kind, owner, _, payload, _) = load(
         pool,

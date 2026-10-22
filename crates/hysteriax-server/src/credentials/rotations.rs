@@ -17,11 +17,16 @@ use uuid::Uuid;
 
 const PAGE: i64 = 100;
 
+mod publication;
 mod trust;
 mod users;
 
 pub(super) async fn run_preparation(state: AppState) {
-    tokio::join!(trust::run(state.clone()), users::run(state));
+    tokio::join!(
+        trust::run(state.clone()),
+        users::run(state.clone()),
+        publication::run(state)
+    );
 }
 
 pub async fn members_on(connection: &mut sqlx::PgConnection, ca: &str) -> Result<Vec<String>> {
@@ -117,6 +122,7 @@ pub async fn advance(state: &AppState, id: &str) -> Result<()> {
         return Ok(());
     }
     if phase == "probes" {
+        publication::pass(state, id).await?;
         return switch_probes(state, id, &ca, version).await;
     }
     if !trust::pass(state, id, &ca, version).await? {
@@ -176,8 +182,6 @@ async fn publish_ready(state: &AppState, id: &str, ca: &str, version: i64) -> Re
         "target CA is no longer valid or preparing"
     );
     sqlx::query("UPDATE mtls_authorities SET published_version=$2,maintenance_error=NULL,next_action_at=CASE WHEN source='generated' THEN (SELECT expires_at-interval '365 days' FROM mtls_ca_generations WHERE ca_id=$1 AND ca_version=$2) ELSE NULL END WHERE credential_id=$1").bind(ca).bind(version).execute(&mut *tx).await?;
-    sqlx::query("UPDATE mtls_user_versions SET released=TRUE WHERE ca_id=$1 AND ca_version=$2 AND NOT discarded").bind(ca).bind(version).execute(&mut *tx).await?;
-    sqlx::query("UPDATE mtls_user_identities i SET next_action_at=CASE WHEN EXISTS(SELECT 1 FROM users u WHERE u.id=i.user_id AND u.enabled AND (u.expires_at IS NULL OR u.expires_at>$3) AND (u.quota_bytes IS NULL OR u.usage_bytes<u.quota_bytes)) THEN (SELECT CASE WHEN v.next_action_at<=$3 AND v.expires_at>=(SELECT expires_at-interval '5 minutes' FROM mtls_ca_generations WHERE ca_id=$1 AND ca_version=$2) THEN $3+interval '1 hour' ELSE greatest($3,v.next_action_at) END FROM mtls_user_versions v WHERE v.identity_id=i.id AND v.ca_version=$2 AND v.released AND NOT v.discarded ORDER BY v.credential_version DESC LIMIT 1) ELSE NULL END,maintenance_error=CASE WHEN (SELECT v.next_action_at<=$3 AND v.expires_at>=(SELECT expires_at-interval '5 minutes' FROM mtls_ca_generations WHERE ca_id=$1 AND ca_version=$2) FROM mtls_user_versions v WHERE v.identity_id=i.id AND v.ca_version=$2 AND v.released AND NOT v.discarded ORDER BY v.credential_version DESC LIMIT 1) THEN 'CA update required: cannot extend the existing certificate' ELSE NULL END,revision=revision+1,updated_at=$3 WHERE i.ca_id=$1 AND NOT i.archived").bind(ca).bind(version).bind(Utc::now()).execute(&mut *tx).await?;
     let deadline = retention_deadline(&mut tx, ca, old).await?;
     sqlx::query("INSERT INTO mtls_trust_cleanup(ca_id,ca_version,next_action_at) VALUES($1,$2,$3) ON CONFLICT DO NOTHING").bind(ca).bind(old).bind(deadline).execute(&mut *tx).await?;
     update_node_metadata(&mut tx, &state.secrets, ca, version).await?;
@@ -189,7 +193,9 @@ async fn publish_ready(state: &AppState, id: &str, ca: &str, version: i64) -> Re
         json!({"version":version,"retired_version":old,"cleanup_after":deadline}),
     )
     .await?;
+    publication::enqueue_on(&mut tx, id, ca, version).await?;
     tx.commit().await?;
+    publication::pass(state, id).await?;
     Ok(())
 }
 
@@ -698,7 +704,7 @@ pub async fn retry_node_job(
 /// generation leaves use the issuer boundary; retired compatible leaves use
 /// their actual expiry because they cannot be extended.
 pub async fn status_on(connection: &mut sqlx::PgConnection, id: &str) -> Result<Value> {
-    let row=sqlx::query("WITH selected AS (SELECT DISTINCT ON(t.node_id,i.user_id) t.node_id,i.user_id,v.expires_at,g.expires_at AS issuer_expires,v.ca_version,a.published_version FROM mtls_rotation_nodes m JOIN mtls_rotations r ON r.id=m.rotation_id JOIN mtls_node_trust t ON t.node_id=m.node_id AND t.ca_id=r.ca_id AND t.deployed JOIN node_assignments na ON na.node_id=t.node_id JOIN users u ON u.id=na.user_id AND u.enabled AND (u.expires_at IS NULL OR u.expires_at>$2) AND (u.quota_bytes IS NULL OR u.usage_bytes<u.quota_bytes) JOIN mtls_user_identities i ON i.user_id=u.id AND i.ca_id=r.ca_id AND NOT i.archived JOIN mtls_user_versions v ON v.identity_id=i.id AND v.ca_version=t.ca_version AND v.released AND NOT v.discarded JOIN mtls_ca_generations g ON g.ca_id=v.ca_id AND g.ca_version=v.ca_version JOIN mtls_authorities a ON a.credential_id=r.ca_id WHERE r.id=$1 ORDER BY t.node_id,i.user_id,(v.not_before<=$2 AND v.expires_at>$2) DESC,(v.ca_version=a.published_version) DESC,v.ca_version DESC,v.credential_version DESC),probes AS(SELECT p.expires_at,g.expires_at AS issuer_expires,p.ca_version,a.published_version FROM mtls_rotation_nodes m JOIN mtls_rotations r ON r.id=m.rotation_id JOIN mtls_active_probes active ON active.node_id=m.node_id AND active.ca_id=r.ca_id JOIN mtls_probe_versions p ON p.node_id=active.node_id AND p.credential_id=active.credential_id AND p.credential_version=active.credential_version JOIN mtls_ca_generations g ON g.ca_id=p.ca_id AND g.ca_version=p.ca_version JOIN mtls_authorities a ON a.credential_id=r.ca_id WHERE r.id=$1) SELECT r.phase,r.ca_version,coalesce(r.previous_version,r.ca_version-1) AS previous_version,g.expires_at AS old_ca_expires,(SELECT min(expires_at) FROM selected) AS client_expires,(SELECT min(expires_at) FROM probes) AS probe_expires,least(g.expires_at-interval '5 minutes',(SELECT min(CASE WHEN ca_version=published_version THEN issuer_expires-interval '5 minutes' ELSE expires_at END) FROM selected),(SELECT min(CASE WHEN ca_version=published_version THEN issuer_expires-interval '5 minutes' ELSE expires_at END) FROM probes)) AS deadline,coalesce((SELECT jsonb_agg(node_id ORDER BY node_id) FROM mtls_rotation_nodes WHERE rotation_id=r.id AND (NOT trust_prepared OR r.phase='probes' AND NOT probe_switched)),'[]'::jsonb) AS blocked_nodes,(SELECT count(*) FROM mtls_user_identities i JOIN users u ON u.id=i.user_id WHERE i.ca_id=r.ca_id AND NOT i.archived AND u.enabled AND (u.expires_at IS NULL OR u.expires_at>$2) AND (u.quota_bytes IS NULL OR u.usage_bytes<u.quota_bytes)) AS eligible_users,(SELECT count(DISTINCT v.identity_id) FROM mtls_user_versions v JOIN mtls_user_identities i ON i.id=v.identity_id JOIN users u ON u.id=i.user_id WHERE v.ca_id=r.ca_id AND v.ca_version=r.ca_version AND NOT i.archived AND NOT v.discarded AND v.expires_at>$2 AND u.enabled AND (u.expires_at IS NULL OR u.expires_at>$2) AND (u.quota_bytes IS NULL OR u.usage_bytes<u.quota_bytes)) AS prepared_users FROM mtls_rotations r JOIN mtls_ca_generations g ON g.ca_id=r.ca_id AND g.ca_version=coalesce(r.previous_version,r.ca_version-1) WHERE r.id=$1")
+    let row=sqlx::query("WITH selected AS (SELECT DISTINCT ON(t.node_id,i.user_id) t.node_id,i.user_id,v.expires_at,g.expires_at AS issuer_expires,v.ca_version,a.published_version FROM mtls_rotation_nodes m JOIN mtls_rotations r ON r.id=m.rotation_id JOIN mtls_node_trust t ON t.node_id=m.node_id AND t.ca_id=r.ca_id AND t.deployed JOIN node_assignments na ON na.node_id=t.node_id JOIN users u ON u.id=na.user_id AND u.enabled AND (u.expires_at IS NULL OR u.expires_at>$2) AND (u.quota_bytes IS NULL OR u.usage_bytes<u.quota_bytes) JOIN mtls_user_identities i ON i.user_id=u.id AND i.ca_id=r.ca_id AND NOT i.archived JOIN mtls_user_version_publication v ON v.identity_id=i.id AND v.ca_version=t.ca_version AND v.released AND NOT v.discarded JOIN mtls_ca_generations g ON g.ca_id=v.ca_id AND g.ca_version=v.ca_version JOIN mtls_authorities a ON a.credential_id=r.ca_id WHERE r.id=$1 ORDER BY t.node_id,i.user_id,(v.not_before<=$2 AND v.expires_at>$2) DESC,(v.ca_version=a.published_version) DESC,v.ca_version DESC,v.credential_version DESC),probes AS(SELECT p.expires_at,g.expires_at AS issuer_expires,p.ca_version,a.published_version FROM mtls_rotation_nodes m JOIN mtls_rotations r ON r.id=m.rotation_id JOIN mtls_active_probes active ON active.node_id=m.node_id AND active.ca_id=r.ca_id JOIN mtls_probe_versions p ON p.node_id=active.node_id AND p.credential_id=active.credential_id AND p.credential_version=active.credential_version JOIN mtls_ca_generations g ON g.ca_id=p.ca_id AND g.ca_version=p.ca_version JOIN mtls_authorities a ON a.credential_id=r.ca_id WHERE r.id=$1) SELECT r.phase,r.ca_version,coalesce(r.previous_version,r.ca_version-1) AS previous_version,g.expires_at AS old_ca_expires,(SELECT min(expires_at) FROM selected) AS client_expires,(SELECT min(expires_at) FROM probes) AS probe_expires,least(g.expires_at-interval '5 minutes',(SELECT min(CASE WHEN ca_version=published_version THEN issuer_expires-interval '5 minutes' ELSE expires_at END) FROM selected),(SELECT min(CASE WHEN ca_version=published_version THEN issuer_expires-interval '5 minutes' ELSE expires_at END) FROM probes)) AS deadline,coalesce((SELECT jsonb_agg(node_id ORDER BY node_id) FROM mtls_rotation_nodes WHERE rotation_id=r.id AND (NOT trust_prepared OR r.phase='probes' AND NOT probe_switched)),'[]'::jsonb) AS blocked_nodes,(SELECT count(*) FROM mtls_user_identities i JOIN users u ON u.id=i.user_id WHERE i.ca_id=r.ca_id AND NOT i.archived AND u.enabled AND (u.expires_at IS NULL OR u.expires_at>$2) AND (u.quota_bytes IS NULL OR u.usage_bytes<u.quota_bytes)) AS eligible_users,(SELECT count(DISTINCT v.identity_id) FROM mtls_user_version_publication v JOIN mtls_user_identities i ON i.id=v.identity_id JOIN users u ON u.id=i.user_id WHERE v.ca_id=r.ca_id AND v.ca_version=r.ca_version AND NOT i.archived AND NOT v.discarded AND v.expires_at>$2 AND u.enabled AND (u.expires_at IS NULL OR u.expires_at>$2) AND (u.quota_bytes IS NULL OR u.usage_bytes<u.quota_bytes)) AS prepared_users FROM mtls_rotations r JOIN mtls_ca_generations g ON g.ca_id=r.ca_id AND g.ca_version=coalesce(r.previous_version,r.ca_version-1) WHERE r.id=$1")
         .bind(id).bind(Utc::now()).fetch_one(connection).await?;
     let deadline: DateTime<Utc> = row.get("deadline");
     Ok(
@@ -783,7 +789,7 @@ async fn operation_stale_on(connection: &mut sqlx::PgConnection, job: &str) -> R
 pub async fn maintenance_notifications_on(
     connection: &mut sqlx::PgConnection,
 ) -> Result<Vec<Value>> {
-    let rows=sqlx::query("SELECT c.id,c.name,c.revision,c.created_at,c.updated_at,a.published_version,coalesce(min(v.expires_at),min(i.created_at)) AS deadline,min(i.maintenance_error) AS reason,count(DISTINCT i.id) AS affected FROM mtls_user_identities i JOIN users u ON u.id=i.user_id AND u.enabled AND (u.expires_at IS NULL OR u.expires_at>$1) AND (u.quota_bytes IS NULL OR u.usage_bytes<u.quota_bytes) JOIN mtls_authorities a ON a.credential_id=i.ca_id JOIN credentials c ON c.id=i.ca_id AND NOT c.archived LEFT JOIN LATERAL(SELECT expires_at FROM mtls_user_versions WHERE identity_id=i.id AND ca_version=a.published_version AND released AND NOT discarded ORDER BY credential_version DESC LIMIT 1) v ON TRUE WHERE NOT i.archived AND i.maintenance_error IS NOT NULL GROUP BY c.id,a.published_version ORDER BY c.id")
+    let rows=sqlx::query("SELECT c.id,c.name,c.revision,c.created_at,c.updated_at,a.published_version,coalesce(min(v.expires_at),min(i.created_at)) AS deadline,min(i.maintenance_error) AS reason,count(DISTINCT i.id) AS affected FROM mtls_user_identities i JOIN users u ON u.id=i.user_id AND u.enabled AND (u.expires_at IS NULL OR u.expires_at>$1) AND (u.quota_bytes IS NULL OR u.usage_bytes<u.quota_bytes) JOIN mtls_authorities a ON a.credential_id=i.ca_id JOIN credentials c ON c.id=i.ca_id AND NOT c.archived LEFT JOIN LATERAL(SELECT expires_at FROM mtls_user_version_publication WHERE identity_id=i.id AND ca_version=a.published_version AND released AND NOT discarded ORDER BY credential_version DESC LIMIT 1) v ON TRUE WHERE NOT i.archived AND i.maintenance_error IS NOT NULL GROUP BY c.id,a.published_version ORDER BY c.id")
         .bind(Utc::now()).fetch_all(connection).await?;
     let mut output = Vec::new();
     for row in rows {

@@ -280,7 +280,7 @@ pub async fn prepare_users(
         );
         let versions: Vec<i64> = trust.iter().map(|v| v.version).collect();
         for user in &users {
-            let valid:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM mtls_user_identities i JOIN mtls_user_versions v ON v.identity_id=i.id WHERE i.user_id=$1 AND i.ca_id=$2 AND NOT i.archived AND v.ca_version=ANY($3) AND v.released AND NOT v.discarded AND v.not_before<=now() AND v.expires_at>now())")
+            let valid:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM mtls_user_identities i JOIN mtls_user_version_publication v ON v.identity_id=i.id WHERE i.user_id=$1 AND i.ca_id=$2 AND NOT i.archived AND v.ca_version=ANY($3) AND v.released AND NOT v.discarded AND v.not_before<=now() AND v.expires_at>now())")
                 .bind(user).bind(ca).bind(&versions).fetch_one(pool).await?;
             ensure!(
                 valid,

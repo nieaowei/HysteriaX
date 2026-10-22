@@ -60,7 +60,7 @@ pub(in crate::credentials::rotations) async fn fixture_with_pool(
     sqlx::raw_sql("DO $$ DECLARE r record; BEGIN FOR r IN SELECT c.relname,t.tgname FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_proc p ON p.oid=t.tgfoid WHERE c.relnamespace=current_schema()::regnamespace AND p.proname='hysteriax_serialize_writes' LOOP EXECUTE format('ALTER TABLE %I DISABLE TRIGGER %I',r.relname,r.tgname); END LOOP; END $$").execute(&state.pool).await.unwrap();
     (state, ca, rotation)
 }
-async fn nodes(state: &AppState, ca: &str, n: i32) {
+pub(in crate::credentials::rotations) async fn nodes(state: &AppState, ca: &str, n: i32) {
     let cipher = state.secrets.encrypt("{}").unwrap();
     sqlx::query("INSERT INTO nodes(id,name,state,ssh_host,ssh_port,ssh_username,ssh_credential_id,ssh_credential_version,public_host,public_port,listen_addr,node_token_hash,node_token_enc,traffic_stats_secret_enc,desired_config_enc,mtls_state,deployed_revision,deployed_content_sha256,created_at,updated_at) SELECT 'member-'||lpad(i::text,4,'0'),'Member','deployed','127.0.0.1',9,'root','fixture-ssh',1,'example.test',443,':443','hash-'||i,$2,$2,$2,'ready',1,'fixture-digest',now(),now() FROM generate_series(1,$1)i ON CONFLICT(id) DO NOTHING").bind(n).bind(cipher).execute(&state.pool).await.unwrap();
     sqlx::query("INSERT INTO mtls_node_trust(node_id,ca_id,ca_version,desired,deployed) SELECT id,$1,1,true,true FROM nodes ON CONFLICT DO NOTHING").bind(ca).execute(&state.pool).await.unwrap();
@@ -325,7 +325,7 @@ async fn exact_claim_does_not_consume_another_rotations_work_and_busy_ca_owner_i
     );
 }
 
-async fn prove(state: &AppState, ca: &str, node: &str) {
+pub(in crate::credentials::rotations) async fn prove(state: &AppState, ca: &str, node: &str) {
     crate::credentials::maintenance::renew_probe_on(&state.pool, &state.secrets, node, ca, 2)
         .await
         .unwrap();

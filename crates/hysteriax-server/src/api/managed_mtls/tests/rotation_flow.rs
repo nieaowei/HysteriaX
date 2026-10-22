@@ -200,7 +200,7 @@ async fn every_node_must_prove_new_ca_before_one_shared_publication_and_probe_sw
     assert_eq!(published(&state, &ca).await, 2);
     assert_eq!(phase(&state, rotation).await, "probes");
     let versions: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM mtls_user_versions WHERE ca_version=2 AND released",
+        "SELECT count(*) FROM mtls_user_version_publication WHERE ca_version=2 AND released",
     )
     .fetch_one(&state.pool)
     .await
@@ -640,7 +640,7 @@ async fn resumed_and_new_users_are_included_before_final_generation_publication(
     rotations::advance(&state, rotation).await.unwrap();
     assert_eq!(published(&state, &ca).await, 2);
     let prepared: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM mtls_user_versions WHERE ca_version=2 AND released",
+        "SELECT count(*) FROM mtls_user_version_publication WHERE ca_version=2 AND released",
     )
     .fetch_one(&state.pool)
     .await
