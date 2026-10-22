@@ -199,4 +199,4 @@ async fn page(pool: &PgPool, work: &Work) -> Result<bool> {
 }
 
 #[cfg(test)]
-mod tests;
+pub(super) mod tests;

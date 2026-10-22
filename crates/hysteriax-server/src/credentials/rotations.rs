@@ -18,9 +18,10 @@ use uuid::Uuid;
 const PAGE: i64 = 100;
 
 mod trust;
+mod users;
 
-pub(super) async fn run_trust(state: AppState) {
-    trust::run(state).await;
+pub(super) async fn run_preparation(state: AppState) {
+    tokio::join!(trust::run(state.clone()), users::run(state));
 }
 
 pub async fn members_on(connection: &mut sqlx::PgConnection, ca: &str) -> Result<Vec<String>> {
@@ -121,30 +122,8 @@ pub async fn advance(state: &AppState, id: &str) -> Result<()> {
     if !trust::pass(state, id, &ca, version).await? {
         return Ok(());
     }
-    let mut tx = db::begin_write(&state.pool).await?;
-    let current: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM mtls_rotations r JOIN credentials c ON c.id=r.ca_id WHERE r.id=$1 AND r.ca_id=$2 AND r.ca_version=$3 AND r.phase IN ('identities','publish') AND NOT c.archived)")
-        .bind(id).bind(&ca).bind(version).fetch_one(&mut *tx).await?;
-    ensure!(current, "rotation changed before identity admission");
-    let members = members_on(&mut tx, &ca).await?;
-    sqlx::query("INSERT INTO mtls_user_identities(id,user_id,ca_id,created_at,updated_at) SELECT gen_random_uuid()::text,a.user_id,$1,$3,$3 FROM (SELECT DISTINCT user_id FROM node_assignments WHERE node_id=ANY($2)) a ON CONFLICT(user_id,ca_id) DO NOTHING").bind(&ca).bind(&members).bind(Utc::now()).execute(&mut *tx).await?;
-    sqlx::query("UPDATE mtls_rotations SET phase=CASE WHEN phase='trust' THEN 'identities' ELSE phase END,error_message=NULL,retry_requested=FALSE,updated_at=$2 WHERE id=$1").bind(id).bind(Utc::now()).execute(&mut *tx).await?;
-    tx.commit().await?;
-
-    let users:Vec<String>=sqlx::query_scalar("SELECT i.user_id FROM mtls_user_identities i JOIN users u ON u.id=i.user_id WHERE i.ca_id=$1 AND NOT i.archived AND u.enabled AND (u.expires_at IS NULL OR u.expires_at>$3) AND (u.quota_bytes IS NULL OR u.usage_bytes<u.quota_bytes) AND NOT EXISTS(SELECT 1 FROM mtls_user_versions v WHERE v.identity_id=i.id AND v.ca_version=$2 AND NOT v.discarded AND v.not_before<=$3 AND v.expires_at>$3) ORDER BY i.user_id LIMIT $4")
-        .bind(&ca).bind(version).bind(Utc::now()).bind(PAGE).fetch_all(&state.pool).await?;
-    for user in users {
-        let candidate =
-            identities::prepare_user(&state.pool, &state.secrets, &user, &ca, version, false)
-                .await?;
-        let mut tx = db::begin_write(&state.pool).await?;
-        let valid:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM mtls_rotations WHERE id=$1 AND phase IN ('identities','publish') AND ca_version=$2)").bind(id).bind(version).fetch_one(&mut *tx).await?;
-        ensure!(valid, "rotation phase changed during signing");
-        identities::commit_user(&mut tx, &state.secrets, candidate).await?;
-        sqlx::query("UPDATE mtls_rotations SET prepared_count=prepared_count+1 WHERE id=$1")
-            .bind(id)
-            .execute(&mut *tx)
-            .await?;
-        tx.commit().await?;
+    if !users::pass(state, id, &ca, version).await? {
+        return Ok(());
     }
     publish_ready(state, id, &ca, version).await
 }
@@ -157,6 +136,12 @@ async fn publish_ready(state: &AppState, id: &str, ca: &str, version: i64) -> Re
             tx.rollback().await?;
             return Ok(());
         }
+    }
+    // A user assigned while an earlier identity page was being processed must
+    // not be omitted merely because it has no identity row yet.
+    if users::missing_identity_on(&mut tx, ca).await? {
+        tx.rollback().await?;
+        return Ok(());
     }
     let missing:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM mtls_user_identities i JOIN users u ON u.id=i.user_id WHERE i.ca_id=$1 AND NOT i.archived AND u.enabled AND (u.expires_at IS NULL OR u.expires_at>$3) AND (u.quota_bytes IS NULL OR u.usage_bytes<u.quota_bytes) AND NOT EXISTS(SELECT 1 FROM mtls_user_versions v WHERE v.identity_id=i.id AND v.ca_version=$2 AND NOT v.discarded AND v.not_before<=$3 AND v.expires_at>$3))")
         .bind(ca).bind(version).bind(Utc::now()).fetch_one(&mut *tx).await?;

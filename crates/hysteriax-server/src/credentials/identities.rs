@@ -33,6 +33,19 @@ impl PreparedIdentity {
     pub fn will_issue(&self) -> bool {
         self.issued.is_some()
     }
+    pub(crate) fn matches_rotation(
+        &self,
+        identity: &str,
+        user: &str,
+        ca: &str,
+        version: i64,
+    ) -> bool {
+        self.id == identity
+            && self.user_id == user
+            && self.ca_id == ca
+            && self.ca_version == version
+            && self.generation_state == "preparing"
+    }
 }
 
 pub async fn prepare_user(

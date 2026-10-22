@@ -8,9 +8,16 @@ use axum::{
     extract::{Extension, Path, State},
 };
 
-async fn fixture(n: i32) -> (AppState, String, String) {
+pub(in crate::credentials::rotations) async fn fixture(n: i32) -> (AppState, String, String) {
+    fixture_with_pool(db::test_pool_with_max_connections(8).await, n).await
+}
+
+pub(in crate::credentials::rotations) async fn fixture_with_pool(
+    pool: PgPool,
+    n: i32,
+) -> (AppState, String, String) {
     let state = AppState::new(
-        db::test_pool_with_max_connections(8).await,
+        pool,
         SecretBox::from_base64("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA").unwrap(),
     );
     crate::credentials::migration::migrate(&state.pool, &state.secrets)
@@ -475,7 +482,7 @@ async fn admission_work(state: &AppState) -> Work {
         .unwrap()
         .unwrap()
 }
-async fn many_rotations(state: &AppState, ca: &str, n: i32) {
+pub(in crate::credentials::rotations) async fn many_rotations(state: &AppState, ca: &str, n: i32) {
     sqlx::query("INSERT INTO credentials(id,name,kind,latest_version,created_at,updated_at) SELECT 'admit-ca-'||i,'CA','ca_identity',2,now(),now() FROM generate_series(1,$1)i").bind(n).execute(&state.pool).await.unwrap();
     sqlx::query("INSERT INTO credential_versions(credential_id,version,payload_enc,metadata,created_at) SELECT c.id,v.version,v.payload_enc,v.metadata,now() FROM credentials c CROSS JOIN credential_versions v WHERE c.id LIKE 'admit-ca-%' AND v.credential_id=$1").bind(ca).execute(&state.pool).await.unwrap();
     sqlx::query("INSERT INTO mtls_authorities(credential_id,source,published_version) SELECT id,'generated',1 FROM credentials WHERE id LIKE 'admit-ca-%'").execute(&state.pool).await.unwrap();

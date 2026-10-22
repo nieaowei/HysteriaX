@@ -11,7 +11,7 @@ pub async fn run(state: AppState) {
         super::identity_maintenance::run(state.clone()),
         super::probe_maintenance::run(state.clone()),
         super::authority_maintenance::run(state.clone()),
-        super::rotations::run_trust(state)
+        super::rotations::run_preparation(state)
     );
 }
 
