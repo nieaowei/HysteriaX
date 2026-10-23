@@ -68,8 +68,22 @@ async fn record_on(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     source: &Source,
 ) -> Result<sqlx::postgres::PgRow> {
-    let row=sqlx::query("SELECT r.*,z.provider_zone_id,z.connection_id AS zone_connection FROM dns_records r JOIN dns_zones z ON z.id=r.zone_id WHERE r.id=$1 FOR UPDATE OF r FOR SHARE OF z")
-        .bind(&source.record).fetch_one(&mut **tx).await?;
+    let connection = source.operation_source["connection_id"]
+        .as_str()
+        .context("DNS connection missing")?;
+    sqlx::query("SELECT id FROM dns_connections WHERE id=$1 FOR KEY SHARE")
+        .bind(connection)
+        .fetch_one(&mut **tx)
+        .await?;
+    let zone =
+        sqlx::query("SELECT provider_zone_id,connection_id FROM dns_zones WHERE id=$1 FOR SHARE")
+            .bind(&source.zone_id)
+            .fetch_one(&mut **tx)
+            .await?;
+    let row = sqlx::query("SELECT * FROM dns_records WHERE id=$1 FOR UPDATE")
+        .bind(&source.record)
+        .fetch_one(&mut **tx)
+        .await?;
     let expected = if source.action == "record-delete" {
         json!({"delete":true})
     } else {
@@ -82,9 +96,9 @@ async fn record_on(
     );
     anyhow::ensure!(
         row.get::<String, _>("zone_id") == source.zone_id
-            && row.get::<String, _>("provider_zone_id") == source.zone
+            && zone.get::<String, _>("provider_zone_id") == source.zone
             && row.get::<Option<String>, _>("provider_record_id") == source.remote
-            && row.get::<String, _>("zone_connection")
+            && zone.get::<String, _>("connection_id")
                 == source.operation_source["connection_id"]
                     .as_str()
                     .context("DNS connection missing")?,

@@ -1,4 +1,5 @@
 mod records;
+mod refresh;
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
 use sqlx::{PgPool, Row};
@@ -44,9 +45,9 @@ pub async fn execute(pool: &PgPool, secrets: &SecretBox, job: &JobInput) -> Resu
             super::rotation::apply(pool, &provider, &connection, version, &payload).await?
         }
         "verify" | "connection-refresh" => {
-            refresh_connection(pool, &provider, &connection, &payload).await?
+            refresh::connection(pool, &provider, job, id, &operation_source).await?
         }
-        "zone-refresh" => refresh_zone(pool, &provider, &resource).await?,
+        "zone-refresh" => refresh::zone(pool, &provider, job, id, &operation_source).await?,
         "record-create" | "record-update" | "record-delete" => {
             write_record(pool, &provider, job, id, &action, &resource, &payload).await?
         }
@@ -104,105 +105,6 @@ fn output(result: Value) -> JobOutput {
         published_connection: None,
         delete_node: false,
     }
-}
-
-async fn refresh_connection(
-    pool: &PgPool,
-    provider: &Cloudflare,
-    id: &str,
-    payload: &Value,
-) -> Result<Value> {
-    let zones = provider.zones().await?;
-    let mut tx = db::begin_write(pool).await?;
-    let current = sqlx::query("SELECT revision FROM dns_connections WHERE id=$1")
-        .bind(id)
-        .fetch_one(&mut *tx)
-        .await?;
-    if payload["expected_revision"].as_i64() != Some(current.get("revision")) {
-        bail!("DNS connection changed before verification");
-    }
-    for zone in &zones {
-        let remote_id = zone["id"].as_str().context("missing provider zone ID")?;
-        let name = super::hostname(
-            zone["name"]
-                .as_str()
-                .context("missing provider zone name")?,
-        )?;
-        let owner: Option<String> =
-            sqlx::query_scalar("SELECT connection_id FROM dns_zones WHERE provider_zone_id=$1")
-                .bind(remote_id)
-                .fetch_optional(&mut *tx)
-                .await?;
-        if owner.as_deref().is_some_and(|owner| owner != id) {
-            continue;
-        }
-        sqlx::query("INSERT INTO dns_zones(id,connection_id,provider_zone_id,name,synced_at) VALUES($1,$2,$3,$4,now()) ON CONFLICT(provider_zone_id) DO UPDATE SET name=excluded.name,synced_at=now()")
-            .bind(Uuid::new_v4().to_string()).bind(id).bind(remote_id).bind(name).execute(&mut *tx).await?;
-    }
-    sqlx::query("UPDATE dns_connections SET status='verified',verified_at=now(),updated_at=now() WHERE id=$1")
-        .bind(id).execute(&mut *tx).await?;
-    tx.commit().await?;
-    Ok(json!({"zones":zones.len(),"connection_id":id}))
-}
-
-async fn refresh_zone(pool: &PgPool, provider: &Cloudflare, id: &str) -> Result<Value> {
-    let zone = sqlx::query("SELECT provider_zone_id FROM dns_zones WHERE id=$1")
-        .bind(id)
-        .fetch_one(pool)
-        .await?;
-    let records = provider
-        .records(&zone.get::<String, _>("provider_zone_id"))
-        .await?;
-    let mut tx = db::begin_write(pool).await?;
-    let mut seen = Vec::<String>::new();
-    for remote in &records {
-        let remote_id = remote["id"]
-            .as_str()
-            .context("missing provider record ID")?;
-        seen.push(remote_id.into());
-        let mut existing = sqlx::query("SELECT id,remote_snapshot,desired FROM dns_records WHERE zone_id=$1 AND provider_record_id=$2")
-            .bind(id).bind(remote_id).fetch_optional(&mut *tx).await?;
-        if existing.is_none()
-            && let Some(operation) = remote["comment"]
-                .as_str()
-                .and_then(|comment| comment.strip_prefix("HysteriaX operation:"))
-        {
-            existing = sqlx::query("SELECT r.id,r.remote_snapshot,r.desired FROM dns_records r JOIN dns_operations o ON o.resource_id=r.id WHERE r.zone_id=$1 AND o.id=$2 AND o.action='record-create'")
-                .bind(id).bind(operation).fetch_optional(&mut *tx).await?;
-        }
-        if let Some(existing) = &existing
-            && existing.get::<Option<Value>, _>("desired").is_some()
-        {
-            let active: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM jobs WHERE resource_id=$1 AND kind IN ('dns-record-create','dns-record-update','dns-record-delete') AND status IN ('queued','running'))")
-                .bind(existing.get::<String,_>("id")).fetch_one(&mut *tx).await?;
-            if active {
-                continue;
-            }
-            sqlx::query("UPDATE dns_operations SET applied_at=now(),result=$1 WHERE resource_id=$2 AND applied_at IS NULL AND action IN ('record-create','record-update','record-delete')")
-                .bind(json!({"reconciled_by_refresh":true,"observed":super::provider::editable(remote)}))
-                .bind(existing.get::<String,_>("id")).execute(&mut *tx).await?;
-        }
-        let local_id = existing
-            .as_ref()
-            .map(|r| r.get::<String, _>("id"))
-            .unwrap_or_else(|| Uuid::new_v4().to_string());
-        let changed = existing
-            .as_ref()
-            .is_some_and(|r| r.get::<Option<Value>, _>("remote_snapshot").as_ref() != Some(remote));
-        sqlx::query("INSERT INTO dns_records(id,zone_id,provider_record_id,name,record_type,content,ttl,proxied,remote_snapshot,state) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'synced') ON CONFLICT(id) DO UPDATE SET provider_record_id=excluded.provider_record_id,name=excluded.name,record_type=excluded.record_type,content=excluded.content,ttl=excluded.ttl,proxied=excluded.proxied,remote_snapshot=excluded.remote_snapshot,desired=NULL,state='synced',deleted_at=NULL,revision=dns_records.revision+$10,updated_at=now(),resolution_status=CASE WHEN $10=1 THEN 'unchecked' ELSE dns_records.resolution_status END")
-            .bind(&local_id).bind(id).bind(remote_id).bind(remote["name"].as_str().context("missing record name")?)
-            .bind(remote["type"].as_str().context("missing record type")?).bind(remote["content"].as_str().unwrap_or(""))
-            .bind(remote["ttl"].as_i64().unwrap_or(1)).bind(remote["proxied"].as_bool().unwrap_or(false)).bind(remote)
-            .bind(if changed {1_i64}else{0_i64}).execute(&mut *tx).await?;
-    }
-    sqlx::query("UPDATE dns_records SET state='remote_missing',deleted_at=now(),revision=revision+1,updated_at=now() WHERE zone_id=$1 AND provider_record_id IS NOT NULL AND NOT(provider_record_id=ANY($2)) AND desired IS NULL AND deleted_at IS NULL")
-        .bind(id).bind(&seen).execute(&mut *tx).await?;
-    sqlx::query("UPDATE dns_zones SET synced_at=now() WHERE id=$1")
-        .bind(id)
-        .execute(&mut *tx)
-        .await?;
-    tx.commit().await?;
-    Ok(json!({"zone_id":id,"records":records.len()}))
 }
 
 async fn write_record(
@@ -679,16 +581,22 @@ mod tests {
             writes: Arc::new(AtomicUsize::new(0)),
         };
         let (provider, server) = provider(remote.clone()).await;
-        let error = write_record(
-            &state.pool,
-            &provider,
-            &job,
-            operation,
-            "record-update",
-            "record",
-            &payload,
+        let previous = refresh::tests::start(&state, &receipt).await;
+        let error = crate::execution::supervise(
+            state.pool.clone(),
+            previous.leases.clone(),
+            write_record(
+                &state.pool,
+                &provider,
+                &job,
+                operation,
+                "record-update",
+                "record",
+                &payload,
+            ),
         )
         .await
+        .unwrap()
         .unwrap_err();
         assert!(error.to_string().contains("changed externally"));
         assert_eq!(remote.writes.load(Ordering::SeqCst), 0);
@@ -697,7 +605,12 @@ mod tests {
             .execute(&state.pool)
             .await
             .unwrap();
-        refresh_zone(&state.pool, &provider, &zone).await.unwrap();
+        let mut tx = state.pool.begin().await.unwrap();
+        for lease in &previous.leases {
+            lease.release(&mut tx).await.unwrap();
+        }
+        tx.commit().await.unwrap();
+        refresh::tests::refresh_zone_for_test(&state, &provider, &zone).await;
         let record = sqlx::query("SELECT content,desired FROM dns_records WHERE id='record'")
             .fetch_one(&state.pool)
             .await
