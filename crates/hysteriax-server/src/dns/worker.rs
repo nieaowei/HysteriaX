@@ -44,11 +44,13 @@ pub async fn execute(pool: &PgPool, secrets: &SecretBox, job: &JobInput) -> Resu
             .await
             .map(output);
     }
+    if action == "credential-apply" {
+        return super::rotation::execute(pool, secrets, job, id, &operation_source)
+            .await
+            .map(output);
+    }
     let provider = super::provider(pool, secrets, &connection, version).await?;
     let result = match action.as_str() {
-        "credential-apply" => {
-            super::rotation::apply(pool, &provider, &connection, version, &payload).await?
-        }
         "verify" | "connection-refresh" => {
             refresh::connection(pool, &provider, job, id, &operation_source).await?
         }
