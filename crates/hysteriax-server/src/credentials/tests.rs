@@ -14,17 +14,17 @@ const KEY: &str = include_str!("../../../../tests/fixtures/credentials-test.key"
 fn secrets() -> SecretBox {
     SecretBox::from_base64("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA").unwrap()
 }
-async fn state() -> AppState {
+pub(super) async fn state() -> AppState {
     let pool = crate::db::test_pool_with_max_connections(3).await;
     migration::migrate(&pool, &secrets()).await.unwrap();
     AppState::new(pool, secrets())
 }
-fn actor() -> Extension<AdminActor> {
+pub(super) fn actor() -> Extension<AdminActor> {
     Extension(AdminActor {
         id: "test-admin".into(),
     })
 }
-async fn create(state: &AppState, kind: &str, payload: Value) -> String {
+pub(super) async fn create(state: &AppState, kind: &str, payload: Value) -> String {
     let (_, Json(result)) = api::create(
         State(state.clone()),
         actor(),
@@ -39,7 +39,7 @@ async fn create(state: &AppState, kind: &str, payload: Value) -> String {
     .unwrap();
     result["id"].as_str().unwrap().into()
 }
-async fn node(state: &AppState, name: &str, ssh: &str, config: Value) -> String {
+pub(super) async fn node(state: &AppState, name: &str, ssh: &str, config: Value) -> String {
     let (_,Json(result))=crate::api::nodes::create(State(state.clone()),Json(serde_json::from_value(json!({"name":name,"ssh_host":"127.0.0.1","ssh_port":22,"ssh_username":"root","ssh_credential_id":ssh,"ssh_credential_version":1,"public_host":"credentials.example.test","public_port":443,"listen_addr":":443","config":config})).unwrap())).await.unwrap();
     result["node"]["id"].as_str().unwrap().into()
 }
@@ -232,15 +232,11 @@ async fn publication_updates_all_references_and_preserves_pinned_history() {
             target_revision: None,
             attempts: 1,
         };
-        let result = worker::apply(&state.pool, &state.secrets, &job)
-            .await
-            .unwrap();
+        let result = run_application(&state, &job).await.unwrap();
         assert_eq!(result.stage, "credential_deployment_queued");
         // A crash after the transactional handoff but before jobs::succeed
         // must acknowledge the existing follow-up, not enqueue it twice.
-        let recovered = worker::apply(&state.pool, &state.secrets, &job)
-            .await
-            .unwrap();
+        let recovered = run_application(&state, &job).await.unwrap();
         assert_eq!(recovered.result["already_applied"], true);
         let count: i64 =
             sqlx::query_scalar("SELECT count(*) FROM config_versions WHERE node_id=$1")
@@ -341,9 +337,7 @@ async fn concurrent_node_edits_and_newer_publications_prevent_stale_application(
         .execute(&state.pool)
         .await
         .unwrap();
-    let error = worker::apply(&state.pool, &state.secrets, &job)
-        .await
-        .unwrap_err();
+    let error = run_application(&state, &job).await.unwrap_err();
     assert!(error.to_string().contains("node changed"));
     let _ = api::publish(
         State(state.clone()),
@@ -357,7 +351,7 @@ async fn concurrent_node_edits_and_newer_publications_prevent_stale_application(
     .await
     .unwrap();
     assert!(
-        worker::apply(&state.pool, &state.secrets, &job)
+        run_application(&state, &job)
             .await
             .unwrap_err()
             .to_string()
@@ -378,7 +372,7 @@ async fn restart_acknowledges_committed_ssh_application_without_reconnecting_or_
     let state = state().await;
     let ssh = create(&state, "ssh_password", json!({"secret":"old-password"})).await;
     let node = node(&state, "SSH recovery node", &ssh, json!({})).await;
-    let (_, Json(published)) = api::publish(
+    let (_, Json(_published)) = api::publish(
         State(state.clone()),
         actor(),
         Path(ssh.clone()),
@@ -401,16 +395,17 @@ async fn restart_acknowledges_committed_ssh_application_without_reconnecting_or_
         target_revision: None,
         attempts: 2,
     };
-    // Inject the durable state of a completed SSH transaction followed by a
-    // process crash before the final job result was persisted.
-    let mut tx = crate::db::begin_write(&state.pool).await.unwrap();
-    sqlx::query("UPDATE nodes SET ssh_credential_version=2,desired_revision=2 WHERE id=$1")
-        .bind(&node)
-        .execute(&mut *tx)
-        .await
-        .unwrap();
-    sqlx::query("UPDATE credential_batch_items SET applied_at=now(),apply_stage='credential_applied' WHERE batch_id=$1").bind(published["batch_id"].as_str().unwrap()).execute(&mut *tx).await.unwrap();
-    tx.commit().await.unwrap();
+    // Commit through the same atomic persistence path, then model a crash
+    // before the outer job completion and a later credential publication.
+    let leases = application_scope(&state, &job).await;
+    crate::execution::supervise(
+        state.pool.clone(),
+        leases,
+        worker::commit_ssh_for_test(&state.pool, &state.secrets, &job),
+    )
+    .await
+    .unwrap()
+    .unwrap();
     let _ = api::publish(
         State(state.clone()),
         actor(),
@@ -422,9 +417,7 @@ async fn restart_acknowledges_committed_ssh_application_without_reconnecting_or_
     )
     .await
     .unwrap();
-    let result = worker::apply(&state.pool, &state.secrets, &job)
-        .await
-        .unwrap();
+    let result = run_application(&state, &job).await.unwrap();
     assert_eq!(result.result["already_applied"], true);
     assert_eq!(result.stage, "credential_applied");
     let row = sqlx::query("SELECT ssh_credential_version,desired_revision FROM nodes WHERE id=$1")
@@ -809,4 +802,55 @@ async fn invalid_legacy_pair_rolls_back_without_dropping_material() {
             .unwrap(),
         0
     );
+}
+
+async fn application_scope(
+    state: &AppState,
+    job: &crate::deployment::JobInput,
+) -> Vec<crate::execution::Execution> {
+    let mut tx = state.pool.begin().await.unwrap();
+    sqlx::query("UPDATE jobs SET status='running',attempts=$2 WHERE id=$1")
+        .bind(&job.id)
+        .bind(job.attempts)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    let mut keys = vec![
+        format!("job:{}", job.id),
+        format!("node:{}", job.node_id.as_deref().unwrap()),
+    ];
+    keys.sort();
+    let mut leases = vec![];
+    for key in keys {
+        let existing=sqlx::query("SELECT owner,generation FROM resource_leases WHERE resource_key=$1 AND owner=$2 AND work_id=$3 AND expires_at>clock_timestamp() AND NOT blocked")
+            .bind(&key).bind(&state.instance_id).bind(&job.id).fetch_optional(&mut *tx).await.unwrap();
+        leases.push(if let Some(row) = existing {
+            crate::execution::Execution {
+                resource: key,
+                owner: row.get("owner"),
+                generation: row.get("generation"),
+                work: job.id.clone(),
+            }
+        } else {
+            crate::execution::acquire(&mut tx, &key, &state.instance_id, &job.id)
+                .await
+                .unwrap()
+                .unwrap()
+        });
+    }
+    tx.commit().await.unwrap();
+    leases
+}
+async fn run_application(
+    state: &AppState,
+    job: &crate::deployment::JobInput,
+) -> anyhow::Result<crate::deployment::JobOutput> {
+    let leases = application_scope(state, job).await;
+    crate::execution::supervise(
+        state.pool.clone(),
+        leases,
+        worker::apply(&state.pool, &state.secrets, job),
+    )
+    .await
+    .unwrap()
 }
