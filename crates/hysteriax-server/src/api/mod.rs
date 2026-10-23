@@ -47,6 +47,33 @@ pub(crate) fn audit_actor() -> String {
 pub fn router(state: AppState) -> Router {
     use subscriptions::templates as st;
     let admin = Router::new()
+        .route(
+            "/api/v2/dns/connections",
+            get(dns::list_connections).post(dns::v2::create_connection),
+        )
+        .route(
+            "/api/v2/dns/connections/{id}",
+            get(dns::get_connection)
+                .patch(dns::v2::patch_connection)
+                .delete(dns::v2::delete_connection),
+        )
+        .route(
+            "/api/v2/dns/connections/{id}/verify",
+            post(dns::v2::connection_action),
+        )
+        .route(
+            "/api/v2/dns/connections/{id}/refresh",
+            post(dns::v2::connection_action),
+        )
+        .route("/api/v2/dns/zones", get(dns::list_zones))
+        .route(
+            "/api/v2/dns/zones/{id}",
+            axum::routing::patch(dns::v2::patch_zone),
+        )
+        .route(
+            "/api/v2/dns/zones/{id}/refresh",
+            post(dns::v2::refresh_zone),
+        )
         .route("/api/v2/nodes", get(nodes::list).post(nodes::create_v2))
         .route(
             "/api/v2/nodes/{id}",
