@@ -89,6 +89,16 @@ impl Execution {
         intent: &Value,
     ) -> Result<(String, bool), sqlx::Error> {
         self.guard(connection).await?;
+        // A caller may catch a network error and attempt rollback or cleanup
+        // before its executor quarantines the work. Do not send another step
+        // while the previous request may still be executing remotely.
+        let uncertain: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM execution_operations WHERE (resource_key=$1 OR work_id=$2) AND state IN ('dispatching','reconciling','needs_attention') AND NOT(work_id=$2 AND step=$3))")
+            .bind(&self.resource).bind(&self.work).bind(step).fetch_one(&mut *connection).await?;
+        if uncertain {
+            return Err(sqlx::Error::Protocol(
+                "a previous remote step requires verification before another dispatch".into(),
+            ));
+        }
         let id = uuid::Uuid::new_v4().to_string();
         let inserted=sqlx::query("INSERT INTO execution_operations(operation_id,resource_key,owner,generation,work_id,step,state,intent) VALUES($1,$2,$3,$4,$5,$6,'dispatching',$7) ON CONFLICT(work_id,step) DO NOTHING")
             .bind(&id).bind(&self.resource).bind(&self.owner).bind(self.generation).bind(&self.work).bind(step).bind(intent)
@@ -752,5 +762,123 @@ mod boundary_tests {
                 .unwrap();
         assert_eq!(state, "verified");
         assert_eq!(evidence["provider_receipt"], "stable");
+    }
+
+    #[tokio::test]
+    async fn catching_an_uncertain_response_does_not_permit_a_later_cleanup_or_rollback_send() {
+        let (pool, lease) = fixture().await;
+        let sends = Arc::new(AtomicUsize::new(0));
+        let result = supervise(pool.clone(), vec![lease.clone()], async {
+            let first = remote(
+                "ssh-command",
+                "install".into(),
+                async {
+                    sends.fetch_add(1, Ordering::SeqCst);
+                    Err::<(), _>(anyhow::anyhow!("response lost"))
+                },
+                |_| serde_json::json!({}),
+            )
+            .await;
+            assert!(first.is_err());
+            for kind in ["ssh-cleanup", "ssh-rollback", "dns-update"] {
+                let next = remote(
+                    kind,
+                    "later".into(),
+                    async {
+                        sends.fetch_add(1, Ordering::SeqCst);
+                        Ok(())
+                    },
+                    |_| serde_json::json!({}),
+                )
+                .await;
+                assert!(next.is_err());
+            }
+        })
+        .await;
+        assert!(result.is_some());
+        assert_eq!(sends.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM execution_operations")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            1
+        );
+        let mut tx = pool.begin().await.unwrap();
+        assert!(!lease.release(&mut tx).await.unwrap());
+        tx.rollback().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn uncertainty_on_any_resource_of_the_same_work_blocks_a_new_step() {
+        let (pool, lease) = fixture().await;
+        let mut tx = pool.begin().await.unwrap();
+        let other = acquire(&mut tx, "dns-zone:z", "instance-a", "work")
+            .await
+            .unwrap()
+            .unwrap();
+        other
+            .dispatch(&mut tx, "prior", &serde_json::json!({"request":"first"}))
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        for state in ["dispatching", "reconciling", "needs_attention"] {
+            sqlx::query("UPDATE execution_operations SET state=$1")
+                .bind(state)
+                .execute(&pool)
+                .await
+                .unwrap();
+            let mut tx = pool.begin().await.unwrap();
+            assert!(
+                lease
+                    .dispatch(&mut tx, "next", &serde_json::json!({}))
+                    .await
+                    .is_err()
+            );
+            tx.rollback().await.unwrap();
+        }
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM execution_operations")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn verified_steps_continue_sequentially_and_uncertainty_does_not_block_other_resources() {
+        let (pool, lease) = fixture().await;
+        let mut tx = pool.begin().await.unwrap();
+        let unrelated = acquire(&mut tx, "node:b", "instance-b", "other-work")
+            .await
+            .unwrap()
+            .unwrap();
+        unrelated
+            .dispatch(&mut tx, "unresolved", &serde_json::json!({}))
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        let sends = Arc::new(AtomicUsize::new(0));
+        let result = supervise(pool.clone(), vec![lease], async {
+            for step in ["upload", "install", "cleanup"] {
+                remote(
+                    "ssh-command",
+                    step.into(),
+                    async {
+                        sends.fetch_add(1, Ordering::SeqCst);
+                        Ok(())
+                    },
+                    |_| serde_json::json!({"finished":true}),
+                )
+                .await
+                .unwrap();
+            }
+        })
+        .await;
+        assert!(result.is_some());
+        assert_eq!(sends.load(Ordering::SeqCst), 3);
+        assert_eq!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM execution_operations WHERE work_id='work' AND state='verified'").fetch_one(&pool).await.unwrap(),3);
+        assert_eq!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM execution_operations WHERE work_id='other-work' AND state='dispatching'").fetch_one(&pool).await.unwrap(),1);
     }
 }
