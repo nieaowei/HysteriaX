@@ -70,6 +70,7 @@ pub async fn run_job(pool: &PgPool, job: &JobInput) -> anyhow::Result<JobOutput>
     })
 }
 
+#[derive(Clone, Copy)]
 struct History {
     table: &'static str,
     time: &'static str,
@@ -213,6 +214,8 @@ pub async fn prepare_final_delete(pool: &PgPool, node: &str) -> Result<(), sqlx:
 }
 
 pub async fn purge_history(pool: &PgPool, job: &JobInput) -> Result<i64, sqlx::Error> {
+    crate::execution::require_job_scope(&job.id, job.node_id.as_deref())
+        .map_err(|error| sqlx::Error::Protocol(error.to_string()))?;
     let node = job
         .node_id
         .as_deref()
@@ -373,38 +376,67 @@ async fn purge_batch(
     limit: i64,
     total: i64,
 ) -> Result<(i64, Option<(DateTime<Utc>, String)>), sqlx::Error> {
-    let mut tx = db::begin_write(pool).await?;
-    let running: bool =
-        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM jobs WHERE id=$1 AND status='running')")
-            .bind(&job.id)
-            .fetch_one(&mut *tx)
-            .await?;
-    if !running {
-        return Ok((0, None));
+    crate::execution::require_job_scope(&job.id, job.node_id.as_deref())
+        .map_err(|error| sqlx::Error::Protocol(error.to_string()))?;
+    let (job, node, history, cursor) = (job.clone(), node.to_owned(), *history, cursor.cloned());
+    db::write(pool, move |tx| {
+        let (job, node, cursor) = (job.clone(), node.clone(), cursor.clone());
+        Box::pin(async move {
+            purge_batch_on(tx, &job, &node, &history, cursor.as_ref(), limit, total).await
+        })
+    })
+    .await
+}
+
+async fn purge_batch_on(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    job: &JobInput,
+    node: &str,
+    history: &History,
+    cursor: Option<&(DateTime<Utc>, String)>,
+    limit: i64,
+    total: i64,
+) -> Result<(i64, Option<(DateTime<Utc>, String)>), sqlx::Error> {
+    let Some(source) = sqlx::query("SELECT kind,node_id,target_revision,payload_json,attempts,resource_key FROM jobs WHERE id=$1 AND status='running' FOR UPDATE")
+        .bind(&job.id).fetch_optional(&mut **tx).await? else { return Ok((0,None)); };
+    if job.node_id.as_deref() != Some(node)
+        || source.get::<String, _>("kind") != job.kind
+        || source.get::<Option<String>, _>("node_id") != job.node_id
+        || source.get::<Option<i64>, _>("target_revision") != job.target_revision
+        || source.get::<serde_json::Value, _>("payload_json") != job.payload
+        || source.get::<i64, _>("attempts") != job.attempts
+    {
+        return Err(sqlx::Error::Protocol(
+            "node cleanup job source changed".into(),
+        ));
     }
-    let valid:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM nodes WHERE id=$1 AND state='deleting' AND desired_revision=$2)")
-        .bind(node).bind(job.target_revision).fetch_one(&mut *tx).await?;
+    if let Some(resource) = source.get::<Option<String>, _>("resource_key") {
+        crate::execution::require_job_resource_scope(&job.id, &resource)
+            .map_err(|error| sqlx::Error::Protocol(error.to_string()))?;
+    }
+    let valid = sqlx::query_scalar::<_,bool>("SELECT true FROM nodes WHERE id=$1 AND state='deleting' AND desired_revision=$2 FOR NO KEY UPDATE")
+        .bind(node).bind(job.target_revision).fetch_optional(&mut **tx).await?.unwrap_or(false);
     if !valid {
         return Err(sqlx::Error::Protocol(
             "node removal was superseded; reload before retrying".into(),
         ));
     }
     sqlx::query("SET LOCAL statement_timeout='2s'")
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?;
     // Cleanup selectivity changes drastically as each batch commits. Avoid a
     // cached generic plan and always cost the matching node/seek index.
     sqlx::query("SET LOCAL plan_cache_mode=force_custom_plan")
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?;
     // With skewed node ages, incremental sort badly underestimates the cost
     // of filtering a global time index before finding this node's first row.
     sqlx::query("SET LOCAL enable_incremental_sort=off")
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?;
     sqlx::query("SELECT set_config('hysteriax.history_cleanup_node',$1,true)")
         .bind(node)
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?;
     let source = history
         .source
@@ -422,7 +454,7 @@ async fn purge_batch(
     };
     let limit_parameter = if cursor.is_some() { "$4" } else { "$2" };
     let statement = format!(
-        "SELECT ctid::text AS location,{time} AS at_time,{id}::text AS cursor_id FROM {table} WHERE node_id=$1{source}{seek} ORDER BY {time} DESC,{id} DESC LIMIT {limit_parameter}",
+        "SELECT ctid::text AS location,{time} AS at_time,{id}::text AS cursor_id FROM {table} WHERE node_id=$1{source}{seek} ORDER BY {time} DESC,{id} DESC LIMIT {limit_parameter} FOR UPDATE",
         time = history.time,
         id = history.id,
         table = history.table
@@ -431,9 +463,8 @@ async fn purge_batch(
     if let Some((at, id)) = cursor {
         query = query.bind(at).bind(id);
     }
-    let rows = query.bind(limit).fetch_all(&mut *tx).await?;
+    let rows = query.bind(limit).fetch_all(&mut **tx).await?;
     if rows.is_empty() {
-        tx.commit().await?;
         return Ok((0, None));
     }
     let last = rows.last().unwrap();
@@ -447,7 +478,7 @@ async fn purge_batch(
         history.table
     ))
     .bind(locations)
-    .execute(&mut *tx)
+    .execute(&mut **tx)
     .await?
     .rows_affected() as i64;
     let checkpoint = CleanupCursor {
@@ -456,8 +487,10 @@ async fn purge_batch(
         at: next.0,
         id: next.1.clone(),
     };
-    sqlx::query("UPDATE jobs SET stage='removing_history',result_json=jsonb_build_object('stage','removing_history','result',jsonb_build_object('removed_history_rows',$1::bigint,'cleanup_cursor',$3::jsonb)),updated_at=now() WHERE id=$2 AND status='running'")
-        .bind(total+deleted).bind(&job.id).bind(sqlx::types::Json(checkpoint)).execute(&mut *tx).await?;
-    tx.commit().await?;
+    sqlx::query("UPDATE jobs SET stage='removing_history',result_json=jsonb_build_object('stage','removing_history','result',jsonb_build_object('removed_history_rows',$1::bigint,'cleanup_cursor',$3::jsonb)),updated_at=clock_timestamp() WHERE id=$2 AND status='running'")
+        .bind(total+deleted).bind(&job.id).bind(sqlx::types::Json(checkpoint)).execute(&mut **tx).await?;
     Ok((deleted, Some(next)))
 }
+
+#[cfg(test)]
+mod ownership_tests;

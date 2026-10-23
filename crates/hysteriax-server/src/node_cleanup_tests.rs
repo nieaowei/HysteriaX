@@ -694,13 +694,18 @@ async fn cancelled_cleanup_does_not_report_node_removal() {
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
     }).await.unwrap();
-    let mut tx = db::begin_write(&state.pool).await.unwrap();
-    sqlx::query("UPDATE jobs SET status='cancelled' WHERE id=$1")
-        .bind(&id)
-        .execute(&mut *tx)
-        .await
-        .unwrap();
-    tx.commit().await.unwrap();
+    db::write(&state.pool, move |tx| {
+        let id = id.clone();
+        Box::pin(async move {
+            sqlx::query("UPDATE jobs SET status='cancelled' WHERE id=$1")
+                .bind(id)
+                .execute(&mut **tx)
+                .await?;
+            Ok::<_, sqlx::Error>(())
+        })
+    })
+    .await
+    .unwrap();
     tokio::time::timeout(Duration::from_secs(10), worker)
         .await
         .unwrap()

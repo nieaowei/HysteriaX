@@ -501,7 +501,7 @@ async fn node_cleanup_purges_pending_items_and_batches_in_its_durable_cursor() {
         .execute(&pool)
         .await
         .unwrap();
-    sqlx::query("INSERT INTO jobs(id,kind,node_id,target_revision,status,stage,available_at,created_at,updated_at) VALUES('cleanup','record-remove','a',2,'running','starting',now(),now(),now())").execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO jobs(id,kind,node_id,target_revision,status,stage,attempts,available_at,created_at,updated_at) VALUES('cleanup','record-remove','a',2,'running','starting',1,now(),now(),now())").execute(&pool).await.unwrap();
     let job = crate::deployment::JobInput {
         id: "cleanup".into(),
         kind: "record-remove".into(),
