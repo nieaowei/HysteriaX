@@ -351,22 +351,25 @@ async fn online_failed_samples_do_not_erase_successful_history() {
     let (state, nodes, user) = fixture().await;
     let good = serde_json::to_vec(&json!({&user:1})).unwrap();
     let cycle = Uuid::new_v4();
-    let at = Utc::now() - Duration::minutes(2);
+    // Keep the sample and the requested final bucket in the same fixed hour.
+    let anchor: DateTime<Utc> = "2026-10-14T12:30:00Z".parse().unwrap();
+    let at = anchor - Duration::minutes(2);
     record_online(&state.pool, &nodes[0], cycle, at, 2, Some(&good))
         .await
         .unwrap();
     record_online(&state.pool, &nodes[1], cycle, at, 2, None)
         .await
         .unwrap();
-    let Json(value) = history(
-        State(state),
-        Query(HistoryQuery {
+    let Json(value) = history_at(
+        state,
+        HistoryQuery {
             metrics: None,
             range: "today".into(),
             timezone: "UTC".into(),
             node_id: None,
             source: None,
-        }),
+        },
+        anchor,
     )
     .await
     .unwrap();
@@ -469,22 +472,25 @@ async fn monitoring_credentials_are_short_lived_separate_from_deployment_credent
 async fn successful_empty_traffic_is_zero_and_failed_collection_is_incomplete() {
     let (state, nodes, _) = fixture().await;
     let cycle = Uuid::new_v4();
-    let at = Utc::now() - Duration::minutes(2);
+    // Keep the sample and the requested final bucket in the same fixed hour.
+    let anchor: DateTime<Utc> = "2026-10-14T12:30:00Z".parse().unwrap();
+    let at = anchor - Duration::minutes(2);
     for node in &nodes {
         record_online(&state.pool, node, cycle, at, 2, Some(b"{}"))
             .await
             .unwrap();
         finish_traffic_sample(&state.pool, node, cycle, "ok").await;
     }
-    let Json(value) = history(
-        State(state.clone()),
-        Query(HistoryQuery {
+    let Json(value) = history_at(
+        state.clone(),
+        HistoryQuery {
             metrics: None,
             range: "today".into(),
             timezone: "UTC".into(),
             node_id: None,
             source: None,
-        }),
+        },
+        anchor,
     )
     .await
     .unwrap();
@@ -493,15 +499,16 @@ async fn successful_empty_traffic_is_zero_and_failed_collection_is_incomplete() 
     assert_eq!(bucket["incomplete"], false);
     assert_eq!(bucket["traffic_covered_nodes"], 2);
     finish_traffic_sample(&state.pool, &nodes[0], cycle, "failed").await;
-    let Json(value) = history(
-        State(state),
-        Query(HistoryQuery {
+    let Json(value) = history_at(
+        state,
+        HistoryQuery {
             metrics: None,
             range: "today".into(),
             timezone: "UTC".into(),
             node_id: None,
             source: None,
-        }),
+        },
+        anchor,
     )
     .await
     .unwrap();
