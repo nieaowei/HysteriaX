@@ -40,12 +40,12 @@ async fn authenticated_reads_remain_available_while_writer_lock_is_held() {
         .unwrap();
     assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
     holder.rollback().await.unwrap();
-    let untouched: bool =
-        sqlx::query_scalar("SELECT last_used_at IS NULL FROM admin_tokens WHERE id='active'")
+    let independent_touch: bool =
+        sqlx::query_scalar("SELECT last_used_at IS NOT NULL FROM admin_tokens WHERE id='active'")
             .fetch_one(&pool)
             .await
             .unwrap();
-    assert!(untouched);
+    assert!(independent_touch);
     assert_eq!(
         client
             .get(format!("{base}/api/v1/version"))

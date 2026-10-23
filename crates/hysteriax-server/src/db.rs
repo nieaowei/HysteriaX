@@ -1,16 +1,20 @@
 use std::{str::FromStr, time::Duration};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use sqlx::{
-    Connection, PgConnection, PgPool, Postgres, Transaction,
+    PgPool, Postgres, Transaction,
     migrate::Migrator,
     postgres::{PgConnectOptions, PgPoolOptions},
 };
 
 pub static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
 
-const INSTANCE_LOCK_KEY: i64 = 62_177_345_902_812;
-const WRITE_LOCK_KEY: i64 = 62_177_345_902_811;
+#[cfg(test)]
+use sqlx::{Connection, PgConnection};
+#[cfg(test)]
+mod legacy_lock_fixture;
+#[cfg(test)]
+pub use legacy_lock_fixture::begin_write;
 
 // A stopped client can leave one active statement, then an idle transaction.
 // Together their server-side limits must fit inside a fresh execution lease.
@@ -51,70 +55,6 @@ pub fn pool_options_for_maintenance(maintenance: bool) -> PgPoolOptions {
                 Ok(())
             })
         })
-}
-
-pub async fn acquire_instance_lock(database_url: &str) -> Result<PgConnection> {
-    let options = connect_options(database_url)?;
-    let mut connection = PgConnection::connect_with(&options)
-        .await
-        .context("connect to PostgreSQL to acquire the single-instance lock")?;
-    let acquired: bool = sqlx::query_scalar("SELECT pg_try_advisory_lock($1)")
-        .bind(INSTANCE_LOCK_KEY)
-        .fetch_one(&mut connection)
-        .await
-        .context("acquire the single-instance lock")?;
-    if !acquired {
-        bail!("another HysteriaX server instance is already using this database");
-    }
-    Ok(connection)
-}
-
-pub async fn check_instance_lock(connection: &mut PgConnection) -> Result<()> {
-    let held: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM pg_locks WHERE locktype = 'advisory' AND pid = pg_backend_pid() AND granted AND objsubid = 1 AND classid::bigint * 4294967296 + objid::bigint = $1)",
-    )
-        .bind(INSTANCE_LOCK_KEY)
-        .fetch_one(&mut *connection)
-        .await
-        .context("single-instance lock connection was lost")?;
-    if !held {
-        bail!("single-instance lock is no longer held");
-    }
-    Ok(())
-}
-
-pub async fn try_begin_write(
-    pool: &PgPool,
-) -> Result<Option<Transaction<'static, Postgres>>, sqlx::Error> {
-    let mut transaction = pool.begin().await?;
-    let acquired: bool = sqlx::query_scalar("SELECT pg_try_advisory_xact_lock($1)")
-        .bind(WRITE_LOCK_KEY)
-        .fetch_one(&mut *transaction)
-        .await?;
-    if acquired {
-        crate::execution::guard_current(&mut transaction).await?;
-        Ok(Some(transaction))
-    } else {
-        transaction.rollback().await?;
-        Ok(None)
-    }
-}
-
-pub async fn begin_write(pool: &PgPool) -> Result<Transaction<'static, Postgres>, sqlx::Error> {
-    let deadline = tokio::time::Instant::now() + pool.options().get_acquire_timeout();
-    loop {
-        if let Some(transaction) = try_begin_write(pool).await? {
-            return Ok(transaction);
-        }
-        // Finish BEGIN/ROLLBACK before applying our contention deadline.
-        // Cancelling an in-flight BEGIN can return a server-side transaction
-        // to the pool before SQLx has recorded its transaction depth.
-        if tokio::time::Instant::now() >= deadline {
-            return Err(sqlx::Error::PoolTimedOut);
-        }
-        // Waiting writers release their connections before retrying.
-        tokio::time::sleep(Duration::from_millis(rand::random_range(25..75))).await;
-    }
 }
 
 /// Error metadata used by the pure-database retry boundary. Business errors
@@ -331,11 +271,7 @@ pub async fn test_pool_through_version(max_connections: u32, through_version: i6
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        MIGRATOR, acquire_instance_lock, begin_write, check_instance_lock, serializable, test_pool,
-        test_pool_with_max_connections,
-    };
-    use sqlx::Connection;
+    use super::{MIGRATOR, begin_write, serializable, test_pool, test_pool_with_max_connections};
     use std::time::Duration;
 
     #[tokio::test]
@@ -467,24 +403,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn database_allows_only_one_server_instance_lock_holder() {
-        let database_url = std::env::var("TEST_DATABASE_URL")
-            .or_else(|_| std::env::var("DATABASE_URL"))
-            .expect("TEST_DATABASE_URL must be configured");
-        let mut first = acquire_instance_lock(&database_url).await.unwrap();
-        assert!(acquire_instance_lock(&database_url).await.is_err());
-        check_instance_lock(&mut first).await.unwrap();
-        first.close().await.unwrap();
-        acquire_instance_lock(&database_url)
-            .await
-            .unwrap()
-            .close()
-            .await
-            .unwrap();
-    }
-
-    #[tokio::test]
-    async fn waiting_writers_leave_connections_available_for_reads() {
+    async fn legacy_fixture_waiters_leave_connections_available_for_reads() {
         let pool = test_pool_with_max_connections(3).await;
         let holder = begin_write(&pool).await.unwrap();
         let mut writers = tokio::task::JoinSet::new();
@@ -548,7 +467,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn write_transactions_keep_sse_event_ids_in_commit_order() {
+    async fn legacy_fixture_serializes_its_own_events() {
         let pool = test_pool_with_max_connections(2).await;
         let timestamp = chrono::Utc::now();
         sqlx::query("INSERT INTO jobs (id, kind, status, stage, available_at, created_at, updated_at) VALUES ('serialized-job', 'sync', 'queued', 'queued', $1, $2, $3)")
@@ -632,3 +551,7 @@ mod tests {
 #[cfg(test)]
 #[path = "db/runtime_timeout_tests.rs"]
 mod runtime_timeout_tests;
+
+#[cfg(test)]
+#[path = "db/cutover_tests.rs"]
+mod cutover_tests;

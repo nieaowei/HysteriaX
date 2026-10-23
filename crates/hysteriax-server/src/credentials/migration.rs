@@ -11,20 +11,26 @@ use super::{Reference, insert};
 use crate::{db, security::SecretBox};
 
 pub async fn migrate(pool: &PgPool, secrets: &SecretBox) -> Result<()> {
-    let mut tx = db::begin_write(pool).await?;
-    super::legacy_reset::reset(&mut tx, secrets).await?;
+    let secrets = secrets.clone();
+    db::serializable(pool, move |tx| {
+        let secrets = secrets.clone();
+        Box::pin(async move { migrate_on(tx, &secrets).await })
+    })
+    .await
+}
+async fn migrate_on(tx: &mut Transaction<'_, Postgres>, secrets: &SecretBox) -> Result<()> {
+    super::legacy_reset::reset(tx, secrets).await?;
     let done: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM credential_migrations WHERE name='credentials_v2')",
     )
-    .fetch_one(&mut *tx)
+    .fetch_one(&mut **tx)
     .await?;
     if done {
-        migrate_tls_pairs_on(&mut tx, secrets).await?;
-        tx.commit().await?;
+        migrate_tls_pairs_on(tx, secrets).await?;
         return Ok(());
     }
 
-    let resources = sqlx::query("SELECT * FROM config_resources WHERE resource_kind IN ('certificate','private_key','ech_key')").fetch_all(&mut *tx).await?;
+    let resources = sqlx::query("SELECT * FROM config_resources WHERE resource_kind IN ('certificate','private_key','ech_key')").fetch_all(&mut **tx).await?;
     let mut mapping = BTreeMap::<(String, String), String>::new();
     for row in resources {
         let node: String = row.get("node_id");
@@ -41,7 +47,7 @@ pub async fn migrate(pool: &PgPool, secrets: &SecretBox) -> Result<()> {
             json!({})
         };
         let id = insert(
-            &mut tx,
+            tx,
             secrets,
             &format!("{} · {}", row.get::<String, _>("name"), node),
             &kind,
@@ -63,7 +69,7 @@ pub async fn migrate(pool: &PgPool, secrets: &SecretBox) -> Result<()> {
     }
 
     let nodes = sqlx::query("SELECT * FROM nodes")
-        .fetch_all(&mut *tx)
+        .fetch_all(&mut **tx)
         .await?;
     for row in nodes {
         let node: String = row.get("id");
@@ -85,7 +91,7 @@ pub async fn migrate(pool: &PgPool, secrets: &SecretBox) -> Result<()> {
         let metadata = super::validate_payload(kind, &payload)
             .context("retained SSH credential is invalid")?;
         let id = insert(
-            &mut tx,
+            tx,
             secrets,
             &format!("{name} · SSH"),
             kind,
@@ -98,7 +104,7 @@ pub async fn migrate(pool: &PgPool, secrets: &SecretBox) -> Result<()> {
         sqlx::query("UPDATE nodes SET ssh_credential_id=$1,ssh_credential_version=1 WHERE id=$2")
             .bind(&id)
             .bind(&node)
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await?;
         // Verify other encrypted node material before committing any conversion.
         for field in ["node_token_enc", "traffic_stats_secret_enc"] {
@@ -108,22 +114,10 @@ pub async fn migrate(pool: &PgPool, secrets: &SecretBox) -> Result<()> {
         let mut dns = BTreeMap::new();
         let mut desired: Value =
             serde_json::from_str(&secrets.decrypt(&row.get::<String, _>("desired_config_enc"))?)?;
-        convert_config(
-            &mut tx,
-            secrets,
-            &node,
-            &name,
-            &mut desired,
-            &mapping,
-            &mut dns,
-        )
-        .await?;
+        convert_config(tx, secrets, &node, &name, &mut desired, &mapping, &mut dns).await?;
         let deployed = if let Some(cipher) = row.get::<Option<String>, _>("deployed_config_enc") {
             let mut value: Value = serde_json::from_str(&secrets.decrypt(&cipher)?)?;
-            convert_snapshot(
-                &mut tx, secrets, &node, &name, &mut value, &mapping, &mut dns,
-            )
-            .await?;
+            convert_snapshot(tx, secrets, &node, &name, &mut value, &mapping, &mut dns).await?;
             Some(secrets.encrypt(&value.to_string())?)
         } else {
             None
@@ -132,53 +126,49 @@ pub async fn migrate(pool: &PgPool, secrets: &SecretBox) -> Result<()> {
             "SELECT id,config_enc FROM config_versions WHERE node_id=$1 ORDER BY revision",
         )
         .bind(&node)
-        .fetch_all(&mut *tx)
+        .fetch_all(&mut **tx)
         .await?;
         for version in versions {
             let mut value: Value =
                 serde_json::from_str(&secrets.decrypt(&version.get::<String, _>("config_enc"))?)?;
-            convert_snapshot(
-                &mut tx, secrets, &node, &name, &mut value, &mapping, &mut dns,
-            )
-            .await?;
+            convert_snapshot(tx, secrets, &node, &name, &mut value, &mapping, &mut dns).await?;
             let plain = value.to_string();
             sqlx::query("UPDATE config_versions SET config_enc=$1,content_sha256=$2 WHERE id=$3")
                 .bind(secrets.encrypt(&plain)?)
                 .bind(hex::encode(Sha256::digest(plain.as_bytes())))
                 .bind(version.get::<String, _>("id"))
-                .execute(&mut *tx)
+                .execute(&mut **tx)
                 .await?;
         }
         sqlx::query("UPDATE nodes SET desired_config_enc=$1,deployed_config_enc=$2 WHERE id=$3")
             .bind(secrets.encrypt(&desired.to_string())?)
             .bind(deployed)
             .bind(&node)
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await?;
     }
 
     let assignments = sqlx::query("SELECT * FROM node_assignments")
-        .fetch_all(&mut *tx)
+        .fetch_all(&mut **tx)
         .await?;
     for row in assignments {
         secrets.decrypt(&row.get::<String, _>("credential_enc"))?;
     }
     for cipher in sqlx::query_scalar::<_, String>("SELECT token_enc FROM subscription_credentials")
-        .fetch_all(&mut *tx)
+        .fetch_all(&mut **tx)
         .await?
     {
         secrets.decrypt(&cipher)?;
     }
-    super::reference_index::flush_pending_on(&mut tx, secrets).await?;
-    sqlx::query("DELETE FROM config_resources WHERE resource_kind IN ('certificate','private_key','ech_key')").execute(&mut *tx).await?;
-    sqlx::query("ALTER TABLE nodes DROP COLUMN ssh_secret_enc, DROP COLUMN ssh_passphrase_enc, DROP COLUMN ssh_auth_type, ALTER COLUMN ssh_credential_id SET NOT NULL, ALTER COLUMN ssh_credential_version SET NOT NULL").execute(&mut *tx).await?;
-    sqlx::query("ALTER TABLE node_assignments DROP COLUMN client_certificate_enc, DROP COLUMN client_private_key_enc").execute(&mut *tx).await?;
+    super::reference_index::flush_pending_on(tx, secrets).await?;
+    sqlx::query("DELETE FROM config_resources WHERE resource_kind IN ('certificate','private_key','ech_key')").execute(&mut **tx).await?;
+    sqlx::query("ALTER TABLE nodes DROP COLUMN ssh_secret_enc, DROP COLUMN ssh_passphrase_enc, DROP COLUMN ssh_auth_type, ALTER COLUMN ssh_credential_id SET NOT NULL, ALTER COLUMN ssh_credential_version SET NOT NULL").execute(&mut **tx).await?;
+    sqlx::query("ALTER TABLE node_assignments DROP COLUMN client_certificate_enc, DROP COLUMN client_private_key_enc").execute(&mut **tx).await?;
     sqlx::query("INSERT INTO credential_migrations(name,completed_at) VALUES('credentials_v2',$1)")
         .bind(Utc::now())
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?;
-    migrate_tls_pairs_on(&mut tx, secrets).await?;
-    tx.commit().await?;
+    migrate_tls_pairs_on(tx, secrets).await?;
     Ok(())
 }
 

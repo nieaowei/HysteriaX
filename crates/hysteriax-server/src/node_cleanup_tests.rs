@@ -532,7 +532,7 @@ async fn old_node_cleanup_seeks_its_own_index_despite_newer_other_node_history()
 }
 
 #[tokio::test]
-async fn cleanup_waits_for_busy_writer_without_consuming_an_attempt() {
+async fn retired_global_write_lock_does_not_block_cleanup_or_consume_an_attempt() {
     let state = fixture(1200).await;
     assert_eq!(request(&state).await, StatusCode::ACCEPTED);
     let job = claim_next(&state.pool).await.unwrap().unwrap();
@@ -540,11 +540,6 @@ async fn cleanup_waits_for_busy_writer_without_consuming_an_attempt() {
     let holder = db::begin_write(&state.pool).await.unwrap();
     let worker_state = state.clone();
     let worker = tokio::spawn(async move { execute_one(worker_state, job).await });
-    tokio::time::sleep(Duration::from_secs(6)).await;
-    assert!(
-        !worker.is_finished(),
-        "a busy write slot must not fail the task"
-    );
     assert_eq!(
         sqlx::query_scalar::<_, i64>("SELECT 1::bigint")
             .fetch_one(&state.pool)
@@ -552,11 +547,11 @@ async fn cleanup_waits_for_busy_writer_without_consuming_an_attempt() {
             .unwrap(),
         1
     );
-    holder.rollback().await.unwrap();
     tokio::time::timeout(Duration::from_secs(10), worker)
         .await
         .unwrap()
         .unwrap();
+    holder.rollback().await.unwrap();
     let (status, attempts): (String, i64) =
         sqlx::query_as("SELECT status,attempts FROM jobs WHERE id=$1")
             .bind(id)
@@ -697,8 +692,7 @@ async fn cancelled_cleanup_does_not_report_node_removal() {
     db::write(&state.pool, move |tx| {
         let id = id.clone();
         Box::pin(async move {
-            // Match the worker's job-row-first order. The transitional legacy
-            // statement trigger still takes its advisory lock on UPDATE.
+            // Match the worker's job-row-first order for cancellation.
             sqlx::query("SELECT id FROM jobs WHERE id=$1 FOR UPDATE")
                 .bind(&id)
                 .fetch_one(&mut **tx)

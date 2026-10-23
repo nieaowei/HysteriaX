@@ -32,7 +32,7 @@ mod traffic;
 use std::{env, future::IntoFuture, time::Duration};
 
 use anyhow::{Context, Result, bail};
-use sqlx::{PgConnection, PgPool};
+use sqlx::PgPool;
 use tracing_subscriber::EnvFilter;
 
 use crate::{security::SecretBox, state::AppState};
@@ -66,7 +66,6 @@ async fn main() -> Result<()> {
         .connect_with(options)
         .await
         .context("connect to PostgreSQL database")?;
-    let mut instance_lock = db::acquire_instance_lock(&database_url).await?;
 
     let master_key = env::var("HYSTERIAX_MASTER_KEY")
         .context("HYSTERIAX_MASTER_KEY must be a base64 encoded 32-byte key")?;
@@ -120,18 +119,9 @@ async fn main() -> Result<()> {
         shutdown_signal(),
         Duration::from_secs(8),
     );
-    tokio::pin!(server);
-    let monitor = monitor_instance_lock(&mut instance_lock);
-    tokio::pin!(monitor);
-    let result = tokio::select! {
-        result = &mut server => result,
-        result = &mut monitor => {
-            shutdown.send_replace(true);
-            result.and_then(|_| Err(anyhow::anyhow!("single-instance lock monitor stopped unexpectedly")))
-        }
-    };
-    // Abort and join before releasing the instance lock. Dropping worker JoinSets
-    // cancels their child jobs; persisted running work is recovered on startup.
+    let result = server.await;
+    // Stop all workers before returning. Recovery is driven by expired resource
+    // leases; another healthy instance continues its own claimed work.
     let workers = [
         analytics, jobs, traffic, network, limits, probes, quota_rank, mtls, heartbeat, publisher,
     ];
@@ -174,13 +164,6 @@ async fn serve_with_shutdown(
     }
 }
 
-async fn monitor_instance_lock(connection: &mut PgConnection) -> Result<()> {
-    loop {
-        tokio::time::sleep(Duration::from_secs(5)).await;
-        db::check_instance_lock(connection).await?;
-    }
-}
-
 #[cfg(unix)]
 async fn shutdown_signal() {
     use tokio::signal::unix::{SignalKind, signal};
@@ -217,17 +200,14 @@ async fn initialize_admin_token(pool: &PgPool) -> Result<()> {
     }
     let digest = security::token_digest(&token);
     let timestamp = chrono::Utc::now();
-    let mut tx = db::begin_write(pool).await?;
-    sqlx::query(
-        "INSERT INTO admin_tokens (id, token_hash, label, created_at) VALUES ($1, $2, $3, $4)",
-    )
-    .bind(uuid::Uuid::new_v4().to_string())
-    .bind(digest)
-    .bind("initial administrator token")
-    .bind(timestamp)
-    .execute(&mut *tx)
-    .await?;
-    tx.commit().await?;
+    let id = uuid::Uuid::new_v4().to_string();
+    db::serializable::<_,anyhow::Error,_>(pool,move |tx| {let (id,digest)=(id.clone(),digest.clone());Box::pin(async move {
+        if sqlx::query_scalar::<_,i64>("SELECT count(*) FROM admin_tokens").fetch_one(&mut **tx).await?==0 {
+            sqlx::query("INSERT INTO admin_tokens(id,token_hash,label,created_at) VALUES($1,$2,'initial administrator token',$3)")
+                .bind(id).bind(digest).bind(timestamp).execute(&mut **tx).await?;
+        }
+        Ok(())
+    })}).await?;
     tracing::warn!("created the initial administrator token hash");
     Ok(())
 }
