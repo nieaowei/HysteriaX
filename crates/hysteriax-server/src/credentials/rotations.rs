@@ -286,7 +286,7 @@ pub async fn configure_job(
     if !validate_job_on(&mut *pool.acquire().await?, job).await? {
         return Ok(None);
     }
-    crate::execution::require_job_scope(&job.id, job.node_id.as_deref().context("node required")?)?;
+    crate::execution::require_job_scope(&job.id, job.node_id.as_deref())?;
     let row = sqlx::query(CONFIGURATION_SOURCE)
         .bind(&job.id)
         .bind(&job.node_id)
@@ -369,7 +369,7 @@ async fn bind_configuration(
     db::serializable(pool, move |tx| {
         let (job,ca,rotation,expected)=(job.clone(),ca.clone(),rotation.clone(),expected.clone());
         Box::pin(async move {
-            crate::execution::require_job_scope(&job.id,job.node_id.as_deref().context("node required")?)?;
+            crate::execution::require_job_scope(&job.id,job.node_id.as_deref())?;
             let node: Option<String> = sqlx::query_scalar("SELECT id FROM nodes WHERE id=$1 AND state NOT IN ('deleting','delete_failed') FOR NO KEY UPDATE").bind(&job.node_id).fetch_optional(&mut **tx).await?;
             ensure!(node.is_some(), "managed operation node is being removed");
             sqlx::query("SELECT id FROM credentials WHERE id=$1 FOR KEY SHARE").bind(&ca).fetch_optional(&mut **tx).await?;

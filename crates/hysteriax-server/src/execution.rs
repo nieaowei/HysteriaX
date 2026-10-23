@@ -244,8 +244,8 @@ struct Scope {
 }
 tokio::task_local! { static CURRENT: Scope; }
 
-/// A deployment writer may only bind the exact job and node it was leased for.
-pub(crate) fn require_job_scope(job: &str, node: &str) -> anyhow::Result<()> {
+/// A job writer must own its exact job and, when present, its node.
+pub(crate) fn require_job_scope(job: &str, node: Option<&str>) -> anyhow::Result<()> {
     let scope = CURRENT.try_with(|scope| scope.leases.clone());
     let leases = match scope {
         Ok(leases) => leases,
@@ -254,14 +254,23 @@ pub(crate) fn require_job_scope(job: &str, node: &str) -> anyhow::Result<()> {
         #[cfg(test)]
         Err(_) => return Ok(()),
         #[cfg(not(test))]
-        Err(_) => anyhow::bail!("managed deployment requires a job execution scope"),
+        Err(_) => anyhow::bail!("job writer requires a job execution scope"),
     };
-    for resource in [format!("job:{job}"), format!("node:{node}")] {
+    let owner = leases
+        .iter()
+        .find(|lease| lease.resource == format!("job:{job}") && lease.work == job)
+        .map(|lease| lease.owner.as_str())
+        .ok_or_else(|| anyhow::anyhow!("job writer does not belong to this job execution"))?;
+    let mut resources = vec![format!("job:{job}")];
+    if let Some(node) = node {
+        resources.push(format!("node:{node}"));
+    }
+    for resource in resources {
         anyhow::ensure!(
-            leases
-                .iter()
-                .any(|lease| lease.resource == resource && lease.work == job),
-            "managed deployment does not belong to this job execution"
+            leases.iter().any(|lease| lease.resource == resource
+                && lease.work == job
+                && lease.owner == owner),
+            "job writer does not belong to this job execution"
         );
     }
     Ok(())

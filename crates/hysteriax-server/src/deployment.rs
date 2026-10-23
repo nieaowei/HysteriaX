@@ -96,14 +96,18 @@ pub(crate) async fn report_progress(
     stage: &str,
     message: &str,
 ) -> Result<()> {
-    let timestamp = now();
-    let mut tx = db::begin_write(pool).await?;
-    let Some(row) = sqlx::query("SELECT logs_json FROM jobs WHERE id = $1 AND status = 'running'")
+    crate::execution::require_job_scope(&job.id, job.node_id.as_deref())?;
+    let (job, stage, message) = (job.clone(), stage.to_owned(), message.to_owned());
+    db::write::<_, anyhow::Error, _>(pool, move |tx| {
+        let (job, stage, message) = (job.clone(), stage.clone(), message.clone());
+        Box::pin(async move {
+    let timestamp: chrono::DateTime<chrono::Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
+        .fetch_one(&mut **tx).await?;
+    let Some(row) = sqlx::query("SELECT logs_json FROM jobs WHERE id = $1 AND status = 'running' FOR UPDATE")
         .bind(&job.id)
-        .fetch_optional(&mut *tx)
+        .fetch_optional(&mut **tx)
         .await?
     else {
-        tx.rollback().await?;
         return Ok(());
     };
     let mut logs: Vec<Value> = row.get::<sqlx::types::Json<Vec<Value>>, _>("logs_json").0;
@@ -120,14 +124,13 @@ pub(crate) async fn report_progress(
     let updated = sqlx::query(
         "UPDATE jobs SET stage = $1, logs_json = $2, updated_at = $3 WHERE id = $4 AND status = 'running'",
     )
-    .bind(stage)
+    .bind(&stage)
     .bind(sqlx::types::Json(logs_json))
     .bind(timestamp)
     .bind(&job.id)
-    .execute(&mut *tx)
+    .execute(&mut **tx)
     .await?;
     if updated.rows_affected() == 0 {
-        tx.rollback().await?;
         return Ok(());
     }
     let payload = json!({
@@ -143,11 +146,15 @@ pub(crate) async fn report_progress(
         .bind(&job.id)
         .bind(payload)
         .bind(timestamp)
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?;
-    tx.commit().await?;
     Ok(())
+        })
+    }).await
 }
+
+#[cfg(test)]
+mod progress_tests;
 
 async fn ssh_test(pool: &PgPool, secrets: &SecretBox, job: &JobInput) -> Result<JobOutput> {
     let node_id = job
