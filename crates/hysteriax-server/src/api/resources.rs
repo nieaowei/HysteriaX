@@ -12,11 +12,9 @@ use axum::{
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde::Deserialize;
 use serde_json::{Value, json};
-use sha2::Digest;
 use sqlx::Row;
-use uuid::Uuid;
 
-use crate::{api::now, db, error::ApiError, state::AppState};
+use crate::{db, error::ApiError, state::AppState};
 
 const MAX_RESOURCE_BYTES: usize = 20 * 1024 * 1024;
 
@@ -214,72 +212,34 @@ pub async fn list(
     })).collect()))
 }
 
+mod mutations;
+pub(super) use mutations::{create_v2, delete_v2};
+
 pub async fn create(
     State(state): State<AppState>,
-    AxumPath(node_id): AxumPath<String>,
+    AxumPath(node): AxumPath<String>,
     Json(input): Json<CreateResource>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
-    if !safe_name(&input.name) {
-        return Err(ApiError::bad_request(
-            "name must be a single filename without path separators",
-        ));
-    }
-    if !matches!(input.resource_kind.as_str(), "acl" | "geoip" | "geosite") {
-        return Err(ApiError::bad_request("unsupported config resource kind"));
-    }
-    let content = STANDARD
-        .decode(input.content_base64.as_bytes())
-        .map_err(|_| ApiError::bad_request("content_base64 is invalid"))?;
-    if content.is_empty() || content.len() > MAX_RESOURCE_BYTES {
-        return Err(ApiError::bad_request(
-            "resource must be between 1 byte and 20 MiB",
-        ));
-    }
-    validate_text_resource(&input.resource_kind, &content)?;
-    let id = Uuid::new_v4().to_string();
-    let digest = hex::encode(sha2::Sha256::digest(&content));
-    let timestamp = now();
-    let content_enc = state.secrets.encrypt_bytes(&content)?;
-    let size = content.len() as i64;
-    let name = input.name.trim().to_owned();
-    let kind = input.resource_kind;
-    let response = json!({"id":id,"name":name,"resource_kind":kind,"content_sha256":digest,"size_bytes":size,"reference":format!("resource://{id}")});
+    let prepared = mutations::Prepared::new(&state.secrets, input)?;
     let actor = super::audit_actor();
-    db::serializable::<_, ApiError, _>(&state.pool, move |tx| {
-        let (id,node_id,name,kind,content_enc,digest,actor) = (id.clone(),node_id.clone(),name.clone(),kind.clone(),content_enc.clone(),digest.clone(),actor.clone());
-        Box::pin(async move {
-            editable_node_on(tx, &node_id).await?;
-            let inserted = sqlx::query("INSERT INTO config_resources(id,node_id,name,resource_kind,content_enc,content_sha256,size_bytes,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(node_id,name) DO NOTHING")
-                .bind(&id).bind(&node_id).bind(&name).bind(&kind).bind(content_enc).bind(&digest).bind(size).bind(timestamp).execute(&mut **tx).await?;
-            if inserted.rows_affected()!=1 {
-                return Err(ApiError::conflict("a resource with this name already exists on the node"));
-            }
-            super::audit_on(tx,&actor,"node.resource_uploaded","node",&node_id,json!({"resource_id":id,"name":name,"kind":kind,"sha256":digest,"size_bytes":size})).await
-        })
-    }).await?;
+    let response = db::serializable(&state.pool, move |tx| {
+        let (prepared, node, actor) = (prepared.clone(), node.clone(), actor.clone());
+        Box::pin(async move { prepared.commit_on(tx, &node, &actor).await })
+    })
+    .await?;
     Ok((StatusCode::CREATED, Json(response)))
 }
 
 pub async fn delete(
     State(state): State<AppState>,
-    AxumPath((node_id, resource_id)): AxumPath<(String, String)>,
+    AxumPath((node, resource)): AxumPath<(String, String)>,
 ) -> Result<StatusCode, ApiError> {
     let actor = super::audit_actor();
-    db::serializable::<_, ApiError, _>(&state.pool, move |tx| {
-        let (node_id,resource_id,actor) = (node_id.clone(),resource_id.clone(),actor.clone());
-        Box::pin(async move {
-            editable_node_on(tx, &node_id).await?;
-            crate::credentials::reference_index::assert_clean_on(tx).await?;
-            let name: String = sqlx::query_scalar("SELECT name FROM config_resources WHERE node_id=$1 AND id=$2 FOR UPDATE")
-                .bind(&node_id).bind(&resource_id).fetch_optional(&mut **tx).await?.ok_or_else(||ApiError::not_found("config resource"))?;
-            let referenced: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM config_resource_references WHERE node_id=$1 AND resource_id=$2)")
-                .bind(&node_id).bind(&resource_id).fetch_one(&mut **tx).await?;
-            if referenced { return Err(ApiError::conflict("resource is referenced by a current, deployed or saved node configuration")); }
-            sqlx::query("DELETE FROM config_resources WHERE node_id=$1 AND id=$2")
-                .bind(&node_id).bind(&resource_id).execute(&mut **tx).await?;
-            super::audit_on(tx,&actor,"node.resource_deleted","node",&node_id,json!({"resource_id":resource_id,"name":name})).await
-        })
-    }).await?;
+    db::serializable(&state.pool, move |tx| {
+        let (node, resource, actor) = (node.clone(), resource.clone(), actor.clone());
+        Box::pin(async move { mutations::delete_on(tx, &node, &resource, &actor).await })
+    })
+    .await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

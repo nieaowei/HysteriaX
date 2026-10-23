@@ -54,6 +54,14 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v2/admin/tokens/{id}", delete(admin_tokens::revoke))
         .route("/api/v2/users", get(users::list).post(users::create_v2))
         .route(
+            "/api/v2/nodes/{id}/resources",
+            get(resources::list).post(resources::create_v2),
+        )
+        .route(
+            "/api/v2/nodes/{id}/resources/{resource_id}",
+            delete(resources::delete_v2),
+        )
+        .route(
             "/api/v2/users/{id}",
             get(users::get)
                 .patch(users::patch_v2)

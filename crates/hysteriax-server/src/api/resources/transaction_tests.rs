@@ -2,7 +2,7 @@ use super::*;
 use crate::credentials::reference_index;
 use sqlx::{PgConnection, PgPool};
 
-async fn fixture() -> (AppState, String, String) {
+pub(super) async fn fixture() -> (AppState, String, String) {
     let pool = db::test_pool_with_max_connections(4).await;
     let secrets =
         crate::security::SecretBox::from_base64("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
