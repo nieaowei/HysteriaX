@@ -63,6 +63,14 @@ pub(super) struct StoredResponse {
 }
 
 impl StoredResponse {
+    pub(super) fn empty(status: StatusCode) -> Self {
+        Self {
+            status: status.as_u16(),
+            headers: vec![("cache-control".into(), "no-store".into())],
+            body: String::new(),
+        }
+    }
+
     pub(super) fn json(status: StatusCode, body: Value) -> Self {
         Self {
             status: status.as_u16(),
@@ -76,7 +84,7 @@ impl StoredResponse {
 
     pub(super) fn into_http(self) -> Result<Response, ApiError> {
         let status = StatusCode::from_u16(self.status).map_err(|_| ApiError::internal())?;
-        if !status.is_success() {
+        if !status.is_success() || (matches!(status.as_u16(), 204 | 205) && !self.body.is_empty()) {
             return Err(ApiError::internal());
         }
         let mut response = Response::new(Body::from(self.body));
