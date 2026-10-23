@@ -107,4 +107,4 @@ async fn page(pool: &PgPool, work: &Work) -> Result<()> {
 }
 
 #[cfg(test)]
-mod tests;
+pub(in crate::credentials::rotations) mod tests;

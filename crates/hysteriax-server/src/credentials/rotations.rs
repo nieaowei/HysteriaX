@@ -208,12 +208,13 @@ pub async fn validate_job_on(connection: &mut sqlx::PgConnection, job: &JobInput
     if job.payload["mtls_operation"] != true {
         return Ok(false);
     }
-    let row=sqlx::query("SELECT o.*,n.desired_revision AS current_desired,n.deployed_revision AS current_base,n.mtls_activation_id AS current_activation,n.deployed_content_sha256 AS current_digest,g.state AS generation_state,r.phase AS rotation_phase,c.completed_at AS cleanup_completed FROM mtls_node_operations o JOIN nodes n ON n.id=o.node_id JOIN mtls_ca_generations g ON g.ca_id=o.ca_id AND g.ca_version=o.ca_version LEFT JOIN mtls_rotations r ON r.id=o.rotation_id LEFT JOIN mtls_trust_cleanup c ON c.ca_id=o.ca_id AND c.ca_version=o.ca_version WHERE o.job_id=$1 AND o.node_id=$2")
+    let row=sqlx::query("SELECT o.*,n.desired_revision AS current_desired,n.deployed_revision AS current_base,n.mtls_activation_id AS current_activation,n.deployed_content_sha256 AS current_digest,g.state AS generation_state,r.phase AS rotation_phase,r.outcome AS rotation_outcome,c.completed_at AS cleanup_completed FROM mtls_node_operations o JOIN nodes n ON n.id=o.node_id JOIN mtls_ca_generations g ON g.ca_id=o.ca_id AND g.ca_version=o.ca_version LEFT JOIN mtls_rotations r ON r.id=o.rotation_id LEFT JOIN mtls_trust_cleanup c ON c.ca_id=o.ca_id AND c.ca_version=o.ca_version WHERE o.job_id=$1 AND o.node_id=$2")
         .bind(&job.id).bind(&job.node_id).fetch_optional(&mut *connection).await?.context("managed node operation is missing or its node was removed")?;
     let stage: String = row.get("stage");
     if stage == "trust" {
         ensure!(
             row.get::<String, _>("generation_state") == "preparing"
+                && row.get::<Option<String>, _>("rotation_outcome").is_none()
                 && row
                     .get::<Option<String>, _>("rotation_phase")
                     .is_some_and(|p| matches!(p.as_str(), "trust" | "identities" | "publish")),
@@ -272,6 +273,10 @@ pub async fn validate_job_on(connection: &mut sqlx::PgConnection, job: &JobInput
     Ok(true)
 }
 
+// Capture only the operation's dependencies. The clock and materialized queue
+// flag are not source revisions; ciphertext is compared without decrypting in TX.
+const CONFIGURATION_SOURCE: &str = "SELECT material.*,to_jsonb(material)-'database_now'-'effective_version'-'pending_job' AS configuration_source FROM (SELECT o.*,a.published_version,c.latest_version AS ca_latest_version,c.archived AS ca_archived,g.expires_at AS published_expires,EXISTS(SELECT 1 FROM mtls_node_trust t WHERE t.node_id=o.node_id AND t.ca_id=o.ca_id AND t.deployed) AS deployed_ca,jsonb_build_object('id',n.id,'state',n.state,'desired_revision',CASE WHEN o.use_desired THEN n.desired_revision END,'deployed_revision',n.deployed_revision,'activation_id',n.mtls_activation_id,'digest',n.deployed_content_sha256,'mtls_state',n.mtls_state) AS node_source,(SELECT jsonb_build_object('id',p.id,'phase',p.phase,'snapshot_enc',p.snapshot_enc,'trust',p.trust) FROM mtls_activations p WHERE p.job_id=o.job_id AND p.phase IN ('activating','verified','recovery_required')) AS pending_source,(SELECT snapshot_enc FROM mtls_activations WHERE id=o.base_activation_id AND phase='committed') AS base_source,clock_timestamp() AS database_now FROM mtls_node_operations o JOIN nodes n ON n.id=o.node_id JOIN mtls_authorities a ON a.credential_id=o.ca_id JOIN credentials c ON c.id=a.credential_id JOIN mtls_ca_generations g ON g.ca_id=a.credential_id AND g.ca_version=a.published_version WHERE o.job_id=$1 AND o.node_id=$2) material";
+
 pub async fn configure_job(
     pool: &PgPool,
     secrets: &SecretBox,
@@ -281,13 +286,23 @@ pub async fn configure_job(
     if !validate_job_on(&mut *pool.acquire().await?, job).await? {
         return Ok(None);
     }
-    let row=sqlx::query("SELECT o.*,a.published_version,g.expires_at AS published_expires,EXISTS(SELECT 1 FROM mtls_node_trust t WHERE t.node_id=o.node_id AND t.ca_id=o.ca_id AND t.deployed) AS deployed_ca FROM mtls_node_operations o JOIN mtls_authorities a ON a.credential_id=o.ca_id JOIN mtls_ca_generations g ON g.ca_id=a.credential_id AND g.ca_version=a.published_version WHERE o.job_id=$1").bind(&job.id).fetch_one(pool).await?;
+    crate::execution::require_job_scope(&job.id, job.node_id.as_deref().context("node required")?)?;
+    let row = sqlx::query(CONFIGURATION_SOURCE)
+        .bind(&job.id)
+        .bind(&job.node_id)
+        .fetch_one(pool)
+        .await?;
+    ensure!(
+        !row.get::<bool, _>("ca_archived"),
+        "CA identity is archived"
+    );
+    let mut candidate = snapshot.clone();
     let stage: String = row.get("stage");
     let ca: String = row.get("ca_id");
     let published: i64 = row.get("published_version");
     let persisted:Option<String>=sqlx::query_scalar("SELECT snapshot_enc FROM mtls_activations WHERE job_id=$1 AND phase IN ('activating','verified','recovery_required')").bind(&job.id).fetch_optional(pool).await?;
     if let Some(cipher) = persisted {
-        *snapshot = serde_json::from_str(&secrets.decrypt(&cipher)?)?;
+        candidate = serde_json::from_str(&secrets.decrypt(&cipher)?)?;
     } else if !row.get::<bool, _>("use_desired")
         && let Some(activation) = row.get::<Option<String>, _>("base_activation_id")
     {
@@ -297,9 +312,9 @@ pub async fn configure_job(
         .bind(activation)
         .fetch_one(pool)
         .await?;
-        *snapshot = serde_json::from_str(&secrets.decrypt(&cipher)?)?;
+        candidate = serde_json::from_str(&secrets.decrypt(&cipher)?)?;
     }
-    let options = snapshot
+    let options = candidate
         .get_mut("server_config")
         .context("managed snapshot config missing")?;
     let policy = Settings::from_config(options)?;
@@ -328,22 +343,55 @@ pub async fn configure_job(
     } else {
         published
     };
-    sqlx::query("UPDATE mtls_node_operations SET effective_version=$2 WHERE job_id=$1")
-        .bind(&job.id)
-        .bind(published)
-        .execute(pool)
-        .await?;
+    let skip_users = bind_configuration(pool, job, &row).await?;
+    *snapshot = candidate;
     Ok(Some(JobContext {
         trust,
         probe_version: version,
         recovery: row.get("recovery"),
-        skip_users: stage == "trust"
-            && (row.get::<bool, _>("deployed_ca")
-                || row.get::<bool, _>("recovery")
-                    && row.get::<DateTime<Utc>, _>("published_expires")
-                        <= Utc::now() + Duration::minutes(5)),
+        skip_users,
     }))
 }
+
+async fn bind_configuration(
+    pool: &PgPool,
+    job: &JobInput,
+    source: &sqlx::postgres::PgRow,
+) -> Result<bool> {
+    let (job, ca, target, published, rotation, expected) = (
+        job.clone(),
+        source.get::<String, _>("ca_id"),
+        source.get::<i64, _>("ca_version"),
+        source.get::<i64, _>("published_version"),
+        source.get::<Option<String>, _>("rotation_id"),
+        source.get::<Value, _>("configuration_source"),
+    );
+    db::serializable(pool, move |tx| {
+        let (job,ca,rotation,expected)=(job.clone(),ca.clone(),rotation.clone(),expected.clone());
+        Box::pin(async move {
+            crate::execution::require_job_scope(&job.id,job.node_id.as_deref().context("node required")?)?;
+            let node: Option<String> = sqlx::query_scalar("SELECT id FROM nodes WHERE id=$1 AND state NOT IN ('deleting','delete_failed') FOR NO KEY UPDATE").bind(&job.node_id).fetch_optional(&mut **tx).await?;
+            ensure!(node.is_some(), "managed operation node is being removed");
+            sqlx::query("SELECT id FROM credentials WHERE id=$1 FOR KEY SHARE").bind(&ca).fetch_optional(&mut **tx).await?;
+            sqlx::query("SELECT credential_id FROM mtls_authorities WHERE credential_id=$1 FOR SHARE").bind(&ca).fetch_optional(&mut **tx).await?;
+            sqlx::query("SELECT ca_version FROM mtls_ca_generations WHERE ca_id=$1 AND ca_version=ANY($2::bigint[]) ORDER BY ca_version FOR SHARE").bind(&ca).bind(vec![target,published]).fetch_all(&mut **tx).await?;
+            if let Some(rotation)=rotation {
+                sqlx::query("SELECT id FROM mtls_rotations WHERE id=$1 FOR SHARE").bind(rotation).fetch_optional(&mut **tx).await?;
+            }
+            validate_job_on(tx,&job).await?;
+            let current=sqlx::query(CONFIGURATION_SOURCE).bind(&job.id).bind(&job.node_id).fetch_one(&mut **tx).await?;
+            ensure!(current.get::<Value,_>("configuration_source")==expected && !current.get::<bool,_>("ca_archived"),"managed operation dependencies changed during configuration; retry");
+            ensure!(current.get::<Option<i64>,_>("effective_version").is_none_or(|v|v==published),"managed operation was already bound to another publication; recover with a fresh operation");
+            let changed=sqlx::query("UPDATE mtls_node_operations SET effective_version=$2 WHERE job_id=$1 AND (effective_version IS NULL OR effective_version=$2)").bind(&job.id).bind(published).execute(&mut **tx).await?;
+            ensure!(changed.rows_affected()==1,"managed operation binding changed");
+            let now:DateTime<Utc>=current.get("database_now");
+            Ok(current.get::<String,_>("stage")=="trust" && (current.get::<bool,_>("deployed_ca") || current.get::<bool,_>("recovery") && current.get::<DateTime<Utc>,_>("published_expires")<=now+Duration::minutes(5)))
+        })
+    }).await
+}
+
+#[cfg(test)]
+mod configuration_tests;
 
 pub async fn operation_completed(tx: &mut Transaction<'_, Postgres>, job: &JobInput) -> Result<()> {
     if job.payload["mtls_operation"] != true {

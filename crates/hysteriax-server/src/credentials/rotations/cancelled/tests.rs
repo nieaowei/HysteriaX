@@ -12,7 +12,7 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
-async fn fixture(n: i32) -> (AppState, String, String) {
+pub(in crate::credentials::rotations) async fn fixture(n: i32) -> (AppState, String, String) {
     let (state, ca, rotation) = super::super::trust::tests::fixture(n).await;
     sqlx::query("INSERT INTO jobs(id,kind,node_id,target_revision,payload_json,status,stage,available_at,created_at,updated_at) SELECT 'old-'||id,'deploy',id,1,'{\"mtls_operation\":true}','queued','queued',now(),now(),now() FROM nodes").execute(&state.pool).await.unwrap();
     sqlx::query("INSERT INTO mtls_node_operations(job_id,node_id,ca_id,ca_version,rotation_id,stage,desired_revision,base_revision,base_digest,created_at) SELECT j.id,j.node_id,$1,2,$2,'trust',1,1,'fixture-digest',now() FROM jobs j").bind(&ca).bind(&rotation).execute(&state.pool).await.unwrap();

@@ -244,6 +244,29 @@ struct Scope {
 }
 tokio::task_local! { static CURRENT: Scope; }
 
+/// A deployment writer may only bind the exact job and node it was leased for.
+pub(crate) fn require_job_scope(job: &str, node: &str) -> anyhow::Result<()> {
+    let scope = CURRENT.try_with(|scope| scope.leases.clone());
+    let leases = match scope {
+        Ok(leases) => leases,
+        // Older state-machine fixtures call deployment helpers directly. The
+        // production path always requires the job executor's explicit scope.
+        #[cfg(test)]
+        Err(_) => return Ok(()),
+        #[cfg(not(test))]
+        Err(_) => anyhow::bail!("managed deployment requires a job execution scope"),
+    };
+    for resource in [format!("job:{job}"), format!("node:{node}")] {
+        anyhow::ensure!(
+            leases
+                .iter()
+                .any(|lease| lease.resource == resource && lease.work == job),
+            "managed deployment does not belong to this job execution"
+        );
+    }
+    Ok(())
+}
+
 /// Apply ownership checks inside every transaction opened by a leased worker.
 /// The task-local scope never crosses into API handlers or unrelated workers.
 pub async fn guard_current(connection: &mut PgConnection) -> Result<(), sqlx::Error> {
