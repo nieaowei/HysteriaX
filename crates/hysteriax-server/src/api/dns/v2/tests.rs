@@ -115,7 +115,7 @@ async fn fixture(kind: usize) -> (AppState, Case) {
     };
     (state, case)
 }
-async fn serve(state: AppState) -> (String, tokio::task::JoinHandle<()>) {
+pub(super) async fn serve(state: AppState) -> (String, tokio::task::JoinHandle<()>) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}/api/v2/dns", listener.local_addr().unwrap());
     let task = tokio::spawn(async move {
@@ -125,7 +125,7 @@ async fn serve(state: AppState) -> (String, tokio::task::JoinHandle<()>) {
     });
     (base, task)
 }
-fn client() -> Client {
+pub(super) fn client() -> Client {
     Client::builder()
         .timeout(std::time::Duration::from_secs(10))
         .build()
@@ -147,14 +147,19 @@ async fn send(
     }
     request.send().await.unwrap()
 }
-async fn count(state: &AppState, query: &str) -> i64 {
+pub(super) async fn count(state: &AppState, query: &str) -> i64 {
     sqlx::query_scalar(query)
         .fetch_one(&state.pool)
         .await
         .unwrap()
 }
-async fn snapshot(state: &AppState) -> Value {
+pub(super) async fn snapshot(state: &AppState) -> Value {
     let tables = [
+        "nodes",
+        "node_packages",
+        "config_versions",
+        "dns_records",
+        "dns_bindings",
         "credentials",
         "credential_versions",
         "credential_reference_edges",

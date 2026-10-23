@@ -246,3 +246,6 @@ pub(crate) async fn refresh_zone(
 
 #[cfg(test)]
 mod tests;
+
+mod records;
+pub(crate) use records::{create_record, record_action, set_binding, unbind};

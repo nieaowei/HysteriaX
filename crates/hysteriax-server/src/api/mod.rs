@@ -48,6 +48,26 @@ pub fn router(state: AppState) -> Router {
     use subscriptions::templates as st;
     let admin = Router::new()
         .route(
+            "/api/v2/dns/records",
+            get(dns::list_records).post(dns::v2::create_record),
+        )
+        .route(
+            "/api/v2/dns/records/{id}",
+            get(dns::get_record)
+                .patch(dns::v2::record_action)
+                .delete(dns::v2::record_action),
+        )
+        .route(
+            "/api/v2/dns/records/{id}/check",
+            post(dns::v2::record_action),
+        )
+        .route(
+            "/api/v2/nodes/{id}/dns-binding",
+            get(dns::get_binding)
+                .put(dns::v2::set_binding)
+                .delete(dns::v2::unbind),
+        )
+        .route(
             "/api/v2/dns/connections",
             get(dns::list_connections).post(dns::v2::create_connection),
         )
