@@ -1,3 +1,4 @@
+mod drift;
 use crate::db;
 pub(crate) mod probe_tokens;
 use std::{env, time::Duration};
@@ -97,61 +98,43 @@ pub(crate) async fn report_progress(
     stage: &str,
     message: &str,
 ) -> Result<()> {
-    crate::execution::require_job_scope(&job.id, job.node_id.as_deref())?;
     let (job, stage, message) = (job.clone(), stage.to_owned(), message.to_owned());
-    db::write::<_, anyhow::Error, _>(pool, move |tx| {
+    db::write(pool, move |tx| {
         let (job, stage, message) = (job.clone(), stage.clone(), message.clone());
-        Box::pin(async move {
-    let timestamp: chrono::DateTime<chrono::Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
-        .fetch_one(&mut **tx).await?;
-    let Some(row) = sqlx::query("SELECT logs_json FROM jobs WHERE id = $1 AND status = 'running' FOR UPDATE")
-        .bind(&job.id)
-        .fetch_optional(&mut **tx)
-        .await?
-    else {
+        Box::pin(async move { progress_on(tx, &job, &stage, &message).await })
+    })
+    .await
+}
+
+async fn progress_on(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    job: &JobInput,
+    stage: &str,
+    message: &str,
+) -> Result<()> {
+    let Some(row) = crate::execution::job_source_on(tx, job).await? else {
         return Ok(());
     };
+    let timestamp: chrono::DateTime<chrono::Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
+        .fetch_one(&mut **tx)
+        .await?;
     let mut logs: Vec<Value> = row.get::<sqlx::types::Json<Vec<Value>>, _>("logs_json").0;
-    logs.push(json!({
-        "created_at": timestamp,
-        "stage": stage,
-        "message": message,
-        "attempt": job.attempts,
-    }));
+    logs.push(
+        json!({"created_at":timestamp,"stage":stage,"message":message,"attempt":job.attempts}),
+    );
     if logs.len() > 100 {
         logs.drain(..logs.len() - 100);
     }
-    let logs_json = logs;
-    let updated = sqlx::query(
-        "UPDATE jobs SET stage = $1, logs_json = $2, updated_at = $3 WHERE id = $4 AND status = 'running'",
-    )
-    .bind(&stage)
-    .bind(sqlx::types::Json(logs_json))
-    .bind(timestamp)
-    .bind(&job.id)
-    .execute(&mut **tx)
-    .await?;
-    if updated.rows_affected() == 0 {
-        return Ok(());
-    }
-    let payload = json!({
-        "id": job.id,
-        "kind": job.kind,
-        "node_id": job.node_id,
-        "status": "running",
-        "stage": stage,
-        "message": message,
-        "attempts": job.attempts,
-    });
-    sqlx::query("INSERT INTO job_events (job_id, event_type, payload_json, created_at) VALUES ($1, 'job.progress', $2, $3)")
-        .bind(&job.id)
-        .bind(payload)
+    sqlx::query("UPDATE jobs SET stage=$1,logs_json=$2,updated_at=$3 WHERE id=$4")
+        .bind(stage)
+        .bind(sqlx::types::Json(logs))
         .bind(timestamp)
+        .bind(&job.id)
         .execute(&mut **tx)
         .await?;
+    sqlx::query("INSERT INTO job_events(job_id,event_type,payload_json,created_at) VALUES($1,'job.progress',$2,$3)")
+        .bind(&job.id).bind(json!({"id":job.id,"kind":job.kind,"node_id":job.node_id,"status":"running","stage":stage,"message":message,"attempts":job.attempts})).bind(timestamp).execute(&mut **tx).await?;
     Ok(())
-        })
-    }).await
 }
 
 #[cfg(test)]
@@ -606,11 +589,14 @@ async fn deploy_with_probe(
             .await?;
         let remote_hash = remote_hash_output.trim();
         if remote_hash != expected_hash {
-            sqlx::query("UPDATE nodes SET state = 'drift', updated_at = $1 WHERE id = $2")
-                .bind(now())
-                .bind(node_id)
-                .execute(pool)
-                .await?;
+            drift::record(
+                pool,
+                job,
+                row.get("desired_revision"),
+                row.get("deployed_revision"),
+                &expected_hash,
+            )
+            .await?;
             bail!(
                 "remote Hysteria configuration changed outside HysteriaX; inspect the difference, then start an explicit sync to apply the desired revision"
             )
@@ -1940,10 +1926,6 @@ fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
 
-fn now() -> chrono::DateTime<chrono::Utc> {
-    chrono::Utc::now()
-}
-
 fn primary_listener_port(listen_addr: &str) -> Option<u16> {
     let (_, ports) = listen_addr.rsplit_once(':')?;
     ports.split([',', '-']).next()?.parse().ok()
@@ -2264,7 +2246,7 @@ mod tests {
     #[tokio::test]
     async fn progress_updates_job_stage_logs_and_persisted_event_atomically() {
         let pool = test_pool().await;
-        sqlx::query("INSERT INTO jobs (id, kind, status, stage, available_at, created_at, updated_at) VALUES ('progress-job', 'sync', 'running', 'starting', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')")
+        sqlx::query("INSERT INTO jobs (id, kind, target_revision, attempts, status, stage, available_at, created_at, updated_at) VALUES ('progress-job', 'sync', 1, 1, 'running', 'starting', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')")
             .execute(&pool)
             .await
             .unwrap();

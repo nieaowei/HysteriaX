@@ -316,7 +316,7 @@ async fn require_admin(
 
     let digest = token_digest(token);
     let actor = match sqlx::query(
-        "SELECT id,last_used_at FROM admin_tokens WHERE token_hash=$1 AND revoked_at IS NULL",
+        "SELECT id,(last_used_at IS NULL OR last_used_at<=clock_timestamp()-interval '60 seconds') AS usage_due FROM admin_tokens WHERE token_hash=$1 AND revoked_at IS NULL",
     )
     .bind(&digest)
     .fetch_optional(&state.pool)
@@ -334,20 +334,20 @@ async fn require_admin(
         Err(error) => return ApiError::from(error).into_response(),
     };
     let id: String = actor.get("id");
-    let last_used: Option<DateTime<Utc>> = actor.get("last_used_at");
-    if last_used.is_none_or(|at| now() - at >= chrono::Duration::seconds(60)) {
+    if actor.get::<bool, _>("usage_due") {
         // Usage metadata must not turn a read request into a blocking writer.
         // Authentication and revocation are checked by the SELECT above.
-        let touched: Result<(), sqlx::Error> = async {
-            if let Some(mut tx) = db::try_begin_write(&state.pool).await? {
-                sqlx::query("UPDATE admin_tokens SET last_used_at=$1 WHERE id=$2 AND revoked_at IS NULL AND (last_used_at IS NULL OR last_used_at<$3)")
-                    .bind(now()).bind(&id).bind(now()-chrono::Duration::seconds(60)).execute(&mut *tx).await?;
-                tx.commit().await?;
+        // Metadata is optional: bound both pool admission and database work.
+        // Dropping a timed-out transaction rolls it back before pool reuse.
+        let touched = tokio::time::timeout(
+            Duration::from_millis(50),
+            token_usage::touch(&state.pool, &id, &digest),
+        )
+        .await;
+        if let Ok(Err(error)) = touched {
+            if error.as_database_error().and_then(|e| e.code()).as_deref() != Some("55P03") {
+                tracing::warn!(error = %error, "administrator token usage timestamp not updated");
             }
-            Ok(())
-        }.await;
-        if let Err(error) = touched {
-            tracing::warn!(error = %error, "administrator token usage timestamp not updated");
         }
     }
     request
@@ -355,6 +355,8 @@ async fn require_admin(
         .insert(AdminActor { id: id.clone() });
     AUDIT_ACTOR_ID.scope(id, next.run(request)).await
 }
+
+mod token_usage;
 
 async fn cache_stats(State(state): State<AppState>) -> Json<Value> {
     Json(json!({"caches":state.caches.stats(),"events":state.events.stats()}))

@@ -3,7 +3,7 @@ use crate::execution;
 
 async fn fixture() -> PgPool {
     let pool = db::test_pool_with_max_connections(8).await;
-    sqlx::query("INSERT INTO jobs(id,kind,status,stage,attempts,available_at,created_at,updated_at) SELECT id,'sync','running','starting',1,now(),now(),now() FROM unnest(ARRAY['one','two'])id").execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO jobs(id,kind,target_revision,status,stage,attempts,available_at,created_at,updated_at) SELECT id,'sync',1,'running','starting',1,now(),now(),now() FROM unnest(ARRAY['one','two'])id").execute(&pool).await.unwrap();
     sqlx::raw_sql("DO $$ DECLARE r record; BEGIN FOR r IN SELECT c.relname,t.tgname FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_proc p ON p.oid=t.tgfoid WHERE c.relnamespace=current_schema()::regnamespace AND p.proname='hysteriax_serialize_writes' LOOP EXECUTE format('ALTER TABLE %I DISABLE TRIGGER %I',r.relname,r.tgname); END LOOP; END $$").execute(&pool).await.unwrap();
     pool
 }
@@ -289,4 +289,33 @@ async fn one_hundred_log_limit_preserves_all_events_and_uses_one_database_timest
     );
     let consistent:bool=sqlx::query_scalar("SELECT updated_at=(logs_json->99->>'created_at')::timestamptz AND updated_at=(SELECT created_at FROM job_events WHERE job_id='one' ORDER BY id DESC LIMIT 1) FROM jobs WHERE id='one'").fetch_one(&pool).await.unwrap();
     assert!(consistent);
+}
+
+#[tokio::test]
+async fn a_healthy_lease_cannot_append_progress_for_changed_job_metadata() {
+    for query in [
+        "UPDATE jobs SET kind='deploy' WHERE id='one'",
+        "UPDATE jobs SET target_revision=2 WHERE id='one'",
+        "UPDATE jobs SET payload_json='{\"force\":true}' WHERE id='one'",
+        "UPDATE jobs SET attempts=2 WHERE id='one'",
+        "UPDATE jobs SET resource_key='another' WHERE id='one'",
+    ] {
+        let pool = fixture().await;
+        let leases = owner(&pool, "one", "instance").await;
+        let input = job("one");
+        sqlx::query(query).execute(&pool).await.unwrap();
+        assert!(
+            execution::supervise(
+                pool.clone(),
+                leases,
+                report_progress(&pool, &input, "late", "old source")
+            )
+            .await
+            .unwrap()
+            .is_err(),
+            "{query}"
+        );
+        assert_eq!(logs(&pool, "one").await, json!([]));
+        assert_eq!(count(&pool, "SELECT count(*) FROM job_events").await, 0);
+    }
 }

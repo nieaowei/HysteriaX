@@ -332,6 +332,34 @@ pub(crate) fn job_leases(job: &str, node: &str) -> anyhow::Result<Option<(Execut
     Ok(Some((primary, node)))
 }
 
+/// Use inside a guarded transaction. A live lease alone does not authorize a
+/// stale JobInput after the persisted attempt, payload or target has changed.
+pub(crate) async fn job_source_on(
+    connection: &mut PgConnection,
+    job: &crate::deployment::JobInput,
+) -> anyhow::Result<Option<sqlx::postgres::PgRow>> {
+    require_job_scope(&job.id, job.node_id.as_deref())?;
+    let Some(row) = sqlx::query("SELECT * FROM jobs WHERE id=$1 AND status='running' FOR UPDATE")
+        .bind(&job.id)
+        .fetch_optional(&mut *connection)
+        .await?
+    else {
+        return Ok(None);
+    };
+    anyhow::ensure!(
+        row.get::<String, _>("kind") == job.kind
+            && row.get::<Option<String>, _>("node_id") == job.node_id
+            && row.get::<Option<i64>, _>("target_revision") == job.target_revision
+            && row.get::<Value, _>("payload_json") == job.payload
+            && row.get::<i64, _>("attempts") == job.attempts,
+        "job execution source changed"
+    );
+    if let Some(resource) = row.get::<Option<String>, _>("resource_key") {
+        require_job_resource_scope(&job.id, &resource)?;
+    }
+    Ok(Some(row))
+}
+
 /// Apply ownership checks inside every transaction opened by a leased worker.
 /// The task-local scope never crosses into API handlers or unrelated workers.
 pub async fn guard_current(connection: &mut PgConnection) -> Result<(), sqlx::Error> {

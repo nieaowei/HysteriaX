@@ -43,7 +43,7 @@ pub(super) async fn managed_node(state: &AppState, ca: &str) -> Value {
 
 async fn job(state: &AppState, node: &str) -> String {
     let id = uuid::Uuid::new_v4().to_string();
-    sqlx::query("INSERT INTO jobs(id,kind,node_id,target_revision,status,stage,available_at,created_at,updated_at) VALUES($1,'deploy',$2,1,'running','starting',now(),now(),now())").bind(&id).bind(node).execute(&state.pool).await.unwrap();
+    sqlx::query("INSERT INTO jobs(id,kind,node_id,target_revision,attempts,status,stage,available_at,created_at,updated_at) VALUES($1,'deploy',$2,1,1,'running','starting',now(),now(),now())").bind(&id).bind(node).execute(&state.pool).await.unwrap();
     id
 }
 async fn auth(state: &AppState, node: &str, token: &str, password: &str) -> bool {
@@ -623,7 +623,7 @@ async fn prepare_bound_users(
         node_id: Some(node.into()),
         target_revision: Some(1),
         payload: json!({}),
-        attempts: 0,
+        attempts: 1,
     };
     let mut tx = state.pool.begin().await?;
     let mut leases = vec![];
