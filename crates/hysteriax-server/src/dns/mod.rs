@@ -1,4 +1,5 @@
 pub mod binding;
+mod execution;
 pub mod probe;
 pub mod provider;
 pub mod rotation;
@@ -251,7 +252,7 @@ pub async fn enqueue(
     if op.resource_type == "dns_record"
         && matches!(
             op.action,
-            "record-create" | "record-update" | "record-delete"
+            "record-create" | "record-update" | "record-delete" | "record-check"
         )
     {
         let revision: i64 =

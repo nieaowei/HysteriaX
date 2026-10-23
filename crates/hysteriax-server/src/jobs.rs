@@ -416,6 +416,26 @@ mod failure_tests;
 #[cfg(test)]
 mod ownership_tests;
 
+#[cfg(test)]
+pub(crate) async fn claim_for_test(
+    pool: &PgPool,
+    owner: &str,
+) -> Option<(JobInput, Vec<crate::execution::Execution>)> {
+    claim_next_for(pool, Some(owner))
+        .await
+        .unwrap()
+        .map(|claimed| (claimed.job, claimed.leases))
+}
+
+#[cfg(test)]
+pub(crate) async fn execute_for_test(
+    state: AppState,
+    job: JobInput,
+    leases: Vec<crate::execution::Execution>,
+) {
+    execute_claimed(state, ClaimedJob { job, leases }).await;
+}
+
 async fn execute_one(state: AppState, job: JobInput) -> bool {
     // Subscribe before the database check: a removal before subscription is
     // caught by persisted status, and a later removal is caught by the signal.
@@ -430,6 +450,11 @@ async fn execute_one(state: AppState, job: JobInput) -> bool {
     };
     match result {
         Ok(output) => {
+            // A domain worker may have atomically requeued or ended its work
+            // and released the captured leases. Do not republish that output.
+            if !job_is_running(&state.pool, &job.id).await {
+                return false;
+            }
             let removed = output.delete_node;
             if let Err(error) =
                 retry_persistence(|| persist_success(&state, &job, output.clone())).await
@@ -897,7 +922,7 @@ async fn fail_after(
     .await
 }
 
-async fn fail_on(
+pub(crate) async fn fail_on(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     job: &JobInput,
     message: &str,
@@ -907,6 +932,8 @@ async fn fail_on(
     waiting_recovery: bool,
     retry_after: Option<i64>,
 ) -> Result<(), sqlx::Error> {
+    crate::execution::require_job_scope(&job.id, job.node_id.as_deref())
+        .map_err(|e| sqlx::Error::Protocol(e.to_string()))?;
     let Some(source) = sqlx::query("SELECT kind,node_id,target_revision,payload_json,attempts,stage,resource_key FROM jobs WHERE id=$1 AND status='running' FOR UPDATE")
         .bind(&job.id).fetch_optional(&mut **tx).await? else { return Ok(()); };
     if source.get::<String, _>("kind") != job.kind

@@ -36,10 +36,15 @@ pub async fn execute(pool: &PgPool, secrets: &SecretBox, job: &JobInput) -> Resu
     let version: i64 = job.payload["dns_credential_version"]
         .as_i64()
         .unwrap_or_else(|| row.get("credential_version"));
-    let provider = super::provider(pool, secrets, &connection, version).await?;
     let action: String = row.get("action");
     let resource: String = row.get("resource_id");
     let payload: Value = row.get("payload");
+    if action == "record-check" {
+        return super::probe::execute_job(pool, job, id, &operation_source)
+            .await
+            .map(output);
+    }
+    let provider = super::provider(pool, secrets, &connection, version).await?;
     let result = match action.as_str() {
         "credential-apply" => {
             super::rotation::apply(pool, &provider, &connection, version, &payload).await?
@@ -50,26 +55,6 @@ pub async fn execute(pool: &PgPool, secrets: &SecretBox, job: &JobInput) -> Resu
         "zone-refresh" => refresh::zone(pool, &provider, job, id, &operation_source).await?,
         "record-create" | "record-update" | "record-delete" => {
             write_record(pool, &provider, job, id, &action, &resource, &payload).await?
-        }
-        "record-check" => {
-            let result = super::probe::check(pool, &resource).await?;
-            if result["status"] == "pending" {
-                let created: chrono::DateTime<chrono::Utc> = row.get("created_at");
-                if chrono::Utc::now() - created < chrono::Duration::minutes(10) {
-                    let (job, id, expected) =
-                        (job.clone(), id.to_owned(), operation_source.clone());
-                    db::write(pool,move |tx| {let (job,id,expected)=(job.clone(),id.clone(),expected.clone());Box::pin(async move {
-                        records::job_on(tx,&job,&id,Some(&expected)).await?;
-                        sqlx::query("UPDATE jobs SET status='queued',stage='dns_propagation_wait',attempts=0,available_at=clock_timestamp()+interval '30 seconds',updated_at=clock_timestamp() WHERE id=$1 AND status='running'")
-                            .bind(&job.id).execute(&mut **tx).await?;
-                        crate::kick_requests::event(tx,&job.id,"job.retrying",json!({"id":job.id,"kind":job.kind,"status":"queued","stage":"dns_propagation_wait"})).await?;
-                        Ok::<_,anyhow::Error>(())
-                    })}).await?;
-                    return Ok(output(result));
-                }
-                bail!("DNS propagation check exceeded ten minutes; check resolution again");
-            }
-            result
         }
         _ => bail!("unsupported DNS operation"),
     };

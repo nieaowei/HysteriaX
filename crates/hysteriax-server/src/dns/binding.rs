@@ -441,7 +441,7 @@ pub async fn ensure_ready(
         if row.get::<String, _>("state") != "synced" || row.get::<bool, _>("proxied") {
             bail!("node DNS records are pending or proxied; repair before deployment");
         }
-        let detail = super::probe::check(pool, &row.get::<String, _>("id")).await?;
+        let detail = super::probe::inspect(pool, &row.get::<String, _>("id")).await?;
         if detail["status"] != "verified" {
             bail!("node DNS resolution is not verified; retry after propagation");
         }

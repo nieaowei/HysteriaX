@@ -1,3 +1,6 @@
+mod persistence;
+#[cfg(test)]
+tokio::task_local! {static OBSERVATION_STATUS_FOR_TEST: &'static str;}
 use std::{
     net::{IpAddr, SocketAddr},
     time::Duration,
@@ -9,14 +12,12 @@ use hickory_proto::{
     rr::{Name, RData, RecordType},
 };
 use serde_json::{Value, json};
-use sqlx::{PgPool, Row};
+use sqlx::PgPool;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpStream, UdpSocket},
     time::timeout,
 };
-
-use crate::db;
 
 /// A DNS exchange validates source, transaction, question, truncation and authority.
 async fn query(
@@ -121,19 +122,55 @@ async fn addresses(name: &str) -> Vec<String> {
     }
     values
 }
-pub async fn check(pool: &PgPool, id: &str) -> Result<Value> {
-    let row=sqlx::query("SELECT r.*,z.name AS zone_name FROM dns_records r JOIN dns_zones z ON z.id=r.zone_id WHERE r.id=$1").bind(id).fetch_one(pool).await?;
-    let name: String = row.get("name");
-    let expected: String = row.get("content");
-    let kind = match row.get::<String, _>("record_type").as_str() {
-        "A" => RecordType::A,
-        "AAAA" => RecordType::AAAA,
-        "CNAME" => RecordType::CNAME,
-        _ => bail!("unsupported DNS record check"),
+pub async fn inspect(pool: &PgPool, id: &str) -> Result<Value> {
+    inspect_with(pool, id, |source| async move { observe(&source).await }).await
+}
+
+async fn inspect_with<F, Fut>(pool: &PgPool, id: &str, observe: F) -> Result<Value>
+where
+    F: FnOnce(persistence::Record) -> Fut,
+    Fut: std::future::Future<Output = Result<Value>>,
+{
+    crate::execution::check_current().await?;
+    let source = persistence::capture(pool, id).await?;
+    let detail = observe(source.clone()).await?;
+    persistence::validate(pool, &source).await?;
+    crate::execution::check_current().await?;
+    Ok(detail)
+}
+
+pub(super) async fn execute_job(
+    pool: &PgPool,
+    job: &crate::deployment::JobInput,
+    operation: &str,
+    expected: &Value,
+) -> Result<Value> {
+    let source = match persistence::prepare_job(pool, job, operation, expected).await? {
+        persistence::Prepared::Applied(receipt) => return Ok(receipt),
+        persistence::Prepared::Ready(source) => source,
     };
-    if row.get::<String, _>("state") != "synced" {
-        bail!("DNS record must be written before checking resolution");
+    let detail = observe(&source.record).await?;
+    persistence::save_job(pool, &source, &detail).await
+}
+
+async fn observe(source: &persistence::Record) -> Result<Value> {
+    // Override only transport in executor integration fixtures. Admission,
+    // source validation, publication and resource release still run normally.
+    #[cfg(test)]
+    if let Ok(status) = OBSERVATION_STATUS_FOR_TEST.try_with(|status| *status) {
+        let expected = source.content.trim_end_matches('.').to_ascii_lowercase();
+        return Ok(
+            json!({"record_id":source.id,"status":status,"expected":expected,
+            "management_answers":if status=="verified" {json!([expected])} else {json!([])},
+            "authoritative":if status=="verified" {json!([{"server":"fixture","answers":[expected]}])} else {json!([])},
+            "target_addresses":["8.8.8.8"],"management_addresses":["8.8.8.8"]}),
+        );
     }
+    let id = &source.id;
+    let name = source.name.clone();
+    let expected = source.content.clone();
+    let kind = source.kind;
+    let zone_name = source.zone_name.clone();
     let management = recursive(&name, kind).await.map(|r| answers(&r, kind));
     // A flattened CNAME has address answers rather than a literal CNAME answer.
     let target_addresses = if kind == RecordType::CNAME {
@@ -146,7 +183,6 @@ pub async fn check(pool: &PgPool, id: &str) -> Result<Value> {
     } else {
         Vec::new()
     };
-    let zone_name: String = row.get("zone_name");
     let mut authoritative = Vec::<Value>::new();
     if let Ok(ns) = recursive(&zone_name, RecordType::NS).await {
         for host in answers(&ns, RecordType::NS).into_iter().take(4) {
@@ -202,12 +238,7 @@ pub async fn check(pool: &PgPool, id: &str) -> Result<Value> {
                     })
                 })
         });
-    let known_proxied_target = if kind == RecordType::CNAME {
-        sqlx::query_scalar::<_,bool>("SELECT EXISTS(SELECT 1 FROM dns_records WHERE name=$1 AND proxied AND deleted_at IS NULL)").bind(&expected).fetch_one(pool).await?
-    } else {
-        false
-    };
-    let status = if row.get::<bool, _>("proxied") || known_proxied_target {
+    let status = if source.proxied || source.target_proxied {
         "proxied"
     } else if local_matches && authoritative_matches {
         "verified"
@@ -215,10 +246,5 @@ pub async fn check(pool: &PgPool, id: &str) -> Result<Value> {
         "pending"
     };
     let detail = json!({"record_id":id,"status":status,"expected":expected,"management_answers":management.ok(),"authoritative":authoritative,"target_addresses":target_addresses,"management_addresses":management_addresses});
-    let mut tx = db::begin_write(pool).await?;
-    // An in-flight result must never validate a newer edit.
-    sqlx::query("UPDATE dns_records SET resolution_status=$1,resolution_detail=$2,checked_at=now() WHERE id=$3 AND revision=$4 AND state='synced'")
-        .bind(status).bind(&detail).bind(id).bind(row.get::<i64,_>("revision")).execute(&mut *tx).await?;
-    tx.commit().await?;
     Ok(detail)
 }
