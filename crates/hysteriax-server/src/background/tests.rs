@@ -386,8 +386,26 @@ async fn recorded_network_results_are_acknowledged_without_another_ssh_read() {
             }
             finish(&state.pool, &next, !failure).await.unwrap();
         })
+        .await;
+        // A renewal can observe the committed release before finish's response
+        // reaches this future. Prove the acknowledgement from durable state.
+        let acknowledged: bool = sqlx::query_scalar(
+            "SELECT state=$2 AND owner IS NULL FROM background_work WHERE id=$1",
+        )
+        .bind(&next.id)
+        .bind(if failure { "failed" } else { "complete" })
+        .fetch_one(&state.pool)
         .await
         .unwrap();
+        assert!(acknowledged);
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM resource_leases WHERE work_id=$1")
+                .bind(&next.id)
+                .fetch_one(&state.pool)
+                .await
+                .unwrap(),
+            0
+        );
         assert_eq!(
             count(&state, "SELECT count(*) FROM node_network_samples").await,
             1

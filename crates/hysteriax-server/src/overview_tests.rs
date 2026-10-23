@@ -440,7 +440,7 @@ async fn monitoring_credentials_are_short_lived_separate_from_deployment_credent
         .execute(&state.pool)
         .await
         .unwrap();
-    sqlx::query("INSERT INTO monitoring_probe_tokens(node_id,token_hash,expires_at) VALUES($1,$2,now()+interval '30 seconds')").bind(node).bind(crate::security::token_digest("monitor-secret")).execute(&state.pool).await.unwrap();
+    crate::proxy_monitor::token_tests::install_fixture(&state, node, "monitor-secret").await;
     let auth = |credential: &str| {
         serde_json::from_value(json!({"addr":"","auth":credential,"tx":0})).unwrap()
     };
@@ -453,7 +453,10 @@ async fn monitoring_credentials_are_short_lived_separate_from_deployment_credent
     .unwrap();
     let result = serde_json::to_value(result.0).unwrap();
     assert_eq!(result["ok"], true);
-    assert_eq!(result["id"], format!("monitor-{node}"));
+    assert_eq!(
+        result["id"],
+        crate::proxy_monitor::identity(node, &crate::security::token_digest("monitor-secret"))
+    );
     sqlx::query("UPDATE monitoring_probe_tokens SET expires_at=now()-interval '1 second'")
         .execute(&state.pool)
         .await

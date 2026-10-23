@@ -322,6 +322,9 @@ pub async fn sync_ssh_target_in_tx(
         let desired = record.remote();
         let key = format!("node-ssh:{node}:{revision}:{id}");
         let connection: String = zone.get("connection_id");
+        // Enqueue pins the pending revision, including this desired edit.
+        sqlx::query("UPDATE dns_records SET desired=$1,state='pending',resolution_status='unchecked',revision=revision+1,updated_at=now() WHERE id=$2")
+            .bind(&desired).bind(&id).execute(&mut **tx).await?;
         let receipt = super::enqueue(tx, super::Operation {
             key: &key,
             request: &json!({"node_id":node,"node_revision":revision,"record_id":id,"desired":desired}),
@@ -330,8 +333,6 @@ pub async fn sync_ssh_target_in_tx(
             resource_key: format!("dns-zone:{zone_id}"), action: "record-update",
             payload: json!({"desired":desired,"baseline":baseline}), node: Some(node),
         }).await?;
-        sqlx::query("UPDATE dns_records SET desired=$1,state='pending',resolution_status='unchecked',revision=revision+1,updated_at=now() WHERE id=$2")
-            .bind(&desired).bind(&id).execute(&mut **tx).await?;
         let job = receipt["job_id"]
             .as_str()
             .ok_or_else(ApiError::internal)?

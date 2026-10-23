@@ -1,12 +1,10 @@
+mod records;
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
-use super::{
-    audit,
-    provider::{Cloudflare, editable},
-};
+use super::provider::{Cloudflare, editable};
 use crate::{
     db,
     deployment::{JobInput, JobOutput},
@@ -17,10 +15,13 @@ pub async fn execute(pool: &PgPool, secrets: &SecretBox, job: &JobInput) -> Resu
     let id = job.payload["dns_operation_id"]
         .as_str()
         .context("missing DNS operation")?;
-    let row = sqlx::query("SELECT * FROM dns_operations WHERE id=$1")
-        .bind(id)
-        .fetch_one(pool)
-        .await?;
+    let (input, operation) = (job.clone(), id.to_owned());
+    let row = db::write(pool, move |tx| {
+        let (job, id) = (input.clone(), operation.clone());
+        Box::pin(async move { records::job_on(tx, &job, &id, None).await })
+    })
+    .await?;
+    let operation_source: Value = row.get("frozen_source");
     if row
         .get::<Option<chrono::DateTime<chrono::Utc>>, _>("applied_at")
         .is_some()
@@ -54,11 +55,15 @@ pub async fn execute(pool: &PgPool, secrets: &SecretBox, job: &JobInput) -> Resu
             if result["status"] == "pending" {
                 let created: chrono::DateTime<chrono::Utc> = row.get("created_at");
                 if chrono::Utc::now() - created < chrono::Duration::minutes(10) {
-                    let mut tx = db::begin_write(pool).await?;
-                    sqlx::query("UPDATE jobs SET status='queued',stage='dns_propagation_wait',attempts=0,available_at=now()+interval '30 seconds',updated_at=now() WHERE id=$1 AND status='running'")
-                        .bind(&job.id).execute(&mut *tx).await?;
-                    crate::kick_requests::event(&mut tx,&job.id,"job.retrying",json!({"id":job.id,"kind":job.kind,"status":"queued","stage":"dns_propagation_wait"})).await?;
-                    tx.commit().await?;
+                    let (job, id, expected) =
+                        (job.clone(), id.to_owned(), operation_source.clone());
+                    db::write(pool,move |tx| {let (job,id,expected)=(job.clone(),id.clone(),expected.clone());Box::pin(async move {
+                        records::job_on(tx,&job,&id,Some(&expected)).await?;
+                        sqlx::query("UPDATE jobs SET status='queued',stage='dns_propagation_wait',attempts=0,available_at=clock_timestamp()+interval '30 seconds',updated_at=clock_timestamp() WHERE id=$1 AND status='running'")
+                            .bind(&job.id).execute(&mut **tx).await?;
+                        crate::kick_requests::event(tx,&job.id,"job.retrying",json!({"id":job.id,"kind":job.kind,"status":"queued","stage":"dns_propagation_wait"})).await?;
+                        Ok::<_,anyhow::Error>(())
+                    })}).await?;
                     return Ok(output(result));
                 }
                 bail!("DNS propagation check exceeded ten minutes; check resolution again");
@@ -67,25 +72,25 @@ pub async fn execute(pool: &PgPool, secrets: &SecretBox, job: &JobInput) -> Resu
         }
         _ => bail!("unsupported DNS operation"),
     };
-    let mut tx = db::begin_write(pool).await?;
-    // Completion and audit are committed together; recovered jobs can safely acknowledge again.
-    let changed = sqlx::query(
-        "UPDATE dns_operations SET result=$1,applied_at=now() WHERE id=$2 AND applied_at IS NULL",
-    )
-    .bind(&result)
-    .bind(id)
-    .execute(&mut *tx)
-    .await?;
-    if changed.rows_affected() != 0 {
-        audit(
-            &mut tx,
-            &action,
-            &resource,
-            json!({"operation_id":id,"job_id":job.id}),
-        )
-        .await?;
-    }
-    tx.commit().await?;
+    let (input, operation, expected, action, resource, saved, audit_id) = (
+        job.clone(),
+        id.to_owned(),
+        operation_source,
+        action,
+        resource,
+        result.clone(),
+        Uuid::new_v4().to_string(),
+    );
+    db::write(pool,move |tx| {let (job,id,expected,action,resource,result,audit_id)=(input.clone(),operation.clone(),expected.clone(),action.clone(),resource.clone(),saved.clone(),audit_id.clone());Box::pin(async move {
+        records::job_on(tx,&job,&id,Some(&expected)).await?;
+        let changed=sqlx::query("UPDATE dns_operations SET result=$1,applied_at=clock_timestamp() WHERE id=$2 AND applied_at IS NULL")
+            .bind(&result).bind(&id).execute(&mut **tx).await?;
+        if changed.rows_affected()!=0 {
+            sqlx::query("INSERT INTO audit_records(id,actor,action,entity_type,entity_id,detail_json,created_at) VALUES($1,'admin',$2,'dns',$3,$4,clock_timestamp())")
+                .bind(audit_id).bind(format!("dns.{action}")).bind(resource).bind(json!({"operation_id":id,"job_id":job.id})).execute(&mut **tx).await?;
+        }
+        Ok::<_,anyhow::Error>(())
+    })}).await?;
     Ok(output(result))
 }
 fn output(result: Value) -> JobOutput {
@@ -209,13 +214,15 @@ async fn write_record(
     id: &str,
     payload: &Value,
 ) -> Result<Value> {
-    let row = sqlx::query("SELECT r.*,z.provider_zone_id FROM dns_records r JOIN dns_zones z ON z.id=r.zone_id WHERE r.id=$1")
-        .bind(id).fetch_one(pool).await?;
-    let zone: String = row.get("provider_zone_id");
-    let remote_id: Option<String> = row.get("provider_record_id");
+    let source = match records::prepare(pool, job, operation, action, id, payload).await? {
+        records::Prepared::Applied(receipt) => return Ok(receipt),
+        records::Prepared::Ready(source) => source,
+    };
+    let zone = &source.zone;
+    let remote_id = &source.remote;
     let desired = &payload["desired"];
     let result = if action == "record-create" {
-        let records = provider.records(&zone).await?;
+        let records = provider.records(zone).await?;
         let marker = format!("HysteriaX operation:{operation}");
         if let Some(created) = records
             .iter()
@@ -238,13 +245,13 @@ async fn write_record(
                     "record name conflicts with an existing remote record; refresh and select it explicitly"
                 );
             }
-            provider.create(&zone, desired, operation).await?
+            provider.create(zone, desired, operation).await?
         }
     } else {
         let remote_id = remote_id
             .as_deref()
             .context("provider record ID is missing")?;
-        let current = provider.record(&zone, remote_id).await?;
+        let current = provider.record(zone, remote_id).await?;
         if action == "record-delete" && current.is_none() {
             json!({"deleted":true})
         } else {
@@ -257,64 +264,15 @@ async fn write_record(
                     bail!("record changed externally; refresh and review the differences");
                 }
                 if action == "record-delete" {
-                    provider.delete(&zone, remote_id).await?;
+                    provider.delete(zone, remote_id).await?;
                     json!({"deleted":true})
                 } else {
-                    provider.update(&zone, remote_id, desired).await?
+                    provider.update(zone, remote_id, desired).await?
                 }
             }
         }
     };
-    let mut tx = db::begin_write(pool).await?;
-    if action == "record-delete" {
-        sqlx::query("UPDATE dns_records SET state='deleted',deleted_at=now(),desired=NULL,revision=revision+1,updated_at=now() WHERE id=$1")
-            .bind(id).execute(&mut *tx).await?;
-    } else {
-        sqlx::query("UPDATE dns_records SET provider_record_id=$1,name=$2,record_type=$3,content=$4,ttl=$5,proxied=$6,remote_snapshot=$7,desired=NULL,state='synced',resolution_status='unchecked',revision=revision+1,updated_at=now() WHERE id=$8")
-            .bind(result["id"].as_str().context("missing written provider record ID")?).bind(result["name"].as_str().context("missing written name")?)
-            .bind(result["type"].as_str().context("missing written type")?).bind(result["content"].as_str().context("missing written content")?)
-            .bind(result["ttl"].as_i64().unwrap_or(1)).bind(result["proxied"].as_bool().unwrap_or(false)).bind(&result).bind(id).execute(&mut *tx).await?;
-    }
-    if action != "record-delete" {
-        let operation_row =
-            sqlx::query("SELECT connection_id,credential_version FROM dns_operations WHERE id=$1")
-                .bind(operation)
-                .fetch_one(&mut *tx)
-                .await?;
-        let connection: String = operation_row.get("connection_id");
-        let key = format!("check:{operation}");
-        super::enqueue(
-            &mut tx,
-            super::Operation {
-                key: &key,
-                request: &json!({"record_id":id,"after_operation":operation}),
-                connection: &connection,
-                version: job.payload["dns_credential_version"]
-                    .as_i64()
-                    .unwrap_or_else(|| operation_row.get("credential_version")),
-                resource_type: "dns_record",
-                resource: id,
-                resource_name: result["name"].as_str().context("missing record name")?,
-                resource_key: format!("dns-zone:{}", row.get::<String, _>("zone_id")),
-                action: "record-check",
-                payload: json!({}),
-                node: job.node_id.as_deref(),
-            },
-        )
-        .await
-        .map_err(|e| anyhow::anyhow!(e.message))?;
-    }
-    // Commit the provider result with the record, closing the DB-commit/recovery gap.
-    sqlx::query(
-        "UPDATE dns_operations SET result=$1,applied_at=now() WHERE id=$2 AND applied_at IS NULL",
-    )
-    .bind(json!({"record_id":id,"deleted":action=="record-delete"}))
-    .bind(operation)
-    .execute(&mut *tx)
-    .await?;
-    audit(&mut tx, action, id, json!({"operation_id":operation})).await?;
-    tx.commit().await?;
-    Ok(json!({"record_id":id,"deleted":action=="record-delete"}))
+    records::commit(pool, &source, &result).await
 }
 
 #[cfg(test)]
@@ -332,9 +290,9 @@ mod tests {
     };
 
     #[derive(Clone)]
-    struct Remote {
-        records: Arc<Mutex<Vec<Value>>>,
-        writes: Arc<AtomicUsize>,
+    pub(super) struct Remote {
+        pub(super) records: Arc<Mutex<Vec<Value>>>,
+        pub(super) writes: Arc<AtomicUsize>,
     }
     async fn list(State(remote): State<Remote>) -> Json<Value> {
         Json(
@@ -394,7 +352,7 @@ mod tests {
         remote.writes.fetch_add(1, Ordering::SeqCst);
         Json(json!({"success":true,"result":record}))
     }
-    async fn provider(remote: Remote) -> (Cloudflare, tokio::task::JoinHandle<()>) {
+    pub(super) async fn provider(remote: Remote) -> (Cloudflare, tokio::task::JoinHandle<()>) {
         let app = Router::new()
             .route("/zones/remote-zone/dns_records", get(list).post(create))
             .route(
@@ -456,6 +414,11 @@ mod tests {
             payload: row.get("payload_json"),
             attempts: 1,
         };
+        sqlx::query("UPDATE jobs SET status='running',attempts=1 WHERE id=$1")
+            .bind(&job.id)
+            .execute(&state.pool)
+            .await
+            .unwrap();
         let operation = job.payload["dns_operation_id"].as_str().unwrap();
         let payload: Value = sqlx::query_scalar("SELECT payload FROM dns_operations WHERE id=$1")
             .bind(operation)
@@ -542,6 +505,11 @@ mod tests {
                 payload: row.get("payload_json"),
                 attempts: 1,
             };
+            sqlx::query("UPDATE jobs SET status='running',attempts=1 WHERE id=$1")
+                .bind(&job.id)
+                .execute(&state.pool)
+                .await
+                .unwrap();
             let operation: String = row.get("operation_id");
             let id: String = row.get("resource_id");
             let payload: Value = row.get("payload");
@@ -596,6 +564,11 @@ mod tests {
             payload: job_row.get("payload_json"),
             attempts: 1,
         };
+        sqlx::query("UPDATE jobs SET status='running',attempts=1 WHERE id=$1")
+            .bind(&job.id)
+            .execute(&state.pool)
+            .await
+            .unwrap();
         let operation = job.payload["dns_operation_id"].as_str().unwrap();
         let payload: Value = sqlx::query_scalar("SELECT payload FROM dns_operations WHERE id=$1")
             .bind(operation)
@@ -688,6 +661,11 @@ mod tests {
             payload: job_row.get("payload_json"),
             attempts: 1,
         };
+        sqlx::query("UPDATE jobs SET status='running',attempts=1 WHERE id=$1")
+            .bind(&job.id)
+            .execute(&state.pool)
+            .await
+            .unwrap();
         let operation = job.payload["dns_operation_id"].as_str().unwrap();
         let payload: Value = sqlx::query_scalar("SELECT payload FROM dns_operations WHERE id=$1")
             .bind(operation)
