@@ -709,7 +709,7 @@ async fn deploy_with_probe(
     } else {
         None
     };
-    let activation = if crate::credentials::activation::required(
+    let mut activation = if crate::credentials::activation::required(
         &mtls,
         deployed_options.as_ref(),
         &row.get::<String, _>("mtls_state"),
@@ -736,19 +736,22 @@ async fn deploy_with_probe(
         None
     };
     if let Some(previous) = &recovery_previous {
-        let mut tx = db::begin_write(pool).await?;
-        sqlx::query(
-            "UPDATE mtls_activations SET previous_digest=$2 WHERE job_id=$1 AND phase='activating'",
-        )
-        .bind(&job.id)
-        .bind(if previous.is_empty() {
-            None
-        } else {
-            Some(previous)
-        })
-        .execute(&mut *tx)
-        .await?;
-        tx.commit().await?;
+        let record = activation
+            .as_ref()
+            .context("known recovery requires an activation")?;
+        activation = Some(
+            crate::credentials::activation::record_previous(
+                pool,
+                &job.id,
+                record,
+                if previous.is_empty() {
+                    None
+                } else {
+                    Some(previous.as_str())
+                },
+            )
+            .await?,
+        );
     }
     let systemd_unit = systemd_unit(port_hopping);
     let remote_staging = format!("/tmp/hysteriax-{node_id}");

@@ -549,42 +549,6 @@ fn completion_database_error(error: anyhow::Error) -> sqlx::Error {
     }
 }
 
-async fn pin_completion_rotation_on(
-    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    job: &JobInput,
-) -> anyhow::Result<()> {
-    if job.payload["mtls_operation"] != true {
-        return Ok(());
-    }
-    let source=sqlx::query("SELECT ca_id,ca_version,effective_version,rotation_id FROM mtls_node_operations WHERE job_id=$1 AND node_id=$2")
-        .bind(&job.id).bind(&job.node_id).fetch_one(&mut **tx).await?;
-    let ca: String = source.get("ca_id");
-    sqlx::query("SELECT id FROM credentials WHERE id=$1 FOR KEY SHARE")
-        .bind(&ca)
-        .fetch_optional(&mut **tx)
-        .await?;
-    sqlx::query("SELECT credential_id FROM mtls_authorities WHERE credential_id=$1 FOR SHARE")
-        .bind(&ca)
-        .fetch_optional(&mut **tx)
-        .await?;
-    let mut versions = vec![source.get::<i64, _>("ca_version")];
-    if let Some(version) = source.get::<Option<i64>, _>("effective_version") {
-        versions.push(version);
-    }
-    versions.sort();
-    versions.dedup();
-    sqlx::query("SELECT ca_version FROM mtls_ca_generations WHERE ca_id=$1 AND ca_version=ANY($2) ORDER BY ca_version FOR SHARE")
-        .bind(&ca).bind(versions).fetch_all(&mut **tx).await?;
-    if let Some(rotation) = source.get::<Option<String>, _>("rotation_id") {
-        sqlx::query("SELECT id FROM mtls_rotations WHERE id=$1 FOR SHARE")
-            .bind(rotation)
-            .fetch_optional(&mut **tx)
-            .await?;
-    }
-    crate::credentials::rotations::validate_job_on(tx, job).await?;
-    Ok(())
-}
-
 async fn completion_gate_on(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     job: &JobInput,
@@ -654,7 +618,7 @@ async fn completion_gate_on(
         )
         .into());
     }
-    pin_completion_rotation_on(tx, job).await?;
+    crate::credentials::rotations::pin_job_source_on(tx, job).await?;
     Ok(true)
 }
 

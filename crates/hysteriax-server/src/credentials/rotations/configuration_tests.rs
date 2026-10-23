@@ -330,6 +330,11 @@ async fn pending_fixture() -> (AppState, String, JobInput, Value) {
         .await
         .unwrap();
     tx.commit().await.unwrap();
+    sqlx::query("UPDATE jobs SET status='running',attempts=1 WHERE id=$1")
+        .bind(&id)
+        .execute(&state.pool)
+        .await
+        .unwrap();
     let job = input(&state, &id).await;
     let mut value = json!({"caller":"independent desired snapshot"});
     let context = configure_job(&state.pool, &state.secrets, &job, &mut value)

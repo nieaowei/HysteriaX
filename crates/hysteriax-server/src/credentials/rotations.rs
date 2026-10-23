@@ -273,6 +273,43 @@ pub async fn validate_job_on(connection: &mut sqlx::PgConnection, job: &JobInput
     Ok(true)
 }
 
+/// Caller owns the job and node rows; keep the exact CA source stable to commit.
+pub(crate) async fn pin_job_source_on(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    job: &JobInput,
+) -> anyhow::Result<()> {
+    if job.payload["mtls_operation"] != true {
+        return Ok(());
+    }
+    let source=sqlx::query("SELECT ca_id,ca_version,effective_version,rotation_id FROM mtls_node_operations WHERE job_id=$1 AND node_id=$2")
+        .bind(&job.id).bind(&job.node_id).fetch_one(&mut **tx).await?;
+    let ca: String = source.get("ca_id");
+    sqlx::query("SELECT id FROM credentials WHERE id=$1 FOR KEY SHARE")
+        .bind(&ca)
+        .fetch_optional(&mut **tx)
+        .await?;
+    sqlx::query("SELECT credential_id FROM mtls_authorities WHERE credential_id=$1 FOR SHARE")
+        .bind(&ca)
+        .fetch_optional(&mut **tx)
+        .await?;
+    let mut versions = vec![source.get::<i64, _>("ca_version")];
+    if let Some(version) = source.get::<Option<i64>, _>("effective_version") {
+        versions.push(version);
+    }
+    versions.sort();
+    versions.dedup();
+    sqlx::query("SELECT ca_version FROM mtls_ca_generations WHERE ca_id=$1 AND ca_version=ANY($2) ORDER BY ca_version FOR SHARE")
+        .bind(&ca).bind(versions).fetch_all(&mut **tx).await?;
+    if let Some(rotation) = source.get::<Option<String>, _>("rotation_id") {
+        sqlx::query("SELECT id FROM mtls_rotations WHERE id=$1 FOR SHARE")
+            .bind(rotation)
+            .fetch_optional(&mut **tx)
+            .await?;
+    }
+    validate_job_on(tx, job).await?;
+    Ok(())
+}
+
 // Capture only the operation's dependencies. The clock and materialized queue
 // flag are not source revisions; ciphertext is compared without decrypting in TX.
 const CONFIGURATION_SOURCE: &str = "SELECT material.*,to_jsonb(material)-'database_now'-'effective_version'-'pending_job' AS configuration_source FROM (SELECT o.*,a.published_version,c.latest_version AS ca_latest_version,c.archived AS ca_archived,g.expires_at AS published_expires,EXISTS(SELECT 1 FROM mtls_node_trust t WHERE t.node_id=o.node_id AND t.ca_id=o.ca_id AND t.deployed) AS deployed_ca,jsonb_build_object('id',n.id,'state',n.state,'desired_revision',CASE WHEN o.use_desired THEN n.desired_revision END,'deployed_revision',n.deployed_revision,'activation_id',n.mtls_activation_id,'digest',n.deployed_content_sha256,'mtls_state',n.mtls_state) AS node_source,(SELECT jsonb_build_object('id',p.id,'phase',p.phase,'snapshot_enc',p.snapshot_enc,'trust',p.trust) FROM mtls_activations p WHERE p.job_id=o.job_id AND p.phase IN ('activating','verified','recovery_required')) AS pending_source,(SELECT snapshot_enc FROM mtls_activations WHERE id=o.base_activation_id AND phase='committed') AS base_source,clock_timestamp() AS database_now FROM mtls_node_operations o JOIN nodes n ON n.id=o.node_id JOIN mtls_authorities a ON a.credential_id=o.ca_id JOIN credentials c ON c.id=a.credential_id JOIN mtls_ca_generations g ON g.ca_id=a.credential_id AND g.ca_version=a.published_version WHERE o.job_id=$1 AND o.node_id=$2) material";

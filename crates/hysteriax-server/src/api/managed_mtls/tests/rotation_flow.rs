@@ -1063,6 +1063,11 @@ async fn unconfirmed_remote_trust_survives_new_attempt_until_a_later_commit() {
     let rotation = receipt["rotation_id"].as_str().unwrap();
     rotations::advance(&state, rotation).await.unwrap();
     let original = rotation_job(&state, rotation, n).await;
+    sqlx::query("UPDATE jobs SET status='running',attempts=1 WHERE id=$1")
+        .bind(&original)
+        .execute(&state.pool)
+        .await
+        .unwrap();
     let input = job_input(&state, &original).await;
     let mut pending = snapshot(&state, n, 1).await;
     let context = rotations::configure_job(&state.pool, &state.secrets, &input, &mut pending)
