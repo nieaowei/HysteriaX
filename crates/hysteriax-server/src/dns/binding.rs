@@ -464,7 +464,7 @@ pub async fn queue_sync(tx: &mut Transaction<'_, Postgres>, node: &str) -> Resul
 pub(crate) async fn before_node_delete(
     tx: &mut Transaction<'_, Postgres>,
     node: &str,
-) -> Result<(), sqlx::Error> {
+) -> anyhow::Result<()> {
     // Creation jobs retain their node IDs after deletion, providing ownership
     // evidence without treating selected existing records as node-owned.
     let records = sqlx::query(
@@ -487,11 +487,21 @@ pub(crate) async fn before_node_delete(
         let name: String = record.get("name");
         let connection: String = record.get("connection_id");
         let key = format!("node-delete:{node}:{id}");
+        let request = json!({"node_id":node,"record_id":id,"action":"node-delete"});
+        if super::existing_operation(tx, &key, &request)
+            .await?
+            .is_some()
+        {
+            continue;
+        }
+        // Freeze the new pending revision before enqueue pins its source.
+        sqlx::query("UPDATE dns_records SET desired=$1,state='pending',revision=revision+1,updated_at=clock_timestamp() WHERE id=$2")
+            .bind(json!({"delete":true})).bind(&id).execute(&mut **tx).await?;
         let receipt = super::enqueue(
             tx,
             super::Operation {
                 key: &key,
-                request: &json!({"node_id":node,"record_id":id,"action":"node-delete"}),
+                request: &request,
                 connection: &connection,
                 version: record.get("credential_version"),
                 resource_type: "dns_record",
@@ -505,18 +515,14 @@ pub(crate) async fn before_node_delete(
                 node: None,
             },
         )
-        .await
-        .map_err(|error| sqlx::Error::Protocol(error.message))?;
-        sqlx::query("UPDATE dns_records SET desired=$1,state='pending',revision=revision+1,updated_at=now() WHERE id=$2")
-            .bind(json!({"delete":true})).bind(&id).execute(&mut **tx).await?;
+        .await?;
         super::audit(
             tx,
             "node.cleanup_requested",
             &id,
             json!({"node_id":node,"job_id":receipt["job_id"]}),
         )
-        .await
-        .map_err(|error| sqlx::Error::Protocol(error.to_string()))?;
+        .await?;
     }
     Ok(())
 }

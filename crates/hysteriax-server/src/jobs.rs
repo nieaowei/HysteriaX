@@ -410,6 +410,8 @@ async fn finish_execution(
 }
 
 #[cfg(test)]
+mod completion_tests;
+#[cfg(test)]
 mod failure_tests;
 #[cfg(test)]
 mod ownership_tests;
@@ -495,8 +497,31 @@ where
     }
 }
 
-async fn succeed(app: &AppState, job: &JobInput, mut output: JobOutput) -> Result<(), sqlx::Error> {
+pub(crate) async fn succeed(
+    app: &AppState,
+    job: &JobInput,
+    mut output: JobOutput,
+) -> Result<(), sqlx::Error> {
+    crate::execution::require_job_scope(&job.id, job.node_id.as_deref())
+        .map_err(|error| sqlx::Error::Protocol(error.to_string()))?;
+    if output.delete_node && !matches!(job.kind.as_str(), "uninstall" | "record-remove") {
+        return Err(sqlx::Error::Protocol(
+            "this job cannot remove a node".into(),
+        ));
+    }
     let pool = &app.pool;
+    if output.delete_node {
+        let (job, output) = (job.clone(), output.clone());
+        let proceed = db::serializable(pool, move |tx| {
+            let (job, output) = (job.clone(), output.clone());
+            Box::pin(async move { completion_gate_on(tx, &job, &output).await })
+        })
+        .await
+        .map_err(completion_database_error)?;
+        if !proceed {
+            return Ok(());
+        }
+    }
     if output.delete_node && output.result["history_cleaned"] != true {
         let removed = crate::node_cleanup::purge_history(pool, job).await?;
         output.result["removed_history_rows"] = json!(removed);
@@ -506,15 +531,153 @@ async fn succeed(app: &AppState, job: &JobInput, mut output: JobOutput) -> Resul
     {
         crate::node_cleanup::prepare_final_delete(pool, node).await?;
     }
-    let timestamp = now();
+    let (app, job) = (app.clone(), job.clone());
+    let audit_id = uuid::Uuid::new_v4().to_string();
+    db::serializable(pool, move |tx| {
+        let (app, job, output, audit_id) =
+            (app.clone(), job.clone(), output.clone(), audit_id.clone());
+        Box::pin(async move { succeed_on(tx, &app, &job, &output, &audit_id).await })
+    })
+    .await
+    .map_err(completion_database_error)
+}
+
+fn completion_database_error(error: anyhow::Error) -> sqlx::Error {
+    match error.downcast::<sqlx::Error>() {
+        Ok(error) => error,
+        Err(error) => sqlx::Error::Protocol(error.to_string()),
+    }
+}
+
+async fn pin_completion_rotation_on(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    job: &JobInput,
+) -> anyhow::Result<()> {
+    if job.payload["mtls_operation"] != true {
+        return Ok(());
+    }
+    let source=sqlx::query("SELECT ca_id,ca_version,effective_version,rotation_id FROM mtls_node_operations WHERE job_id=$1 AND node_id=$2")
+        .bind(&job.id).bind(&job.node_id).fetch_one(&mut **tx).await?;
+    let ca: String = source.get("ca_id");
+    sqlx::query("SELECT id FROM credentials WHERE id=$1 FOR KEY SHARE")
+        .bind(&ca)
+        .fetch_optional(&mut **tx)
+        .await?;
+    sqlx::query("SELECT credential_id FROM mtls_authorities WHERE credential_id=$1 FOR SHARE")
+        .bind(&ca)
+        .fetch_optional(&mut **tx)
+        .await?;
+    let mut versions = vec![source.get::<i64, _>("ca_version")];
+    if let Some(version) = source.get::<Option<i64>, _>("effective_version") {
+        versions.push(version);
+    }
+    versions.sort();
+    versions.dedup();
+    sqlx::query("SELECT ca_version FROM mtls_ca_generations WHERE ca_id=$1 AND ca_version=ANY($2) ORDER BY ca_version FOR SHARE")
+        .bind(&ca).bind(versions).fetch_all(&mut **tx).await?;
+    if let Some(rotation) = source.get::<Option<String>, _>("rotation_id") {
+        sqlx::query("SELECT id FROM mtls_rotations WHERE id=$1 FOR SHARE")
+            .bind(rotation)
+            .fetch_optional(&mut **tx)
+            .await?;
+    }
+    crate::credentials::rotations::validate_job_on(tx, job).await?;
+    Ok(())
+}
+
+async fn completion_gate_on(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    job: &JobInput,
+    output: &JobOutput,
+) -> anyhow::Result<bool> {
+    let Some(source) = sqlx::query("SELECT kind,node_id,target_revision,payload_json,attempts,resource_key FROM jobs WHERE id=$1 AND status='running' FOR UPDATE")
+        .bind(&job.id).fetch_optional(&mut **tx).await? else { return Ok(false); };
+    if source.get::<String, _>("kind") != job.kind
+        || source.get::<Option<String>, _>("node_id") != job.node_id
+        || source.get::<Option<i64>, _>("target_revision") != job.target_revision
+        || source.get::<Value, _>("payload_json") != job.payload
+        || source.get::<i64, _>("attempts") != job.attempts
+    {
+        return Err(sqlx::Error::Protocol("job completion source changed".into()).into());
+    }
+    let mut resources = vec![format!("job:{}", job.id)];
+    if let Some(node) = &job.node_id {
+        resources.push(format!("node:{node}"));
+        let node_source =
+            sqlx::query("SELECT state,desired_revision FROM nodes WHERE id=$1 FOR NO KEY UPDATE")
+                .bind(node)
+                .fetch_optional(&mut **tx)
+                .await?
+                .ok_or_else(|| sqlx::Error::Protocol("job completion node is missing".into()))?;
+        if output.delete_node
+            && (node_source.get::<String, _>("state") != "deleting"
+                || Some(node_source.get::<i64, _>("desired_revision")) != job.target_revision)
+        {
+            return Err(sqlx::Error::Protocol("node removal source changed".into()).into());
+        }
+    }
+    if let Some(resource) = source.get::<Option<String>, _>("resource_key") {
+        crate::execution::require_job_resource_scope(&job.id, &resource)
+            .map_err(|e| sqlx::Error::Protocol(e.to_string()))?;
+        resources.push(resource);
+    }
+    let uncertain: bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM execution_operations WHERE (work_id=$1 OR resource_key=ANY($2::text[])) AND state IN ('dispatching','reconciling','needs_attention'))")
+        .bind(&job.id).bind(&resources).fetch_one(&mut **tx).await?;
+    if uncertain {
+        fail_on(
+            tx,
+            job,
+            "Remote outcome requires verification before completion",
+            false,
+            false,
+            false,
+            false,
+            None,
+        )
+        .await?;
+        return Ok(false);
+    }
+    if (output.deployed_revision.is_some()
+        || output.deployed_config.is_some()
+        || output.deployed_sha256.is_some()
+        || output.published_connection.is_some())
+        && (output.deployed_revision.is_none()
+            || output.deployed_revision != job.target_revision
+            || output.deployed_config.is_none()
+            || output.deployed_sha256.is_none()
+            || job.node_id.is_none()
+            || output.node_state.is_none()
+            || output.delete_node)
+    {
+        return Err(sqlx::Error::Protocol(
+            "deployment output does not match the claimed target".into(),
+        )
+        .into());
+    }
+    pin_completion_rotation_on(tx, job).await?;
+    Ok(true)
+}
+
+async fn succeed_on(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    app: &AppState,
+    job: &JobInput,
+    output: &JobOutput,
+    audit_id: &str,
+) -> anyhow::Result<()> {
+    if !completion_gate_on(tx, job, output).await? {
+        return Ok(());
+    }
+    let timestamp: chrono::DateTime<chrono::Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
+        .fetch_one(&mut **tx)
+        .await?;
     let result = json!({"stage": output.stage, "result": output.result});
-    let mut tx = db::begin_write(pool).await?;
     if crate::api::ssh_fingerprint::supports_confirmation(&job.kind)
         && output.stage == "fingerprint_confirmation_required"
     {
         let revision = output.result["node_revision"].as_i64().unwrap_or(-1);
         let current: Option<i64> = sqlx::query_scalar("SELECT desired_revision FROM nodes WHERE id=$1 AND state!='deleting' AND (state!='delete_failed' OR $2)")
-            .bind(&job.node_id).bind(job.kind == "ssh-test" && output.result["delete_recovery"] == true).fetch_optional(&mut *tx).await?;
+            .bind(&job.node_id).bind(job.kind == "ssh-test" && output.result["delete_recovery"] == true).fetch_optional(&mut **tx).await?;
         let valid = current == Some(revision);
         let status = if valid {
             "waiting_confirmation"
@@ -527,7 +690,7 @@ async fn succeed(app: &AppState, job: &JobInput, mut output: JobOutput) -> Resul
             "superseded"
         };
         let changed = sqlx::query("UPDATE jobs SET status=$1,stage=$2,result_json=$3,error_message=NULL,updated_at=$4,finished_at=CASE WHEN $1='cancelled' THEN $4 ELSE NULL END WHERE id=$5 AND status='running'")
-            .bind(status).bind(stage).bind(&result).bind(timestamp).bind(&job.id).execute(&mut *tx).await?;
+            .bind(status).bind(stage).bind(&result).bind(timestamp).bind(&job.id).execute(&mut **tx).await?;
         if changed.rows_affected() == 1 {
             let log = json!({"created_at":timestamp,"stage":stage,"attempt":job.attempts,
                 "message":if valid { "SSH host fingerprint observed; waiting for explicit trust." } else { "SSH test superseded by a node change." }});
@@ -536,49 +699,48 @@ async fn succeed(app: &AppState, job: &JobInput, mut output: JobOutput) -> Resul
             )
             .bind(log)
             .bind(&job.id)
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await?;
             if valid {
                 sqlx::query("UPDATE nodes SET state=$1,updated_at=$2 WHERE id=$3")
                     .bind(&output.node_state)
                     .bind(timestamp)
                     .bind(&job.node_id)
-                    .execute(&mut *tx)
+                    .execute(&mut **tx)
                     .await?;
             }
-            crate::kick_requests::event(&mut tx, &job.id,
+            crate::kick_requests::event(tx, &job.id,
                 if valid { "job.waiting_confirmation" } else { "job.cancelled" },
                 json!({"id":job.id,"kind":job.kind,"node_id":job.node_id,"status":status,"stage":stage,"result":output.result})).await?;
         }
-        return tx.commit().await;
+        return Ok(());
     }
     if job.kind == "ssh-test" && output.stage == "environment_checked" {
         let current: Option<i64> = sqlx::query_scalar("SELECT desired_revision FROM nodes WHERE id=$1 AND state!='deleting' AND (state!='delete_failed' OR $2)")
-            .bind(&job.node_id).bind(job.kind == "ssh-test" && output.result["delete_recovery"] == true).fetch_optional(&mut *tx).await?;
+            .bind(&job.node_id).bind(job.kind == "ssh-test" && output.result["delete_recovery"] == true).fetch_optional(&mut **tx).await?;
         if current != output.result["node_revision"].as_i64() || current.is_none() {
             let changed = sqlx::query("UPDATE jobs SET status='cancelled',stage='superseded',updated_at=$1,finished_at=$1 WHERE id=$2 AND status='running'")
-                .bind(timestamp).bind(&job.id).execute(&mut *tx).await?;
+                .bind(timestamp).bind(&job.id).execute(&mut **tx).await?;
             if changed.rows_affected() == 1 {
-                crate::kick_requests::event(&mut tx,&job.id,"job.cancelled",json!({"id":job.id,"kind":job.kind,"node_id":job.node_id,"status":"cancelled","stage":"superseded"})).await?;
+                crate::kick_requests::event(tx,&job.id,"job.cancelled",json!({"id":job.id,"kind":job.kind,"node_id":job.node_id,"status":"cancelled","stage":"superseded"})).await?;
             }
-            return tx.commit().await;
+            return Ok(());
         }
     }
     let changed = sqlx::query("UPDATE jobs SET status = 'succeeded', stage = $1, result_json = $2, error_message = NULL, updated_at = $3, finished_at = $4 WHERE id = $5 AND status = 'running'")
-        .bind(&output.stage).bind(result).bind(timestamp).bind(timestamp).bind(&job.id).execute(&mut *tx).await?;
+        .bind(&output.stage).bind(result).bind(timestamp).bind(timestamp).bind(&job.id).execute(&mut **tx).await?;
     if changed.rows_affected() == 0 {
-        tx.commit().await?;
         return Ok(());
     }
     if job.kind == "ssh-test" && output.stage == "environment_checked" {
         sqlx::query("UPDATE nodes SET ssh_host_fingerprint=$1 WHERE id=$2")
             .bind(output.result["fingerprint"].as_str())
             .bind(&job.node_id)
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await?;
     }
     crate::kick_requests::finish(
-        &mut tx,
+        tx,
         job,
         if output.stage == "restriction_cleared" {
             "cancelled"
@@ -595,40 +757,37 @@ async fn succeed(app: &AppState, job: &JobInput, mut output: JobOutput) -> Resul
         {
             if output.result["activation_id"].is_string() {
                 crate::credentials::activation::commit(
-                    &mut tx,
+                    tx,
                     &job.id,
                     output.deployed_sha256.as_deref().unwrap_or(""),
                 )
                 .await?;
             }
             sqlx::query("UPDATE nodes SET state = CASE WHEN state IN ('deleting', 'delete_failed') THEN state ELSE $1 END, deployed_revision = $2, deployed_config_enc = $3, deployed_content_sha256 = $4, last_seen_at = $5, updated_at = $6 WHERE id = $7")
-                .bind(state).bind(revision).bind(config).bind(output.deployed_sha256.as_deref()).bind(timestamp).bind(timestamp).bind(node_id).execute(&mut *tx).await?;
+                .bind(state).bind(revision).bind(config).bind(output.deployed_sha256.as_deref()).bind(timestamp).bind(timestamp).bind(node_id).execute(&mut **tx).await?;
             if let Some(connection) = &output.published_connection {
                 sqlx::query("UPDATE nodes SET published_connection=$1 WHERE id=$2")
                     .bind(connection)
                     .bind(node_id)
-                    .execute(&mut *tx)
+                    .execute(&mut **tx)
                     .await?;
             }
             sqlx::query("UPDATE config_versions SET deployed_success = TRUE WHERE node_id = $1 AND revision = $2")
-                .bind(node_id).bind(revision).execute(&mut *tx).await?;
-            crate::credentials::reference_index::flush_node_on(&mut tx, &app.secrets, node_id)
-                .await?;
-            crate::credentials::rotations::operation_completed(&mut tx, job)
-                .await
-                .map_err(|e| sqlx::Error::Protocol(e.to_string()))?;
+                .bind(node_id).bind(revision).execute(&mut **tx).await?;
+            crate::credentials::reference_index::flush_node_on(tx, &app.secrets, node_id).await?;
+            crate::credentials::rotations::operation_completed(tx, job).await?;
         } else {
             sqlx::query("UPDATE nodes SET state = CASE WHEN state IN ('deleting', 'delete_failed') THEN state ELSE $1 END, updated_at = $2 WHERE id = $3")
                 .bind(state)
                 .bind(timestamp)
                 .bind(node_id)
-                .execute(&mut *tx)
+                .execute(&mut **tx)
                 .await?;
         }
     }
     let payload = json!({"id": job.id, "kind": job.kind, "node_id": job.node_id, "status": "succeeded", "stage": output.stage, "result": output.result});
     sqlx::query("INSERT INTO job_events (job_id, event_type, payload_json, created_at) VALUES ($1, 'job.succeeded', $2, $3)")
-        .bind(&job.id).bind(payload).bind(timestamp).execute(&mut *tx).await?;
+        .bind(&job.id).bind(payload).bind(timestamp).execute(&mut **tx).await?;
     if output.delete_node
         && let Some(node_id) = &job.node_id
     {
@@ -636,7 +795,7 @@ async fn succeed(app: &AppState, job: &JobInput, mut output: JobOutput) -> Resul
             .bind(timestamp)
             .bind(node_id)
             .bind(&job.id)
-            .fetch_all(&mut *tx)
+            .fetch_all(&mut **tx)
             .await?;
         for row in pending {
             let id: String = row.get("id");
@@ -646,7 +805,7 @@ async fn succeed(app: &AppState, job: &JobInput, mut output: JobOutput) -> Resul
                 .bind(&id)
                 .bind(payload)
                 .bind(timestamp)
-                .execute(&mut *tx)
+                .execute(&mut **tx)
                 .await?;
         }
         let record_only = job.kind == "record-remove";
@@ -659,29 +818,29 @@ async fn succeed(app: &AppState, job: &JobInput, mut output: JobOutput) -> Resul
         detail["remote_uninstall"] = json!(!record_only);
         detail["removed_history_rows"] = output.result["removed_history_rows"].clone();
         sqlx::query("INSERT INTO audit_records (id, actor, action, entity_type, entity_id, detail_json, created_at) VALUES ($1, $5, $6, 'node', $2, $3, $4)")
-                .bind(uuid::Uuid::new_v4().to_string()).bind(node_id).bind(detail).bind(timestamp)
+                .bind(audit_id).bind(node_id).bind(detail).bind(timestamp)
                 .bind(job.payload["actor_id"].as_str().unwrap_or("admin"))
-                .bind(if record_only { "node.record_removed" } else { "node.deleted" }).execute(&mut *tx).await?;
-        crate::api::authorization_groups::before_node_delete(&mut tx, node_id, timestamp).await?;
-        crate::dns::binding::before_node_delete(&mut tx, node_id).await?;
+                .bind(if record_only { "node.record_removed" } else { "node.deleted" }).execute(&mut **tx).await?;
+        crate::api::authorization_groups::before_node_delete(tx, node_id, timestamp).await?;
+        crate::dns::binding::before_node_delete(tx, node_id).await?;
         // History is empty now. Cached FK plans must not sequentially rescan
         // large child tables using statistics from before the purge.
         sqlx::query("SET LOCAL enable_seqscan=off")
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await?;
         sqlx::query("SET LOCAL enable_bitmapscan=off")
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await?;
-        sqlx::query("SET LOCAL jit=off").execute(&mut *tx).await?;
+        sqlx::query("SET LOCAL jit=off").execute(&mut **tx).await?;
         sqlx::query("SET LOCAL plan_cache_mode=force_custom_plan")
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await?;
         sqlx::query("SET LOCAL statement_timeout='2s'")
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await?;
         sqlx::query("DELETE FROM nodes WHERE id = $1 AND state = 'deleting'")
             .bind(node_id)
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await?;
     }
     if job.kind != "kick"
@@ -690,11 +849,8 @@ async fn succeed(app: &AppState, job: &JobInput, mut output: JobOutput) -> Resul
         && output.result["delete_recovery"] != true
         && let Some(node) = &job.node_id
     {
-        crate::kick_requests::schedule(&mut tx, Some(node), true)
-            .await
-            .map_err(|e| sqlx::Error::Protocol(e.message))?;
+        crate::kick_requests::schedule(tx, Some(node), true).await?;
     }
-    tx.commit().await?;
     Ok(())
 }
 

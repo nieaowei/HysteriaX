@@ -148,6 +148,123 @@ async fn phase(state: &AppState, rotation: &str) -> String {
 }
 
 #[tokio::test]
+async fn leased_job_completion_atomically_publishes_verified_activation_and_rotation_proof_after_native_retry()
+ {
+    let state = state().await;
+    let ca = generated(&state).await;
+    let node = managed_node(&state, &ca).await;
+    let id = node["id"].as_str().unwrap();
+    initial_deployment(&state, &node, &ca).await;
+    let (_, Json(receipt)) = publish(
+        State(state.clone()),
+        actor(),
+        Path(ca.clone()),
+        Json(publish_request(1, "leased-completion")),
+    )
+    .await
+    .unwrap();
+    let rotation = receipt["rotation_id"].as_str().unwrap();
+    rotations::advance(&state, rotation).await.unwrap();
+    let job = rotation_job(&state, rotation, id).await;
+    sqlx::query("UPDATE jobs SET status='running',attempts=1 WHERE id=$1")
+        .bind(&job)
+        .execute(&state.pool)
+        .await
+        .unwrap();
+    let input = job_input(&state, &job).await;
+    let mut snapshot = snapshot(&state, id, input.target_revision.unwrap()).await;
+    let context = rotations::configure_job(&state.pool, &state.secrets, &input, &mut snapshot)
+        .await
+        .unwrap()
+        .unwrap();
+    let probe = credentials::maintenance::renew_probe_on(
+        &state.pool,
+        &state.secrets,
+        id,
+        &ca,
+        context.probe_version,
+    )
+    .await
+    .unwrap();
+    let digest = "verified-leased-completion";
+    let active = activation::begin(
+        &state.pool,
+        &state.secrets,
+        activation::Begin {
+            node: id,
+            job: &job,
+            revision: input.target_revision.unwrap(),
+            digest,
+            snapshot: &snapshot,
+            trust: &context.trust,
+            probe: Some((&probe.0, probe.1)),
+        },
+    )
+    .await
+    .unwrap();
+    activation::verified(&state.pool, &job).await.unwrap();
+    let cipher = state
+        .secrets
+        .encrypt(&snapshot["server_config"].to_string())
+        .unwrap();
+    let output = crate::deployment::JobOutput {
+        stage: "health_checked".into(),
+        result: activation::marker(&active),
+        node_state: Some("deployed".into()),
+        deployed_revision: input.target_revision,
+        deployed_config: Some(cipher.clone()),
+        deployed_sha256: Some(digest.into()),
+        published_connection: None,
+        delete_node: false,
+    };
+    let mut tx = state.pool.begin().await.unwrap();
+    let mut leases = vec![];
+    for resource in [format!("job:{job}"), format!("node:{id}")] {
+        leases.push(
+            crate::execution::acquire(&mut tx, &resource, &state.instance_id, &job)
+                .await
+                .unwrap()
+                .unwrap(),
+        );
+    }
+    tx.commit().await.unwrap();
+    sqlx::raw_sql("CREATE SEQUENCE managed_completion_attempts; CREATE FUNCTION retry_managed_completion() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.event_type='job.succeeded' AND nextval('managed_completion_attempts')=1 THEN RAISE EXCEPTION USING ERRCODE='40P01',MESSAGE='retry verified activation'; END IF; RETURN NEW; END $$; CREATE TRIGGER retry_managed_completion BEFORE INSERT ON job_events FOR EACH ROW EXECUTE FUNCTION retry_managed_completion();").execute(&state.pool).await.unwrap();
+    crate::execution::supervise(
+        state.pool.clone(),
+        leases.clone(),
+        crate::jobs::succeed(&state, &input, output),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT last_value FROM managed_completion_attempts")
+            .fetch_one(&state.pool)
+            .await
+            .unwrap(),
+        2
+    );
+    assert!(sqlx::query_scalar::<_,bool>("SELECT j.status='succeeded' AND a.phase='committed' AND n.mtls_state='ready' AND n.deployed_config_enc=$2 AND n.mtls_activation_id=a.id AND r.trust_prepared FROM jobs j JOIN mtls_activations a ON a.job_id=j.id JOIN nodes n ON n.id=j.node_id JOIN mtls_rotation_nodes r ON r.job_id=j.id WHERE j.id=$1").bind(&job).bind(&cipher).fetch_one(&state.pool).await.unwrap());
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM job_events WHERE job_id=$1 AND event_type='job.succeeded'"
+        )
+        .bind(&job)
+        .fetch_one(&state.pool)
+        .await
+        .unwrap(),
+        1
+    );
+    let mut tx = state.pool.begin().await.unwrap();
+    for lease in &leases {
+        assert!(lease.release(&mut tx).await.unwrap());
+    }
+    tx.commit().await.unwrap();
+    rotations::advance(&state, rotation).await.unwrap();
+    assert_eq!(published(&state, &ca).await, 2);
+}
+
+#[tokio::test]
 async fn every_node_must_prove_new_ca_before_one_shared_publication_and_probe_switch() {
     let state = state().await;
     let ca = generated(&state).await;
