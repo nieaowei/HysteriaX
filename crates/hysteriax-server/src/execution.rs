@@ -258,7 +258,7 @@ pub async fn guard_current(connection: &mut PgConnection) -> Result<(), sqlx::Er
         .find(|lease| lease.resource.starts_with("job:"))
     {
         let running: Option<bool> =
-            sqlx::query_scalar("SELECT true FROM jobs WHERE id=$1 AND status='running' FOR UPDATE")
+            sqlx::query_scalar("SELECT true FROM jobs j WHERE j.id=$1 AND j.status='running' AND NOT EXISTS(SELECT 1 FROM mtls_superseded_node_jobs s WHERE s.job_id=j.id) FOR UPDATE OF j")
                 .bind(&job.work)
                 .fetch_optional(&mut *connection)
                 .await?;
@@ -296,7 +296,7 @@ async fn observe_current(scope: &Scope) -> Result<(), sqlx::Error> {
     }
     if let Some(job) = scope.leases.iter().find(|l| l.resource.starts_with("job:")) {
         let active: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM jobs WHERE id=$1 AND status='running')",
+            "SELECT EXISTS(SELECT 1 FROM jobs j WHERE j.id=$1 AND j.status='running' AND NOT EXISTS(SELECT 1 FROM mtls_superseded_node_jobs s WHERE s.job_id=j.id))",
         )
         .bind(&job.work)
         .fetch_one(&scope.pool)
@@ -424,6 +424,16 @@ pub async fn remote<T>(
     let step = format!("{kind}:{index}");
     let mut tx = scope.pool.begin().await?;
     guard_current(&mut tx).await?;
+    // Pin the source through the durable intent commit. A replacement may
+    // follow an already dispatched step, whose uncertain result stays recorded.
+    if let Some(job) = scope.leases.iter().find(|l| l.resource.starts_with("job:")) {
+        let outcome: Option<(Option<String>,)> = sqlx::query_as("SELECT r.outcome FROM mtls_node_operations o JOIN mtls_rotations r ON r.id=o.rotation_id WHERE o.job_id=$1 FOR KEY SHARE OF r")
+            .bind(&job.work).fetch_optional(&mut *tx).await?;
+        anyhow::ensure!(
+            outcome.is_none_or(|(outcome,)| outcome.is_none()),
+            "CA target was superseded before dispatch"
+        );
+    }
     let (operation, fresh) = lease
         .dispatch(
             &mut tx,

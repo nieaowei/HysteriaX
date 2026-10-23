@@ -137,26 +137,15 @@ where
         result => result,
     }
 }
-async fn lock_ca_on(
-    tx: &mut Transaction<'_, Postgres>,
-    ca: &str,
-    publication: bool,
-) -> Result<(), ApiError> {
-    if publication {
-        sqlx::query("SELECT n.id FROM nodes n WHERE n.id IN (SELECT node_id FROM mtls_node_trust WHERE ca_id=$1 UNION SELECT node_id FROM mtls_live_activation_trust WHERE ca_id=$1) ORDER BY n.id FOR NO KEY UPDATE OF n").bind(ca).fetch_all(&mut **tx).await?;
-    }
+async fn lock_ca_on(tx: &mut Transaction<'_, Postgres>, ca: &str) -> Result<(), ApiError> {
     sqlx::query("SELECT id FROM credentials WHERE id=$1 FOR UPDATE")
         .bind(ca)
         .fetch_all(&mut **tx)
         .await?;
-    let authority =
-        sqlx::query("SELECT credential_id FROM mtls_authorities WHERE credential_id=$1 FOR UPDATE")
-            .bind(ca)
-            .fetch_optional(&mut **tx)
-            .await?;
-    if publication && authority.is_none() {
-        return Err(ApiError::not_found("CA identity"));
-    }
+    sqlx::query("SELECT credential_id FROM mtls_authorities WHERE credential_id=$1 FOR UPDATE")
+        .bind(ca)
+        .fetch_optional(&mut **tx)
+        .await?;
     Ok(())
 }
 async fn lock_reissue_on(
@@ -336,7 +325,7 @@ async fn update_policy_inner(
     {
         return Ok(value);
     }
-    lock_ca_on(tx,&id,false).await?;
+    lock_ca_on(tx,&id).await?;
     let result = sqlx::query("UPDATE mtls_authorities a SET client_validity_days=$1,renew_before_hours=$2,policy_revision=policy_revision+1 FROM credentials c WHERE a.credential_id=$3 AND a.policy_revision=$4 AND c.id=a.credential_id AND NOT c.archived RETURNING a.policy_revision")
         .bind(i32::from(input.policy.client_validity_days)).bind(i32::from(input.policy.renew_before_hours)).bind(&id).bind(input.expected_revision).fetch_optional(&mut **tx).await?
         .ok_or_else(|| ApiError::conflict("CA policy changed, is archived, or was deleted"))?;
@@ -507,9 +496,9 @@ pub(crate) async fn publish_authority_on(
     let source = source.ok_or_else(ApiError::internal)?;
     // Ordinary publication changes CA-owned rows; rotation work discovers
     // members from authoritative trust before it can publish the new version.
-    // Explicit replacement still protects node jobs it cancels. User material
-    // visibility follows the generation fact; physical flags are bounded work.
-    lock_ca_on(tx, &id, input.replace_rotation_id.is_some()).await?;
+    // Replacement changes the same CA-owned facts. Material flags and old-job
+    // cancellation are derived in bounded work after this atomic source change.
+    lock_ca_on(tx, &id).await?;
     let now: DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
         .fetch_one(&mut **tx)
         .await?;
@@ -548,10 +537,8 @@ pub(crate) async fn publish_authority_on(
                 crate::credentials::rotations::retention_deadline(tx, &id, previous).await?;
             sqlx::query("INSERT INTO mtls_trust_cleanup(ca_id,ca_version,next_action_at) VALUES($1,$2,$3) ON CONFLICT DO NOTHING").bind(&id).bind(previous).bind(deadline).execute(&mut **tx).await?;
         }
-        let cancelled=sqlx::query("UPDATE jobs j SET status='cancelled',stage='ca_target_superseded',updated_at=$2,finished_at=$2 FROM mtls_node_operations o WHERE o.job_id=j.id AND o.rotation_id=$1 AND j.status IN ('queued','waiting_confirmation') RETURNING j.id,j.kind,j.node_id").bind(&previous_id).bind(now).fetch_all(&mut **tx).await?;
-        for job in cancelled {
-            crate::kick_requests::event(tx,&job.get::<String,_>("id"),"job.cancelled",json!({"id":job.get::<String,_>("id"),"kind":job.get::<String,_>("kind"),"node_id":job.get::<Option<String>,_>("node_id"),"status":"cancelled","stage":"ca_target_superseded"})).await?;
-        }
+        crate::credentials::rotations::cancelled::enqueue_on(tx, &previous_id, &id, previous)
+            .await?;
         sqlx::query("UPDATE mtls_rotations SET phase='complete',outcome=$3,error_message='Target was replaced by an explicit publication request',updated_at=$2 WHERE id=$1").bind(&previous_id).bind(now).bind(if unpublished{"superseded_unpublished_target"}else{"superseded_expired_publication"}).execute(&mut **tx).await?;
         super::credentials::record(
             tx,

@@ -17,6 +17,7 @@ use uuid::Uuid;
 
 const PAGE: i64 = 100;
 
+pub(crate) mod cancelled;
 mod cleanup;
 mod metadata;
 mod probes;
@@ -35,6 +36,7 @@ pub(super) async fn run_preparation(state: AppState) {
         release::run(state.clone()),
         probes::run(state.clone()),
         superseded::run(state.clone()),
+        cancelled::run(state.clone()),
         cleanup::run(state)
     );
 }
@@ -69,6 +71,7 @@ pub async fn run_pass(state: &AppState) -> Result<()> {
     metadata::scheduled_pass(state).await?;
     probes::scheduled_pass(state).await?;
     superseded::scheduled_pass(state).await?;
+    cancelled::scheduled_pass(state).await?;
     cleanup::scheduled_pass(state).await?;
     Ok(())
 }
