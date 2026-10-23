@@ -1,6 +1,6 @@
 use super::*;
 
-async fn fixture() -> (AppState, String) {
+pub(super) async fn fixture() -> (AppState, String) {
     let pool = db::test_pool_with_max_connections(4).await;
     let secrets =
         crate::security::SecretBox::from_base64("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
@@ -32,7 +32,7 @@ async fn waiting(state: &AppState) {
         }
     }).await.unwrap();
 }
-async fn history(state: &AppState, node: &str) {
+pub(super) async fn history(state: &AppState, node: &str) {
     let mut tx = state.pool.begin().await.unwrap();
     for revision in 2..=4 {
         sqlx::query("INSERT INTO config_versions(id,node_id,revision,config_enc,content_sha256,deployed_success,created_at) SELECT $1,node_id,$2,config_enc,content_sha256,TRUE,created_at FROM config_versions WHERE node_id=$3 AND revision=1").bind(Uuid::new_v4().to_string()).bind(revision as i64).bind(node).execute(&mut *tx).await.unwrap();

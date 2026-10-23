@@ -1231,6 +1231,12 @@ async fn cancel_running_node_jobs_in_tx(
     Ok(())
 }
 
+mod v2;
+pub(super) use v2::{
+    action as action_v2, delete as delete_v2, remove_record as remove_record_v2,
+    update_usage as update_usage_v2,
+};
+
 pub async fn deploy(
     State(state): State<AppState>,
     Path(id): Path<String>,

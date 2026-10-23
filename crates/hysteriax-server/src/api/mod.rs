@@ -47,6 +47,20 @@ pub(crate) fn audit_actor() -> String {
 pub fn router(state: AppState) -> Router {
     use subscriptions::templates as st;
     let admin = Router::new()
+        .route("/api/v2/nodes", get(nodes::list))
+        .route(
+            "/api/v2/nodes/{id}",
+            get(nodes::get).delete(nodes::delete_v2),
+        )
+        .route("/api/v2/nodes/{id}/record", delete(nodes::remove_record_v2))
+        .route("/api/v2/nodes/{id}/deploy", post(nodes::action_v2))
+        .route("/api/v2/nodes/{id}/sync", post(nodes::action_v2))
+        .route("/api/v2/nodes/{id}/rollback", post(nodes::action_v2))
+        .route("/api/v2/nodes/{id}/ssh-test", post(nodes::action_v2))
+        .route(
+            "/api/v2/nodes/{id}/usage",
+            axum::routing::put(nodes::update_usage_v2),
+        )
         .route(
             "/api/v2/credentials",
             get(credentials::list).post(credentials::create_v2),

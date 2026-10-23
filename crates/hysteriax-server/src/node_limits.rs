@@ -371,7 +371,7 @@ async fn evaluate(tx: &mut Transaction<'_, Postgres>, id: &str, now: DateTime<Ut
     Ok(())
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 pub struct UsageUpdate {
     expected_revision: i64,
     usage_bytes: i64,
@@ -383,14 +383,26 @@ pub async fn update_usage(
     Path(id): Path<String>,
     Json(input): Json<UsageUpdate>,
 ) -> Result<Json<Value>, ApiError> {
+    let (secrets, actor) = (state.secrets.clone(), crate::api::audit_actor());
+    let response = db::serializable(&state.pool, move |tx| {
+        let (id, input, secrets, actor) =
+            (id.clone(), input.clone(), secrets.clone(), actor.clone());
+        Box::pin(async move { update_usage_on(tx, id, input, secrets, actor).await })
+    })
+    .await?;
+    Ok(Json(response))
+}
+
+pub(crate) async fn update_usage_on(
+    tx: &mut Transaction<'static, Postgres>,
+    id: String,
+    input: UsageUpdate,
+    secrets: std::sync::Arc<crate::security::SecretBox>,
+    actor: String,
+) -> Result<Value, ApiError> {
     if input.usage_bytes < 0 || input.expected_revision < 1 {
         return Err(ApiError::bad_request("usage and revision must be valid"));
     }
-    let secrets = state.secrets.clone();
-    let response=db::serializable::<_,ApiError,_>(&state.pool,move |tx| {
-        let id=id.clone();
-        let secrets=secrets.clone();
-        Box::pin(async move {
     let revision: Option<(i64, String)> =
         sqlx::query_as("SELECT desired_revision, state FROM nodes WHERE id = $1 FOR NO KEY UPDATE")
             .bind(&id)
@@ -405,10 +417,10 @@ pub async fn update_usage(
         ));
     }
     ensure(tx, &id).await?;
-    let now = sqlx::query_scalar("SELECT clock_timestamp()").fetch_one(&mut **tx).await?;
-    rollover(tx, &id, now)
-        .await
-        .map_err(ApiError::from)?;
+    let now = sqlx::query_scalar("SELECT clock_timestamp()")
+        .fetch_one(&mut **tx)
+        .await?;
+    rollover(tx, &id, now).await.map_err(ApiError::from)?;
     sqlx::query("UPDATE node_packages SET usage_bytes = $1, generation = generation + 1, boot_id = NULL, sampled_at = NULL, gap_reason = 'usage_corrected', period_id = CASE WHEN $2 THEN $3 ELSE period_id END WHERE node_id = $4")
         .bind(input.usage_bytes).bind(input.reset).bind(Uuid::new_v4().to_string()).bind(&id).execute(&mut **tx).await?;
     sqlx::query(
@@ -420,10 +432,10 @@ pub async fn update_usage(
     .await?;
     sqlx::query("INSERT INTO config_versions(id,node_id,revision,config_enc,content_sha256,created_at) SELECT $1,node_id,$2,config_enc,content_sha256,$3 FROM config_versions WHERE node_id=$4 AND revision=$5")
         .bind(Uuid::new_v4().to_string()).bind(revision+1).bind(Utc::now()).bind(&id).bind(revision).execute(&mut **tx).await?;
-    crate::credentials::reference_index::flush_node_on(tx,&secrets,&id).await?;
+    crate::credentials::reference_index::flush_node_on(tx, &secrets, &id).await?;
     audit(
         tx,
-        "admin",
+        &actor,
         if input.reset {
             "node.usage_reset"
         } else {
@@ -434,13 +446,8 @@ pub async fn update_usage(
         json!({"usage_bytes": input.usage_bytes}),
     )
     .await?;
-    evaluate(tx, &id, now)
-        .await
-        .map_err(ApiError::from)?;
+    evaluate(tx, &id, now).await.map_err(ApiError::from)?;
     Ok(json!({"id": id, "revision": revision + 1}))
-        })
-    }).await?;
-    Ok(Json(response))
 }
 
 pub async fn run(state: AppState) {
