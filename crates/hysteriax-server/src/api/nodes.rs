@@ -240,7 +240,7 @@ async fn get_snapshot(
 
 pub async fn create(
     State(state): State<AppState>,
-    Json(mut input): Json<CreateNode>,
+    Json(input): Json<CreateNode>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
     let allocation_request = serde_json::to_value(&input).map_err(|_| ApiError::internal())?;
     if let Some(allocation) = &input.dns_allocation {
@@ -256,9 +256,43 @@ pub async fn create(
             return replay_created_node(&state, previous).await;
         }
     }
+    let replay_key = input
+        .dns_allocation
+        .as_ref()
+        .map(|a| a.idempotency_key.clone());
+    let creation = prepare_creation(&state, input).await?;
+    let app = state.clone();
+    let outcome = db::serializable::<_, ApiError, _>(&state.pool, move |tx| {
+        let (creation, app) = (creation.clone(), app.clone());
+        Box::pin(async move { insert_node_on(tx, &app, &creation).await })
+    })
+    .await;
+    let outcome = match outcome {
+        Err(error) if replay_key.is_some() => NodeCreation::Existing(
+            crate::dns::replay_after_error(
+                &state.pool,
+                replay_key.as_deref().unwrap(),
+                &allocation_request,
+                error,
+            )
+            .await?,
+        ),
+        other => other?,
+    };
+    match outcome {
+        NodeCreation::Created(value) => Ok((StatusCode::CREATED, Json(value))),
+        NodeCreation::Existing(previous) => replay_created_node(&state, previous).await,
+    }
+}
+
+async fn prepare_creation(
+    state: &AppState,
+    mut input: CreateNode,
+) -> Result<std::sync::Arc<PreparedNodeCreation>, ApiError> {
+    let allocation_request = serde_json::to_value(&input).map_err(|_| ApiError::internal())?;
     let id = Uuid::new_v4().to_string();
     let prepared = if let Some(allocation) = &input.dns_allocation {
-        let prepared = crate::dns::binding::prepare(&state, &id, allocation).await?;
+        let prepared = crate::dns::binding::prepare(state, &id, allocation).await?;
         input.public_host = prepared.hostname.clone();
         Some(prepared)
     } else {
@@ -280,7 +314,7 @@ pub async fn create(
     let (first_listen_port, hopping) = validate_listen_addr(&input.listen_addr)?;
     validate_hop_public_port(input.public_port, first_listen_port, hopping)?;
     validate_ssh_credential(
-        &state,
+        state,
         &input.ssh_credential_id,
         input.ssh_credential_version,
         false,
@@ -320,15 +354,12 @@ pub async fn create(
     let stats_secret_enc = state.secrets.encrypt(&stats_secret)?;
     let digest = hex::encode(Sha256::digest(deployment_snapshot_json.as_bytes()));
 
-    let replay_key = input
-        .dns_allocation
-        .as_ref()
-        .map(|a| a.idempotency_key.clone());
     let creation = std::sync::Arc::new(PreparedNodeCreation {
         id,
         input,
         prepared,
         allocation_request: allocation_request.clone(),
+        history_id: Uuid::new_v4().to_string(),
         token,
         timestamp: now,
         proxy_probe_url,
@@ -340,32 +371,12 @@ pub async fn create(
         digest,
         actor: super::audit_actor(),
     });
-    let app = state.clone();
-    let outcome = db::serializable::<_, ApiError, _>(&state.pool, move |tx| {
-        let (creation, app) = (creation.clone(), app.clone());
-        Box::pin(async move { insert_node_on(tx, &app, &creation).await })
-    })
-    .await;
-    let outcome = match outcome {
-        Err(error) if replay_key.is_some() => NodeCreation::Existing(
-            crate::dns::replay_after_error(
-                &state.pool,
-                replay_key.as_deref().unwrap(),
-                &allocation_request,
-                error,
-            )
-            .await?,
-        ),
-        other => other?,
-    };
-    match outcome {
-        NodeCreation::Created(value) => Ok((StatusCode::CREATED, Json(value))),
-        NodeCreation::Existing(previous) => replay_created_node(&state, previous).await,
-    }
+    Ok(creation)
 }
 
 struct PreparedNodeCreation {
     id: String,
+    history_id: String,
     input: CreateNode,
     prepared: Option<crate::dns::binding::Prepared>,
     allocation_request: Value,
@@ -464,7 +475,7 @@ async fn insert_node_on(
         .execute(&mut **tx)
         .await?;
     sqlx::query("INSERT INTO config_versions (id, node_id, revision, config_enc, content_sha256, created_at) VALUES ($1, $2, 1, $3, $4, $5)")
-        .bind(Uuid::new_v4().to_string()).bind(id).bind(creation.deployment_snapshot_enc.as_str()).bind(digest).bind(now)
+        .bind(&creation.history_id).bind(id).bind(creation.deployment_snapshot_enc.as_str()).bind(digest).bind(now)
         .execute(&mut **tx).await?;
     let dns_result =
         if let (Some(allocation), Some(prepared)) = (&input.dns_allocation, &creation.prepared) {
@@ -490,6 +501,57 @@ pub async fn patch(
     Path(id): Path<String>,
     Json(input): Json<PatchNode>,
 ) -> Result<Json<Value>, ApiError> {
+    let prepared = prepare_patch(&state, id, input).await?;
+    let pool = state.pool.clone();
+    db::serializable(&pool, move |tx| {
+        let (state, prepared) = (state.clone(), prepared.clone());
+        Box::pin(async move { patch_on(tx, &state, (*prepared).clone()).await })
+    })
+    .await
+}
+
+// Operational observations may change independently. Freeze the fields this
+// patch merges or overwrites, including configuration material with its own
+// background publication lifecycle.
+fn patch_source(row: &sqlx::postgres::PgRow) -> Value {
+    let mut source = serde_json::Map::new();
+    for field in [
+        "name",
+        "ssh_host",
+        "ssh_username",
+        "public_host",
+        "listen_addr",
+        "desired_config_enc",
+    ] {
+        source.insert(field.into(), json!(row.get::<String, _>(field)));
+    }
+    for field in [
+        "ssh_credential_id",
+        "ssh_host_fingerprint",
+        "proxy_probe_url",
+        "tls_sni",
+    ] {
+        source.insert(field.into(), json!(row.get::<Option<String>, _>(field)));
+    }
+    for field in ["ssh_port", "public_port", "traffic_stats_port"] {
+        source.insert(field.into(), json!(row.get::<i32, _>(field)));
+    }
+    source.insert(
+        "ssh_credential_version".into(),
+        json!(row.get::<Option<i64>, _>("ssh_credential_version")),
+    );
+    source.insert(
+        "tls_skip_verify".into(),
+        json!(row.get::<bool, _>("tls_skip_verify")),
+    );
+    Value::Object(source)
+}
+
+async fn prepare_patch(
+    state: &AppState,
+    id: String,
+    input: PatchNode,
+) -> Result<std::sync::Arc<PreparedNodePatch>, ApiError> {
     if input.expected_revision < 1 {
         return Err(ApiError::bad_request("expected_revision must be positive"));
     }
@@ -535,7 +597,7 @@ pub async fn patch(
     let ssh_changed = ssh_credential_id != current.get::<String, _>("ssh_credential_id")
         || ssh_credential_version != current.get::<i64, _>("ssh_credential_version");
     validate_ssh_credential(
-        &state,
+        state,
         &ssh_credential_id,
         ssh_credential_version,
         !ssh_changed,
@@ -691,6 +753,7 @@ pub async fn patch(
         .map_err(|_| ApiError::internal())?;
     let actor = super::audit_actor();
     let package = input.package;
+    let source = patch_source(&current);
     let prepared = std::sync::Arc::new(PreparedNodePatch {
         id,
         revision,
@@ -713,7 +776,10 @@ pub async fn patch(
         config,
         old_config,
         config_enc,
-        deployment_snapshot_json,
+        source,
+        history_id: Uuid::new_v4().to_string(),
+        deployment_snapshot_enc: state.secrets.encrypt(&deployment_snapshot_json)?,
+        deployment_digest: hex::encode(Sha256::digest(deployment_snapshot_json.as_bytes())),
         updated_at,
         mtls,
         new_ca,
@@ -728,12 +794,7 @@ pub async fn patch(
         actor,
         package,
     });
-    let pool = state.pool.clone();
-    db::serializable(&pool, move |tx| {
-        let (state, prepared) = (state.clone(), prepared.clone());
-        Box::pin(async move { patch_on(tx, &state, (*prepared).clone()).await })
-    })
-    .await
+    Ok(prepared)
 }
 
 #[derive(Clone)]
@@ -759,7 +820,10 @@ struct PreparedNodePatch {
     config: Value,
     old_config: Value,
     config_enc: String,
-    deployment_snapshot_json: String,
+    source: Value,
+    history_id: String,
+    deployment_snapshot_enc: String,
+    deployment_digest: String,
     updated_at: chrono::DateTime<chrono::Utc>,
     mtls: crate::credentials::node_mtls::Settings,
     new_ca: bool,
@@ -802,7 +866,10 @@ async fn patch_on(
         config,
         old_config,
         config_enc,
-        deployment_snapshot_json,
+        source,
+        history_id,
+        deployment_snapshot_enc,
+        deployment_digest,
         updated_at,
         mtls,
         new_ca,
@@ -825,6 +892,11 @@ async fn patch_on(
     if current.get::<i64, _>("desired_revision") != revision {
         return Err(ApiError::conflict(
             "node changed while saving; reload before editing",
+        ));
+    }
+    if patch_source(&current) != source {
+        return Err(ApiError::conflict(
+            "node configuration changed during preparation; reload before editing",
         ));
     }
     if current.get::<String, _>("state") == "deleting" {
@@ -889,8 +961,8 @@ async fn patch_on(
     crate::credentials::node_mtls::save_target(tx, &id, next_revision, &mtls).await?;
     super::ssh_fingerprint::cancel_waiting(tx, &id).await?;
     sqlx::query("INSERT INTO config_versions (id, node_id, revision, config_enc, content_sha256, created_at) VALUES ($1, $2, $3, $4, $5, $6)")
-        .bind(Uuid::new_v4().to_string()).bind(&id).bind(next_revision).bind(state.secrets.encrypt(&deployment_snapshot_json)?)
-        .bind(hex::encode(Sha256::digest(deployment_snapshot_json.as_bytes()))).bind(updated_at).execute(&mut **tx).await?;
+        .bind(history_id).bind(&id).bind(next_revision).bind(deployment_snapshot_enc)
+        .bind(deployment_digest).bind(updated_at).execute(&mut **tx).await?;
     if let Some(package) = &package {
         crate::node_limits::save(tx, &id, package).await?;
     }
@@ -1233,8 +1305,8 @@ async fn cancel_running_node_jobs_in_tx(
 
 mod v2;
 pub(super) use v2::{
-    action as action_v2, delete as delete_v2, remove_record as remove_record_v2,
-    update_usage as update_usage_v2,
+    action as action_v2, create as create_v2, delete as delete_v2, patch as patch_v2,
+    remove_record as remove_record_v2, update_usage as update_usage_v2,
 };
 
 pub async fn deploy(
@@ -1632,6 +1704,9 @@ fn validate_traffic_stats_port(port: u16) -> Result<(), ApiError> {
 
 #[cfg(test)]
 mod transaction_tests;
+
+#[cfg(test)]
+mod preparation_tests;
 
 #[cfg(test)]
 mod tests {

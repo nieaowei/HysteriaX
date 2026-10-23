@@ -156,6 +156,34 @@ fn header_and_keyed_digest_contract() {
     );
 }
 
+#[test]
+fn child_operation_key_binds_actor_operation_header_request_and_master_key() {
+    let secrets = SecretBox::from_base64("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA").unwrap();
+    let other = SecretBox::from_base64("AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE").unwrap();
+    let original = RequestIdentity {
+        actor: "one".into(),
+        operation: "nodes.create".into(),
+        key: "caller-key".into(),
+        digest: "digest-one".into(),
+    };
+    let key = original.operation_key(&secrets).unwrap();
+    assert!(key.starts_with("v2:"));
+    assert_eq!(key.len(), 67);
+    assert!(!key.contains("caller-key"));
+    assert_eq!(key, original.clone().operation_key(&secrets).unwrap());
+    for field in ["actor", "operation", "key", "digest"] {
+        let mut changed = original.clone();
+        match field {
+            "actor" => changed.actor = "two".into(),
+            "operation" => changed.operation = "nodes.patch".into(),
+            "key" => changed.key = "different-key".into(),
+            _ => changed.digest = "digest-two".into(),
+        }
+        assert_ne!(key, changed.operation_key(&secrets).unwrap());
+    }
+    assert_ne!(key, original.operation_key(&other).unwrap());
+}
+
 #[tokio::test]
 async fn committed_secret_response_replays_exactly_without_business_or_audit_reexecution() {
     let state = fixture().await;

@@ -47,10 +47,12 @@ pub(crate) fn audit_actor() -> String {
 pub fn router(state: AppState) -> Router {
     use subscriptions::templates as st;
     let admin = Router::new()
-        .route("/api/v2/nodes", get(nodes::list))
+        .route("/api/v2/nodes", get(nodes::list).post(nodes::create_v2))
         .route(
             "/api/v2/nodes/{id}",
-            get(nodes::get).delete(nodes::delete_v2),
+            get(nodes::get)
+                .patch(nodes::patch_v2)
+                .delete(nodes::delete_v2),
         )
         .route("/api/v2/nodes/{id}/record", delete(nodes::remove_record_v2))
         .route("/api/v2/nodes/{id}/deploy", post(nodes::action_v2))

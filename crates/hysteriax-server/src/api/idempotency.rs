@@ -22,6 +22,17 @@ pub(super) struct RequestIdentity {
 }
 
 impl RequestIdentity {
+    /// Namespace legacy child operation receipts by the authenticated request.
+    pub(super) fn operation_key(&self, secrets: &SecretBox) -> Result<String, ApiError> {
+        Ok(format!(
+            "v2:{}",
+            secrets.request_digest(
+                "hysteriax.management.v2.operation",
+                &serde_json::to_vec(self).map_err(|_| ApiError::internal())?
+            )
+        ))
+    }
+
     pub(super) fn from_headers(
         secrets: &SecretBox,
         actor: &str,
