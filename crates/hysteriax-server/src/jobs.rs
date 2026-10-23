@@ -410,6 +410,8 @@ async fn finish_execution(
 }
 
 #[cfg(test)]
+mod failure_tests;
+#[cfg(test)]
 mod ownership_tests;
 
 async fn execute_one(state: AppState, job: JobInput) {
@@ -443,10 +445,7 @@ async fn execute_one(state: AppState, job: JobInput) {
         }
         Err(error) => {
             let message = safe_error(&state.pool, &state.secrets, &job, &error).await;
-            let mut job = job;
-            if let Some(delay) = crate::dns::provider::retry_delay(&error) {
-                job.payload["dns_retry_after"] = json!(delay);
-            }
+            let retry_after = crate::dns::provider::retry_delay(&error);
             let retry = (deployment::retryable(&error)
                 || (job.kind == "record-remove" && crate::node_cleanup::retryable(&error)))
                 && if job.kind == "kick" {
@@ -459,7 +458,7 @@ async fn execute_one(state: AppState, job: JobInput) {
             let rolled_back = was_rolled_back(&error);
             let rollback_failed = was_rollback_failed(&error);
             retry_persistence(|| {
-                fail(
+                fail_after(
                     &state.pool,
                     &job,
                     &message,
@@ -467,6 +466,7 @@ async fn execute_one(state: AppState, job: JobInput) {
                     rolled_back,
                     rollback_failed,
                     waiting_recovery,
+                    retry_after,
                 )
             })
             .await;
@@ -698,6 +698,7 @@ async fn succeed(app: &AppState, job: &JobInput, mut output: JobOutput) -> Resul
     Ok(())
 }
 
+#[cfg(test)]
 async fn fail(
     pool: &PgPool,
     job: &JobInput,
@@ -707,15 +708,94 @@ async fn fail(
     rollback_failed: bool,
     waiting_recovery: bool,
 ) -> Result<(), sqlx::Error> {
-    let mut tx = db::begin_write(pool).await?;
-    let uncertain:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM execution_operations WHERE work_id=$1 AND state IN ('dispatching','reconciling','needs_attention'))")
-        .bind(&job.id).fetch_one(&mut *tx).await?;
+    fail_after(
+        pool,
+        job,
+        message,
+        retry,
+        rolled_back,
+        rollback_failed,
+        waiting_recovery,
+        None,
+    )
+    .await
+}
+
+async fn fail_after(
+    pool: &PgPool,
+    job: &JobInput,
+    message: &str,
+    retry: bool,
+    rolled_back: bool,
+    rollback_failed: bool,
+    waiting_recovery: bool,
+    retry_after: Option<i64>,
+) -> Result<(), sqlx::Error> {
+    crate::execution::require_job_scope(&job.id, job.node_id.as_deref())
+        .map_err(|error| sqlx::Error::Protocol(error.to_string()))?;
+    let (job, message) = (job.clone(), message.to_owned());
+    db::write(pool, move |tx| {
+        let (job, message) = (job.clone(), message.clone());
+        Box::pin(async move {
+            fail_on(
+                tx,
+                &job,
+                &message,
+                retry,
+                rolled_back,
+                rollback_failed,
+                waiting_recovery,
+                retry_after,
+            )
+            .await
+        })
+    })
+    .await
+}
+
+async fn fail_on(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    job: &JobInput,
+    message: &str,
+    retry: bool,
+    rolled_back: bool,
+    rollback_failed: bool,
+    waiting_recovery: bool,
+    retry_after: Option<i64>,
+) -> Result<(), sqlx::Error> {
+    let Some(source) = sqlx::query("SELECT kind,node_id,target_revision,payload_json,attempts,stage,resource_key FROM jobs WHERE id=$1 AND status='running' FOR UPDATE")
+        .bind(&job.id).fetch_optional(&mut **tx).await? else { return Ok(()); };
+    if source.get::<String, _>("kind") != job.kind
+        || source.get::<Option<String>, _>("node_id") != job.node_id
+        || source.get::<Option<i64>, _>("target_revision") != job.target_revision
+        || source.get::<Value, _>("payload_json") != job.payload
+        || source.get::<i64, _>("attempts") != job.attempts
+    {
+        return Err(sqlx::Error::Protocol("job failure source changed".into()));
+    }
+    let mut resources = vec![format!("job:{}", job.id)];
+    if let Some(node) = &job.node_id {
+        resources.push(format!("node:{node}"));
+    }
+    if let Some(resource) = source.get::<Option<String>, _>("resource_key") {
+        crate::execution::require_job_resource_scope(&job.id, &resource)
+            .map_err(|error| sqlx::Error::Protocol(error.to_string()))?;
+        resources.push(resource);
+    }
+    let (uncertain, attention):(bool,bool)=sqlx::query_as("SELECT count(*)>0,coalesce(bool_or(state='needs_attention'),false) FROM execution_operations WHERE (work_id=$1 OR resource_key=ANY($2::text[])) AND state IN ('dispatching','reconciling','needs_attention')")
+        .bind(&job.id).bind(&resources).fetch_one(&mut **tx).await?;
     let retry = retry && !uncertain;
-    let timestamp = now();
+    let timestamp: chrono::DateTime<chrono::Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
+        .fetch_one(&mut **tx)
+        .await?;
     let (status, stage, available_at, finished_at, event_name) = if uncertain {
         (
             "failed",
-            "reconciling",
+            if attention || source.get::<String, _>("stage") == "needs_attention" {
+                "needs_attention"
+            } else {
+                "reconciling"
+            },
             timestamp,
             Some(timestamp),
             "job.reconciliation_required",
@@ -724,14 +804,11 @@ async fn fail(
         let delay = if job.kind == "kick" {
             crate::kick_requests::retry_delay(job.attempts).unwrap_or(300)
         } else if job.kind.starts_with("dns-") {
-            job.payload["dns_retry_after"]
-                .as_i64()
-                .unwrap_or(30 * job.attempts)
-                .max(30)
+            retry_after.unwrap_or(30 * job.attempts).max(30)
         } else {
             30
         };
-        let later = now() + chrono::Duration::seconds(delay);
+        let later = timestamp + chrono::Duration::seconds(delay);
         ("queued", "retry_wait", later, None, "job.retrying")
     } else if job.kind == "kick" {
         (
@@ -765,12 +842,12 @@ async fn fail(
         ("failed", "failed", timestamp, Some(timestamp), "job.failed")
     };
     let changed = sqlx::query("UPDATE jobs SET status = $1, stage = $2, error_message = $3, available_at = $4, updated_at = $5, finished_at = $6 WHERE id = $7 AND status = 'running'")
-        .bind(status).bind(stage).bind(message).bind(available_at).bind(timestamp).bind(finished_at).bind(&job.id).execute(&mut *tx).await?;
+        .bind(status).bind(stage).bind(message).bind(available_at).bind(timestamp).bind(finished_at).bind(&job.id).execute(&mut **tx).await?;
     if changed.rows_affected() == 0 {
-        tx.commit().await?;
         return Ok(());
     }
-    if job.kind == "ssh-test"
+    if !uncertain
+        && job.kind == "ssh-test"
         && !retry
         && let Some(revision) = job.payload["confirmed_revision"].as_i64()
     {
@@ -786,9 +863,9 @@ async fn fail(
             "unreachable"
         };
         sqlx::query("UPDATE nodes SET state=$4,updated_at=$1 WHERE id=$2 AND desired_revision=$3 AND ssh_host_fingerprint IS NOT NULL AND state IN ('needs_fingerprint','fingerprint_changed')")
-            .bind(timestamp).bind(&job.node_id).bind(revision).bind(state).execute(&mut *tx).await?;
+            .bind(timestamp).bind(&job.node_id).bind(revision).bind(state).execute(&mut **tx).await?;
     }
-    if let Some(node_id) = &job.node_id {
+    if !uncertain && let Some(node_id) = &job.node_id {
         let state = if rolled_back {
             Some("rolled_back")
         } else if rollback_failed {
@@ -818,21 +895,19 @@ async fn fail(
                 .bind(state)
                 .bind(timestamp)
                 .bind(node_id)
-                .execute(&mut *tx)
+                .execute(&mut **tx)
                 .await?;
         }
     }
-    if job.kind.starts_with("dns-record-") && job.kind != "dns-record-check" {
-        sqlx::query("UPDATE dns_records SET state=$1,updated_at=now() WHERE id=(SELECT resource_id FROM dns_operations WHERE id=$2) AND desired IS NOT NULL")
-            .bind(if retry { "pending" } else { "failed" }).bind(job.payload["dns_operation_id"].as_str()).execute(&mut *tx).await?;
+    if !uncertain && job.kind.starts_with("dns-record-") && job.kind != "dns-record-check" {
+        // An applied operation or an older desired document cannot fail a later edit.
+        // Explicit retries move operation.job_id to their new attempt atomically.
+        sqlx::query("UPDATE dns_records r SET state=$1,updated_at=$4 FROM dns_operations o WHERE o.id=$2 AND o.job_id=$3 AND o.resource_type='dns_record' AND o.applied_at IS NULL AND r.id=o.resource_id AND r.desired IS NOT NULL AND o.payload->'source_revision'=to_jsonb(r.revision) AND r.desired=CASE WHEN o.action='record-delete' THEN '{\"delete\":true}'::jsonb ELSE o.payload->'desired' END")
+            .bind(if retry { "pending" } else { "failed" }).bind(job.payload["dns_operation_id"].as_str()).bind(&job.id).bind(timestamp).execute(&mut **tx).await?;
     }
     if !retry {
-        crate::kick_requests::finish(
-            &mut tx,
-            job,
-            if uncertain { "needs_attention" } else { stage },
-        )
-        .await?;
+        crate::kick_requests::finish(tx, job, if uncertain { "needs_attention" } else { stage })
+            .await?;
     }
     let payload = json!({"id": job.id, "kind": job.kind, "node_id": job.node_id, "status": status, "stage": stage, "error": message, "attempts": job.attempts});
     sqlx::query(
@@ -842,9 +917,8 @@ async fn fail(
     .bind(event_name)
     .bind(payload)
     .bind(timestamp)
-    .execute(&mut *tx)
+    .execute(&mut **tx)
     .await?;
-    tx.commit().await?;
     Ok(())
 }
 

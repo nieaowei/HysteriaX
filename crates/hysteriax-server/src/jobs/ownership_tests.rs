@@ -1,24 +1,24 @@
 use super::*;
 
-async fn fixture() -> PgPool {
+pub(super) async fn fixture() -> PgPool {
     let pool = db::test_pool_with_max_connections(8).await;
     sqlx::query("INSERT INTO nodes(id,name,ssh_host,ssh_port,ssh_username,ssh_auth_type,ssh_secret_enc,public_host,public_port,listen_addr,node_token_hash,node_token_enc,traffic_stats_secret_enc,desired_config_enc,created_at,updated_at) SELECT id,id,'127.0.0.1',22,'root','password','unused','example.test',443,':443',id,'unused','unused','unused',now(),now() FROM unnest(ARRAY['node-a','node-b'])id").execute(&pool).await.unwrap();
     sqlx::raw_sql("DO $$ DECLARE r record; BEGIN FOR r IN SELECT c.relname,t.tgname FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_proc p ON p.oid=t.tgfoid WHERE c.relnamespace=current_schema()::regnamespace AND p.proname='hysteriax_serialize_writes' LOOP EXECUTE format('ALTER TABLE %I DISABLE TRIGGER %I',r.relname,r.tgname); END LOOP; END $$").execute(&pool).await.unwrap();
     pool
 }
-async fn enqueue(pool: &PgPool, id: &str, node: Option<&str>, resource: Option<&str>) {
+pub(super) async fn enqueue(pool: &PgPool, id: &str, node: Option<&str>, resource: Option<&str>) {
     sqlx::query("INSERT INTO jobs(id,kind,node_id,target_revision,resource_key,status,stage,available_at,created_at,updated_at) VALUES($1,'sync',$2,1,$3,'queued','queued',clock_timestamp(),clock_timestamp(),clock_timestamp())").bind(id).bind(node).bind(resource).execute(pool).await.unwrap();
 }
-async fn claim(pool: &PgPool, owner: &str) -> ClaimedJob {
+pub(super) async fn claim(pool: &PgPool, owner: &str) -> ClaimedJob {
     claim_next_for(pool, Some(owner)).await.unwrap().unwrap()
 }
-async fn count(pool: &PgPool, q: &str) -> i64 {
+pub(super) async fn count(pool: &PgPool, q: &str) -> i64 {
     sqlx::query_scalar(q).fetch_one(pool).await.unwrap()
 }
 async fn lease_snapshot(pool: &PgPool) -> Value {
     sqlx::query_scalar("SELECT coalesce(jsonb_agg(to_jsonb(l) ORDER BY resource_key),'[]'::jsonb) FROM resource_leases l").fetch_one(pool).await.unwrap()
 }
-async fn operation(pool: &PgPool, claimed: &ClaimedJob) -> String {
+pub(super) async fn operation(pool: &PgPool, claimed: &ClaimedJob) -> String {
     let lease = claimed
         .leases
         .iter()

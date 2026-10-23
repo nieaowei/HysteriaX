@@ -247,8 +247,22 @@ pub async fn enqueue(
             .await?;
     sqlx::query("UPDATE jobs SET resource_key=$1,resource_type=$2,resource_id=$3,resource_name=$4 WHERE id=$5")
         .bind(&op.resource_key).bind(op.resource_type).bind(op.resource).bind(op.resource_name).bind(&job).execute(&mut **tx).await?;
+    let mut payload = op.payload;
+    if op.resource_type == "dns_record"
+        && matches!(
+            op.action,
+            "record-create" | "record-update" | "record-delete"
+        )
+    {
+        let revision: i64 =
+            sqlx::query_scalar("SELECT revision FROM dns_records WHERE id=$1 FOR KEY SHARE")
+                .bind(op.resource)
+                .fetch_one(&mut **tx)
+                .await?;
+        payload["source_revision"] = json!(revision);
+    }
     sqlx::query("INSERT INTO dns_operations(id,idempotency_key,request_sha256,job_id,connection_id,credential_version,resource_type,resource_id,action,payload) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)")
-        .bind(&id).bind(op.key).bind(request_hash(op.request)).bind(&job).bind(op.connection).bind(op.version).bind(op.resource_type).bind(op.resource).bind(op.action).bind(op.payload).execute(&mut **tx).await?;
+        .bind(&id).bind(op.key).bind(request_hash(op.request)).bind(&job).bind(op.connection).bind(op.version).bind(op.resource_type).bind(op.resource).bind(op.action).bind(payload).execute(&mut **tx).await?;
     Ok(json!({"operation_id":id,"job_id":job,"resource_id":op.resource}))
 }
 

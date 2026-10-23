@@ -276,6 +276,29 @@ pub(crate) fn require_job_scope(job: &str, node: Option<&str>) -> anyhow::Result
     Ok(())
 }
 
+/// Validate a job's persisted extra resource in the same transaction that reads it.
+pub(crate) fn require_job_resource_scope(job: &str, resource: &str) -> anyhow::Result<()> {
+    require_job_scope(job, None)?;
+    let leases = match CURRENT.try_with(|scope| scope.leases.clone()) {
+        Ok(leases) => leases,
+        #[cfg(test)]
+        Err(_) => return Ok(()),
+        #[cfg(not(test))]
+        Err(_) => anyhow::bail!("job writer requires a job execution scope"),
+    };
+    let owner = leases
+        .iter()
+        .find(|l| l.resource == format!("job:{job}") && l.work == job)
+        .ok_or_else(|| anyhow::anyhow!("job writer is missing its job lease"))?;
+    anyhow::ensure!(
+        leases
+            .iter()
+            .any(|l| l.resource == resource && l.work == job && l.owner == owner.owner),
+        "job writer is missing its persisted resource lease"
+    );
+    Ok(())
+}
+
 /// Apply ownership checks inside every transaction opened by a leased worker.
 /// The task-local scope never crosses into API handlers or unrelated workers.
 pub async fn guard_current(connection: &mut PgConnection) -> Result<(), sqlx::Error> {
