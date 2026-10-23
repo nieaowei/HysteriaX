@@ -1629,6 +1629,7 @@ dependencies = [
  "futures-core",
  "hex",
  "hickory-proto",
+ "hmac 0.12.1",
  "hysteriax-template-validator",
  "rand 0.9.5",
  "rcgen",

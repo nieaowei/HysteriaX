@@ -2,8 +2,9 @@ use crate::db;
 
 use axum::{
     Json,
-    extract::{Path, Query, State},
-    http::StatusCode,
+    extract::{Extension, OriginalUri, Path, Query, State},
+    http::{HeaderMap, StatusCode},
+    response::Response,
 };
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
@@ -134,22 +135,86 @@ pub async fn create(
     State(state): State<AppState>,
     Json(input): Json<CreateUser>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
-    validate_name(&input.name)?;
-    validate_quota(input.quota_bytes)?;
-    let expires_at = normalize_expiry(input.expires_at)?;
-    let id = Uuid::new_v4().to_string();
-    let timestamp = now();
-    let response = json!({"id":id,"name":input.name.trim(),"enabled":input.enabled,"revision":1});
+    let prepared = PreparedUser::new(input)?;
     let actor = super::audit_actor();
-    db::serializable::<_, ApiError, _>(&state.pool,move |tx| {
-        let (id,name,actor)=(id.clone(),input.name.trim().to_owned(),actor.clone());
-        Box::pin(async move {
-            sqlx::query("INSERT INTO users(id,name,enabled,expires_at,quota_bytes,usage_bytes,revision,created_at,updated_at) VALUES($1,$2,$3,$4,$5,0,1,$6,$6)")
-                .bind(&id).bind(&name).bind(input.enabled).bind(expires_at).bind(input.quota_bytes).bind(timestamp).execute(&mut **tx).await?;
-            super::audit_on(tx,&actor,"user.created","user",&id,json!({"name":name})).await
-        })
-    }).await?;
+    let response = db::serializable::<_, ApiError, _>(&state.pool, move |tx| {
+        let (prepared, actor) = (prepared.clone(), actor.clone());
+        Box::pin(async move { prepared.commit_on(tx, &actor).await })
+    })
+    .await?;
     Ok((StatusCode::CREATED, Json(response)))
+}
+
+pub(super) async fn create_v2(
+    State(state): State<AppState>,
+    Extension(actor): Extension<super::AdminActor>,
+    OriginalUri(uri): OriginalUri,
+    headers: HeaderMap,
+    Json(body): Json<Value>,
+) -> Result<Response, ApiError> {
+    use super::idempotency::{RequestIdentity, StoredResponse, execute};
+    let identity = RequestIdentity::from_headers(
+        &state.secrets,
+        &actor.id,
+        "users.create",
+        &headers,
+        json!({"method":"POST","uri":uri.to_string(),"body":body}),
+    )?;
+    let input = serde_json::from_value(body)
+        .map_err(|_| ApiError::bad_request("invalid user creation request"))?;
+    let prepared = PreparedUser::new(input)?;
+    execute(&state, identity, move |tx| {
+        let (prepared, actor) = (prepared.clone(), actor.id.clone());
+        Box::pin(async move {
+            Ok(StoredResponse::json(
+                StatusCode::CREATED,
+                prepared.commit_on(tx, &actor).await?,
+            ))
+        })
+    })
+    .await?
+    .into_http()
+}
+
+#[derive(Clone)]
+struct PreparedUser {
+    id: String,
+    name: String,
+    enabled: bool,
+    expires_at: Option<DateTime<Utc>>,
+    quota_bytes: Option<i64>,
+    timestamp: DateTime<Utc>,
+}
+
+impl PreparedUser {
+    fn new(input: CreateUser) -> Result<Self, ApiError> {
+        validate_name(&input.name)?;
+        validate_quota(input.quota_bytes)?;
+        Ok(Self {
+            id: Uuid::new_v4().to_string(),
+            name: input.name.trim().into(),
+            enabled: input.enabled,
+            expires_at: normalize_expiry(input.expires_at)?,
+            quota_bytes: input.quota_bytes,
+            timestamp: now(),
+        })
+    }
+
+    async fn commit_on(&self, tx: &mut sqlx::PgConnection, actor: &str) -> Result<Value, ApiError> {
+        sqlx::query("INSERT INTO users(id,name,enabled,expires_at,quota_bytes,usage_bytes,revision,created_at,updated_at) VALUES($1,$2,$3,$4,$5,0,1,$6,$6)")
+            .bind(&self.id).bind(&self.name).bind(self.enabled).bind(self.expires_at)
+            .bind(self.quota_bytes).bind(self.timestamp).execute(&mut *tx).await?;
+        super::audit_on(
+            tx,
+            actor,
+            "user.created",
+            "user",
+            &self.id,
+            json!({"name":self.name}),
+        )
+        .await?;
+        Ok(json!({"id":self.id,"name":self.name,"enabled":self.enabled,"revision":1}))
+    }
 }
 
 pub async fn patch(

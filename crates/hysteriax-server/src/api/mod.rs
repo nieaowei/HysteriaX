@@ -2,6 +2,7 @@ pub(crate) mod authorization_groups;
 mod client_summary;
 pub(crate) mod credentials;
 pub(crate) mod dns;
+mod idempotency;
 pub(crate) mod job_retries;
 pub(crate) mod managed_mtls;
 pub(crate) mod nodes;
@@ -45,6 +46,7 @@ pub(crate) fn audit_actor() -> String {
 pub fn router(state: AppState) -> Router {
     use subscriptions::templates as st;
     let admin = Router::new()
+        .route("/api/v2/users", get(users::list).post(users::create_v2))
         .route(
             "/api/v1/subscription-templates",
             get(st::list).post(st::create),

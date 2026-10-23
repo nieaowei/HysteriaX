@@ -6,7 +6,7 @@ use chacha20poly1305::{
 };
 
 #[derive(Clone)]
-pub struct SecretBox(XChaCha20Poly1305, String);
+pub struct SecretBox(XChaCha20Poly1305, String, hmac::Hmac<sha2::Sha256>);
 
 impl SecretBox {
     pub fn from_base64(encoded: &str) -> Result<Self> {
@@ -21,11 +21,23 @@ impl SecretBox {
         Ok(Self(
             XChaCha20Poly1305::new_from_slice(&key).expect("validated key length"),
             fingerprint,
+            <hmac::Hmac<Sha256> as hmac::Mac>::new_from_slice(&key).expect("validated key length"),
         ))
     }
 
     pub fn fingerprint(&self) -> &str {
         &self.1
+    }
+
+    /// Keyed request hashes do not expose a database-only password guessing oracle.
+    /// Keep their domain separate from encryption and the public key fingerprint.
+    pub fn request_digest(&self, domain: &str, request: &[u8]) -> String {
+        use hmac::Mac;
+        let mut mac = self.2.clone();
+        mac.update(domain.as_bytes());
+        mac.update(&[0]);
+        mac.update(request);
+        hex::encode(mac.finalize().into_bytes())
     }
 
     pub fn encrypt(&self, plaintext: &str) -> Result<String> {
