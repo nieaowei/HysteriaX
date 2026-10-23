@@ -22,6 +22,7 @@ mod metadata;
 mod probes;
 mod publication;
 mod release;
+pub(crate) mod superseded;
 mod trust;
 mod users;
 
@@ -33,6 +34,7 @@ pub(super) async fn run_preparation(state: AppState) {
         metadata::run(state.clone()),
         release::run(state.clone()),
         probes::run(state.clone()),
+        superseded::run(state.clone()),
         cleanup::run(state)
     );
 }
@@ -66,6 +68,7 @@ pub async fn run_pass(state: &AppState) -> Result<()> {
     publication::scheduled_pass(state).await?;
     metadata::scheduled_pass(state).await?;
     probes::scheduled_pass(state).await?;
+    superseded::scheduled_pass(state).await?;
     cleanup::scheduled_pass(state).await?;
     Ok(())
 }
@@ -177,7 +180,7 @@ async fn audit(
 
 const RETENTION_DEADLINE: &str = "SELECT coalesce(greatest((SELECT expires_at FROM mtls_user_versions WHERE ca_id=$1 AND ca_version=$2 ORDER BY expires_at DESC LIMIT 1),(SELECT expires_at FROM mtls_probe_versions WHERE ca_id=$1 AND ca_version=$2 ORDER BY expires_at DESC LIMIT 1))+interval '5 minutes',clock_timestamp())";
 
-async fn retention_deadline(
+pub(crate) async fn retention_deadline(
     connection: &mut sqlx::PgConnection,
     ca: &str,
     version: i64,

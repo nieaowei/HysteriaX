@@ -144,14 +144,11 @@ async fn lock_ca_on(
 ) -> Result<(), ApiError> {
     if publication {
         sqlx::query("SELECT n.id FROM nodes n WHERE n.id IN (SELECT node_id FROM mtls_node_trust WHERE ca_id=$1 UNION SELECT node_id FROM mtls_live_activation_trust WHERE ca_id=$1) ORDER BY n.id FOR NO KEY UPDATE OF n").bind(ca).fetch_all(&mut **tx).await?;
-        let users:Vec<String>=sqlx::query_scalar("SELECT u.id FROM users u JOIN mtls_user_identities i ON i.user_id=u.id WHERE i.ca_id=$1 ORDER BY u.id FOR NO KEY UPDATE OF u").bind(ca).fetch_all(&mut **tx).await?;
-        sqlx::query("SELECT id FROM credentials WHERE id=$1 OR owner_user_id=ANY($2) ORDER BY id FOR UPDATE").bind(ca).bind(&users).fetch_all(&mut **tx).await?;
-    } else {
-        sqlx::query("SELECT id FROM credentials WHERE id=$1 FOR UPDATE")
-            .bind(ca)
-            .fetch_all(&mut **tx)
-            .await?;
     }
+    sqlx::query("SELECT id FROM credentials WHERE id=$1 FOR UPDATE")
+        .bind(ca)
+        .fetch_all(&mut **tx)
+        .await?;
     let authority =
         sqlx::query("SELECT credential_id FROM mtls_authorities WHERE credential_id=$1 FOR UPDATE")
             .bind(ca)
@@ -159,16 +156,6 @@ async fn lock_ca_on(
             .await?;
     if publication && authority.is_none() {
         return Err(ApiError::not_found("CA identity"));
-    }
-    if publication {
-        sqlx::query("SELECT id FROM mtls_user_identities WHERE ca_id=$1 ORDER BY id FOR UPDATE")
-            .bind(ca)
-            .fetch_all(&mut **tx)
-            .await?;
-        sqlx::query("SELECT id FROM mtls_rotations WHERE ca_id=$1 ORDER BY id FOR UPDATE")
-            .bind(ca)
-            .fetch_all(&mut **tx)
-            .await?;
     }
     Ok(())
 }
@@ -520,7 +507,8 @@ pub(crate) async fn publish_authority_on(
     let source = source.ok_or_else(ApiError::internal)?;
     // Ordinary publication changes CA-owned rows; rotation work discovers
     // members from authoritative trust before it can publish the new version.
-    // Explicit replacement still protects the graph it modifies.
+    // Explicit replacement still protects node jobs it cancels. User material
+    // visibility follows the generation fact; physical flags are bounded work.
     lock_ca_on(tx, &id, input.replace_rotation_id.is_some()).await?;
     let now: DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
         .fetch_one(&mut **tx)
@@ -537,7 +525,7 @@ pub(crate) async fn publish_authority_on(
     {
         return Err(ApiError::conflict("CA changed or is archived"));
     }
-    let pending=sqlx::query("SELECT r.id,r.phase,r.ca_version,g.expires_at FROM mtls_rotations r JOIN mtls_ca_generations g ON g.ca_id=r.ca_id AND g.ca_version=r.ca_version WHERE r.ca_id=$1 AND r.phase<>'complete'").bind(&id).fetch_optional(&mut **tx).await?;
+    let pending=sqlx::query("SELECT r.id,r.phase,r.ca_version,g.expires_at FROM mtls_rotations r JOIN mtls_ca_generations g ON g.ca_id=r.ca_id AND g.ca_version=r.ca_version WHERE r.ca_id=$1 AND r.phase<>'complete' FOR UPDATE OF r,g").bind(&id).fetch_optional(&mut **tx).await?;
     if let Some(pending) = pending {
         let phase: String = pending.get("phase");
         let previous_id: String = pending.get("id");
@@ -554,9 +542,11 @@ pub(crate) async fn publish_authority_on(
         }
         if unpublished {
             sqlx::query("UPDATE mtls_ca_generations SET state='retired' WHERE ca_id=$1 AND ca_version=$2 AND state='preparing'").bind(&id).bind(previous).execute(&mut **tx).await?;
-            sqlx::query("UPDATE mtls_user_versions SET discarded=TRUE WHERE ca_id=$1 AND ca_version=$2 AND NOT released").bind(&id).bind(previous).execute(&mut **tx).await?;
-            let deadline:Option<DateTime<Utc>>=sqlx::query_scalar("SELECT max(expires_at)+interval '5 minutes' FROM(SELECT expires_at FROM mtls_user_versions WHERE ca_id=$1 AND ca_version=$2 UNION ALL SELECT expires_at FROM mtls_probe_versions WHERE ca_id=$1 AND ca_version=$2) materials").bind(&id).bind(previous).fetch_one(&mut **tx).await?;
-            sqlx::query("INSERT INTO mtls_trust_cleanup(ca_id,ca_version,next_action_at) VALUES($1,$2,$3) ON CONFLICT DO NOTHING").bind(&id).bind(previous).bind(deadline.unwrap_or(now)).execute(&mut **tx).await?;
+            crate::credentials::rotations::superseded::enqueue_on(tx, &previous_id, &id, previous)
+                .await?;
+            let deadline =
+                crate::credentials::rotations::retention_deadline(tx, &id, previous).await?;
+            sqlx::query("INSERT INTO mtls_trust_cleanup(ca_id,ca_version,next_action_at) VALUES($1,$2,$3) ON CONFLICT DO NOTHING").bind(&id).bind(previous).bind(deadline).execute(&mut **tx).await?;
         }
         let cancelled=sqlx::query("UPDATE jobs j SET status='cancelled',stage='ca_target_superseded',updated_at=$2,finished_at=$2 FROM mtls_node_operations o WHERE o.job_id=j.id AND o.rotation_id=$1 AND j.status IN ('queued','waiting_confirmation') RETURNING j.id,j.kind,j.node_id").bind(&previous_id).bind(now).fetch_all(&mut **tx).await?;
         for job in cancelled {

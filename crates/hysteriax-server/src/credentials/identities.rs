@@ -191,7 +191,7 @@ pub async fn commit_user(
     let now: DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
         .fetch_one(&mut **tx)
         .await?;
-    let ca = sqlx::query("SELECT a.policy_revision,g.state,c.archived FROM mtls_authorities a JOIN mtls_ca_generations g ON g.ca_id=a.credential_id AND g.ca_version=$2 JOIN credentials c ON c.id=a.credential_id WHERE a.credential_id=$1")
+    let ca = sqlx::query("SELECT a.policy_revision,g.state,c.archived FROM mtls_authorities a JOIN mtls_ca_generations g ON g.ca_id=a.credential_id AND g.ca_version=$2 JOIN credentials c ON c.id=a.credential_id WHERE a.credential_id=$1 FOR KEY SHARE OF g")
         .bind(&candidate.ca_id).bind(candidate.ca_version).fetch_one(&mut **tx).await?;
     ensure!(
         !ca.get::<bool, _>("archived")
