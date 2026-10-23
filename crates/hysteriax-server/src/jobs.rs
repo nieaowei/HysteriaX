@@ -333,7 +333,7 @@ async fn execute_claimed(state: AppState, claimed: ClaimedJob) {
         execute_one(state, claimed.job),
     )
     .await;
-    if completed.is_some() {
+    if completed == Some(true) {
         let release = finish_execution(&pool, &job, &leases).await;
         if let Err(error) = release {
             tracing::warn!(%error,"job resource release deferred to recovery");
@@ -416,22 +416,44 @@ mod failure_tests;
 #[cfg(test)]
 mod ownership_tests;
 
-async fn execute_one(state: AppState, job: JobInput) {
+async fn execute_one(state: AppState, job: JobInput) -> bool {
     // Subscribe before the database check: a removal before subscription is
     // caught by persisted status, and a later removal is caught by the signal.
     let receiver = state.removed_nodes.subscribe();
     if !job_is_running(&state.pool, &job.id).await {
-        return;
+        return true;
     }
     let result = tokio::select! {
         biased;
-        _ = wait_for_node_removal(&state,&job,receiver) => return,
+        _ = wait_for_node_removal(&state,&job,receiver) => return false,
         result = deployment::run_job(&state.pool, &state.secrets, &job) => result,
     };
     match result {
         Ok(output) => {
             let removed = output.delete_node;
-            retry_persistence(|| succeed(&state, &job, output.clone())).await;
+            if let Err(error) =
+                retry_persistence(|| persist_success(&state, &job, output.clone())).await
+            {
+                let message = safe_error(&state.pool, &state.secrets, &job, &error).await;
+                return match retry_persistence(|| {
+                    persistence::reject_completion(&state.pool, &job, &message)
+                })
+                .await
+                {
+                    Ok(release) => release,
+                    Err(error) => {
+                        tracing::warn!(job_id=job.id,%error,"completion rejection could not be persisted; retaining execution for recovery");
+                        if let Err(error) = retry_persistence(|| {
+                            persistence::quarantine_completion(&state.pool, &job)
+                        })
+                        .await
+                        {
+                            tracing::error!(job_id=job.id,%error,"could not retain remote completion barrier");
+                        }
+                        false
+                    }
+                };
+            }
             if removed && let Some(node) = &job.node_id {
                 let absent = sqlx::query_scalar::<_, bool>(
                     "SELECT NOT EXISTS(SELECT 1 FROM nodes WHERE id=$1)",
@@ -459,7 +481,7 @@ async fn execute_one(state: AppState, job: JobInput) {
                 job.kind == "kick" && crate::kick_requests::transport_error(&error);
             let rolled_back = was_rolled_back(&error);
             let rollback_failed = was_rollback_failed(&error);
-            retry_persistence(|| {
+            if let Err(error) = retry_persistence(|| async {
                 fail_after(
                     &state.pool,
                     &job,
@@ -470,44 +492,47 @@ async fn execute_one(state: AppState, job: JobInput) {
                     waiting_recovery,
                     retry_after,
                 )
+                .await
+                .map_err(anyhow::Error::from)
             })
-            .await;
-        }
-    }
-}
-
-// Keep the worker slot and completed output until the transaction is acknowledged.
-// Both completion transactions guard on status='running', so an uncertain commit
-// can be retried without duplicate events or repeating remote side effects.
-async fn retry_persistence<F, Fut>(mut persist: F)
-where
-    F: FnMut() -> Fut,
-    Fut: std::future::Future<Output = Result<(), sqlx::Error>>,
-{
-    let mut delay = 1;
-    loop {
-        match persist().await {
-            Ok(()) => return,
-            Err(error) => {
-                tracing::error!(%error, "job persistence failed; retrying without repeating remote work")
+            .await
+            {
+                tracing::warn!(job_id=job.id,%error,"failure could not be persisted; retaining execution for recovery");
+                if let Err(error) =
+                    retry_persistence(|| persistence::quarantine_completion(&state.pool, &job))
+                        .await
+                {
+                    tracing::error!(job_id=job.id,%error,"could not retain remote failure barrier");
+                }
+                return false;
             }
         }
-        tokio::time::sleep(Duration::from_secs(delay)).await;
-        delay = (delay * 2).min(30);
     }
+    true
 }
 
+mod persistence;
+use persistence::retry_persistence;
+
+#[cfg(test)]
 pub(crate) async fn succeed(
     app: &AppState,
     job: &JobInput,
-    mut output: JobOutput,
+    output: JobOutput,
 ) -> Result<(), sqlx::Error> {
-    crate::execution::require_job_scope(&job.id, job.node_id.as_deref())
-        .map_err(|error| sqlx::Error::Protocol(error.to_string()))?;
+    persist_success(app, job, output)
+        .await
+        .map_err(completion_database_error)
+}
+
+async fn persist_success(
+    app: &AppState,
+    job: &JobInput,
+    mut output: JobOutput,
+) -> anyhow::Result<()> {
+    crate::execution::require_job_scope(&job.id, job.node_id.as_deref())?;
     if output.delete_node && !matches!(job.kind.as_str(), "uninstall" | "record-remove") {
-        return Err(sqlx::Error::Protocol(
-            "this job cannot remove a node".into(),
-        ));
+        return Err(sqlx::Error::Protocol("this job cannot remove a node".into()).into());
     }
     let pool = &app.pool;
     if output.delete_node {
@@ -516,8 +541,7 @@ pub(crate) async fn succeed(
             let (job, output) = (job.clone(), output.clone());
             Box::pin(async move { completion_gate_on(tx, &job, &output).await })
         })
-        .await
-        .map_err(completion_database_error)?;
+        .await?;
         if !proceed {
             return Ok(());
         }
@@ -539,9 +563,9 @@ pub(crate) async fn succeed(
         Box::pin(async move { succeed_on(tx, &app, &job, &output, &audit_id).await })
     })
     .await
-    .map_err(completion_database_error)
 }
 
+#[cfg(test)]
 fn completion_database_error(error: anyhow::Error) -> sqlx::Error {
     match error.downcast::<sqlx::Error>() {
         Ok(error) => error,
@@ -1354,7 +1378,7 @@ mod tests {
                 .unwrap(),
         );
         insert_running_job(&pool).await;
-        sqlx::raw_sql("CREATE SEQUENCE completion_attempt; CREATE FUNCTION reject_first_completion() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF nextval('completion_attempt') = 1 THEN RAISE EXCEPTION 'injected failure'; END IF; RETURN NEW; END $$; CREATE TRIGGER reject_completion BEFORE INSERT ON job_events FOR EACH ROW EXECUTE FUNCTION reject_first_completion();").execute(&pool).await.unwrap();
+        sqlx::raw_sql("CREATE SEQUENCE completion_attempt; CREATE FUNCTION reject_first_completion() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF nextval('completion_attempt') = 1 THEN RAISE EXCEPTION 'injected lock contention' USING ERRCODE='55P03'; END IF; RETURN NEW; END $$; CREATE TRIGGER reject_completion BEFORE INSERT ON job_events FOR EACH ROW EXECUTE FUNCTION reject_first_completion();").execute(&pool).await.unwrap();
         let job = JobInput {
             id: "job-running".into(),
             kind: "sync".into(),
@@ -1373,7 +1397,9 @@ mod tests {
             published_connection: None,
             delete_node: false,
         };
-        super::retry_persistence(|| super::succeed(&state, &job, output.clone())).await;
+        super::retry_persistence(|| super::persist_success(&state, &job, output.clone()))
+            .await
+            .unwrap();
         // Retrying an uncertain commit is also idempotent.
         super::succeed(&state, &job, output).await.unwrap();
         let status: String = sqlx::query_scalar("SELECT status FROM jobs WHERE id='job-running'")

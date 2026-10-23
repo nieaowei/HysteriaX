@@ -382,14 +382,21 @@ async fn needs_attention_is_not_downgraded_and_unowned_operations_are_not_rewrit
         .await
         .unwrap()
         .unwrap();
-    let (other, _) = extra
-        .dispatch(
-            &mut tx,
-            "unrelated-request",
-            &json!({"request_digest":"other"}),
-        )
-        .await
-        .unwrap();
+    assert!(
+        extra
+            .dispatch(
+                &mut tx,
+                "unrelated-request",
+                &json!({"request_digest":"other"}),
+            )
+            .await
+            .is_err()
+    );
+    // Model an existing historical intent owned outside this release scope.
+    // Current dispatch correctly refuses to create it after needs_attention.
+    let other = uuid::Uuid::new_v4().to_string();
+    sqlx::query("INSERT INTO execution_operations(operation_id,resource_key,owner,generation,work_id,step,state,intent) VALUES($1,$2,$3,$4,$5,'unrelated-request','dispatching','{\"request_digest\":\"other\"}')")
+        .bind(&other).bind(&extra.resource).bind(&extra.owner).bind(extra.generation).bind(&extra.work).execute(&mut *tx).await.unwrap();
     tx.commit().await.unwrap();
     let q = "SELECT to_jsonb(l) FROM resource_leases l WHERE resource_key='dns-zone:unrelated'";
     let before: Value = sqlx::query_scalar(q).fetch_one(&pool).await.unwrap();
