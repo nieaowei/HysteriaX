@@ -299,6 +299,29 @@ pub(crate) fn require_job_resource_scope(job: &str, resource: &str) -> anyhow::R
     Ok(())
 }
 
+/// Capture the two immutable lease incarnations used by job-owned artifacts.
+pub(crate) fn job_leases(job: &str, node: &str) -> anyhow::Result<Option<(Execution, Execution)>> {
+    require_job_scope(job, Some(node))?;
+    let leases = match CURRENT.try_with(|scope| scope.leases.clone()) {
+        Ok(leases) => leases,
+        #[cfg(test)]
+        Err(_) => return Ok(None),
+        #[cfg(not(test))]
+        Err(_) => anyhow::bail!("job artifacts require an execution scope"),
+    };
+    let primary = leases
+        .iter()
+        .find(|l| l.resource == format!("job:{job}") && l.work == job)
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("missing job artifact lease"))?;
+    let node = leases
+        .iter()
+        .find(|l| l.resource == format!("node:{node}") && l.work == job && l.owner == primary.owner)
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("missing node artifact lease"))?;
+    Ok(Some((primary, node)))
+}
+
 /// Apply ownership checks inside every transaction opened by a leased worker.
 /// The task-local scope never crosses into API handlers or unrelated workers.
 pub async fn guard_current(connection: &mut PgConnection) -> Result<(), sqlx::Error> {

@@ -615,10 +615,9 @@ pub async fn hy2_auth(
 
     let auth_hash = token_digest(&input.auth);
     let probe_hash: Option<String> = sqlx::query_scalar(
-        "SELECT p.token_hash FROM deployment_probe_tokens p JOIN jobs j ON j.id=p.job_id JOIN nodes n ON n.id=p.node_id WHERE p.node_id=$1 AND p.expires_at>$2 AND j.status='running' AND j.node_id=p.node_id AND j.kind IN ('deploy','sync','rollback') AND (n.mtls_state='ready' OR EXISTS(SELECT 1 FROM mtls_activations a WHERE a.id=n.mtls_activation_id AND a.job_id=j.id AND a.phase IN ('activating','verified','recovery_required')))",
+        "SELECT p.token_hash FROM deployment_probe_tokens p JOIN jobs j ON j.id=p.job_id JOIN nodes n ON n.id=p.node_id JOIN resource_leases nl ON nl.resource_key='node:'||p.node_id AND nl.work_id=j.id AND nl.owner=p.owner AND nl.generation=p.node_generation AND NOT nl.blocked AND nl.expires_at>clock_timestamp() JOIN resource_leases jl ON jl.resource_key='job:'||j.id AND jl.work_id=j.id AND jl.owner=p.owner AND jl.generation=p.job_generation AND NOT jl.blocked AND jl.expires_at>clock_timestamp() WHERE p.node_id=$1 AND p.expires_at>clock_timestamp() AND j.status='running' AND j.node_id=p.node_id AND j.kind IN ('deploy','sync','rollback') AND (n.mtls_state='ready' OR EXISTS(SELECT 1 FROM mtls_activations a WHERE a.id=n.mtls_activation_id AND a.generation=n.mtls_generation AND a.job_id=j.id AND a.phase IN ('activating','verified','recovery_required')))",
     )
     .bind(&node_id)
-    .bind(now())
     .fetch_optional(&state.pool)
     .await?;
     if probe_hash.is_some_and(|expected| {
@@ -627,7 +626,7 @@ pub async fn hy2_auth(
     }) {
         return Ok(Json(AuthResponse {
             ok: true,
-            id: format!("probe-{node_id}"),
+            id: crate::deployment::probe_tokens::identity(&node_id, &auth_hash),
         }));
     }
     if node.get::<String, _>("mtls_state") != "ready" {

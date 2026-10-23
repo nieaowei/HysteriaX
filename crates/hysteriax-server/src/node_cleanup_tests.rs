@@ -697,6 +697,12 @@ async fn cancelled_cleanup_does_not_report_node_removal() {
     db::write(&state.pool, move |tx| {
         let id = id.clone();
         Box::pin(async move {
+            // Match the worker's job-row-first order. The transitional legacy
+            // statement trigger still takes its advisory lock on UPDATE.
+            sqlx::query("SELECT id FROM jobs WHERE id=$1 FOR UPDATE")
+                .bind(&id)
+                .fetch_one(&mut **tx)
+                .await?;
             sqlx::query("UPDATE jobs SET status='cancelled' WHERE id=$1")
                 .bind(id)
                 .execute(&mut **tx)

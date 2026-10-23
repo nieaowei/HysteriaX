@@ -252,7 +252,19 @@ async fn activation_blocks_user_and_subscription_but_only_bound_live_job_probe_b
             .unwrap(),
         0
     );
-    sqlx::query("INSERT INTO deployment_probe_tokens(node_id,token_hash,expires_at,job_id) VALUES($1,$2,now()+interval '1 minute',$3)").bind(id).bind(crate::security::token_digest("probe")).bind(&job).execute(&state.pool).await.unwrap();
+    let mut probe_tx = state.pool.begin().await.unwrap();
+    let job_lease =
+        crate::execution::acquire(&mut probe_tx, &format!("job:{job}"), "probe-test", &job)
+            .await
+            .unwrap()
+            .unwrap();
+    let node_lease =
+        crate::execution::acquire(&mut probe_tx, &format!("node:{id}"), "probe-test", &job)
+            .await
+            .unwrap()
+            .unwrap();
+    sqlx::query("INSERT INTO deployment_probe_tokens(node_id,token_hash,expires_at,job_id,owner,node_generation,job_generation) VALUES($1,$2,clock_timestamp()+interval '1 minute',$3,$4,$5,$6)").bind(id).bind(crate::security::token_digest("probe")).bind(&job).bind(&job_lease.owner).bind(node_lease.generation).bind(job_lease.generation).execute(&mut *probe_tx).await.unwrap();
+    probe_tx.commit().await.unwrap();
     assert!(auth(&state, id, &token, "probe").await);
     sqlx::query(
         "UPDATE deployment_probe_tokens SET expires_at=now()-interval '1 second' WHERE node_id=$1",

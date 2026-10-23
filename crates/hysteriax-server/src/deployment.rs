@@ -1,4 +1,5 @@
 use crate::db;
+pub(crate) mod probe_tokens;
 use std::{env, time::Duration};
 
 use anyhow::{Context, Result, bail};
@@ -307,15 +308,10 @@ async fn deploy(pool: &PgPool, secrets: &SecretBox, job: &JobInput) -> Result<Jo
     if result.is_err() {
         let _ = crate::credentials::activation::uncertain(pool, &job.id).await;
     }
-    if let Err(error) =
-        sqlx::query("DELETE FROM deployment_probe_tokens WHERE node_id = $1 AND token_hash = $2")
-            .bind(node_id)
-            .bind(token_digest(&probe_token))
-            .execute(pool)
-            .await
-    {
-        tracing::warn!(node_id, %error, "failed to clear temporary deployment probe credential");
+    if let Err(error) = probe_tokens::remove(pool, job, &token_digest(&probe_token)).await {
+        tracing::warn!(node_id, %error,"failed to clear temporary deployment probe credential");
     }
+
     result
 }
 
@@ -569,13 +565,6 @@ async fn deploy_with_probe(
             ));
         }
         FingerprintResult::Changed { expected, observed } => {
-            sqlx::query(
-                "UPDATE nodes SET state = 'fingerprint_changed', updated_at = $1 WHERE id = $2",
-            )
-            .bind(now())
-            .bind(node_id)
-            .execute(pool)
-            .await?;
             bail!("SSH host key changed: expected {expected}; observed {observed}")
         }
     };
@@ -754,7 +743,8 @@ async fn deploy_with_probe(
         );
     }
     let systemd_unit = systemd_unit(port_hopping);
-    let remote_staging = format!("/tmp/hysteriax-{node_id}");
+    let remote_paths = probe_tokens::paths(job, &token_digest(probe_token))?;
+    let remote_staging = &remote_paths.stage;
     report_progress(
         pool,
         job,
@@ -905,14 +895,7 @@ async fn deploy_with_probe(
             }
         }
     }
-    let probe_expires_at = chrono::Utc::now() + chrono::Duration::minutes(15);
-    sqlx::query("INSERT INTO deployment_probe_tokens (node_id, token_hash, expires_at,job_id) VALUES ($1, $2, $3,$4) ON CONFLICT(node_id) DO UPDATE SET token_hash = excluded.token_hash, expires_at = excluded.expires_at,job_id=excluded.job_id")
-        .bind(node_id)
-        .bind(token_digest(probe_token))
-        .bind(probe_expires_at)
-        .bind(&job.id)
-        .execute(pool)
-        .await?;
+    probe_tokens::install(pool, job, &token_digest(probe_token)).await?;
     report_progress(
         pool,
         job,
@@ -1022,6 +1005,7 @@ async fn deploy_with_probe(
             secrets,
             &session,
             ProxyProbe {
+                directory: &remote_paths.probe,
                 node_id,
                 token: probe_token,
                 stats_secret: &stats_secret,
@@ -1253,6 +1237,7 @@ where
 }
 
 struct ProxyProbe<'a> {
+    directory: &'a str,
     node_id: &'a str,
     token: &'a str,
     stats_secret: &'a str,
@@ -1273,6 +1258,7 @@ async fn run_proxy_probe(
     probe: ProxyProbe<'_>,
 ) -> Result<Value> {
     let ProxyProbe {
+        directory: remote_dir,
         node_id,
         token: probe_token,
         stats_secret,
@@ -1293,12 +1279,11 @@ async fn run_proxy_probe(
         .map(|target| target.remote_address.as_str())
         .unwrap_or(&default_remote_target);
     let probe_port = free_remote_tcp_port(session, probe_token).await?;
-    let remote_dir = format!("/tmp/hysteriax-probe-{node_id}");
     let client_config_path = format!("{remote_dir}/client.yaml");
     let client_log_path = format!("{remote_dir}/client.log");
     let client_certificate_path = format!("{remote_dir}/client.crt");
     let client_key_path = format!("{remote_dir}/client.key");
-    let probe_id = format!("probe-{node_id}");
+    let probe_id = probe_tokens::identity(node_id, &token_digest(probe_token));
 
     let mut tls = json!({
         "sni": tls_sni.filter(|value| !value.trim().is_empty()).unwrap_or(public_host),
@@ -1347,7 +1332,7 @@ if [ -f "$DIR/client.pid" ]; then
   pid=$(cat "$DIR/client.pid")
   case "$pid" in ''|*[!0-9]*) ;; *)
     args=$(tr '\000' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true)
-    case "$args" in "/opt/hysteriax/hysteria client -c $CONFIG"*) kill "$pid" 2>/dev/null || true ;; esac
+    case "$args" in "/opt/hysteriax/hysteria client -c $CONFIG "*|"timeout --kill-after=2s 90s /opt/hysteriax/hysteria client -c $CONFIG "*) kill "$pid" 2>/dev/null || true ;; esac
   ;; esac
 fi
 rm -rf "$DIR"
@@ -1382,7 +1367,7 @@ chmod 0700 "$DIR"
         session.execute_checked(&chmod_command).await?;
 
         let start_command = format!(
-            "set -eu; umask 077; HYSTERIA_DISABLE_UPDATE_CHECK=1 nohup /opt/hysteriax/hysteria client -c {} > {} 2>&1 </dev/null & pid=$!; printf '%s\\n' \"$pid\" > {}; printf '%s\\n' \"$pid\"",
+            "set -eu; umask 077; HYSTERIA_DISABLE_UPDATE_CHECK=1 nohup timeout --kill-after=2s 90s /opt/hysteriax/hysteria client -c {} > {} 2>&1 </dev/null & pid=$!; printf '%s\\n' \"$pid\" > {}; printf '%s\\n' \"$pid\"",
             shell_quote(&client_config_path),shell_quote(&client_log_path),shell_quote(&format!("{remote_dir}/client.pid"))
         );
         client_pid = Some(
@@ -1501,13 +1486,7 @@ chmod 0700 "$DIR"
         }
     };
 
-    let cleanup_command = format!(
-        "{}rm -rf {}",
-        client_pid
-            .map(|pid| format!("kill {pid} 2>/dev/null || true; sleep 0.2; "))
-            .unwrap_or_default(),
-        shell_quote(&remote_dir)
-    );
+    let cleanup_command = probe_cleanup_command(remote_dir, client_pid);
     let cleanup = session.execute_checked(&cleanup_command).await;
     let route_check = match (probe_result, cleanup) {
         (Ok(route_check), Ok(_)) => route_check,
@@ -1527,6 +1506,17 @@ chmod 0700 "$DIR"
         "transport": "hysteria_client_tcp",
         "route_check": route_check,
     }))
+}
+
+fn probe_cleanup_command(directory: &str, pid: Option<u32>) -> String {
+    let config = shell_quote(&format!("{directory}/client.yaml"));
+    let kill=pid.map(|pid|format!(r#"CONFIG={config}
+args=$(tr '\000' ' ' < /proc/{pid}/cmdline 2>/dev/null || true)
+case "$args" in
+  "/opt/hysteriax/hysteria client -c $CONFIG "*|"timeout --kill-after=2s 90s /opt/hysteriax/hysteria client -c $CONFIG "*) kill {pid} 2>/dev/null || true; sleep 0.2 ;;
+esac
+"#)).unwrap_or_default();
+    format!("{kill}rm -rf {}", shell_quote(directory))
 }
 
 pub(crate) fn client_ech_config(
@@ -1758,6 +1748,11 @@ async fn remote_guard(
     port_hopping: bool,
     listen_addr: Option<&str>,
 ) -> Result<()> {
+    let probe_tools = if listen_addr.is_some() {
+        "if ! command -v timeout >/dev/null 2>&1; then echo 'deployment probe requires timeout from coreutils' >&2; exit 47; fi;"
+    } else {
+        ""
+    };
     let firewall_tools = if port_hopping {
         "if ! command -v nft >/dev/null 2>&1 && ! command -v iptables >/dev/null 2>&1 && ! command -v ip6tables >/dev/null 2>&1; then echo 'port hopping requires nftables or iptables on the remote node' >&2; exit 45; fi;"
     } else {
@@ -1774,7 +1769,7 @@ async fn remote_guard(
         .unwrap_or_default();
     let output = session
         .execute_checked(
-            &format!("set -eu; {firewall_tools} {port_check} if [ -e /etc/systemd/system/hysteriax.service ] && [ ! -f /opt/hysteriax/.hysteriax-managed ]; then echo 'unmanaged systemd unit already exists' >&2; exit 41; fi; if [ -e /opt/hysteriax ] && [ ! -f /opt/hysteriax/.hysteriax-managed ]; then echo 'unmanaged directory already exists' >&2; exit 42; fi; if getent passwd hysteriax >/dev/null 2>&1 && [ ! -f /opt/hysteriax/.hysteriax-managed ]; then echo 'unmanaged hysteriax service account already exists' >&2; exit 43; fi; if command -v hysteria >/dev/null 2>&1 && [ ! -f /opt/hysteriax/.hysteriax-managed ]; then echo 'an existing Hysteria installation was found' >&2; exit 44; fi; df -Pk / | awk 'NR == 2 {{ if ($4 < 102400) exit 1 }}'"),
+            &format!("set -eu; {probe_tools} {firewall_tools} {port_check} if [ -e /etc/systemd/system/hysteriax.service ] && [ ! -f /opt/hysteriax/.hysteriax-managed ]; then echo 'unmanaged systemd unit already exists' >&2; exit 41; fi; if [ -e /opt/hysteriax ] && [ ! -f /opt/hysteriax/.hysteriax-managed ]; then echo 'unmanaged directory already exists' >&2; exit 42; fi; if getent passwd hysteriax >/dev/null 2>&1 && [ ! -f /opt/hysteriax/.hysteriax-managed ]; then echo 'unmanaged hysteriax service account already exists' >&2; exit 43; fi; if command -v hysteria >/dev/null 2>&1 && [ ! -f /opt/hysteriax/.hysteriax-managed ]; then echo 'an existing Hysteria installation was found' >&2; exit 44; fi; df -Pk / | awk 'NR == 2 {{ if ($4 < 102400) exit 1 }}'"),
         )
         .await?;
     let _ = output;
