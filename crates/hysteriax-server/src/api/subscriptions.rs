@@ -633,7 +633,7 @@ pub async fn hy2_auth(
         return Ok(Json(AuthResponse::denied()));
     }
     let monitor_hash: Option<String> = sqlx::query_scalar(
-        "SELECT token_hash FROM monitoring_probe_tokens WHERE node_id = $1 AND expires_at > now()",
+        "SELECT p.token_hash FROM monitoring_probe_tokens p JOIN background_work w ON w.id=p.work_id AND w.node_id=p.node_id AND w.kind='proxy' AND w.state='running' AND w.owner=p.owner AND w.generation=p.work_generation JOIN nodes n ON n.id=p.node_id AND n.deployed_revision=(w.payload->>'deployed_revision')::bigint AND n.mtls_state='ready' AND n.state NOT IN ('deleting','delete_failed') JOIN resource_leases nl ON nl.resource_key='node:'||p.node_id AND nl.work_id=w.id AND nl.owner=p.owner AND nl.generation=p.node_generation AND NOT nl.blocked AND nl.expires_at>clock_timestamp() JOIN resource_leases wl ON wl.resource_key='work:'||w.id AND wl.work_id=w.id AND wl.owner=p.owner AND wl.generation=p.work_generation AND NOT wl.blocked AND wl.expires_at>clock_timestamp() WHERE p.node_id=$1 AND p.expires_at>clock_timestamp()",
     )
     .bind(&node_id)
     .fetch_optional(&state.pool)
@@ -644,7 +644,7 @@ pub async fn hy2_auth(
     }) {
         return Ok(Json(AuthResponse {
             ok: true,
-            id: format!("monitor-{node_id}"),
+            id: crate::proxy_monitor::identity(&node_id, &auth_hash),
         }));
     }
     if crate::node_limits::restricted(&state.pool, &node_id)

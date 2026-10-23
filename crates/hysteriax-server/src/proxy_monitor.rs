@@ -11,6 +11,9 @@ use std::{
 use tokio::process::Command;
 use uuid::Uuid;
 
+#[cfg(test)]
+pub(crate) mod token_tests;
+
 fn probe_directory_prefix() -> String {
     let raw = std::env::var("DATABASE_URL").unwrap_or_default();
     let identity = url::Url::parse(&raw)
@@ -288,15 +291,69 @@ pub(crate) async fn sample_work(state: &AppState, work: &crate::background::Work
     save_result(state, work, result, &token_digest(&token)).await
 }
 
+pub(crate) fn identity(node: &str, hash: &str) -> String {
+    format!("monitor-{node}-{hash}")
+}
+
+fn token_leases(
+    work: &crate::background::Work,
+) -> Result<(&crate::execution::Execution, &crate::execution::Execution)> {
+    anyhow::ensure!(
+        work.kind == "proxy",
+        "monitoring credential requires proxy work"
+    );
+    let primary = work
+        .leases
+        .iter()
+        .find(|l| {
+            l.resource == format!("work:{}", work.id)
+                && l.work == work.id
+                && !l.owner.is_empty()
+                && l.generation > 0
+        })
+        .context("missing monitoring work lease")?;
+    let node = work
+        .leases
+        .iter()
+        .find(|l| {
+            l.resource == format!("node:{}", work.node)
+                && l.work == work.id
+                && l.owner == primary.owner
+                && l.generation > 0
+        })
+        .context("missing monitoring node lease")?;
+    Ok((primary, node))
+}
+
+async fn guard_token_work(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    work: &crate::background::Work,
+) -> Result<()> {
+    let (primary, _) = token_leases(work)?;
+    for lease in &work.leases {
+        lease.guard(tx).await?;
+    }
+    let current: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM background_work WHERE id=$1 AND kind='proxy' AND node_id=$2 AND cycle_id=$3 AND payload=$4 AND state='running' AND owner=$5 AND generation=$6 FOR UPDATE)")
+        .bind(&work.id).bind(&work.node).bind(work.cycle).bind(&work.payload)
+        .bind(&primary.owner).bind(primary.generation).fetch_one(&mut **tx).await?;
+    anyhow::ensure!(current, "monitoring work source changed or ended");
+    Ok(())
+}
+
 async fn install_token(state: &AppState, work: &crate::background::Work, hash: &str) -> Result<()> {
+    token_leases(work)?;
     let (work, hash) = (work.clone(), hash.to_owned());
     crate::db::write(&state.pool,move |tx| {
         let (work,hash)=(work.clone(),hash.clone());
         let node=work.node.clone();
         Box::pin(async move {
-            for lease in &work.leases {lease.guard(tx).await?;}
-            sqlx::query("INSERT INTO monitoring_probe_tokens(node_id,token_hash,expires_at) VALUES($1,$2,clock_timestamp()+interval '30 seconds') ON CONFLICT(node_id) DO UPDATE SET token_hash=$2,expires_at=excluded.expires_at")
-                .bind(node).bind(hash).execute(&mut **tx).await?;
+            guard_token_work(tx,&work).await?;
+            let (primary,node_lease)=token_leases(&work)?;
+            let revision=work.payload["deployed_revision"].as_i64().context("missing proxy revision")?;
+            sqlx::query("SELECT id FROM nodes WHERE id=$1 AND deployed_revision=$2 AND mtls_state='ready' AND state NOT IN ('deleting','delete_failed') FOR NO KEY UPDATE")
+                .bind(&node).bind(revision).fetch_optional(&mut **tx).await?.context("monitoring node source changed")?;
+            sqlx::query("INSERT INTO monitoring_probe_tokens(node_id,token_hash,expires_at,work_id,owner,node_generation,work_generation) VALUES($1,$2,clock_timestamp()+interval '30 seconds',$3,$4,$5,$6) ON CONFLICT(node_id) DO UPDATE SET token_hash=excluded.token_hash,expires_at=excluded.expires_at,work_id=excluded.work_id,owner=excluded.owner,node_generation=excluded.node_generation,work_generation=excluded.work_generation")
+                .bind(node).bind(hash).bind(&work.id).bind(&primary.owner).bind(node_lease.generation).bind(primary.generation).execute(&mut **tx).await?;
             Ok(())
         })
     }).await
@@ -308,11 +365,13 @@ async fn save_result(
     result: ProbeResult,
     token_hash: &str,
 ) -> Result<()> {
+    token_leases(work)?;
     let (work, token_hash) = (work.clone(), token_hash.to_owned());
     crate::db::write(&state.pool,move |tx| {
         let (work,result,token_hash)=(work.clone(),result.clone(),token_hash.clone());
         Box::pin(async move {
-            for lease in &work.leases {lease.guard(tx).await?;}
+            guard_token_work(tx,&work).await?;
+            let (primary,node_lease)=token_leases(&work)?;
             let id=&work.node;
             let revision=work.payload["deployed_revision"].as_i64().context("missing proxy revision")?;
             let started:DateTime<Utc>=serde_json::from_value(work.payload["captured_at"].clone())?;
@@ -331,8 +390,8 @@ async fn save_result(
                         .bind(id).bind(revision).bind(health.0).bind(health.1).bind(health.2).bind(started).execute(&mut **tx).await?;
                 }
             }
-            sqlx::query("DELETE FROM monitoring_probe_tokens WHERE node_id=$1 AND token_hash=$2")
-                .bind(id).bind(token_hash).execute(&mut **tx).await?;
+            sqlx::query("DELETE FROM monitoring_probe_tokens WHERE node_id=$1 AND token_hash=$2 AND work_id=$3 AND owner=$4 AND node_generation=$5 AND work_generation=$6")
+                .bind(id).bind(token_hash).bind(&work.id).bind(&primary.owner).bind(node_lease.generation).bind(primary.generation).execute(&mut **tx).await?;
             Ok(())
         })
     }).await
@@ -502,7 +561,10 @@ async fn probe_using(
             let body = response.bytes().await?;
             if serde_json::from_slice::<Value>(&body)
                 .ok()
-                .and_then(|v| v.get(format!("monitor-{id}")).and_then(Value::as_u64))
+                .and_then(|v| {
+                    v.get(identity(id, &token_digest(token)))
+                        .and_then(Value::as_u64)
+                })
                 .is_some_and(|n| n > 0)
             {
                 break;

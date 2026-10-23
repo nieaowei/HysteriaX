@@ -573,7 +573,11 @@ async fn authoritative_auth_rejects_quota_before_fanout_while_monitoring_credent
         serde_json::to_value(auth("user-token").await.unwrap().0).unwrap()["ok"],
         false
     );
-    sqlx::query("INSERT INTO monitoring_probe_tokens(node_id,token_hash,expires_at) VALUES('a',$1,clock_timestamp()+interval '1 minute')").bind(token_digest("probe-token")).execute(&state.pool).await.unwrap();
+    sqlx::query("UPDATE nodes SET deployed_revision=1 WHERE id='a'")
+        .execute(&state.pool)
+        .await
+        .unwrap();
+    crate::proxy_monitor::token_tests::install_fixture(&state, "a", "probe-token").await;
     assert_eq!(
         serde_json::to_value(auth("probe-token").await.unwrap().0).unwrap()["ok"],
         true

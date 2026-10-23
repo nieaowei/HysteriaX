@@ -1039,15 +1039,8 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(jobs, vec![(id.clone(), "queued".into())]);
-        sqlx::query(
-            "INSERT INTO monitoring_probe_tokens(node_id,token_hash,expires_at) VALUES ($1,$2,$3)",
-        )
-        .bind(&id)
-        .bind(crate::security::token_digest("probe"))
-        .bind(Utc::now() + chrono::Duration::minutes(1))
-        .execute(&state.pool)
-        .await
-        .unwrap();
+        let probe_work =
+            crate::proxy_monitor::token_tests::install_fixture(&state, &id, "probe").await;
         let probe = crate::api::subscriptions::hy2_auth(
             State(state.clone()),
             Path((id.clone(), token.clone())),
@@ -1056,6 +1049,9 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(serde_json::to_value(probe.0).unwrap()["ok"], true);
+        crate::background::finish(&state.pool, &probe_work, true)
+            .await
+            .unwrap();
         set_package(&state, &id, &Package::default()).await;
         maintenance::drain_for_test(&state.pool).await;
         assert!(!restricted(&state.pool, &id).await.unwrap());
