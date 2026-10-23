@@ -1247,18 +1247,14 @@ mod tests {
     }
     #[tokio::test]
     async fn migration_backfills_unlimited_nodes_and_deletion_cascades_package_history() {
-        let (state, id, _) = fixture().await;
-        let mut tx = db::begin_write(&state.pool).await.unwrap();
-        sqlx::raw_sql(
-            "DROP TABLE node_alerts; DROP TABLE node_network_samples; DROP TABLE node_packages;",
-        )
-        .execute(&mut *tx)
-        .await
-        .unwrap();
-        sqlx::raw_sql(include_str!("../migrations/0003_node_packages.sql"))
-            .execute(&mut *tx)
-            .await
-            .unwrap();
+        // Exercise the real 0002 -> latest migration chain, including removal
+        // of the old package-table serialization triggers in 0065.
+        let pool = db::test_pool_through_version(3, 2).await;
+        let id = "legacy-node";
+        sqlx::query("INSERT INTO nodes(id,name,ssh_host,ssh_port,ssh_username,ssh_auth_type,ssh_secret_enc,public_host,public_port,listen_addr,node_token_hash,node_token_enc,traffic_stats_secret_enc,desired_config_enc,created_at,updated_at) VALUES($1,'Legacy','127.0.0.1',22,'root','password','ssh','example.test',443,':443','hash','token','stats','{}',now(),now())")
+            .bind(id).execute(&pool).await.unwrap();
+        db::run_migrations(&pool).await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
         let row =
             sqlx::query("SELECT config,usage_bytes,restricted FROM node_packages WHERE node_id=$1")
                 .bind(&id)
@@ -1269,6 +1265,10 @@ mod tests {
         assert_eq!(package, Package::default());
         assert_eq!(row.get::<i64, _>("usage_bytes"), 0);
         assert!(!row.get::<bool, _>("restricted"));
+        sqlx::query("INSERT INTO node_network_samples(node_id,period_id,delta_tx,delta_rx,sampled_at) VALUES($1,$1,1,2,now())")
+            .bind(id).execute(&mut *tx).await.unwrap();
+        sqlx::query("INSERT INTO node_alerts(id,node_id,kind,scope,created_at) VALUES('legacy-alert',$1,'warning','package',now())")
+            .bind(id).execute(&mut *tx).await.unwrap();
         sqlx::query("DELETE FROM nodes WHERE id=$1")
             .bind(&id)
             .execute(&mut *tx)
@@ -1279,6 +1279,21 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(count, 0);
+        let history: (i64, i64) = sqlx::query_as(
+            "SELECT (SELECT count(*) FROM node_network_samples),(SELECT count(*) FROM node_alerts)",
+        )
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap();
+        assert_eq!(history, (0, 0));
+        assert!(
+            sqlx::query_scalar::<_, bool>(
+                "SELECT to_regprocedure(current_schema()||'.hysteriax_serialize_writes()') IS NULL"
+            )
+            .fetch_one(&mut *tx)
+            .await
+            .unwrap()
+        );
         tx.commit().await.unwrap();
     }
     #[tokio::test]

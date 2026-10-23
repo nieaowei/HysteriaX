@@ -1903,9 +1903,16 @@ mod tests {
 
     #[tokio::test]
     async fn migration_merges_identical_sets_without_replacing_credentials_or_empty_users() {
-        let state = fixture().await;
-        sqlx::raw_sql("DROP TABLE authorization_group_previews,authorization_group_users,authorization_group_nodes,authorization_groups;
-            INSERT INTO users(id,name,created_at,updated_at) VALUES('peer','Peer',now(),now()),('empty','Empty',now(),now());
+        // Build the actual pre-0010 schema. Replaying old DDL on the latest
+        // schema would try to resurrect the global lock removed by 0065.
+        let state = AppState::new(
+            crate::db::test_pool_through_version(3, 9).await,
+            crate::security::SecretBox::from_base64("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+                .unwrap(),
+        );
+        sqlx::query("INSERT INTO nodes(id,name,ssh_host,ssh_port,ssh_username,ssh_auth_type,ssh_secret_enc,public_host,public_port,listen_addr,node_token_hash,node_token_enc,traffic_stats_secret_enc,desired_config_enc,created_at,updated_at) VALUES('node','Legacy','127.0.0.1',22,'root','password','ssh','example.test',443,':443','hash','token','stats',$1,now(),now())")
+            .bind(state.secrets.encrypt("{}").unwrap()).execute(&state.pool).await.unwrap();
+        sqlx::raw_sql("INSERT INTO users(id,name,created_at,updated_at) VALUES('user','User',now(),now()),('peer','Peer',now(),now()),('empty','Empty',now(),now());
             INSERT INTO node_assignments(user_id,node_id,credential_hash,credential_enc,created_at) VALUES('user','node','first','enc-first',now()),('peer','node','second','enc-second',now());")
             .execute(&state.pool).await.unwrap();
         sqlx::raw_sql("INSERT INTO credentials(id,name,kind,owner_user_id,created_at,updated_at) VALUES('cert-a','A','tls_identity','user',now(),now()),('cert-b','B','tls_identity','peer',now(),now());
@@ -1921,12 +1928,7 @@ mod tests {
         .fetch_all(&state.pool)
         .await
         .unwrap();
-        sqlx::raw_sql(include_str!(
-            "../../migrations/0010_authorization_groups.sql"
-        ))
-        .execute(&state.pool)
-        .await
-        .unwrap();
+        crate::db::run_migrations(&state.pool).await.unwrap();
         let groups: i64 = sqlx::query_scalar("SELECT count(*) FROM authorization_groups")
             .fetch_one(&state.pool)
             .await
@@ -1960,6 +1962,15 @@ mod tests {
             7
         );
         crate::db::run_migrations(&state.pool).await.unwrap();
+        assert_eq!(
+            sqlx::query_scalar::<_, bool>(
+                "SELECT to_regprocedure(current_schema()||'.hysteriax_serialize_writes()') IS NULL"
+            )
+            .fetch_one(&state.pool)
+            .await
+            .unwrap(),
+            true,
+        );
         assert_eq!(
             sqlx::query_scalar::<_, i64>("SELECT count(*) FROM authorization_groups")
                 .fetch_one(&state.pool)
