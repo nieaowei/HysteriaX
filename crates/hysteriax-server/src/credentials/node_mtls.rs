@@ -1,5 +1,6 @@
 //! Node policy and public trust material. CA private keys never enter resolved
 //! server options, node resources, snapshots, or subscriber projections.
+mod users;
 use anyhow::{Context, Result, ensure};
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
@@ -253,7 +254,7 @@ pub async fn probe_material(
 pub async fn prepare_users(
     pool: &PgPool,
     secrets: &SecretBox,
-    node: &str,
+    job: &crate::deployment::JobInput,
     settings: &Settings,
     trust: &[TrustVersion],
     rollback: bool,
@@ -261,16 +262,8 @@ pub async fn prepare_users(
     let Some((ca, version)) = settings.authority() else {
         return Ok(());
     };
-    let expected: i64 = sqlx::query_scalar("SELECT desired_revision FROM nodes WHERE id=$1")
-        .bind(node)
-        .fetch_one(pool)
-        .await?;
-    let users: Vec<String> = sqlx::query_scalar(
-        "SELECT user_id FROM node_assignments WHERE node_id=$1 ORDER BY user_id",
-    )
-    .bind(node)
-    .fetch_all(pool)
-    .await?;
+    let source = users::capture(pool, job).await?;
+    let users = &source.users;
     let mut candidates = Vec::new();
     if rollback {
         let valid_ca:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM mtls_ca_generations g JOIN credentials c ON c.id=g.ca_id WHERE g.ca_id=$1 AND g.ca_version=$2 AND g.expires_at>now() AND NOT c.archived)").bind(ca).bind(version).fetch_one(pool).await?;
@@ -279,7 +272,7 @@ pub async fn prepare_users(
             "rollback unavailable: historical CA expired or was archived; rebuild or sync the node"
         );
         let versions: Vec<i64> = trust.iter().map(|v| v.version).collect();
-        for user in &users {
+        for user in users {
             let valid:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM mtls_user_identities i JOIN mtls_user_version_publication v ON v.identity_id=i.id WHERE i.user_id=$1 AND i.ca_id=$2 AND NOT i.archived AND v.ca_version=ANY($3) AND v.released AND NOT v.discarded AND v.not_before<=now() AND v.expires_at>now())")
                 .bind(user).bind(ca).bind(&versions).fetch_one(pool).await?;
             ensure!(
@@ -287,30 +280,14 @@ pub async fn prepare_users(
                 "rollback unavailable: a currently authorized user has no valid historical shared identity; rebuild or sync the node"
             );
         }
+        users::validate(pool, &source).await?;
         return Ok(());
     }
-    for user in &users {
+    for user in users {
+        crate::execution::check_current().await?;
         candidates
             .push(super::identities::prepare_user(pool, secrets, user, ca, version, false).await?);
     }
-    let mut tx = crate::db::begin_write(pool).await?;
-    let current: Option<i64> = sqlx::query_scalar("SELECT desired_revision FROM nodes WHERE id=$1")
-        .bind(node)
-        .fetch_optional(&mut *tx)
-        .await?;
-    let current_users: Vec<String> = sqlx::query_scalar(
-        "SELECT user_id FROM node_assignments WHERE node_id=$1 ORDER BY user_id",
-    )
-    .bind(node)
-    .fetch_all(&mut *tx)
-    .await?;
-    ensure!(
-        current == Some(expected) && current_users == users,
-        "node permissions changed during signing; retry deployment"
-    );
-    for candidate in candidates {
-        super::identities::commit_user(&mut tx, secrets, candidate).await?;
-    }
-    tx.commit().await?;
+    users::commit(pool, secrets, &source, candidates).await?;
     Ok(())
 }

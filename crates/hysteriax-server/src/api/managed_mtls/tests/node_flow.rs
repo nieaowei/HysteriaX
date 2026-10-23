@@ -94,7 +94,7 @@ async fn managed_node_zero_user_preparation_has_public_trust_and_independent_pro
     let trust = node_mtls::desired_trust(&state.pool, id, &policy)
         .await
         .unwrap();
-    node_mtls::prepare_users(&state.pool, &state.secrets, id, &policy, &trust, false)
+    prepare_bound_users(&state, id, &policy, &trust)
         .await
         .unwrap();
     credentials::maintenance::renew_probe_on(&state.pool, &state.secrets, id, &ca, 1)
@@ -191,7 +191,7 @@ async fn activation_blocks_user_and_subscription_but_only_bound_live_job_probe_b
     let trust = node_mtls::desired_trust(&state.pool, id, &policy)
         .await
         .unwrap();
-    node_mtls::prepare_users(&state.pool, &state.secrets, id, &policy, &trust, false)
+    prepare_bound_users(&state, id, &policy, &trust)
         .await
         .unwrap();
     let mut source_tx = state.pool.begin().await.unwrap();
@@ -608,4 +608,50 @@ async fn acme_observation_is_hidden_after_deployment_changes_without_mutating_mt
             .unwrap()
             .is_none()
     );
+}
+
+async fn prepare_bound_users(
+    state: &AppState,
+    node: &str,
+    policy: &Settings,
+    trust: &[node_mtls::TrustVersion],
+) -> anyhow::Result<()> {
+    let id = job(state, node).await;
+    let input = crate::deployment::JobInput {
+        id: id.clone(),
+        kind: "deploy".into(),
+        node_id: Some(node.into()),
+        target_revision: Some(1),
+        payload: json!({}),
+        attempts: 0,
+    };
+    let mut tx = state.pool.begin().await?;
+    let mut leases = vec![];
+    let mut keys = vec![format!("job:{id}"), format!("node:{node}")];
+    keys.sort();
+    for key in keys {
+        leases.push(
+            crate::execution::acquire(&mut tx, &key, &state.instance_id, &id)
+                .await?
+                .expect("available preparation resource"),
+        );
+    }
+    tx.commit().await?;
+    crate::execution::supervise(
+        state.pool.clone(),
+        leases.clone(),
+        node_mtls::prepare_users(&state.pool, &state.secrets, &input, policy, trust, false),
+    )
+    .await
+    .expect("healthy preparation scope")?;
+    let mut tx = state.pool.begin().await?;
+    for lease in leases {
+        assert!(lease.release(&mut tx).await?);
+    }
+    sqlx::query("UPDATE jobs SET status='succeeded',stage='completed' WHERE id=$1")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(())
 }

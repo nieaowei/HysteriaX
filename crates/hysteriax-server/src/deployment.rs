@@ -432,7 +432,7 @@ async fn deploy_with_probe(
         crate::credentials::node_mtls::prepare_users(
             pool,
             secrets,
-            node_id,
+            job,
             &mtls,
             &trust,
             job.kind == "rollback",
@@ -1125,7 +1125,7 @@ async fn deploy_with_probe(
             crate::credentials::node_mtls::prepare_users(
                 pool,
                 secrets,
-                node_id,
+                job,
                 &mtls,
                 &trust,
                 job.kind == "rollback",
