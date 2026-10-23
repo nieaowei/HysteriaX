@@ -180,34 +180,13 @@ pub(crate) async fn preview_create(
     State(state): State<AppState>,
     Json(input): Json<GroupPreviewRequest>,
 ) -> Result<Json<Value>, ApiError> {
-    if input.action != "create" {
-        return Err(ApiError::bad_request(
-            "create preview requires action=create",
-        ));
-    }
-    if input.expected_revision.is_some() {
-        return Err(ApiError::bad_request(
-            "expected_revision is not valid when creating a group",
-        ));
-    }
-    let proposal = proposal_from_preview(input)?;
+    let proposal = preview_create_input(input)?;
+    let token = Uuid::new_v4().to_string();
     let pool = state.pool.clone();
     db::serializable(&pool, move |tx| {
         let (state, proposal) = (state.clone(), proposal.clone());
-        Box::pin(async move {
-            validate_proposal_entities(tx, &proposal).await?;
-            let affected = proposal.user_ids.clone();
-            let old_pairs = effective_pairs(tx, &affected, None).await?;
-            let mut new_pairs = old_pairs.clone();
-            add_group_pairs(&mut new_pairs, &proposal.user_ids, &proposal.node_ids);
-            let (guard, result, request_json) = preview_data(
-                &state, tx, "create", None, None, &affected, &proposal, &old_pairs, &new_pairs,
-            )
-            .await?;
-            let token =
-                store_preview(tx, "create", None, None, request_json, guard, &result).await?;
-            Ok(Json(preview_json("create", token, result)))
-        })
+        let token = token.clone();
+        Box::pin(async move { preview_create_on(tx, state, proposal, token).await })
     })
     .await
 }
@@ -217,26 +196,8 @@ pub(crate) async fn preview_group(
     Path(group_id): Path<String>,
     Json(input): Json<GroupPreviewRequest>,
 ) -> Result<Json<Value>, ApiError> {
-    if !matches!(input.action.as_str(), "update" | "delete") {
-        return Err(ApiError::bad_request(
-            "group preview action must be update or delete",
-        ));
-    }
-    let action = input.action.clone();
-    let expected_revision = input.expected_revision;
-    if expected_revision.is_none() {
-        return Err(ApiError::bad_request("expected_revision is required"));
-    }
-    let proposal = if action == "update" {
-        Some(proposal_from_preview(input.clone())?)
-    } else {
-        if input.name.is_some() || input.user_ids.is_some() || input.node_ids.is_some() {
-            return Err(ApiError::bad_request(
-                "delete preview accepts only action and expected_revision",
-            ));
-        }
-        None
-    };
+    let (action, expected_revision, proposal) = preview_group_input(input)?;
+    let token = Uuid::new_v4().to_string();
     let pool = state.pool.clone();
     db::serializable(&pool, move |tx| {
         let (state, group_id, action, proposal) = (
@@ -245,52 +206,18 @@ pub(crate) async fn preview_group(
             action.clone(),
             proposal.clone(),
         );
+        let token = token.clone();
         Box::pin(async move {
-            let current = load_group_tx(tx, &group_id)
-                .await?
-                .ok_or_else(|| ApiError::not_found("authorization group"))?;
-            check_revision(current.revision, expected_revision)?;
-            if let Some(proposal) = &proposal {
-                validate_proposal_entities(tx, proposal).await?;
-            }
-            let mut affected = current.user_ids.clone();
-            if let Some(proposal) = &proposal {
-                affected.extend(proposal.user_ids.clone());
-            }
-            sort_dedup(&mut affected);
-            let old_pairs = effective_pairs(tx, &affected, None).await?;
-            let mut new_pairs = effective_pairs(tx, &affected, Some(&group_id)).await?;
-            if let Some(proposal) = &proposal {
-                add_group_pairs(&mut new_pairs, &proposal.user_ids, &proposal.node_ids);
-            }
-            let proposal_for_snapshot = proposal.unwrap_or(GroupProposal {
-                name: current.name.clone(),
-                user_ids: Vec::new(),
-                node_ids: Vec::new(),
-            });
-            let (guard, result, request_json) = preview_data(
-                &state,
+            preview_group_on(
                 tx,
-                &action,
-                Some(&group_id),
-                Some(expected_revision.unwrap_or_default()),
-                &affected,
-                &proposal_for_snapshot,
-                &old_pairs,
-                &new_pairs,
+                state,
+                group_id,
+                action,
+                expected_revision,
+                proposal,
+                token,
             )
-            .await?;
-            let token = store_preview(
-                tx,
-                &action,
-                Some(&group_id),
-                None,
-                request_json,
-                guard,
-                &result,
-            )
-            .await?;
-            Ok(Json(preview_json(&action, token, result)))
+            .await
         })
     })
     .await
@@ -359,50 +286,14 @@ pub(crate) async fn preview_memberships(
     Path(user_id): Path<String>,
     Json(input): Json<MembershipPreviewRequest>,
 ) -> Result<Json<Value>, ApiError> {
-    if input.expected_revision < 1 {
-        return Err(ApiError::bad_request("expected_revision must be positive"));
-    }
-    let proposal = normalized_membership(MembershipProposal {
-        group_ids: input.group_ids,
-    })?;
-    let expected_revision = input.expected_revision;
+    let (expected_revision, proposal) = preview_memberships_input(input)?;
+    let token = Uuid::new_v4().to_string();
     let pool = state.pool.clone();
     db::serializable(&pool, move |tx| {
-        let (_state, user_id, proposal) = (state.clone(), user_id.clone(), proposal.clone());
+        let (user_id, proposal) = (user_id.clone(), proposal.clone());
+        let token = token.clone();
         Box::pin(async move {
-            let revision = user_revision(tx, &user_id).await?;
-            check_revision(revision, Some(expected_revision))?;
-            validate_group_ids(tx, &proposal.group_ids).await?;
-            let old_pairs = effective_pairs(tx, std::slice::from_ref(&user_id), None).await?;
-            let new_pairs = pairs_for_user_groups(tx, &user_id, &proposal.group_ids).await?;
-            let guard = guard_snapshot(
-                tx,
-                std::slice::from_ref(&user_id),
-                None,
-                &proposal.group_ids,
-                &[],
-            )
-            .await?;
-            let (additions, removals) = pair_diff(&old_pairs, &new_pairs);
-            let request_json = json!({
-                "expected_revision": expected_revision,
-                "group_ids": proposal.group_ids,
-            });
-            let result = with_plan(
-                diff_json(&additions, &removals),
-                crate::credentials::authorization::plan_on(tx, &additions).await?,
-            );
-            let token = store_preview(
-                tx,
-                "update_memberships",
-                None,
-                Some(&user_id),
-                request_json,
-                guard,
-                &result,
-            )
-            .await?;
-            Ok(Json(preview_json("update_memberships", token, result)))
+            preview_memberships_on(tx, user_id, proposal, expected_revision, token).await
         })
     })
     .await
@@ -836,6 +727,7 @@ async fn guard_snapshot(
     }))
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn store_preview(
     tx: &mut Transaction<'_, Postgres>,
     action: &str,
@@ -844,8 +736,8 @@ async fn store_preview(
     request_json: Value,
     guard_json: Value,
     result_json: &Value,
+    token: &str,
 ) -> Result<String, ApiError> {
-    let token = Uuid::new_v4().to_string();
     let timestamp: DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
         .fetch_one(&mut **tx)
         .await?;
@@ -854,7 +746,7 @@ async fn store_preview(
         .execute(&mut **tx)
         .await?;
     sqlx::query("INSERT INTO authorization_group_previews(token,action,group_id,user_id,request_json,guard_json,result_json,created_at,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)")
-        .bind(&token)
+        .bind(token)
         .bind(action)
         .bind(group_id)
         .bind(user_id)
@@ -865,7 +757,7 @@ async fn store_preview(
         .bind(timestamp + Duration::minutes(PREVIEW_TTL_MINUTES))
         .execute(&mut **tx)
         .await?;
-    Ok(token)
+    Ok(token.to_owned())
 }
 
 #[derive(Debug)]
@@ -1007,6 +899,8 @@ async fn commit_group_mutation(
     )
     .await
     .map_err(|e| ApiError::conflict(e.to_string()))?;
+    let assignments = prepare_group_assignments(state, action, group_id, &proposal).await?;
+    let creation_id = Uuid::new_v4().to_string();
     let pool = state.pool.clone();
     let (state, action, group_id, preview_token) = (
         state.clone(),
@@ -1023,6 +917,8 @@ async fn commit_group_mutation(
             proposal.clone(),
             prepared.clone(),
         );
+        let creation_id = creation_id.clone();
+        let assignments = assignments.clone();
         Box::pin(async move {
             commit_group_on(
                 tx,
@@ -1033,6 +929,8 @@ async fn commit_group_mutation(
                 &preview_token,
                 proposal,
                 prepared,
+                &creation_id,
+                assignments,
             )
             .await
         })
@@ -1050,6 +948,8 @@ async fn commit_group_on(
     preview_token: &str,
     proposal: GroupProposal,
     prepared: crate::credentials::authorization::Prepared,
+    creation_id: &str,
+    assignments: PreparedAssignments,
 ) -> Result<Value, ApiError> {
     let mut users = proposal.user_ids.clone();
     if let Some(group) = group_id {
@@ -1134,7 +1034,7 @@ async fn commit_group_on(
 
     let timestamp = now();
     let target_group_id = if action == "create" {
-        Some(Uuid::new_v4().to_string())
+        Some(creation_id.to_owned())
     } else {
         group_id.map(str::to_owned)
     };
@@ -1224,7 +1124,7 @@ async fn commit_group_on(
     .await
     .map_err(authorization_transaction_error)?;
     let (created_credentials, revocation_job_ids, touched_users) =
-        reconcile_assignments(state, tx, &affected_users, &effective_after).await?;
+        reconcile_assignments(tx, &affected_users, &effective_after, &assignments).await?;
     crate::credentials::authorization::annotate_results_on(tx, &mut managed_identities).await?;
     let mut revision_users: BTreeSet<String> = if group_changed {
         affected_users.iter().cloned().collect()
@@ -1355,10 +1255,10 @@ async fn write_group_relations(
 }
 
 async fn reconcile_assignments(
-    state: &AppState,
     tx: &mut Transaction<'_, Postgres>,
     affected_users: &[String],
     effective_after: &HashSet<Pair>,
+    prepared: &PreparedAssignments,
 ) -> Result<(Vec<Value>, Vec<String>, BTreeSet<String>), ApiError> {
     let rows = if affected_users.is_empty() {
         Vec::new()
@@ -1379,15 +1279,13 @@ async fn reconcile_assignments(
     let mut created = Vec::new();
     let mut touched = BTreeSet::new();
     for (user_id, node_id) in additions {
-        let credential = generate_token();
-        let credential_hash = token_digest(&credential);
-        let credential_enc = state.secrets.encrypt(&credential)?;
+        let credential = prepared.get(&user_id, &node_id)?;
         sqlx::query("INSERT INTO node_assignments(user_id,node_id,credential_hash,credential_enc,created_at) VALUES($1,$2,$3,$4,$5)")
             .bind(&user_id)
             .bind(&node_id)
-            .bind(credential_hash)
-            .bind(credential_enc)
-            .bind(now())
+            .bind(&credential.digest)
+            .bind(&credential.ciphertext)
+            .bind(prepared.timestamp)
             .execute(&mut **tx)
             .await?;
         crate::kick_requests::clear_reason(
@@ -1400,7 +1298,7 @@ async fn reconcile_assignments(
         created.push(json!({
             "user_id":user_id,
             "node_id":node_id,
-            "hy2_credential":credential,
+            "hy2_credential":credential.plaintext,
         }));
         touched.insert(user_id);
     }
@@ -1503,6 +1401,7 @@ async fn commit_membership(
     )
     .await
     .map_err(|e| ApiError::conflict(e.to_string()))?;
+    let assignments = prepare_membership_assignments(state, user_id, &proposal).await?;
     let pool = state.pool.clone();
     let (state, user_id, preview_token) =
         (state.clone(), user_id.to_owned(), preview_token.to_owned());
@@ -1514,6 +1413,7 @@ async fn commit_membership(
             proposal.clone(),
             prepared.clone(),
         );
+        let assignments = assignments.clone();
         Box::pin(async move {
             commit_membership_on(
                 tx,
@@ -1523,6 +1423,7 @@ async fn commit_membership(
                 &preview_token,
                 proposal,
                 prepared,
+                assignments,
             )
             .await
         })
@@ -1530,6 +1431,7 @@ async fn commit_membership(
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn commit_membership_on(
     tx: &mut Transaction<'_, Postgres>,
     state: &AppState,
@@ -1538,6 +1440,7 @@ async fn commit_membership_on(
     preview_token: &str,
     proposal: MembershipProposal,
     prepared: crate::credentials::authorization::Prepared,
+    assignments: PreparedAssignments,
 ) -> Result<Value, ApiError> {
     lock_authorization_graph_on(
         tx,
@@ -1635,7 +1538,7 @@ async fn commit_membership_on(
     .await
     .map_err(authorization_transaction_error)?;
     let (created_credentials, revocation_job_ids, touched_users) =
-        reconcile_assignments(state, tx, &[user_id.to_owned()], &effective_after).await?;
+        reconcile_assignments(tx, &[user_id.to_owned()], &effective_after, &assignments).await?;
     crate::credentials::authorization::annotate_results_on(tx, &mut managed_identities).await?;
     if current_set != target_set || !touched_users.is_empty() {
         bump_user_revisions(tx, &BTreeSet::from([user_id.to_owned()]), timestamp).await?;
@@ -1993,3 +1896,11 @@ mod tests {
 
 #[cfg(test)]
 mod transaction_tests;
+
+mod previews;
+use previews::*;
+
+pub(super) mod v2;
+
+mod assignment_preparation;
+use assignment_preparation::*;
