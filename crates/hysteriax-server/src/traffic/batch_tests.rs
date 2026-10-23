@@ -336,7 +336,7 @@ async fn await_advisory_waiter(pool: &PgPool, key: i64) {
 }
 
 #[tokio::test]
-async fn contended_resets_follow_user_row_admission_order_in_both_directions() {
+async fn contended_resets_follow_node_then_user_admission_order_in_both_directions() {
     for reset_first in [true, false] {
         let pool = fixture(1).await;
         capture(&pool, "initial", "a", &counters(1, 100, 0)).await;
@@ -364,12 +364,24 @@ async fn contended_resets_follow_user_row_admission_order_in_both_directions() {
             let reset_pool = pool.clone();
             let reset = tokio::spawn(async move { reset_user(&reset_pool).await });
             await_advisory_waiter(&pool, key).await;
-            let billing_pool = pool.clone();
-            let billing = tokio::spawn(async move { batches::drain(&billing_pool, "next").await });
-            tokio::task::yield_now().await;
+            // Reset owns node -> user. Billing must skip the busy node without
+            // consuming a captured item, then resume it on the next scheduler pass.
+            assert_eq!(
+                batches::process(&pool, "next").await.unwrap(),
+                Progress::Waiting
+            );
+            assert_eq!(
+                sqlx::query_scalar::<_, i64>(
+                    "SELECT processed_count FROM traffic_sample_batches WHERE sample_id='next'"
+                )
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+                0
+            );
             gate.commit().await.unwrap();
             reset.await.unwrap().unwrap();
-            billing.await.unwrap().unwrap();
+            assert!(batches::drain(&pool, "next").await.unwrap());
             assert_eq!(usage(&pool).await, vec![100]);
         } else {
             let billing_pool = pool.clone();

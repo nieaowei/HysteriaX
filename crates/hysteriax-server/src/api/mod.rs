@@ -54,6 +54,17 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v2/admin/tokens/{id}", delete(admin_tokens::revoke))
         .route("/api/v2/users", get(users::list).post(users::create_v2))
         .route(
+            "/api/v2/users/{id}",
+            get(users::get)
+                .patch(users::patch_v2)
+                .delete(users::delete_v2),
+        )
+        .route("/api/v2/users/{id}/usage", get(users::usage))
+        .route(
+            "/api/v2/users/{id}/quota/reset",
+            post(users::reset_quota_v2),
+        )
+        .route(
             "/api/v1/subscription-templates",
             get(st::list).post(st::create),
         )
