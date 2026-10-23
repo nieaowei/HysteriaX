@@ -1,5 +1,5 @@
 use super::*;
-async fn fixture() -> (AppState, String) {
+pub(super) async fn fixture() -> (AppState, String) {
     let pool = db::test_pool_with_max_connections(4).await;
     let secrets =
         crate::security::SecretBox::from_base64("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
@@ -27,7 +27,7 @@ fn input() -> CreateCredential {
         payload: json!({"secret":"original"}),
     }
 }
-async fn node(state: &AppState, id: &str, name: &str) -> String {
+pub(super) async fn node(state: &AppState, id: &str, name: &str) -> String {
     let input=serde_json::from_value(json!({"name":name,"ssh_host":"127.0.0.1","ssh_port":22,"ssh_username":"root","ssh_credential_id":id,"ssh_credential_version":1,"public_host":"example.test","public_port":443,"listen_addr":":443"})).unwrap();
     let (_, Json(created)) = crate::api::nodes::create(State(state.clone()), Json(input))
         .await

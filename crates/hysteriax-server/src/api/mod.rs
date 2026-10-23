@@ -48,6 +48,29 @@ pub fn router(state: AppState) -> Router {
     use subscriptions::templates as st;
     let admin = Router::new()
         .route(
+            "/api/v2/credentials",
+            get(credentials::list).post(credentials::create_v2),
+        )
+        .route(
+            "/api/v2/credentials/{id}",
+            get(credentials::get)
+                .patch(credentials::patch_v2)
+                .delete(credentials::delete_v2),
+        )
+        .route(
+            "/api/v2/credentials/{id}/versions",
+            post(credentials::publish_v2),
+        )
+        .route(
+            "/api/v2/credentials/{id}/references",
+            get(credentials::references),
+        )
+        .route("/api/v2/credential-batches/{id}", get(credentials::batch))
+        .route(
+            "/api/v2/credential-batches/{id}/retry",
+            post(credentials::retry_v2),
+        )
+        .route(
             "/api/v2/admin/tokens",
             get(list_admin_tokens).post(admin_tokens::create),
         )
