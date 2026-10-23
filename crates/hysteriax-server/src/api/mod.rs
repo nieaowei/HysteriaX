@@ -48,6 +48,22 @@ pub fn router(state: AppState) -> Router {
     use subscriptions::templates as st;
     let admin = Router::new()
         .route(
+            "/api/v2/credentials/ca-identities",
+            post(managed_mtls::v2::create),
+        )
+        .route(
+            "/api/v2/credentials/{id}/ca-versions",
+            post(managed_mtls::v2::publish),
+        )
+        .route(
+            "/api/v2/credentials/{id}/ca-policy",
+            axum::routing::patch(managed_mtls::v2::update_policy),
+        )
+        .route(
+            "/api/v2/users/{id}/managed-certificates/reissue",
+            post(managed_mtls::v2::reissue_user),
+        )
+        .route(
             "/api/v2/dns/records",
             get(dns::list_records).post(dns::v2::create_record),
         )
