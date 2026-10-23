@@ -223,11 +223,21 @@ async fn claim_next_for(
     pool: &PgPool,
     owner: Option<&str>,
 ) -> Result<Option<ClaimedJob>, sqlx::Error> {
-    let timestamp = now();
-    let mut tx = db::begin_write(pool).await?;
+    if owner.is_some_and(str::is_empty) || owner.is_none() && !cfg!(test) {
+        return Err(sqlx::Error::Protocol(
+            "job claim requires an instance owner".into(),
+        ));
+    }
+    let owner = owner.map(str::to_owned);
+    db::write(pool, move |tx| {
+        let owner = owner.clone();
+        Box::pin(async move {
+    let timestamp: chrono::DateTime<chrono::Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
+        .fetch_one(&mut **tx).await?;
+    sqlx::query("SAVEPOINT job_claim").execute(&mut **tx).await?;
     let mut leases = Vec::new();
     let row = sqlx::query("UPDATE jobs SET status = 'running', stage = 'starting', attempts = attempts + CASE WHEN stage='fingerprint_confirmed' THEN 0 ELSE 1 END, started_at = COALESCE(started_at, $1), updated_at = $2 WHERE id = (SELECT candidate.id FROM jobs AS candidate WHERE candidate.status = 'queued' AND candidate.available_at <= $3 AND NOT EXISTS(SELECT 1 FROM mtls_superseded_node_jobs s WHERE s.job_id=candidate.id) AND (candidate.node_id IS NULL OR NOT EXISTS (SELECT 1 FROM jobs AS active WHERE active.node_id = candidate.node_id AND active.status = 'running')) AND (candidate.kind NOT IN ('deploy','sync','rollback') OR NOT EXISTS (SELECT 1 FROM jobs AS dependency WHERE dependency.node_id=candidate.node_id AND dependency.kind LIKE 'dns-%' AND dependency.status IN ('queued','running'))) AND (candidate.resource_key IS NULL OR NOT EXISTS (SELECT 1 FROM jobs AS resource_active WHERE resource_active.resource_key=candidate.resource_key AND resource_active.status='running')) AND NOT EXISTS(SELECT 1 FROM resource_leases l WHERE l.resource_key=ANY(ARRAY['job:'||candidate.id,'node:'||candidate.node_id,candidate.resource_key]) AND (l.blocked OR (l.owner IS NOT NULL AND l.expires_at>clock_timestamp()) OR EXISTS(SELECT 1 FROM execution_operations o WHERE o.resource_key=l.resource_key AND o.state IN ('dispatching','reconciling','needs_attention')))) ORDER BY candidate.available_at, candidate.created_at, candidate.id LIMIT 1 FOR UPDATE OF candidate SKIP LOCKED) RETURNING id, kind, node_id, target_revision, payload_json, attempts, resource_key")
-        .bind(timestamp).bind(timestamp).bind(timestamp).fetch_optional(&mut *tx).await?;
+        .bind(timestamp).bind(timestamp).bind(timestamp).fetch_optional(&mut **tx).await?;
     let job = if let Some(row) = row {
         let job = JobInput {
             id: row.get("id"),
@@ -237,7 +247,7 @@ async fn claim_next_for(
             payload: row.get::<Value, _>("payload_json"),
             attempts: row.get("attempts"),
         };
-        if let Some(owner) = owner {
+        if let Some(owner) = owner.as_deref() {
             let mut resources = vec![format!("job:{}", job.id)];
             if let Some(node) = &job.node_id {
                 resources.push(format!("node:{node}"));
@@ -249,9 +259,10 @@ async fn claim_next_for(
             resources.dedup();
             for resource in resources {
                 let Some(lease) =
-                    crate::execution::acquire(&mut tx, &resource, owner, &job.id).await?
+                    crate::execution::acquire(tx, &resource, owner, &job.id).await?
                 else {
-                    tx.rollback().await?;
+                    sqlx::query("ROLLBACK TO SAVEPOINT job_claim").execute(&mut **tx).await?;
+                    sqlx::query("RELEASE SAVEPOINT job_claim").execute(&mut **tx).await?;
                     return Ok(None);
                 };
                 leases.push(lease);
@@ -259,13 +270,15 @@ async fn claim_next_for(
         }
         let payload = json!({"id": job.id, "kind": job.kind, "node_id": job.node_id, "status": "running", "stage": "starting", "attempts": job.attempts});
         sqlx::query("INSERT INTO job_events (job_id, event_type, payload_json, created_at) VALUES ($1, 'job.started', $2, $3)")
-            .bind(&job.id).bind(payload).bind(timestamp).execute(&mut *tx).await?;
+            .bind(&job.id).bind(payload).bind(timestamp).execute(&mut **tx).await?;
         Some(ClaimedJob { job, leases })
     } else {
         None
     };
-    tx.commit().await?;
+    sqlx::query("RELEASE SAVEPOINT job_claim").execute(&mut **tx).await?;
     Ok(job)
+        })
+    }).await
 }
 
 async fn job_is_running(pool: &PgPool, id: &str) -> bool {
@@ -313,7 +326,6 @@ async fn wait_for_node_removal(
 async fn execute_claimed(state: AppState, claimed: ClaimedJob) {
     let pool = state.pool.clone();
     let job = claimed.job.clone();
-    let work = claimed.job.id.clone();
     let leases = claimed.leases;
     let completed = crate::execution::supervise(
         pool.clone(),
@@ -322,32 +334,83 @@ async fn execute_claimed(state: AppState, claimed: ClaimedJob) {
     )
     .await;
     if completed.is_some() {
-        let release=async {
-            let mut tx=db::begin_write(&pool).await?;
-            for lease in &leases {lease.guard(&mut tx).await?;}
-            let uncertain:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM execution_operations WHERE work_id=$1 AND state IN ('dispatching','reconciling','needs_attention'))")
-                .bind(&work).fetch_one(&mut *tx).await?;
-            if uncertain {
-                sqlx::query("UPDATE resource_leases SET blocked=true WHERE work_id=$1")
-                    .bind(&work).execute(&mut *tx).await?;
-                sqlx::query("UPDATE execution_operations SET state='reconciling',updated_at=clock_timestamp() WHERE work_id=$1 AND state='dispatching'")
-                    .bind(&work).execute(&mut *tx).await?;
-                crate::kick_requests::finish(&mut tx,&job,"needs_attention").await?;
-                let changed=sqlx::query("UPDATE jobs SET status='failed',stage='reconciling',error_message='Remote outcome requires verification before recovery',updated_at=clock_timestamp(),finished_at=clock_timestamp() WHERE id=$1 AND stage!='reconciling'")
-                    .bind(&work).execute(&mut *tx).await?;
-                if changed.rows_affected()==1 {
-                    crate::kick_requests::event(&mut tx,&work,"job.reconciliation_required",json!({"id":work,"status":"failed","stage":"reconciling"})).await?;
-                }
-            } else {
-                for lease in &leases {lease.release(&mut tx).await?;}
-            }
-            tx.commit().await
-        }.await;
+        let release = finish_execution(&pool, &job, &leases).await;
         if let Err(error) = release {
             tracing::warn!(%error,"job resource release deferred to recovery");
         }
     }
 }
+
+/// Runs after the supervised future ends, so it validates the explicit claimed
+/// leases rather than borrowing a task-local scope that has already exited.
+async fn finish_execution(
+    pool: &PgPool,
+    job: &JobInput,
+    leases: &[crate::execution::Execution],
+) -> Result<(), sqlx::Error> {
+    let (job, mut leases) = (job.clone(), leases.to_vec());
+    leases.sort_by(|a, b| a.resource.cmp(&b.resource));
+    let owner = leases
+        .iter()
+        .find(|l| l.resource == format!("job:{}", job.id) && l.work == job.id)
+        .map(|l| l.owner.clone())
+        .ok_or_else(|| sqlx::Error::Protocol("job release is missing its job lease".into()))?;
+    if leases
+        .windows(2)
+        .any(|pair| pair[0].resource == pair[1].resource)
+        || leases.iter().any(|l| l.work != job.id || l.owner != owner)
+    {
+        return Err(sqlx::Error::Protocol(
+            "job release has a different work or owner scope".into(),
+        ));
+    }
+    if let Some(node) = &job.node_id
+        && !leases.iter().any(|l| l.resource == format!("node:{node}"))
+    {
+        return Err(sqlx::Error::Protocol(
+            "job release is missing its node lease".into(),
+        ));
+    }
+    db::write(pool, move |tx| {let (job,leases)=(job.clone(),leases.clone());Box::pin(async move {
+        for lease in &leases {lease.guard(tx).await?;}
+        let row=sqlx::query("SELECT node_id,resource_key,kind,attempts,stage FROM jobs WHERE id=$1 FOR UPDATE")
+            .bind(&job.id).fetch_optional(&mut **tx).await?.ok_or_else(||sqlx::Error::Protocol("job release source is missing".into()))?;
+        if row.get::<String,_>("kind")!=job.kind || row.get::<i64,_>("attempts")!=job.attempts || row.get::<Option<String>,_>("node_id")!=job.node_id {
+            return Err(sqlx::Error::Protocol("job release source changed".into()));
+        }
+        let mut expected=vec![format!("job:{}",job.id)];
+        if let Some(node)=&job.node_id {expected.push(format!("node:{node}"));}
+        if let Some(resource)=row.get::<Option<String>,_>("resource_key") {expected.push(resource);}
+        expected.sort();expected.dedup();
+        let keys:Vec<String>=leases.iter().map(|l|l.resource.clone()).collect();
+        if keys!=expected {return Err(sqlx::Error::Protocol("job release resource scope changed".into()));}
+        let (uncertain,attention):(bool,bool)=sqlx::query_as("SELECT count(*)>0,coalesce(bool_or(state='needs_attention'),false) FROM execution_operations WHERE (work_id=$1 OR resource_key=ANY($2::text[])) AND state IN ('dispatching','reconciling','needs_attention')")
+            .bind(&job.id).bind(&keys).fetch_one(&mut **tx).await?;
+        if uncertain {
+            for lease in &leases {
+                sqlx::query("UPDATE resource_leases SET blocked=true WHERE resource_key=$1 AND owner=$2 AND generation=$3 AND work_id=$4")
+                    .bind(&lease.resource).bind(&lease.owner).bind(lease.generation).bind(&job.id).execute(&mut **tx).await?;
+                sqlx::query("UPDATE execution_operations SET state='reconciling',updated_at=clock_timestamp() WHERE resource_key=$1 AND owner=$2 AND generation=$3 AND work_id=$4 AND state='dispatching'")
+                    .bind(&lease.resource).bind(&lease.owner).bind(lease.generation).bind(&job.id).execute(&mut **tx).await?;
+            }
+            crate::kick_requests::finish(tx,&job,"needs_attention").await?;
+            let stage=if attention || row.get::<String,_>("stage")=="needs_attention" {"needs_attention"} else {"reconciling"};
+            let changed=sqlx::query("UPDATE jobs SET status='failed',stage=$2,error_message=coalesce(error_message,'Remote outcome requires verification before recovery'),updated_at=clock_timestamp(),finished_at=clock_timestamp() WHERE id=$1 AND (status<>'failed' OR stage<>$2)")
+                .bind(&job.id).bind(stage).execute(&mut **tx).await?;
+            if changed.rows_affected()==1 {
+                crate::kick_requests::event(tx,&job.id,"job.reconciliation_required",json!({"id":job.id,"status":"failed","stage":stage})).await?;
+            }
+        } else {
+            for lease in &leases {
+                if !lease.release(tx).await? {return Err(sqlx::Error::Protocol("job resource became uncertain before release".into()));}
+            }
+        }
+        Ok(())
+    })}).await
+}
+
+#[cfg(test)]
+mod ownership_tests;
 
 async fn execute_one(state: AppState, job: JobInput) {
     // Subscribe before the database check: a removal before subscription is
