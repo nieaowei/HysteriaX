@@ -105,6 +105,65 @@ struct Envelope {
     response: StoredResponse,
 }
 
+async fn authorize_on(tx: &mut sqlx::PgConnection, actor: &str) -> Result<(), ApiError> {
+    let active: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM admin_tokens WHERE id=$1 AND revoked_at IS NULL)",
+    )
+    .bind(actor)
+    .fetch_one(tx)
+    .await?;
+    if !active {
+        return Err(ApiError::new(
+            StatusCode::UNAUTHORIZED,
+            "unauthorized",
+            "administrator token is invalid",
+        ));
+    }
+    Ok(())
+}
+
+fn restore(
+    secrets: &SecretBox,
+    identity: &RequestIdentity,
+    row: &sqlx::postgres::PgRow,
+) -> Result<StoredResponse, ApiError> {
+    if row.get::<String, _>("request_digest") != identity.digest {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "idempotency_conflict",
+            "Idempotency-Key was already used for a different request",
+        ));
+    }
+    let saved: String = row.get("response_enc");
+    if saved.is_empty() {
+        return Err(ApiError::internal());
+    }
+    let envelope: Envelope = serde_json::from_slice(&secrets.decrypt_bytes(&saved)?)
+        .map_err(|_| ApiError::internal())?;
+    if envelope.identity != *identity {
+        return Err(ApiError::internal());
+    }
+    envelope.response.clone().into_http()?;
+    Ok(envelope.response)
+}
+
+/// Read committed proof before mutable preparation. A miss grants no ownership:
+/// execute must still reserve/recheck the key atomically with the business work.
+pub(super) async fn replay(
+    state: &AppState,
+    identity: &RequestIdentity,
+) -> Result<Option<StoredResponse>, ApiError> {
+    let mut tx = crate::read_snapshot::begin(&state.pool).await?;
+    authorize_on(&mut tx, &identity.actor).await?;
+    let row = sqlx::query("SELECT request_digest,response_enc FROM management_receipts WHERE actor_id=$1 AND operation=$2 AND idempotency_key=$3")
+        .bind(&identity.actor).bind(&identity.operation).bind(&identity.key).fetch_optional(&mut *tx).await?;
+    let response = row
+        .map(|row| restore(&state.secrets, identity, &row))
+        .transpose()?;
+    tx.commit().await?;
+    Ok(response)
+}
+
 /// Only native serialization/deadlock failures retry. Reservation, business
 /// changes, audit/outbox and encrypted response all commit or roll back together.
 pub(super) async fn execute<F>(
@@ -126,45 +185,18 @@ where
     db::serializable(&state.pool, move |tx| {
         let (identity, secrets, mutation) = (identity.clone(), secrets.clone(), mutation.clone());
         Box::pin(async move {
-            let active: bool = sqlx::query_scalar(
-                "SELECT EXISTS(SELECT 1 FROM admin_tokens WHERE id=$1 AND revoked_at IS NULL)",
-            )
-            .bind(&identity.actor)
-            .fetch_one(&mut **tx)
-            .await?;
-            if !active {
-                return Err(ApiError::new(
-                    StatusCode::UNAUTHORIZED,
-                    "unauthorized",
-                    "administrator token is invalid",
-                ));
-            }
+            authorize_on(tx,&identity.actor).await?;
             let inserted = sqlx::query("INSERT INTO management_receipts(actor_id,operation,idempotency_key,request_digest,response_enc) VALUES($1,$2,$3,$4,'') ON CONFLICT DO NOTHING")
                 .bind(&identity.actor).bind(&identity.operation).bind(&identity.key).bind(&identity.digest)
                 .execute(&mut **tx).await?.rows_affected() == 1;
             let row = sqlx::query("SELECT request_digest,response_enc FROM management_receipts WHERE actor_id=$1 AND operation=$2 AND idempotency_key=$3 FOR UPDATE")
                 .bind(&identity.actor).bind(&identity.operation).bind(&identity.key)
                 .fetch_one(&mut **tx).await?;
-            if row.get::<String, _>("request_digest") != identity.digest {
-                return Err(ApiError::new(
-                    StatusCode::CONFLICT,
-                    "idempotency_conflict",
-                    "Idempotency-Key was already used for a different request",
-                ));
+            if !inserted {
+                return restore(&secrets,&identity,&row);
             }
-            let saved: String = row.get("response_enc");
-            if !inserted && saved.is_empty() {
-                // Never manufacture proof for a damaged historical reservation.
+            if row.get::<String,_>("request_digest") != identity.digest || !row.get::<String,_>("response_enc").is_empty() {
                 return Err(ApiError::internal());
-            }
-            if !saved.is_empty() {
-                let envelope: Envelope = serde_json::from_slice(&secrets.decrypt_bytes(&saved)?)
-                    .map_err(|_| ApiError::internal())?;
-                if envelope.identity != identity {
-                    return Err(ApiError::internal());
-                }
-                envelope.response.clone().into_http()?;
-                return Ok(envelope.response);
             }
             let response = mutation(tx).await?;
             // Validate before commit so an invalid response cannot strand a mutation.

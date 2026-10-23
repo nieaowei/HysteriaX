@@ -3,6 +3,53 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 const SECRET: &str = "successful-response-secret";
 
+#[tokio::test]
+async fn preparation_lookup_is_readonly_and_reuses_authenticated_bound_proof_without_row_locks() {
+    let state = fixture().await;
+    let identity = identity(&state, "one", "create", "lookup", json!(1));
+    assert!(replay(&state, &identity).await.unwrap().is_none());
+    assert_eq!(counts(&state).await, (0, 0, 0));
+    let first = mutate(
+        &state,
+        identity.clone(),
+        "committed",
+        Arc::new(AtomicUsize::new(0)),
+    )
+    .await
+    .unwrap();
+    let mut held = state.pool.begin().await.unwrap();
+    sqlx::query("SELECT actor_id FROM management_receipts FOR UPDATE")
+        .fetch_all(&mut *held)
+        .await
+        .unwrap();
+    assert_eq!(
+        tokio::time::timeout(
+            std::time::Duration::from_millis(200),
+            replay(&state, &identity)
+        )
+        .await
+        .unwrap()
+        .unwrap(),
+        Some(first)
+    );
+    held.rollback().await.unwrap();
+    let mut changed = identity.clone();
+    changed.digest = "0".repeat(64);
+    assert_eq!(
+        replay(&state, &changed).await.unwrap_err().status,
+        StatusCode::CONFLICT
+    );
+    sqlx::query("UPDATE admin_tokens SET revoked_at=clock_timestamp() WHERE id='one'")
+        .execute(&state.pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        replay(&state, &identity).await.unwrap_err().status,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(counts(&state).await, (1, 1, 1));
+}
+
 async fn fixture() -> AppState {
     let pool = db::test_pool_with_max_connections(8).await;
     sqlx::query("INSERT INTO admin_tokens(id,token_hash,label,created_at) VALUES('one',$1,'one',clock_timestamp()),('two',$2,'two',clock_timestamp())")

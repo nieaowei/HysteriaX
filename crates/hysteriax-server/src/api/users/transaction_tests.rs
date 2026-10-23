@@ -1,4 +1,5 @@
 use super::*;
+use crate::security::token_digest;
 
 async fn fixture() -> (AppState, String) {
     let pool = db::test_pool_with_max_connections(4).await;

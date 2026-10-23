@@ -61,6 +61,14 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/api/v2/users/{id}/usage", get(users::usage))
         .route(
+            "/api/v2/users/{id}/subscription",
+            get(subscriptions::get_user).post(subscriptions::rotate_v2),
+        )
+        .route(
+            "/api/v2/users/{id}/credentials/rotate",
+            post(users::rotate_credentials_v2),
+        )
+        .route(
             "/api/v2/users/{id}/quota/reset",
             post(users::reset_quota_v2),
         )

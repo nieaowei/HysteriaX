@@ -140,4 +140,41 @@ pub(crate) async fn reset_quota(
 }
 
 #[cfg(test)]
+mod rotation_tests;
+#[cfg(test)]
 mod tests;
+
+pub(crate) async fn rotate_credentials(
+    State(state): State<AppState>,
+    Extension(actor): Extension<AdminActor>,
+    Path(id): Path<String>,
+    OriginalUri(uri): OriginalUri,
+    headers: HeaderMap,
+    Json(body): Json<Value>,
+) -> Result<Response, ApiError> {
+    let identity = RequestIdentity::from_headers(
+        &state.secrets,
+        &actor.id,
+        "users.credentials_rotate",
+        &headers,
+        json!({"method":"POST","uri":uri.to_string(),"id":id,"body":body}),
+    )?;
+    if let Some(response) = crate::api::idempotency::replay(&state, &identity).await? {
+        return response.into_http();
+    }
+    let input: RevisionRequest = serde_json::from_value(body)
+        .map_err(|_| ApiError::bad_request("invalid credential rotation request"))?;
+    let prepared = super::rotation::prepare(&state, &id).await?;
+    execute(&state, identity, move |tx| {
+        let (id, prepared, actor) = (id.clone(), prepared.clone(), actor.id.clone());
+        Box::pin(async move {
+            Ok(StoredResponse::json(
+                StatusCode::OK,
+                super::rotation::commit_on(tx, id, input.expected_revision, prepared, actor)
+                    .await?,
+            ))
+        })
+    })
+    .await?
+    .into_http()
+}

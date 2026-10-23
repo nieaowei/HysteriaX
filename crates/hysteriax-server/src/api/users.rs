@@ -12,9 +12,8 @@ use sqlx::Row;
 use uuid::Uuid;
 
 use crate::{
-    api::{enqueue_job_with_payload_in_tx, generate_token, now},
+    api::{enqueue_job_with_payload_in_tx, now},
     error::ApiError,
-    security::token_digest,
     state::AppState,
 };
 
@@ -147,6 +146,7 @@ pub async fn create(
 mod v2;
 pub(super) use v2::{
     create as create_v2, delete as delete_v2, patch as patch_v2, reset_quota as reset_quota_v2,
+    rotate_credentials as rotate_credentials_v2,
 };
 
 #[derive(Clone)]
@@ -369,60 +369,22 @@ async fn delete_on(
     Ok(StatusCode::NO_CONTENT)
 }
 
+mod rotation;
 pub async fn rotate_credentials(
     State(state): State<AppState>,
     Path(user_id): Path<String>,
     Json(input): Json<RevisionRequest>,
 ) -> Result<Json<Value>, ApiError> {
+    let prepared = rotation::prepare(&state, &user_id).await?;
     let actor = super::audit_actor();
-    let secrets = state.secrets.clone();
-    let expected = input.expected_revision;
-    db::serializable::<_, ApiError, _>(&state.pool,move |tx| {
-        let (user_id,actor,secrets)=(user_id.clone(),actor.clone(),secrets.clone());
+    let response = db::serializable(&state.pool, move |tx| {
+        let (user_id, prepared, actor) = (user_id.clone(), prepared.clone(), actor.clone());
         Box::pin(async move {
-            let user=lock_user_graph_on(tx,&user_id,false).await?;
-            let revision: i64 = user.get("revision");
-            if revision != expected {
-                return Err(ApiError::conflict(format!(
-                    "user revision is {revision}; reload before editing"
-                )));
-            }
-            let rows =
-                sqlx::query("SELECT node_id FROM node_assignments WHERE user_id = $1 ORDER BY node_id")
-                    .bind(&user_id)
-                    .fetch_all(&mut **tx)
-                    .await?;
-            let timestamp = now();
-            let next_revision = revision + 1;
-            let mut credentials = Vec::with_capacity(rows.len());
-            for row in rows {
-                let node_id: String = row.get("node_id");
-                let credential = generate_token();
-                sqlx::query("UPDATE node_assignments SET credential_hash = $1, credential_enc = $2 WHERE user_id = $3 AND node_id = $4")
-                    .bind(token_digest(&credential)).bind(secrets.encrypt(&credential)?).bind(&user_id).bind(&node_id).execute(&mut **tx).await?;
-                enqueue_job_with_payload_in_tx(
-                    tx,
-                    "kick",
-                    Some(&node_id),
-                    None,
-                    json!({"user_id": user_id}),
-                )
-                .await?;
-                credentials.push(json!({"node_id": node_id, "credential": credential}));
-            }
-            sqlx::query("UPDATE users SET revision = $1, updated_at = $2 WHERE id = $3 AND revision = $4")
-                .bind(next_revision)
-                .bind(timestamp)
-                .bind(&user_id)
-                .bind(revision)
-                .execute(&mut **tx)
-                .await?;
-            super::audit_on(tx,&actor,"user.credentials_rotated","user",&user_id,json!({"revision":next_revision,"nodes":credentials.len()})).await?;
-            Ok(Json(
-                json!({"user_id": user_id, "revision": next_revision, "credentials": credentials, "note": "Save these credentials now; this response is the only plaintext copy."}),
-            ))
+            rotation::commit_on(tx, user_id, input.expected_revision, prepared, actor).await
         })
-    }).await
+    })
+    .await?;
+    Ok(Json(response))
 }
 
 /// Match billing's node-before-user order. Deletion additionally owns the

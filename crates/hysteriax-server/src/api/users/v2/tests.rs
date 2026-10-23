@@ -1,7 +1,7 @@
 use super::*;
 use chrono::{DateTime, Utc};
 
-async fn fixture() -> AppState {
+pub(super) async fn fixture() -> AppState {
     let state = crate::kick_requests::tests::fixture().await;
     sqlx::query("INSERT INTO admin_tokens(id,token_hash,label,created_at,last_used_at) VALUES('admin',$1,'Admin',clock_timestamp(),clock_timestamp())")
         .bind(crate::security::token_digest("admin")).execute(&state.pool).await.unwrap();
@@ -14,7 +14,7 @@ async fn fixture() -> AppState {
     state
 }
 
-async fn serve(state: AppState) -> (String, tokio::task::JoinHandle<()>) {
+pub(super) async fn serve(state: AppState) -> (String, tokio::task::JoinHandle<()>) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!(
         "http://{}/api/v2/users/user",
@@ -28,19 +28,19 @@ async fn serve(state: AppState) -> (String, tokio::task::JoinHandle<()>) {
     (base, task)
 }
 
-fn client() -> reqwest::Client {
+pub(super) fn client() -> reqwest::Client {
     reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
         .build()
         .unwrap()
 }
 
-async fn snapshot(state: &AppState) -> Value {
+pub(super) async fn snapshot(state: &AppState) -> Value {
     sqlx::query_scalar("SELECT jsonb_build_object('users',(SELECT jsonb_agg(to_jsonb(t) ORDER BY id) FROM users t),'assignments',(SELECT jsonb_agg(to_jsonb(t) ORDER BY user_id,node_id) FROM node_assignments t),'jobs',(SELECT jsonb_agg(to_jsonb(t) ORDER BY id) FROM jobs t),'events',(SELECT jsonb_agg(to_jsonb(t) ORDER BY id) FROM job_events t),'audits',(SELECT jsonb_agg(to_jsonb(t) ORDER BY id) FROM audit_records t),'kicks',(SELECT jsonb_agg(to_jsonb(t) ORDER BY node_id,user_id) FROM kick_requests t),'receipts',(SELECT jsonb_agg(to_jsonb(t) ORDER BY actor_id,operation,idempotency_key) FROM management_receipts t),'buckets',(SELECT jsonb_agg(to_jsonb(t) ORDER BY domain,bucket) FROM cache_bucket_versions t))")
         .fetch_one(&state.pool).await.unwrap()
 }
 
-async fn count(state: &AppState, query: &str) -> i64 {
+pub(super) async fn count(state: &AppState, query: &str) -> i64 {
     sqlx::query_scalar(query)
         .fetch_one(&state.pool)
         .await
