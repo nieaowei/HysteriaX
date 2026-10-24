@@ -1040,4 +1040,13 @@
 - 5 项归档安全／完整性单元测试、Python 编译及 diff 检查通过。首轮恢复 fixture 误按顶层解析任务 ID，改用真实 job 响应封装后完整重跑退出 0。证据 docs/verification/0034-restore-maintenance.json；原始最终报告 /tmp/hx0034-phase104-restore-final.json。
 - 此项只证明所列非空 fixture 与维护顺序，不能代替全部生产历史表迁移校验，也不证明备份之后、恢复快照中不存在的外部 SSH／DNS／HTTP 等操作都已获得隔离证据。节点人工修正、剩余平台、完整数据与外部恢复围栏、生产连接／内存预算及维护部署／回退仍需继续，0034 尚未完成。
 
+### 第一百零五阶段：真实 SSH 采样跨人工用量修正的 generation 验收
+
+- 新增 scripts/network_correction_test_fixture.py 和矩阵 --network-correction 专项。三个完整服务、共享 PostgreSQL／Redis、两台自有 Debian 12／13 arm64 systemd 节点，使用真实创建、SSH 指纹确认、凭据引用、部署、Hysteria 转发健康检查路径，不用人工密文节点替代实际管理 API。
+- 部署后在自有节点临时安装受保护的 cat 包装器，只拦截 /sys/class/net 的 tx_bytes 交付，其他命令直接调用系统 cat。记录实际节点租约、工作 owner、采样 generation 和 captured_at，再通过负载均衡 PUT /api/v2/nodes/{id}/usage 提交修正。测试拒绝覆盖已有本地包装器；finally 释放全部等待并仅移除自有包装器。
+- 第一轮释放有效旧数值之前将用量修正为 777、reset=false：节点 revision 与计数 generation 增加，周期保留，boot／sampled_at 清空、质量标记 usage_corrected。旧采样随后正常完成，但不能改写修正值、基线、时间或质量标记，也不能以旧 captured_at 插入网络明细。
+- 第二轮将用量重置为 888、reset=true，新 generation 和新周期已提交后，再释放导致解析失败的旧输出。旧工作按 sampling_failed 结束，但过期 generation 的失败记录同样不能覆盖修正值／质量或生成旧网络明细。每轮等待另一个真实节点产生新采样，证明无关节点继续推进；后续合法采样只在最终比对之后放行。
+- 首轮及增加节点服务 active 检查后的最终运行均通过。最终三个服务进程存活，两台 Hysteria 服务 active，管理任务均成功、38 个变更操作 verified、blocked_resources 为 0；失败的是有意制造的旧后台采样，不是部署任务。专项报告明确排除其他完整 CA／卸载矩阵，不冒充重复覆盖。
+- 证据 docs/verification/0034-live-network-correction.json，原始最终报告 /tmp/hx0034-phase105-network-final.json。Python 编译和 diff 检查通过；自有节点容器、镜像、数据库和进程均清理，共享容器未停止。服务端源码未变，不重复全量。剩余发行版／架构矩阵、完整历史迁移、外部恢复围栏及生产容量／维护发布继续验收，0034 目标保持。
+
 工作区原有 macOS、OpenAPI、生成脚本与任务展示测试改动需持续保留；不得整体覆盖或混入第一阶段服务端提交。

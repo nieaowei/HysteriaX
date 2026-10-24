@@ -159,6 +159,7 @@ def main():
     faults = parser.add_mutually_exclusive_group()
     faults.add_argument("--pause-during-install", action="store_true")
     faults.add_argument("--pause-before-dispatch", action="store_true")
+    faults.add_argument("--network-correction", action="store_true")
     parser.add_argument("--fault-only", action="store_true")
     arguments = parser.parse_args()
     selected = set(arguments.only or [])
@@ -172,11 +173,11 @@ def main():
     }
     if unknown := selected - available:
         parser.error(f"unknown matrix entries: {', '.join(sorted(unknown))}")
-    process_fault = arguments.pause_during_install or arguments.pause_before_dispatch
+    process_fault = arguments.pause_during_install or arguments.pause_before_dispatch or arguments.network_correction
     if process_fault and (arguments.instances != 3 or len(selected or available) < 2):
-        parser.error("process fault tests require three instances and at least two matrix nodes")
+        parser.error("fault tests require three instances and at least two matrix nodes")
     if arguments.fault_only and not process_fault:
-        parser.error("--fault-only requires an explicit process fault scenario")
+        parser.error("--fault-only requires an explicit fault scenario")
     subprocess.run(["cargo", "build", "-p", "hysteriax-server"], cwd=ROOT, check=True)
 
     built_images = []
@@ -618,9 +619,12 @@ def main():
                         )
                         print(f"Deployed {node['name']} successfully", flush=True)
 
+                    if arguments.network_correction:
+                        from network_correction_test_fixture import run_network_correction
+                        verification["network_correction"] = run_network_correction(database, service, matrix_nodes, expect)
                     if arguments.fault_only:
-                        verification.update(passed=True, scope="targeted-process-fault-only", **service.report(), matrix_nodes=len(matrix_nodes), extra_ssh_nodes=0)
-                        print("Targeted process fault and both real node deployment checks passed; remaining matrix scenarios excluded by --fault-only", flush=True)
+                        verification.update(passed=True, scope="targeted-network-correction-only" if arguments.network_correction else "targeted-process-fault-only", **service.report(), matrix_nodes=len(matrix_nodes), extra_ssh_nodes=0)
+                        print("Targeted fault scenario and both real node deployment checks passed; remaining matrix scenarios excluded by --fault-only", flush=True)
                         return
 
                     distinct_nodes = []
