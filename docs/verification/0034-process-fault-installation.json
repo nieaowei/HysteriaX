@@ -1,0 +1,84 @@
+{
+  "phase": 98,
+  "scope": "SIGSTOP during a real mutating installation command, with three native full service processes and two real systemd nodes",
+  "source_sha256": {
+    "scripts/multi_instance_test_fixture.py": "5466a12d947dfbba27571efdc4d3e80b0ba1f4d3c7a2bc6a193b8f868c02f8d7",
+    "scripts/process_fault_test_fixture.py": "25f36586a934b17b8d282b3b98a06340f14c863fa9aa5b87d262538ad72df5ea",
+    "scripts/live_database_diagnostics.py": "64eb3e6fc9db3eee2dd8b474da7fd30715f4aa401e3a332a5127d93badc31305",
+    "scripts/verify-deployment-matrix.py": "a53e26c15666ca00410fff15b1895a79fa1ff38cc0047b352b39a5835b519ede"
+  },
+  "result": {
+    "passed": true,
+    "instances": 3,
+    "installation_process_fault": {
+      "paused_instance": "2d9013d7-3b0c-4631-b5bd-9d685f3a70ec",
+      "operation_id": "4e348094-2a58-4fb0-915f-56199b2ddab3",
+      "original_job_id": "1a4bf2c9-5d00-42c0-aed7-a11facc9c0d8",
+      "retry_job_id": "0563c189-3f7a-463c-a61f-b174ebe45c6e",
+      "quarantined_after_seconds": 67.165,
+      "unrelated_node_finished_before_original_expiry": true,
+      "original_operation_count": 11,
+      "original_payload_executions": 1,
+      "daemon_reload_calls_after_retry": 2,
+      "busy_resource_blocked": true,
+      "completion_fenced": true,
+      "old_progress_rejected": true,
+      "explicit_retry_succeeded": true
+    },
+    "full_service_processes": 3,
+    "round_robin_hits": {
+      "60983": 164,
+      "61000": 164,
+      "61017": 154
+    },
+    "matrix_nodes": 2,
+    "extra_ssh_nodes": 4,
+    "database_diagnostics": {
+      "samples": 811,
+      "errors": 0,
+      "stopped": true
+    },
+    "logs": "/tmp/hx0034-phase97-process-fault-fixed-server-logs-gp9tcvtv",
+    "registered_instances": 3,
+    "operation_states": {
+      "verified": 338
+    },
+    "execution_owners": [
+      "2d9013d7-3b0c-4631-b5bd-9d685f3a70ec",
+      "5266daf5-c978-4a7e-91bd-2ab45b1eadcc",
+      "7c43740e-8c84-4d6f-b0bc-a9d8cadaa083"
+    ],
+    "jobs_by_status": {
+      "succeeded": 29,
+      "failed": 2
+    },
+    "blocked_resources": 0
+  },
+  "diagnostic_summary": {
+    "saved_snapshots": 170,
+    "maximum_observed_lock_waiters": 2,
+    "wait_templates": {
+      "SELECT true FROM resource_leases WHERE resource_key=$1 AND owner=$2 AND generation=$3 AND work_id=$4": 4,
+      "SELECT head FROM event_publication_stream WHERE id FOR UPDATE": 3
+    },
+    "pool_pressure_log_messages": 0
+  },
+  "checks": [
+    "instance UUID mapped to its owned Popen by observing registration before/after startup",
+    "stopped owner removed from load-balancer backends; cleanup resumes only owned stopped processes",
+    "unrelated node completed before original lease expiry",
+    "database-time expiry led to durable failed/blocked work without original payload replay",
+    "busy remote receiver refused positive proof and kept resource blocked",
+    "remote completion receipt fenced by explicit recheck while old process remained stopped",
+    "resumed old process heartbeat observed; original operation and progress/event counts unchanged",
+    "original job remained failed until an independent linked retry completed",
+    "remote daemon-reload count exactly one for original and two after legitimate retry",
+    "complete existing two-node CA/authorization/quota/intermediate-CA/deployment/uninstall workflow after process recovery"
+  ],
+  "limits": [
+    "This specifically proves indeterminate remote work recovery; database-only automatic takeover still needs separate real-process coverage.",
+    "Diagnostic sampling is bounded and cannot prove the absence of sub-sample lock waits or constitute a fair performance comparison.",
+    "The first pre-fix matrix hit an intermittent pool timeout; earlier/final positive runs and targeted fixes do not establish universal capacity.",
+    "No production deployment."
+  ]
+}

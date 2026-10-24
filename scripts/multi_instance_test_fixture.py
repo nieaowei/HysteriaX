@@ -7,6 +7,7 @@ import http.server
 import json
 from pathlib import Path
 import socket
+import signal
 import subprocess
 import threading
 import time
@@ -21,7 +22,7 @@ def free_port():
 
 
 class MultiInstanceServer:
-    def __init__(self, binary, environment, directory, instances=1, migration_log=None):
+    def __init__(self, binary, environment, directory, instances=1, migration_log=None, observe_instances=None):
         if instances not in (1, 3):
             raise ValueError("live verification uses one or three instances")
         self.processes, self.outputs, self.hits = [], [], {}
@@ -29,6 +30,9 @@ class MultiInstanceServer:
         self.lock = threading.Lock()
         self.next = 0
         self.ports = []
+        self.active_ports = []
+        self.instance_ids = []
+        self.paused = set()
         self.environment = dict(environment)
         self.directory = Path(directory)
         self.directory.mkdir(parents=True, exist_ok=True)
@@ -38,6 +42,7 @@ class MultiInstanceServer:
             subprocess.run([self.binary, "--migrate-only"], env=environment,
                            stdout=migration_log, stderr=subprocess.STDOUT, check=True, timeout=120)
             for index in range(instances):
+                before = set(observe_instances()) if observe_instances else set()
                 port = free_port()
                 output = (self.directory / f"instance-{index}.log").open("wb")
                 self.outputs.append(output)
@@ -58,6 +63,12 @@ class MultiInstanceServer:
                     if time.monotonic() > deadline:
                         raise TimeoutError("owned service readiness")
                     time.sleep(0.1)
+                if observe_instances:
+                    added = set(observe_instances()) - before
+                    if len(added) != 1:
+                        raise RuntimeError("cannot map a newly owned process to its instance UUID")
+                    self.instance_ids.append(added.pop())
+            self.active_ports = list(self.ports)
             fixture = self
 
             class Proxy(http.server.BaseHTTPRequestHandler):
@@ -66,7 +77,7 @@ class MultiInstanceServer:
 
                 def dispatch(self):
                     with fixture.lock:
-                        port = fixture.ports[fixture.next % len(fixture.ports)]
+                        port = fixture.active_ports[fixture.next % len(fixture.active_ports)]
                         fixture.next += 1
                         fixture.hits[str(port)] = fixture.hits.get(str(port), 0) + 1
                     body = self.rfile.read(int(self.headers.get("Content-Length", "0"))) or None
@@ -124,6 +135,31 @@ class MultiInstanceServer:
     def poll(self):
         return next((p.returncode for p in self.processes if p.poll() is not None), None)
 
+    def pause(self, index):
+        process = self.processes[index]
+        if process.poll() is not None or index in self.paused:
+            raise RuntimeError("owned process is not available for a new pause")
+        with self.lock:
+            if len(self.active_ports) < 2:
+                raise RuntimeError("cannot pause the last active backend")
+            self.active_ports.remove(self.ports[index])
+        process.send_signal(signal.SIGSTOP)
+        self.paused.add(index)
+
+    def resume(self, index):
+        if index not in self.paused:
+            raise RuntimeError("owned process was not paused")
+        self.processes[index].send_signal(signal.SIGCONT)
+        self.paused.remove(index)
+        with self.lock:
+            self.active_ports.append(self.ports[index])
+
+    def _resume_for_cleanup(self):
+        for index in list(self.paused):
+            if self.processes[index].poll() is None:
+                self.processes[index].send_signal(signal.SIGCONT)
+            self.paused.remove(index)
+
     def _close_proxy(self):
         if self.proxy:
             self.proxy.shutdown()
@@ -131,12 +167,14 @@ class MultiInstanceServer:
             self.proxy = None
 
     def terminate(self):
+        self._resume_for_cleanup()
         self._close_proxy()
         for process in self.processes:
             if process.poll() is None:
                 process.terminate()
 
     def kill(self):
+        self._resume_for_cleanup()
         self._close_proxy()
         for process in self.processes:
             if process.poll() is None:

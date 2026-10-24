@@ -23,6 +23,8 @@ import urllib.request
 from postgres_test import PostgresTestSchema
 from credential_test_fixtures import grant_group
 from multi_instance_test_fixture import MultiInstanceServer
+from process_fault_test_fixture import run_installation_pause
+from live_database_diagnostics import DatabaseDiagnostics
 
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -153,6 +155,7 @@ def main():
     )
     parser.add_argument("--instances", type=int, choices=(1, 3), default=1)
     parser.add_argument("--report", type=pathlib.Path)
+    parser.add_argument("--pause-during-install", action="store_true")
     arguments = parser.parse_args()
     selected = set(arguments.only or [])
     run_id = uuid.uuid4().hex[:10]
@@ -165,6 +168,8 @@ def main():
     }
     if unknown := selected - available:
         parser.error(f"unknown matrix entries: {', '.join(sorted(unknown))}")
+    if arguments.pause_during_install and (arguments.instances != 3 or len(selected or available) < 2):
+        parser.error("--pause-during-install requires three instances and at least two matrix nodes")
     subprocess.run(["cargo", "build", "-p", "hysteriax-server"], cwd=ROOT, check=True)
 
     built_images = []
@@ -206,10 +211,9 @@ def main():
                         timeout=900,
                     )
                     built_images.append(image)
-                    containers.append(container)
                     container_command = [
                         "docker",
-                        "run",
+                        "create",
                         "--privileged",
                         "--cgroupns=host",
                         "--tmpfs",
@@ -222,12 +226,13 @@ def main():
                         f"127.0.0.1:{ssh_port}:22",
                         "-p",
                         f"127.0.0.1:{hy2_port}:443/udp",
-                        "-d",
                         image,
                     ]
                     if platform.system() == "Linux":
                         container_command[3:3] = ["--add-host", "host.docker.internal:host-gateway"]
                     run(container_command)
+                    containers.append(container)
+                    run(["docker", "start", container])
                     wait_for_systemd(container)
                     run(
                         [
@@ -284,7 +289,11 @@ def main():
 
             target_server = None
             with open(temp / "server.log", "wb") as log:
-                service = MultiInstanceServer(SERVER, environment, temp / "services", instances=arguments.instances, migration_log=log)
+                def observe_instances():
+                    with database.connect() as connection:
+                        return {row[0] for row in connection.execute("SELECT instance_id FROM service_instances")}
+                service = MultiInstanceServer(SERVER, environment, temp / "services", instances=arguments.instances, migration_log=log, observe_instances=observe_instances)
+                diagnostics = DatabaseDiagnostics(database.url, temp / "services" / "database-diagnostics.jsonl") if arguments.report else None
 
                 def expect(path, method="GET", payload=None, expected_status=(200, 201, 202)):
                     if path == "/api/v2/jobs" and method == "GET":
@@ -539,8 +548,11 @@ def main():
                             ]
                         )
 
+                    if arguments.pause_during_install:
+                        verification["installation_process_fault"] = run_installation_pause(database, service, matrix_nodes, prepare_node, expect, wait_job)
                     for node in matrix_nodes:
-                        prepare_node(node)
+                        if "node_id" not in node:
+                            prepare_node(node)
 
                     jobs = expect("/api/v2/jobs")
                     for node in matrix_nodes:
@@ -550,6 +562,7 @@ def main():
                             if job.get("node_id") == node["node_id"]
                             and job.get("kind") == "sync"
                             and job.get("target_revision") == node["revision"]
+                            and (not node.get("accepted_deployment_job") or job["id"] == node["accepted_deployment_job"])
                         )
                         result = wait_job(deployment["id"])
                         if result["job"]["status"] != "succeeded":
@@ -936,6 +949,8 @@ def main():
                         flush=True,
                     )
                 finally:
+                    if diagnostics:
+                        verification["database_diagnostics"] = diagnostics.stop()
                     if target_server and target_server.poll() is None:
                         target_server.terminate()
                         try:
