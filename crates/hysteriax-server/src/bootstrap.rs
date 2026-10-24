@@ -88,9 +88,22 @@ pub async fn finalize(pool: &PgPool, secrets: &SecretBox) -> Result<()> {
     crate::traffic::work::assert_ready(pool).await?;
     crate::traffic::access::assert_ready(pool).await?;
     let mut tx = pool.begin().await?;
-    sqlx::query("UPDATE cache_version_epoch SET epoch=gen_random_uuid()::text WHERE id")
+    // Maintenance-only gate: wait for existing guarded transactions, and stop
+    // new claims/guards until their epoch and the runtime contract are replaced.
+    // EXCLUSIVE also conflicts with SELECT FOR UPDATE's ROW SHARE table lock.
+    sqlx::query("LOCK TABLE resource_leases IN EXCLUSIVE MODE")
         .execute(&mut *tx)
         .await?;
+    let epoch: String = sqlx::query_scalar(
+        "UPDATE cache_version_epoch SET epoch=gen_random_uuid()::text WHERE id RETURNING epoch",
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+    // Keep canonical row order and uncertain-operation barriers intact.
+    sqlx::query("SELECT resource_key FROM resource_leases WHERE owner IS NOT NULL OR blocked ORDER BY resource_key FOR UPDATE")
+        .execute(&mut *tx).await?;
+    sqlx::query("UPDATE resource_leases SET epoch=$1,expires_at=CASE WHEN owner IS NOT NULL THEN clock_timestamp() ELSE expires_at END WHERE owner IS NOT NULL OR blocked")
+        .bind(&epoch).execute(&mut *tx).await?;
     // Maintenance, including a restored database, starts a new resume timeline
     // while retaining all historical events and publication sequence numbers.
     sqlx::query("UPDATE event_publication_stream SET epoch=gen_random_uuid()::text WHERE id")

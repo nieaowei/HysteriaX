@@ -146,10 +146,10 @@ async fn prepare(
         anyhow::ensure!(actual.as_deref()==Some(&resource),"DNS credential resource binding changed");
         let mut keys=vec![resource,format!("job:{}",job.id)];
         if let Some(node)=&job.node_id {keys.push(format!("node:{node}"));}keys.sort();keys.dedup();
-        let rows=sqlx::query("SELECT resource_key,owner,generation FROM resource_leases WHERE resource_key=ANY($1) AND work_id=$2 AND owner IS NOT NULL AND expires_at>clock_timestamp() AND NOT blocked ORDER BY resource_key FOR UPDATE")
+        let rows=sqlx::query("SELECT resource_key,owner,epoch,generation FROM resource_leases WHERE resource_key=ANY($1) AND work_id=$2 AND owner IS NOT NULL AND epoch=hysteriax_execution_epoch() AND expires_at>clock_timestamp() AND NOT blocked ORDER BY resource_key FOR UPDATE")
             .bind(&keys).bind(&job.id).fetch_all(&mut **tx).await?;
         anyhow::ensure!(rows.len()==keys.len(),"DNS credential requires its full execution scope");
-        let leases:Vec<crate::execution::Execution>=rows.iter().map(|l|crate::execution::Execution{resource:l.get("resource_key"),work:job.id.clone(),owner:l.get("owner"),generation:l.get("generation")}).collect();
+        let leases:Vec<crate::execution::Execution>=rows.iter().map(|l|crate::execution::Execution{resource:l.get("resource_key"),work:job.id.clone(),owner:l.get("owner"),epoch:l.get("epoch"),generation:l.get("generation")}).collect();
         anyhow::ensure!(leases.iter().all(|l|l.owner==leases[0].owner),"DNS credential has mixed owners");
         let data=source_on(tx,&job,&op).await?;
         Ok(Prepared::Ready(Source{job,operation,expected,leases,data}))

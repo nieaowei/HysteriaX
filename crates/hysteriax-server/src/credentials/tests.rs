@@ -826,13 +826,14 @@ async fn application_scope(
     keys.sort();
     let mut leases = vec![];
     for key in keys {
-        let existing=sqlx::query("SELECT owner,generation FROM resource_leases WHERE resource_key=$1 AND owner=$2 AND work_id=$3 AND expires_at>clock_timestamp() AND NOT blocked")
+        let existing=sqlx::query("SELECT owner,epoch,generation FROM resource_leases WHERE resource_key=$1 AND owner=$2 AND work_id=$3 AND epoch=hysteriax_execution_epoch() AND expires_at>clock_timestamp() AND NOT blocked")
             .bind(&key).bind(&state.instance_id).bind(&job.id).fetch_optional(&mut *tx).await.unwrap();
         leases.push(if let Some(row) = existing {
             crate::execution::Execution {
                 resource: key,
                 owner: row.get("owner"),
                 generation: row.get("generation"),
+                epoch: row.get("epoch"),
                 work: job.id.clone(),
             }
         } else {

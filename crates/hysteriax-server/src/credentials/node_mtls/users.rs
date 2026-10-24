@@ -58,10 +58,10 @@ pub(super) async fn capture(pool: &PgPool, job: &JobInput) -> Result<Source> {
     db::serializable(pool,move |tx|{let job=job.clone();Box::pin(async move {
         job_on(tx,&job).await?;
         let mut keys=vec![format!("job:{}",job.id),format!("node:{}",job.node_id.as_deref().context("deployment node missing")?)];keys.sort();
-        let rows=sqlx::query("SELECT resource_key,owner,generation FROM resource_leases WHERE resource_key=ANY($1) AND work_id=$2 AND owner IS NOT NULL AND expires_at>clock_timestamp() AND NOT blocked ORDER BY resource_key FOR UPDATE")
+        let rows=sqlx::query("SELECT resource_key,owner,epoch,generation FROM resource_leases WHERE resource_key=ANY($1) AND work_id=$2 AND owner IS NOT NULL AND epoch=hysteriax_execution_epoch() AND expires_at>clock_timestamp() AND NOT blocked ORDER BY resource_key FOR UPDATE")
             .bind(&keys).bind(&job.id).fetch_all(&mut **tx).await?;
         anyhow::ensure!(rows.len()==keys.len(),"deployment identity preparation requires full execution leases");
-        let leases:Vec<Execution>=rows.iter().map(|r|Execution{resource:r.get("resource_key"),owner:r.get("owner"),generation:r.get("generation"),work:job.id.clone()}).collect();
+        let leases:Vec<Execution>=rows.iter().map(|r|Execution{resource:r.get("resource_key"),owner:r.get("owner"),epoch:r.get("epoch"),generation:r.get("generation"),work:job.id.clone()}).collect();
         anyhow::ensure!(leases.iter().all(|l|l.owner==leases[0].owner),"deployment identity preparation has mixed owners");
         let (revision,authorization_generation)=node_on(tx,&job).await?;
         Ok(Source{job,revision,authorization_generation,users:vec![],leases,target:None,identity_ids:vec![]})

@@ -335,48 +335,50 @@ async fn truncation_fences_an_empty_source_and_node_deletion_cleans_its_metadata
 #[tokio::test]
 async fn authorization_version_migration_backfills_without_rewriting_business_or_encrypted_history()
 {
-    let pool = db::test_pool_through_version(3, 66).await;
-    let state = AppState::new(
-        pool,
-        crate::security::SecretBox::from_base64("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
-            .unwrap(),
-    );
-    crate::credentials::migration::migrate(&state.pool, &state.secrets)
-        .await
-        .unwrap();
-    let ssh = fixture_api::create(
-        &state,
-        "ssh_password",
-        json!({"secret":"unchanged-encrypted-material"}),
-    )
-    .await;
-    let node = fixture_api::node(&state, "retained", &ssh, json!({})).await;
-    sqlx::query("INSERT INTO users(id,name,created_at,updated_at) VALUES('retained-user','Retained',now(),now())").execute(&state.pool).await.unwrap();
-    sqlx::query("INSERT INTO node_assignments(user_id,node_id,credential_hash,credential_enc,created_at) VALUES('retained-user',$1,'hash',$2,now())")
+    for through in [66, 67] {
+        let pool = db::test_pool_through_version(3, through).await;
+        let state = AppState::new(
+            pool,
+            crate::security::SecretBox::from_base64("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+                .unwrap(),
+        );
+        crate::credentials::migration::migrate(&state.pool, &state.secrets)
+            .await
+            .unwrap();
+        let ssh = fixture_api::create(
+            &state,
+            "ssh_password",
+            json!({"secret":"unchanged-encrypted-material"}),
+        )
+        .await;
+        let node = fixture_api::node(&state, "retained", &ssh, json!({})).await;
+        sqlx::query("INSERT INTO users(id,name,created_at,updated_at) VALUES('retained-user','Retained',now(),now())").execute(&state.pool).await.unwrap();
+        sqlx::query("INSERT INTO node_assignments(user_id,node_id,credential_hash,credential_enc,created_at) VALUES('retained-user',$1,'hash',$2,now())")
         .bind(&node).bind(state.secrets.encrypt("retained-password").unwrap()).execute(&state.pool).await.unwrap();
-    let query = "SELECT jsonb_build_object('nodes',(SELECT jsonb_agg(to_jsonb(n) ORDER BY id) FROM nodes n),'users',(SELECT jsonb_agg(to_jsonb(u) ORDER BY id) FROM users u),'assignments',(SELECT jsonb_agg(to_jsonb(a) ORDER BY user_id,node_id) FROM node_assignments a),'credentials',(SELECT jsonb_agg(to_jsonb(c) ORDER BY id) FROM credentials c),'versions',(SELECT jsonb_agg(to_jsonb(v) ORDER BY credential_id,version) FROM credential_versions v),'history',(SELECT jsonb_agg(to_jsonb(h) ORDER BY id) FROM config_versions h),'events',(SELECT jsonb_agg(to_jsonb(e) ORDER BY id) FROM job_events e),'audit',(SELECT jsonb_agg(to_jsonb(a) ORDER BY id) FROM audit_records a))";
-    let before: Value = sqlx::query_scalar(query)
-        .fetch_one(&state.pool)
-        .await
-        .unwrap();
-    db::run_migrations(&state.pool).await.unwrap();
-    assert_eq!(
-        sqlx::query_scalar::<_, Value>(query)
+        let query = "SELECT jsonb_build_object('nodes',(SELECT jsonb_agg(to_jsonb(n) ORDER BY id) FROM nodes n),'users',(SELECT jsonb_agg(to_jsonb(u) ORDER BY id) FROM users u),'assignments',(SELECT jsonb_agg(to_jsonb(a) ORDER BY user_id,node_id) FROM node_assignments a),'credentials',(SELECT jsonb_agg(to_jsonb(c) ORDER BY id) FROM credentials c),'versions',(SELECT jsonb_agg(to_jsonb(v) ORDER BY credential_id,version) FROM credential_versions v),'history',(SELECT jsonb_agg(to_jsonb(h) ORDER BY id) FROM config_versions h),'events',(SELECT jsonb_agg(to_jsonb(e) ORDER BY id) FROM job_events e),'audit',(SELECT jsonb_agg(to_jsonb(a) ORDER BY id) FROM audit_records a))";
+        let before: Value = sqlx::query_scalar(query)
+            .fetch_one(&state.pool)
+            .await
+            .unwrap();
+        db::run_migrations(&state.pool).await.unwrap();
+        assert_eq!(
+            sqlx::query_scalar::<_, Value>(query)
+                .fetch_one(&state.pool)
+                .await
+                .unwrap(),
+            before
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT generation FROM node_authorization_versions WHERE node_id=$1"
+            )
+            .bind(node)
             .fetch_one(&state.pool)
             .await
             .unwrap(),
-        before
-    );
-    assert_eq!(
-        sqlx::query_scalar::<_, i64>(
-            "SELECT generation FROM node_authorization_versions WHERE node_id=$1"
-        )
-        .bind(node)
-        .fetch_one(&state.pool)
-        .await
-        .unwrap(),
-        0
-    );
+            if through == 66 { 0 } else { 1 }
+        );
+    }
 }
 
 async fn generated_ca(f: &Fixture) -> String {

@@ -456,10 +456,14 @@ async fn work_completion_is_idempotent_and_node_deletion_finishes_without_recrea
 #[tokio::test]
 async fn migration_0058_to_0059_preserves_all_snapshots_publication_state_and_queued_metadata() {
     let pool = db::test_pool_through_version(4, 58).await;
-    let (state, _, _, _) =
-        crate::api::managed_mtls::tests::rotation_flow::metadata_fixture_with_pool(pool, true)
+    let (state, _, rotation, node) =
+        crate::api::managed_mtls::tests::rotation_flow::publication_fixture_with_pool(pool, true)
             .await;
-    let snapshot = "SELECT jsonb_build_object('nodes',(SELECT jsonb_agg(to_jsonb(n) ORDER BY id) FROM nodes n),'versions',(SELECT jsonb_agg(to_jsonb(v) ORDER BY id) FROM config_versions v),'activations',(SELECT jsonb_agg(to_jsonb(a) ORDER BY id) FROM mtls_activations a),'trust',(SELECT jsonb_agg(to_jsonb(t) ORDER BY node_id,ca_id,ca_version) FROM mtls_node_trust t),'work',(SELECT jsonb_agg(to_jsonb(w) ORDER BY id) FROM background_work w),'leases',(SELECT jsonb_agg(to_jsonb(l) ORDER BY resource_key) FROM resource_leases l))";
+    sqlx::query("INSERT INTO background_work(id,kind,payload,state) VALUES('legacy-metadata','mtls-node-publication-metadata',jsonb_build_object('rotation_id',$1::text,'node_id',$2::text),'queued')")
+        .bind(&rotation).bind(&node).execute(&state.pool).await.unwrap();
+    sqlx::query("INSERT INTO resource_leases(resource_key,owner,work_id,generation,expires_at) VALUES($1,'legacy','legacy-metadata',7,clock_timestamp()+interval '1 minute')")
+        .bind(format!("node:{node}")).execute(&state.pool).await.unwrap();
+    let snapshot = "SELECT jsonb_build_object('nodes',(SELECT jsonb_agg(to_jsonb(n) ORDER BY id) FROM nodes n),'versions',(SELECT jsonb_agg(to_jsonb(v) ORDER BY id) FROM config_versions v),'activations',(SELECT jsonb_agg(to_jsonb(a) ORDER BY id) FROM mtls_activations a),'trust',(SELECT jsonb_agg(to_jsonb(t) ORDER BY node_id,ca_id,ca_version) FROM mtls_node_trust t),'work',(SELECT jsonb_agg(to_jsonb(w) ORDER BY id) FROM background_work w),'leases',(SELECT jsonb_agg(to_jsonb(l)-'epoch' ORDER BY resource_key) FROM resource_leases l))";
     let before: Value = sqlx::query_scalar(snapshot)
         .fetch_one(&state.pool)
         .await

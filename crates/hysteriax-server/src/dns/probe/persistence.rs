@@ -105,10 +105,10 @@ pub(super) async fn prepare_job(
         let resource:Option<String>=sqlx::query_scalar("SELECT resource_key FROM jobs WHERE id=$1").bind(&job.id).fetch_one(&mut **tx).await?;
         anyhow::ensure!(resource==Some(format!("dns-zone:{}",record.zone)),"DNS probe zone binding changed");
         let mut keys=vec![format!("job:{}",job.id),resource.context("DNS probe resource missing")?];if let Some(node)=&job.node_id {keys.push(format!("node:{node}"));}keys.sort();keys.dedup();
-        let rows=sqlx::query("SELECT resource_key,owner,generation,work_id FROM resource_leases WHERE resource_key=ANY($1) AND work_id=$2 AND owner IS NOT NULL AND expires_at>clock_timestamp() AND NOT blocked ORDER BY resource_key FOR UPDATE")
+        let rows=sqlx::query("SELECT resource_key,owner,epoch,generation,work_id FROM resource_leases WHERE resource_key=ANY($1) AND work_id=$2 AND owner IS NOT NULL AND epoch=hysteriax_execution_epoch() AND expires_at>clock_timestamp() AND NOT blocked ORDER BY resource_key FOR UPDATE")
             .bind(&keys).bind(&job.id).fetch_all(&mut **tx).await?;
         anyhow::ensure!(rows.len()==keys.len(),"DNS probe requires its full execution scope");
-        let leases:Vec<Execution>=rows.iter().map(|r|Execution{resource:r.get("resource_key"),owner:r.get("owner"),generation:r.get("generation"),work:r.get("work_id")}).collect();
+        let leases:Vec<Execution>=rows.iter().map(|r|Execution{resource:r.get("resource_key"),owner:r.get("owner"),epoch:r.get("epoch"),generation:r.get("generation"),work:r.get("work_id")}).collect();
         anyhow::ensure!(leases.iter().all(|l|l.owner==leases[0].owner),"DNS probe has mixed owners");
         Ok(Prepared::Ready(Work{record,job,operation,expected,leases,created:op.get("created_at")}))
     })}).await

@@ -671,9 +671,39 @@ async fn migration_0056_to_0057_preserves_source_material_and_pending_work_byte_
     let pool = db::test_pool_through_version(8, 56).await;
     let (state, ca, rotation) = super::super::trust::tests::fixture_with_pool(pool, 1).await;
     initialize(&state, 3).await;
-    admit(&state, &ca, &rotation).await;
-    let work = claim(&state, "retained-owner").await;
-    let snapshot = "SELECT jsonb_build_object('credentials',(SELECT jsonb_agg(to_jsonb(c) ORDER BY id) FROM credentials c),'versions',(SELECT jsonb_agg(to_jsonb(v) ORDER BY credential_id,version) FROM credential_versions v),'authorities',(SELECT jsonb_agg(to_jsonb(a) ORDER BY credential_id) FROM mtls_authorities a),'generations',(SELECT jsonb_agg(to_jsonb(g) ORDER BY ca_id,ca_version) FROM mtls_ca_generations g),'nodes',(SELECT jsonb_agg(to_jsonb(n) ORDER BY id) FROM nodes n),'users',(SELECT jsonb_agg(to_jsonb(u) ORDER BY id) FROM users u),'assignments',(SELECT jsonb_agg(to_jsonb(a) ORDER BY node_id,user_id) FROM node_assignments a),'identities',(SELECT jsonb_agg(to_jsonb(i)-'scheduled_ca_version' ORDER BY id) FROM mtls_user_identities i),'rotations',(SELECT jsonb_agg(to_jsonb(r) ORDER BY id) FROM mtls_rotations r),'work',(SELECT jsonb_agg(to_jsonb(w) ORDER BY id) FROM background_work w),'leases',(SELECT jsonb_agg(to_jsonb(l) ORDER BY resource_key) FROM resource_leases l))";
+    // Persist the historical issuance format without calling a worker compiled
+    // against the new lease schema before the upgrade.
+    sqlx::query("INSERT INTO mtls_user_identities(id,user_id,ca_id,created_at,updated_at) SELECT gen_random_uuid()::text,id,$1,now(),now() FROM users")
+        .bind(&ca).execute(&state.pool).await.unwrap();
+    let rows = sqlx::query("SELECT id,user_id,revision,authorization_revision FROM mtls_user_identities WHERE user_id LIKE 'user-%' ORDER BY user_id")
+        .fetch_all(&state.pool).await.unwrap();
+    let mut retained_work = String::new();
+    for (index, row) in rows.into_iter().enumerate() {
+        let identity: String = row.get("id");
+        let id = format!("rotation-user:{rotation}:{identity}");
+        let payload = json!({"rotation_id":rotation,"ca_id":ca,"ca_version":2,"identity_id":identity,"user_id":row.get::<String,_>("user_id"),"identity_revision":row.get::<i64,_>("revision"),"authorization_revision":row.get::<i64,_>("authorization_revision"),"lease_resources":[format!("ca:{ca}"),format!("identity:{identity}")]});
+        sqlx::query("INSERT INTO background_work(id,kind,payload) VALUES($1,$2,$3)")
+            .bind(&id)
+            .bind(ISSUE)
+            .bind(payload)
+            .execute(&state.pool)
+            .await
+            .unwrap();
+        if index == 0 {
+            retained_work = id.clone();
+            sqlx::query("UPDATE background_work SET state='running',owner='retained-owner',generation=1 WHERE id=$1")
+                .bind(&id).execute(&state.pool).await.unwrap();
+            for key in [
+                format!("ca:{ca}"),
+                format!("identity:{identity}"),
+                format!("work:{id}"),
+            ] {
+                sqlx::query("INSERT INTO resource_leases(resource_key,owner,work_id,generation,expires_at) VALUES($1,'retained-owner',$2,1,clock_timestamp()+interval '1 minute')")
+                    .bind(key).bind(&id).execute(&state.pool).await.unwrap();
+            }
+        }
+    }
+    let snapshot = "SELECT jsonb_build_object('credentials',(SELECT jsonb_agg(to_jsonb(c) ORDER BY id) FROM credentials c),'versions',(SELECT jsonb_agg(to_jsonb(v) ORDER BY credential_id,version) FROM credential_versions v),'authorities',(SELECT jsonb_agg(to_jsonb(a) ORDER BY credential_id) FROM mtls_authorities a),'generations',(SELECT jsonb_agg(to_jsonb(g) ORDER BY ca_id,ca_version) FROM mtls_ca_generations g),'nodes',(SELECT jsonb_agg(to_jsonb(n) ORDER BY id) FROM nodes n),'users',(SELECT jsonb_agg(to_jsonb(u) ORDER BY id) FROM users u),'assignments',(SELECT jsonb_agg(to_jsonb(a) ORDER BY node_id,user_id) FROM node_assignments a),'identities',(SELECT jsonb_agg(to_jsonb(i)-'scheduled_ca_version' ORDER BY id) FROM mtls_user_identities i),'rotations',(SELECT jsonb_agg(to_jsonb(r) ORDER BY id) FROM mtls_rotations r),'work',(SELECT jsonb_agg(to_jsonb(w) ORDER BY id) FROM background_work w),'leases',(SELECT jsonb_agg(to_jsonb(l)-'epoch' ORDER BY resource_key) FROM resource_leases l))";
     let before: Value = sqlx::query_scalar(snapshot)
         .fetch_one(&state.pool)
         .await
@@ -690,7 +720,17 @@ async fn migration_0056_to_0057_preserves_source_material_and_pending_work_byte_
         );
     }
     assert_eq!(count(&state,"SELECT count(*) FROM pg_indexes WHERE schemaname=current_schema() AND indexname='background_work_rotation_identity_due'").await,1);
-    for lease in &work.leases {
+    let rows=sqlx::query("SELECT resource_key,owner,generation,epoch,work_id FROM resource_leases WHERE work_id=$1 ORDER BY resource_key")
+        .bind(&retained_work).fetch_all(&state.pool).await.unwrap();
+    assert_eq!(rows.len(), 3);
+    for row in rows {
+        let lease = crate::execution::Execution {
+            resource: row.get("resource_key"),
+            owner: row.get("owner"),
+            generation: row.get("generation"),
+            epoch: row.get("epoch"),
+            work: row.get("work_id"),
+        };
         assert!(lease.renew(&state.pool).await.unwrap());
     }
 }

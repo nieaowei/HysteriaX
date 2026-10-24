@@ -52,9 +52,9 @@ pub(super) async fn prepare(
         };
         let actual:Option<String>=sqlx::query_scalar("SELECT resource_key FROM jobs WHERE id=$1").bind(&job.id).fetch_one(&mut **tx).await?;
         anyhow::ensure!(actual.as_deref()==Some(resource.as_str()),"DNS refresh resource binding changed");
-        let row=sqlx::query("SELECT owner,generation FROM resource_leases WHERE resource_key=$1 AND work_id=$2 AND owner IS NOT NULL AND expires_at>clock_timestamp() AND NOT blocked FOR UPDATE")
+        let row=sqlx::query("SELECT owner,epoch,generation FROM resource_leases WHERE resource_key=$1 AND work_id=$2 AND owner IS NOT NULL AND epoch=hysteriax_execution_epoch() AND expires_at>clock_timestamp() AND NOT blocked FOR UPDATE")
             .bind(&resource).bind(&job.id).fetch_optional(&mut **tx).await?.context("DNS refresh requires its resource execution lease")?;
-        let lease=Execution{resource:resource.clone(),work:job.id.clone(),owner:row.get("owner"),generation:row.get("generation")};
+        let lease=Execution{resource:resource.clone(),work:job.id.clone(),owner:row.get("owner"),epoch:row.get("epoch"),generation:row.get("generation")};
         let connection_source=connection_on(tx,&connection,action!="zone-refresh").await?;
         let zone=if action=="zone-refresh" {
             let value:Value=sqlx::query_scalar("SELECT to_jsonb(z)-'synced_at' FROM dns_zones z WHERE id=$1 FOR UPDATE")

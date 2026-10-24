@@ -1530,32 +1530,7 @@ pub(crate) async fn metadata_fixture_with_pool(
     pool: sqlx::PgPool,
     pending_edit: bool,
 ) -> (AppState, String, String, String) {
-    let state = super::state_with_pool(pool).await;
-    let ca = generated(&state).await;
-    let node = managed_node(&state, &ca).await;
-    let id = node["id"].as_str().unwrap().to_owned();
-    initial_deployment(&state, &node, &ca).await;
-    if pending_edit {
-        let _ = crate::api::nodes::patch(
-            State(state.clone()),
-            Path(id.clone()),
-            Json(
-                serde_json::from_value(json!({"expected_revision":1,"name":"Pending name"}))
-                    .unwrap(),
-            ),
-        )
-        .await
-        .unwrap();
-    }
-    let (_, Json(receipt)) = publish(
-        State(state.clone()),
-        actor(),
-        Path(ca.clone()),
-        Json(publish_request(1, "metadata-fixture")),
-    )
-    .await
-    .unwrap();
-    let rotation = receipt["rotation_id"].as_str().unwrap().to_owned();
+    let (state, ca, rotation, id) = publication_fixture_with_pool(pool, pending_edit).await;
     rotations::advance(&state, &rotation).await.unwrap();
     complete_operation(&state, &rotation_job(&state, &rotation, &id).await).await;
     let resource = format!("node:{id}");
@@ -1660,4 +1635,39 @@ pub(crate) async fn probe_switch_fixture() -> (AppState, String, String, Vec<Str
 
 pub(crate) async fn complete_cleanup_fixture(state: &AppState, job: &str) {
     complete_operation(state, job).await;
+}
+
+// Historical migration fixtures prepare source data without running a worker
+// compiled for a newer resource-lease schema.
+pub(crate) async fn publication_fixture_with_pool(
+    pool: sqlx::PgPool,
+    pending_edit: bool,
+) -> (AppState, String, String, String) {
+    let state = super::state_with_pool(pool).await;
+    let ca = generated(&state).await;
+    let node = managed_node(&state, &ca).await;
+    let id = node["id"].as_str().unwrap().to_owned();
+    initial_deployment(&state, &node, &ca).await;
+    if pending_edit {
+        let _ = crate::api::nodes::patch(
+            State(state.clone()),
+            Path(id.clone()),
+            Json(
+                serde_json::from_value(json!({"expected_revision":1,"name":"Pending name"}))
+                    .unwrap(),
+            ),
+        )
+        .await
+        .unwrap();
+    }
+    let (_, Json(receipt)) = publish(
+        State(state.clone()),
+        actor(),
+        Path(ca.clone()),
+        Json(publish_request(1, "metadata-fixture")),
+    )
+    .await
+    .unwrap();
+    let rotation = receipt["rotation_id"].as_str().unwrap().to_owned();
+    (state, ca, rotation, id)
 }

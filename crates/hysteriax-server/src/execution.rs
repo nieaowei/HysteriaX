@@ -16,6 +16,7 @@ pub struct Execution {
     pub resource: String,
     pub owner: String,
     pub generation: i64,
+    pub epoch: String,
     pub work: String,
 }
 
@@ -31,7 +32,7 @@ pub async fn acquire(
         .bind(resource)
         .execute(&mut *connection)
         .await?;
-    let Some(row) = sqlx::query("SELECT owner,generation,blocked,(expires_at IS NULL OR expires_at<=clock_timestamp()) AS available FROM resource_leases WHERE resource_key=$1 FOR UPDATE SKIP LOCKED")
+    let Some(row) = sqlx::query("SELECT owner,generation,blocked,(epoch<>hysteriax_execution_epoch() OR expires_at IS NULL OR expires_at<=clock_timestamp()) AS available FROM resource_leases WHERE resource_key=$1 FOR UPDATE SKIP LOCKED")
         .bind(resource).fetch_optional(&mut *connection).await? else { return Ok(None); };
     if row.get::<bool, _>("blocked") || !row.get::<bool, _>("available") {
         return Ok(None);
@@ -47,13 +48,14 @@ pub async fn acquire(
             .bind(resource).execute(&mut *connection).await?;
         return Ok(None);
     }
-    let generation: i64 = sqlx::query_scalar("UPDATE resource_leases SET owner=$2,work_id=$3,generation=generation+1,expires_at=clock_timestamp()+make_interval(secs=>$4::double precision) WHERE resource_key=$1 RETURNING generation")
+    let acquired = sqlx::query("UPDATE resource_leases SET owner=$2,work_id=$3,epoch=hysteriax_execution_epoch(),generation=generation+1,expires_at=clock_timestamp()+make_interval(secs=>$4::double precision) WHERE resource_key=$1 RETURNING generation,epoch")
         .bind(resource).bind(owner).bind(work).bind(LEASE_SECONDS as f64)
         .fetch_one(&mut *connection).await?;
     Ok(Some(Execution {
         resource: resource.into(),
         owner: owner.into(),
-        generation,
+        generation: acquired.get("generation"),
+        epoch: acquired.get("epoch"),
         work: work.into(),
     }))
 }
@@ -61,8 +63,8 @@ pub async fn acquire(
 impl Execution {
     /// Hold this row lock through the guarded progress/result transaction.
     pub async fn guard(&self, connection: &mut PgConnection) -> Result<(), sqlx::Error> {
-        let valid: Option<bool> = sqlx::query_scalar("SELECT true FROM resource_leases WHERE resource_key=$1 AND owner=$2 AND generation=$3 AND work_id=$4 AND expires_at>clock_timestamp() AND NOT blocked FOR UPDATE")
-            .bind(&self.resource).bind(&self.owner).bind(self.generation).bind(&self.work)
+        let valid: Option<bool> = sqlx::query_scalar("SELECT true FROM resource_leases WHERE resource_key=$1 AND owner=$2 AND generation=$3 AND work_id=$4 AND epoch=$5 AND epoch=hysteriax_execution_epoch() AND expires_at>clock_timestamp() AND NOT blocked FOR UPDATE")
+            .bind(&self.resource).bind(&self.owner).bind(self.generation).bind(&self.work).bind(&self.epoch)
             .fetch_optional(connection).await?;
         if valid.is_none() {
             return Err(sqlx::Error::Protocol("execution lease was lost".into()));
@@ -71,8 +73,8 @@ impl Execution {
     }
 
     pub async fn renew(&self, pool: &PgPool) -> Result<bool, sqlx::Error> {
-        Ok(sqlx::query("UPDATE resource_leases SET expires_at=clock_timestamp()+make_interval(secs=>$5::double precision) WHERE resource_key=$1 AND owner=$2 AND generation=$3 AND work_id=$4 AND expires_at>clock_timestamp() AND NOT blocked")
-            .bind(&self.resource).bind(&self.owner).bind(self.generation).bind(&self.work).bind(LEASE_SECONDS as f64)
+        Ok(sqlx::query("UPDATE resource_leases SET expires_at=clock_timestamp()+make_interval(secs=>$5::double precision) WHERE resource_key=$1 AND owner=$2 AND generation=$3 AND work_id=$4 AND epoch=$6 AND epoch=hysteriax_execution_epoch() AND expires_at>clock_timestamp() AND NOT blocked")
+            .bind(&self.resource).bind(&self.owner).bind(self.generation).bind(&self.work).bind(LEASE_SECONDS as f64).bind(&self.epoch)
             .execute(pool).await?.rows_affected()==1)
     }
 
@@ -103,17 +105,17 @@ impl Execution {
             ));
         }
         let id = uuid::Uuid::new_v4().to_string();
-        let inserted=sqlx::query("INSERT INTO execution_operations(operation_id,resource_key,owner,generation,work_id,step,state,intent) VALUES($1,$2,$3,$4,$5,$6,'dispatching',$7) ON CONFLICT(work_id,step) DO NOTHING")
-            .bind(&id).bind(&self.resource).bind(&self.owner).bind(self.generation).bind(&self.work).bind(step).bind(intent)
+        let inserted=sqlx::query("INSERT INTO execution_operations(operation_id,resource_key,owner,generation,work_id,step,state,intent,epoch) VALUES($1,$2,$3,$4,$5,$6,'dispatching',$7,$8) ON CONFLICT(work_id,step) DO NOTHING")
+            .bind(&id).bind(&self.resource).bind(&self.owner).bind(self.generation).bind(&self.work).bind(step).bind(intent).bind(&self.epoch)
             .execute(&mut *connection).await?.rows_affected()==1;
         let row = sqlx::query(
-            "SELECT operation_id,intent FROM execution_operations WHERE work_id=$1 AND step=$2",
+            "SELECT operation_id,intent,epoch FROM execution_operations WHERE work_id=$1 AND step=$2",
         )
         .bind(&self.work)
         .bind(step)
         .fetch_one(connection)
         .await?;
-        if row.get::<Value, _>("intent") != *intent {
+        if row.get::<Value, _>("intent") != *intent || row.get::<String, _>("epoch") != self.epoch {
             return Err(sqlx::Error::Protocol(
                 "operation intent changed; verification required".into(),
             ));
@@ -129,8 +131,8 @@ impl Execution {
         evidence: &Value,
     ) -> Result<(), sqlx::Error> {
         self.guard(connection).await?;
-        let changed=sqlx::query("UPDATE execution_operations SET state='verified',evidence=$5,updated_at=clock_timestamp() WHERE operation_id=$1 AND resource_key=$2 AND owner=$3 AND generation=$4 AND work_id=$6 AND state='dispatching'")
-            .bind(operation).bind(&self.resource).bind(&self.owner).bind(self.generation).bind(evidence).bind(&self.work)
+        let changed=sqlx::query("UPDATE execution_operations SET state='verified',evidence=$5,updated_at=clock_timestamp() WHERE operation_id=$1 AND resource_key=$2 AND owner=$3 AND generation=$4 AND work_id=$6 AND epoch=$7 AND state='dispatching'")
+            .bind(operation).bind(&self.resource).bind(&self.owner).bind(self.generation).bind(evidence).bind(&self.work).bind(&self.epoch)
             .execute(connection).await?;
         if changed.rows_affected() != 1 {
             return Err(sqlx::Error::Protocol(
@@ -407,8 +409,8 @@ pub async fn guard_current(connection: &mut PgConnection) -> Result<(), sqlx::Er
 /// every result write and external dispatch still takes the stronger row locks.
 async fn observe_current(scope: &Scope) -> Result<(), sqlx::Error> {
     for lease in &scope.leases {
-        let valid:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM resource_leases WHERE resource_key=$1 AND owner=$2 AND generation=$3 AND work_id=$4 AND expires_at>clock_timestamp() AND NOT blocked)")
-            .bind(&lease.resource).bind(&lease.owner).bind(lease.generation).bind(&lease.work).fetch_one(&scope.pool).await?;
+        let valid:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM resource_leases WHERE resource_key=$1 AND owner=$2 AND generation=$3 AND work_id=$4 AND epoch=$5 AND epoch=hysteriax_execution_epoch() AND expires_at>clock_timestamp() AND NOT blocked)")
+            .bind(&lease.resource).bind(&lease.owner).bind(lease.generation).bind(&lease.work).bind(&lease.epoch).fetch_one(&scope.pool).await?;
         if !valid {
             return Err(sqlx::Error::Protocol("execution lease was lost".into()));
         }
@@ -917,3 +919,7 @@ mod boundary_tests {
         assert_eq!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM execution_operations WHERE work_id='other-work' AND state='dispatching'").fetch_one(&pool).await.unwrap(),1);
     }
 }
+
+#[cfg(test)]
+#[path = "execution/epoch_tests.rs"]
+mod epoch_tests;

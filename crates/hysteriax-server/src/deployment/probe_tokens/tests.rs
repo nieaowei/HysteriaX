@@ -4,21 +4,10 @@ use crate::{execution, state::AppState};
 async fn fixture() -> (AppState, JobInput, Vec<execution::Execution>) {
     fixture_on(db::test_pool_with_max_connections(8).await).await
 }
-async fn fixture_on(pool: PgPool) -> (AppState, JobInput, Vec<execution::Execution>) {
+async fn seed_on(pool: PgPool) -> (AppState, JobInput) {
     sqlx::query("INSERT INTO nodes(id,name,ssh_host,ssh_port,ssh_username,ssh_auth_type,ssh_secret_enc,public_host,public_port,listen_addr,node_token_hash,node_token_enc,traffic_stats_secret_enc,desired_config_enc,created_at,updated_at) SELECT id,id,'127.0.0.1',22,'root','password','unused','example.test',443,':443',CASE WHEN id='a' THEN $1 ELSE id END,'unused','unused','{}',clock_timestamp(),clock_timestamp() FROM unnest(ARRAY['a','b'])id").bind(token_digest("node-auth")).execute(&pool).await.unwrap();
     sqlx::query("INSERT INTO jobs(id,kind,node_id,target_revision,status,stage,attempts,available_at,created_at,updated_at) VALUES('one','deploy','a',1,'running','starting',1,clock_timestamp(),clock_timestamp(),clock_timestamp()),('two','deploy','b',1,'running','starting',1,clock_timestamp(),clock_timestamp(),clock_timestamp())").execute(&pool).await.unwrap();
     sqlx::raw_sql("DO $$ DECLARE r record; BEGIN FOR r IN SELECT c.relname,t.tgname FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_proc p ON p.oid=t.tgfoid WHERE c.relnamespace=current_schema()::regnamespace AND p.proname='hysteriax_serialize_writes' LOOP EXECUTE format('ALTER TABLE %I DISABLE TRIGGER %I',r.relname,r.tgname); END LOOP; END $$").execute(&pool).await.unwrap();
-    let mut tx = pool.begin().await.unwrap();
-    let mut leases = vec![];
-    for key in ["job:one", "node:a"] {
-        leases.push(
-            execution::acquire(&mut tx, key, "owner", "one")
-                .await
-                .unwrap()
-                .unwrap(),
-        );
-    }
-    tx.commit().await.unwrap();
     let state = AppState::new(
         pool,
         SecretBox::from_base64("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA").unwrap(),
@@ -31,8 +20,24 @@ async fn fixture_on(pool: PgPool) -> (AppState, JobInput, Vec<execution::Executi
         payload: json!({}),
         attempts: 1,
     };
+    (state, job)
+}
+async fn fixture_on(pool: PgPool) -> (AppState, JobInput, Vec<execution::Execution>) {
+    let (state, job) = seed_on(pool).await;
+    let mut tx = state.pool.begin().await.unwrap();
+    let mut leases = vec![];
+    for key in ["job:one", "node:a"] {
+        leases.push(
+            execution::acquire(&mut tx, key, "owner", "one")
+                .await
+                .unwrap()
+                .unwrap(),
+        );
+    }
+    tx.commit().await.unwrap();
     (state, job, leases)
 }
+
 async fn auth(state: &AppState, token: &str) -> Value {
     serde_json::to_value(
         crate::api::subscriptions::hy2_auth(
@@ -361,10 +366,12 @@ fn cleanup_checks_the_configuration_path_before_signalling_a_pid_and_removes_onl
 async fn migration_keeps_existing_credentials_and_business_rows_but_requires_fresh_execution_proof()
 {
     let pool = db::test_pool_through_version(8, 61).await;
-    let (state, job, leases) = fixture_on(pool).await;
+    let (state, job) = seed_on(pool).await;
+    sqlx::query("INSERT INTO resource_leases(resource_key,owner,work_id,generation,expires_at) SELECT key,'owner','one',1,clock_timestamp()+interval '1 minute' FROM unnest(ARRAY['job:one','node:a'])key")
+        .execute(&state.pool).await.unwrap();
     sqlx::query("INSERT INTO deployment_probe_tokens(node_id,token_hash,expires_at,job_id) VALUES('a',$1,clock_timestamp()+interval '15 minutes','one')").bind(token_digest("legacy")).execute(&state.pool).await.unwrap();
     let old = row(&state.pool).await;
-    let q = "SELECT jsonb_build_object('nodes',(SELECT jsonb_agg(to_jsonb(n) ORDER BY id) FROM nodes n),'jobs',(SELECT jsonb_agg(to_jsonb(j) ORDER BY id) FROM jobs j),'leases',(SELECT jsonb_agg(to_jsonb(l) ORDER BY resource_key) FROM resource_leases l))";
+    let q = "SELECT jsonb_build_object('nodes',(SELECT jsonb_agg(to_jsonb(n) ORDER BY id) FROM nodes n),'jobs',(SELECT jsonb_agg(to_jsonb(j) ORDER BY id) FROM jobs j),'leases',(SELECT jsonb_agg(to_jsonb(l)-'epoch' ORDER BY resource_key) FROM resource_leases l))";
     let before: Value = sqlx::query_scalar(q).fetch_one(&state.pool).await.unwrap();
     db::run_migrations(&state.pool).await.unwrap();
     db::run_migrations(&state.pool).await.unwrap();
@@ -377,6 +384,11 @@ async fn migration_keeps_existing_credentials_and_business_rows_but_requires_fre
     );
     assert_eq!(old,sqlx::query_scalar::<_,Value>("SELECT to_jsonb(p)-'owner'-'node_generation'-'job_generation' FROM deployment_probe_tokens p WHERE node_id='a'").fetch_one(&state.pool).await.unwrap());
     assert_eq!(auth(&state, "legacy").await["ok"], false);
+    let leases = sqlx::query("SELECT resource_key,owner,generation,epoch,work_id FROM resource_leases ORDER BY resource_key")
+        .fetch_all(&state.pool).await.unwrap().into_iter().map(|r| execution::Execution {
+            resource:r.get("resource_key"), owner:r.get("owner"), generation:r.get("generation"),
+            epoch:r.get("epoch"), work:r.get("work_id"),
+        }).collect();
     execution::supervise(
         state.pool.clone(),
         leases,
