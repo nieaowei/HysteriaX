@@ -30,6 +30,19 @@ pub struct PreparedIdentity {
 }
 
 impl PreparedIdentity {
+    pub(crate) fn matches_deployment(
+        &self,
+        identity: &str,
+        user: &str,
+        ca: &str,
+        version: i64,
+    ) -> bool {
+        self.id == identity
+            && self.user_id == user
+            && self.ca_id == ca
+            && self.ca_version == version
+    }
+
     pub fn will_issue(&self) -> bool {
         self.issued.is_some()
     }

@@ -2,6 +2,9 @@
 //!
 //! A lease fences database writes, never an already dispatched SSH/DNS request.
 //! Uncertain operations keep their resource blocked after expiry until verified.
+mod identity_scope;
+pub(crate) use identity_scope::with_identity_leases;
+
 use serde_json::Value;
 use sqlx::{PgConnection, PgPool, Row};
 
@@ -449,6 +452,10 @@ pub async fn supervise<T>(
         leases,
         sequence: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
     };
+    supervise_scope(scope, work).await
+}
+
+async fn supervise_scope<T>(scope: Scope, work: impl std::future::Future<Output = T>) -> Option<T> {
     CURRENT.scope(scope.clone(), async move {
         // Validate before polling the work future at all; the renewal future's
         // first database await otherwise lets a stale worker start local work.
