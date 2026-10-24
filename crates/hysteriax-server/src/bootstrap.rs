@@ -91,6 +91,11 @@ pub async fn finalize(pool: &PgPool, secrets: &SecretBox) -> Result<()> {
     sqlx::query("UPDATE cache_version_epoch SET epoch=gen_random_uuid()::text WHERE id")
         .execute(&mut *tx)
         .await?;
+    // Maintenance, including a restored database, starts a new resume timeline
+    // while retaining all historical events and publication sequence numbers.
+    sqlx::query("UPDATE event_publication_stream SET epoch=gen_random_uuid()::text WHERE id")
+        .execute(&mut *tx)
+        .await?;
     sqlx::query("INSERT INTO runtime_contract(id,schema_version,management_protocol,master_key_fingerprint) VALUES(true,$1,$2,$3) ON CONFLICT(id) DO UPDATE SET schema_version=EXCLUDED.schema_version,management_protocol=EXCLUDED.management_protocol,initialized_at=clock_timestamp()")
         .bind(MIGRATOR.iter().last().unwrap().version).bind(MANAGEMENT_PROTOCOL).bind(secrets.fingerprint())
         .execute(&mut *tx).await?;
@@ -114,6 +119,16 @@ mod tests {
         crate::traffic::work::initialize(&pool).await.unwrap();
         crate::traffic::access::initialize(&pool).await.unwrap();
         finalize(&pool, &secrets).await.unwrap();
+        let event_epoch: String =
+            sqlx::query_scalar("SELECT epoch FROM event_publication_stream WHERE id")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        sqlx::query("INSERT INTO jobs(id,kind,status,stage,available_at,created_at,updated_at) VALUES('retained','sync','queued','queued',now(),now(),now())")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO job_events(job_id,event_type,payload_json,created_at) VALUES('retained','retained','{}',now())")
+            .execute(&pool).await.unwrap();
+        crate::events::publish_pending(&pool).await.unwrap();
         let epoch: String = sqlx::query_scalar("SELECT epoch FROM cache_version_epoch WHERE id")
             .fetch_one(&pool)
             .await
@@ -128,6 +143,13 @@ mod tests {
             epoch, unchanged,
             "normal startup must not rotate cache epochs"
         );
+        assert_eq!(
+            sqlx::query_scalar::<_, String>("SELECT epoch FROM event_publication_stream WHERE id")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            event_epoch
+        );
         assert!(check_runtime(&pool, &other).await.is_err());
         assert!(finalize(&pool, &other).await.is_err());
         let unchanged: String =
@@ -139,6 +161,13 @@ mod tests {
             epoch, unchanged,
             "rejected maintenance must not alter cache identity"
         );
+        assert_eq!(
+            sqlx::query_scalar::<_, String>("SELECT epoch FROM event_publication_stream WHERE id")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            event_epoch
+        );
         finalize(&pool, &secrets).await.unwrap();
         let rotated: String = sqlx::query_scalar("SELECT epoch FROM cache_version_epoch WHERE id")
             .fetch_one(&pool)
@@ -147,6 +176,36 @@ mod tests {
         assert_ne!(
             epoch, rotated,
             "explicit maintenance invalidates restored Redis state"
+        );
+        assert_ne!(
+            sqlx::query_scalar::<_, String>("SELECT epoch FROM event_publication_stream WHERE id")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            event_epoch
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT head FROM event_publication_stream WHERE id")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM event_publications")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT count(*) FROM job_events WHERE event_type='retained'"
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+            1
         );
         check_runtime(&pool, &secrets).await.unwrap();
         sqlx::query("UPDATE runtime_contract SET management_protocol=999 WHERE id")

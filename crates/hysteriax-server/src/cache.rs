@@ -385,6 +385,7 @@ fn ttl(path: &str) -> Option<Duration> {
     if path.starts_with("/api/v1/subscription-templates")
         || path.ends_with("/events")
         || path == "/api/v1/events"
+        || path == "/api/v2/events/head"
         || path == "/api/v1/version"
         || path.starts_with("/api/v1/admin/")
         || path.ends_with("/subscription")

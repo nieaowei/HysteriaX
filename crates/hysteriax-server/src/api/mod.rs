@@ -3,6 +3,7 @@ pub(crate) mod authorization_groups;
 mod client_summary;
 pub(crate) mod credentials;
 pub(crate) mod dns;
+mod event_stream_v2;
 mod idempotency;
 pub(crate) mod job_retries;
 pub(crate) mod managed_mtls;
@@ -47,6 +48,9 @@ pub(crate) fn audit_actor() -> String {
 pub fn router(state: AppState) -> Router {
     use subscriptions::templates as st;
     let admin = Router::new()
+        .route("/api/v2/events/head", get(event_stream_v2::head))
+        .route("/api/v2/events", get(event_stream_v2::events))
+        .route("/api/v2/jobs/{id}/events", get(event_stream_v2::job_events))
         .route("/api/v2/jobs", get(list_jobs))
         .route("/api/v2/jobs/{id}", get(get_job))
         .route("/api/v2/jobs/{id}/retry", post(job_retries::v2::retry))
