@@ -124,7 +124,12 @@ class MultiInstanceServer:
                 do_PUT = dispatch
                 do_DELETE = dispatch
 
-            self.proxy = http.server.ThreadingHTTPServer(("0.0.0.0", front_port), Proxy)
+            class LoadServer(http.server.ThreadingHTTPServer):
+                # Python's default backlog of five is below the benchmark's
+                # concurrency and can drop requests before a backend sees them.
+                request_queue_size = 128
+
+            self.proxy = LoadServer(("0.0.0.0", front_port), Proxy)
             self.proxy.daemon_threads = True
             threading.Thread(target=self.proxy.serve_forever, daemon=True).start()
         except BaseException:
