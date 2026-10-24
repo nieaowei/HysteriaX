@@ -10,5 +10,7 @@ swiftc -swift-version 6 -parse-as-library \
   "$root/apps/macos/Sources/HysteriaX/Models/OpenAPIResponses.generated.swift" \
   "$root/apps/macos/Sources/HysteriaX/Models/ACMEDNSDraft.swift" \
   "$root/apps/macos/Sources/HysteriaX/Services/APIClient.swift" \
+  "$root/apps/macos/Sources/HysteriaX/Services/ManagementEvent.swift" \
+  "$root/apps/macos/Sources/HysteriaX/Services/ManagementWriteJournal.swift" \
   "$root/tests/acme-dns-client.swift" -o "$tmp_dir/acme-dns-client-tests"
 "$tmp_dir/acme-dns-client-tests" "$root/tests/fixtures/acme-dns-providers.json"

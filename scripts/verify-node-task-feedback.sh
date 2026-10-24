@@ -10,6 +10,8 @@ swiftc -swift-version 6 -parse-as-library \
   "$SOURCE/Models/OpenAPIRequests.generated.swift" \
   "$SOURCE/Models/OpenAPIResponses.generated.swift" \
   "$SOURCE/Services/APIClient.swift" \
+  "$SOURCE/Services/ManagementEvent.swift" \
+  "$SOURCE/Services/ManagementWriteJournal.swift" \
   "$SOURCE/Support/DateDisplayParser.swift" \
   "$SOURCE/Models/NodeTaskFeedback.swift" \
   "$ROOT/tests/node-task-feedback.swift" \

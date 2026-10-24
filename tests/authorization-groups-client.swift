@@ -2,7 +2,7 @@ import Foundation
 
 private final class FixtureState: @unchecked Sendable {
     let lock = NSLock()
-    var requests: [(String, String, Data)] = []
+    var requests: [(String, String, Data, String?)] = []
     var failGroups = false
     func record(_ request: URLRequest) -> Data {
         var body = request.httpBody ?? Data()
@@ -16,7 +16,7 @@ private final class FixtureState: @unchecked Sendable {
             }
         }
         lock.lock(); defer { lock.unlock() }
-        requests.append((request.httpMethod ?? "GET", request.url!.path, body))
+        requests.append((request.httpMethod ?? "GET", request.url!.path, body, request.value(forHTTPHeaderField: "Idempotency-Key")))
         return body
     }
 }
@@ -33,7 +33,7 @@ private final class GroupFixtureProtocol: URLProtocol, @unchecked Sendable {
         let preview = #"{"action":"create","preview_token":"guard-1","additions_count":1,"removals_count":0,"additions":[{"user_id":"user","node_id":"node"}],"removals":[],"automatic_issue_count":1,"pending_issue_count":0,"managed_identities":[{"user_id":"user","ca_credential_id":"ca","ca_versions":[1],"issue_now":true,"pending":false}]}"#
         var status = 200
         let data: Data
-        if path == "/api/v1/credentials/ca-identities" || path.hasSuffix("/ca-versions") {
+        if path == "/api/v2/credentials/ca-identities" || path.hasSuffix("/ca-versions") {
             data = Data(#"{"id":"ca","revision":2,"version":2,"batch_id":"batch","rotation_id":"rotation","published":false}"#.utf8)
         }
         else if path.hasSuffix("/ca-policy") {
@@ -41,9 +41,9 @@ private final class GroupFixtureProtocol: URLProtocol, @unchecked Sendable {
         }
         else if path.hasSuffix("/preview") { data = Data(preview.utf8) }
         else if method == "DELETE" { data = Data(receipt.utf8) }
-        else if path == "/api/v1/version" { data = Data(#"{"api_version":"1.0.0","directory_generation":1,"features":["authorization_groups","managed_mtls"],"service_version":"fixture","hysteria_version":"fixture","mihomo_version":"fixture"}"#.utf8) }
-        else if path == "/api/v1/authorization-groups" && Self.state.failGroups { status = 503; data = Data(#"{"error":{"code":"temporary","message":"groups unavailable"}}"#.utf8) }
-        else if ["/api/v1/jobs", "/api/v1/audit", "/api/v1/nodes", "/api/v1/users", "/api/v1/credentials", "/api/v1/dns/records"].contains(path) { data = Data(#"{"items":[],"total":0,"page":1,"page_size":50}"#.utf8) }
+        else if path == "/api/v2/version" { data = Data(#"{"api_version":"2.0.0","management_protocol":2,"directory_version":"b3:test","features":["authorization_groups","managed_mtls"],"service_version":"fixture","hysteria_version":"fixture","mihomo_version":"fixture"}"#.utf8) }
+        else if path == "/api/v2/authorization-groups" && Self.state.failGroups { status = 503; data = Data(#"{"error":{"code":"temporary","message":"groups unavailable"}}"#.utf8) }
+        else if ["/api/v2/jobs", "/api/v2/audit", "/api/v2/nodes", "/api/v2/users", "/api/v2/credentials", "/api/v2/dns/records"].contains(path) { data = Data(#"{"items":[],"total":0,"page":1,"page_size":50}"#.utf8) }
         else { data = Data("[]".utf8) }
         client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: "HTTP/1.1", headerFields: ["Content-Type":"application/json"])!, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: data)
@@ -73,13 +73,13 @@ struct AuthorizationGroupClientChecks {
         precondition(oldUser.authorizationGroups == nil)
         store.users = [oldUser]
         await store.refreshAuthorizationGroups()
-        precondition(GroupFixtureProtocol.state.requests.contains { $0.1 == "/api/v1/authorization-groups" })
+        precondition(GroupFixtureProtocol.state.requests.contains { $0.1 == "/api/v2/authorization-groups" })
         let preview = try await store.previewAuthorizationGroup(group:nil,name:"Test",userIDs:["user"],nodeIDs:["node"])
         precondition(preview.automaticIssueCount == 1 && preview.pendingIssueCount == 0 && preview.previewToken == "guard-1")
         let sent = try JSONSerialization.jsonObject(with: GroupFixtureProtocol.state.requests.last!.2) as! [String:Any]
         precondition(sent["mtls_bindings"] == nil)
         precondition(sent["user_ids"] as? [String] == ["user"])
-        let reissue=ManagedUserReissueRequest(caCredentialId:"ca",expectedRevisions:["ca":.integer(3)],idempotencyKey:"same-operation")
+        let reissue=ManagedUserReissueRequest(caCredentialId:"ca",expectedRevisions:["ca":.integer(3)])
         let encoded=try JSONSerialization.jsonObject(with:JSONEncoder().encode(reissue)) as! [String:Any]
         precondition((encoded["expected_revisions"] as? [String:Int])?["ca"] == 3)
         let source = try JSONDecoder().decode(AssignmentInfo.self, from: Data(#"{"node_id":"node","created_at":"2026-10-07T00:00:00Z","source_groups":[{"id":"migration-abc","name":"Migrated"},{"id":"group-b","name":"Second"}]}"#.utf8))
@@ -120,18 +120,18 @@ struct AuthorizationGroupClientChecks {
         draft.mode = "off"
         precondition(draft.configuration.objectValue?.count == 1)
         let policy = ManagedCAPolicy(clientValidityDays: 90, renewBeforeHours: 168)
-        let _: CAIdentityReceipt = try await store.createCAIdentity(CAIdentityCreateRequest(name: "Shared", source: "generated", policy: policy, idempotencyKey: "create-once"))
-        try await store.updateCAIdentityPolicy("ca", request: CAPolicyUpdateRequest(expectedRevision: 3, policy: policy, idempotencyKey: "policy-once"))
-        let receipt = try await store.publishCAIdentity("ca", request: CAIdentityPublishRequest(expectedRevision: 2, replaceRotationId: "old-rotation", idempotencyKey: "publish-once"))
+        let _: CAIdentityReceipt = try await store.createCAIdentity(CAIdentityCreateRequest(name: "Shared", source: "generated", policy: policy))
+        try await store.updateCAIdentityPolicy("ca", request: CAPolicyUpdateRequest(expectedRevision: 3, policy: policy))
+        let receipt = try await store.publishCAIdentity("ca", request: CAIdentityPublishRequest(expectedRevision: 2, replaceRotationId: "old-rotation"))
         precondition(receipt.rotationId == "rotation" && receipt.published == false)
         let requests = GroupFixtureProtocol.state.requests
         let policyRequest = requests.first { $0.1.hasSuffix("/ca-policy") }!
         precondition(policyRequest.0 == "PATCH")
         let policyBody = try JSONSerialization.jsonObject(with: policyRequest.2) as! [String:Any]
-        precondition(policyBody["expected_revision"] as? Int == 3 && policyBody["idempotency_key"] as? String == "policy-once")
+        precondition(policyBody["expected_revision"] as? Int == 3 && policyBody["idempotency_key"] == nil && policyRequest.3?.isEmpty == false)
         let publishRequest = requests.first { $0.1.hasSuffix("/ca-versions") }!
         let publishBody = try JSONSerialization.jsonObject(with: publishRequest.2) as! [String:Any]
-        precondition(publishBody["replace_rotation_id"] as? String == "old-rotation" && publishBody["idempotency_key"] as? String == "publish-once")
+        precondition(publishBody["replace_rotation_id"] as? String == "old-rotation" && publishBody["idempotency_key"] == nil && publishRequest.3?.isEmpty == false && publishRequest.3 != policyRequest.3)
         print("Managed mTLS client checks passed: explicit off/managed settings, exact CA version, dedicated CA routes, independent policy revision, persisted operation keys and explicit target replacement.")
     }
 

@@ -67,7 +67,7 @@ response_models = %w[
   NodeUpdateResponse UserUpdateResponse QuotaResetResponse
   ActiveSubscription SubscriptionStatus NodeUsageSummary DataFreshness PendingRevocation
   UserUsageResponse JobDetailResponse HysteriaAuthResponse
-  CreatedEntity NodeReceipt APIHealth APIVersion APIErrorDetail APIErrorResponse
+  CreatedEntity NodeReceipt APIHealth APIVersion EventStreamHead APIErrorDetail APIErrorResponse
   ClientSummary AdminTokenSummary AdminTokenReceipt ServerMonitoring
   OverviewIssue OverviewNode OverviewNodesPage OverviewResponse OverviewBucket OverviewHistory
 ]
@@ -93,7 +93,10 @@ end
 
 def swift_type(schema, schemas)
   if schema.key?("$ref")
-    return schema.fetch("$ref").split("/").last
+    name = schema.fetch("$ref").split("/").last
+    target = schemas.fetch(name)
+    return swift_type(target, schemas) if target["type"] == "string"
+    return name
   end
   type = schema["type"]
   if type.is_a?(Array)

@@ -52,8 +52,7 @@ struct UserManagedCertificatesView: View {
     private func reissue(_ identity: ManagedUserIdentity) {
         let request = requests[identity.caCredentialId] ?? ManagedUserReissueRequest(
             caCredentialId: identity.caCredentialId,
-            expectedRevisions: [identity.caCredentialId: .integer(identity.revision)],
-            idempotencyKey: UUID().uuidString
+            expectedRevisions: [identity.caCredentialId: .integer(identity.revision)]
         )
         requests[identity.caCredentialId] = request
         workingCA = identity.caCredentialId

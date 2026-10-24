@@ -51,7 +51,7 @@ struct DNSBindingEditorView: View {
                 if let allocation = try draft.allocation(zones: store.dnsZones, records: store.dnsRecords) {
                     try await store.setDNSBinding(nodeID: nodeID, revision: detail.revision, allocation: allocation)
                 } else if detail.dnsBinding != nil {
-                    try await store.removeDNSBinding(nodeID: nodeID, revision: detail.revision, publicHost: externalHost, idempotencyKey: draft.idempotencyKey)
+                    try await store.removeDNSBinding(nodeID: nodeID, revision: detail.revision, publicHost: externalHost)
                 } else {
                     try await store.setExternalPublicHost(detail, host: externalHost)
                 }
@@ -68,7 +68,6 @@ struct DNSRecordBindingPicker: View {
     @State private var nodeID = ""
     @State private var saving = false
     @State private var error: String?
-    @State private var key = UUID().uuidString
 
     var body: some View {
         directoryContent
@@ -96,7 +95,7 @@ struct DNSRecordBindingPicker: View {
                             let node = try await store.nodeDetail(nodeID)
                             let ids = store.dnsRecords.filter { $0.zoneId == record.zoneId && $0.name == record.name && $0.supportsEditing && !$0.proxied && $0.state == "synced" }.map(\.id)
                             try await store.setDNSBinding(nodeID: nodeID, revision: node.revision,
-                                allocation: DNSAllocation(idempotencyKey: key, zoneId: record.zoneId, mode: "existing", recordIds: ids))
+                                allocation: DNSAllocation(zoneId: record.zoneId, mode: "existing", recordIds: ids))
                             dismiss()
                         } catch { self.error = error.localizedDescription }
                     }

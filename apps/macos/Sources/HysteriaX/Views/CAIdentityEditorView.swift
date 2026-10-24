@@ -15,7 +15,6 @@ struct CAIdentityEditorView: View {
     @State private var validity = 180
     @State private var renewBefore = 720
     @State private var replacingBlockedTarget = false
-    @State private var idempotencyKey = UUID().uuidString
     @State private var saving = false
     @State private var error: String?
     @State private var importing = false
@@ -94,10 +93,6 @@ struct CAIdentityEditorView: View {
                 name = detail.name; source = ca.source; validity = ca.clientValidityDays; renewBefore = ca.renewBeforeHours
             }
         }
-        .onChange(of: name) { resetKey() }.onChange(of: source) { resetKey() }
-        .onChange(of: certificate) { resetKey() }.onChange(of: privateKey) { resetKey() }
-        .onChange(of: validity) { resetKey() }.onChange(of: renewBefore) { resetKey() }
-        .onChange(of: replacingBlockedTarget) { resetKey() }
         .fileImporter(isPresented: $importing, allowedContentTypes: [.data]) { result in
             do {
                 let url = try result.get()
@@ -110,7 +105,6 @@ struct CAIdentityEditorView: View {
         }
         .onDisappear { certificate = ""; privateKey = "" }
     }
-    private func resetKey() { idempotencyKey = UUID().uuidString }
     private func importedText(_ title: String, text: Binding<String>, field: String) -> some View {
         VStack(alignment: .leading) {
             HStack { Text(title); Spacer(); Button(L10n.text("导入文件…")) { importField = field; importing = true } }
@@ -120,7 +114,6 @@ struct CAIdentityEditorView: View {
     }
     private func save() {
         saving = true; error = nil
-        let key = idempotencyKey
         Task {
             defer { saving = false }
             do {
@@ -128,15 +121,15 @@ struct CAIdentityEditorView: View {
                 let policy = ManagedCAPolicy(clientValidityDays: validity, renewBeforeHours: renewBefore)
                 switch operation {
                 case .create:
-                    let receipt = try await store.createCAIdentity(CAIdentityCreateRequest(name: name.trimmingCharacters(in: .whitespacesAndNewlines), source: source, certificate: importsMaterial ? certificate : nil, privateKey: importsMaterial ? privateKey : nil, policy: policy, idempotencyKey: key))
+                    let receipt = try await store.createCAIdentity(CAIdentityCreateRequest(name: name.trimmingCharacters(in: .whitespacesAndNewlines), source: source, certificate: importsMaterial ? certificate : nil, privateKey: importsMaterial ? privateKey : nil, policy: policy))
                     id = receipt.id
                 case .publish:
                     guard let detail else { return }
-                    let receipt = try await store.publishCAIdentity(detail.id, request: CAIdentityPublishRequest(expectedRevision: detail.revision, certificate: importsMaterial ? certificate : nil, privateKey: importsMaterial ? privateKey : nil, replaceRotationId: replacingBlockedTarget ? blockedRotation?.id : nil, idempotencyKey: key))
+                    let receipt = try await store.publishCAIdentity(detail.id, request: CAIdentityPublishRequest(expectedRevision: detail.revision, certificate: importsMaterial ? certificate : nil, privateKey: importsMaterial ? privateKey : nil, replaceRotationId: replacingBlockedTarget ? blockedRotation?.id : nil))
                     id = receipt.id
                 case .policy:
                     guard let detail, let ca = detail.ca else { return }
-                    try await store.updateCAIdentityPolicy(detail.id, request: CAPolicyUpdateRequest(expectedRevision: ca.policyRevision, policy: policy, idempotencyKey: key))
+                    try await store.updateCAIdentityPolicy(detail.id, request: CAPolicyUpdateRequest(expectedRevision: ca.policyRevision, policy: policy))
                     id = detail.id
                 }
                 certificate = ""; privateKey = ""; onSaved?(id); dismiss()

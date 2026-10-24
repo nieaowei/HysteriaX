@@ -79,16 +79,37 @@ final class ManagementStore {
     var dataRefreshToken = UUID()
     var listCacheSession = UUID()
     let listPageCache = ListPageCache()
-    private var directoryGeneration: Int64?
+    private var directoryVersion: String?
     var errorMessage: String?
 
     private var api: APIClient?
     private var eventTask: Task<Void, Never>?
     private var refreshTask: Task<Void, Never>?
-    @ObservationIgnored private var refreshFlight: Task<Void, Never>?
+    @ObservationIgnored private var refreshFlight: Task<Bool, Never>?
     @ObservationIgnored private var pendingForcedRefresh = false
-    private var lastEventID: String? {
-        UserDefaults.standard.string(forKey: "lastEventID.\(serviceAddress)")
+    // A display snapshot is not proof that all events through a persisted cursor
+    // were applied. Each new connection obtains a head before loading its state.
+    private var eventCursor: String?
+
+    static func eventCursorStorageKey(service: String, actor: String) -> String {
+        "management.eventCursor.v2." + String(data: try! JSONEncoder().encode([service, actor]), encoding: .utf8)!
+    }
+
+    private func saveEventCursor(_ cursor: String) throws {
+        guard let actor = currentAdminTokenID else { throw APIClientError.invalidResponse }
+        eventCursor = cursor
+        UserDefaults.standard.set(cursor, forKey: Self.eventCursorStorageKey(service: serviceAddress, actor: actor))
+    }
+
+    private func synchronizeEvents(using client: APIClient) async throws {
+        let generation = serviceGeneration
+        let head: EventStreamHead = try await client.get(APIEndpoints.getEventStreamHead, bypassCache: true)
+        let cursor = try ManagementEventCursor(head.cursor)
+        guard cursor.epoch == head.epoch, cursor.sequence == head.publicationSeq else { throw APIClientError.invalidResponse }
+        guard generation == serviceGeneration, api === client, !Task.isCancelled else { throw CancellationError() }
+        guard await refresh(forceDirectories: true) else { throw APIClientError.invalidResponse }
+        guard generation == serviceGeneration, api === client, !Task.isCancelled else { throw CancellationError() }
+        try saveEventCursor(head.cursor)
     }
 
     init(client: APIClient? = nil, restoreSnapshot: Bool = true, nodeNotifications: NodeAlertNotifications? = nil) {
@@ -103,7 +124,6 @@ final class ManagementStore {
             let client = APIClient(baseURL: url, token: token)
             api = client
             Task {
-                await refresh()
                 startEventUpdates(using: client)
             }
         }
@@ -119,7 +139,7 @@ final class ManagementStore {
         let _: APIHealth = try await client.get(APIEndpoints.readinessCheck)
         let version: APIVersion = try await client.get(APIEndpoints.getAPIVersion)
         currentAdminTokenID = version.currentAdminTokenId
-        guard version.apiVersion == "1.0.0" else { throw APIClientError.incompatibleAPI(version.apiVersion) }
+        guard version.apiVersion == "2.0.0" && version.managementProtocol == 2 else { throw APIClientError.incompatibleAPI(version.apiVersion) }
         let normalizedAddress = url.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         let serviceChanged = normalizedAddress != self.serviceAddress
         let tokenChanged = previousToken != token
@@ -133,7 +153,8 @@ final class ManagementStore {
         overviewMonitoringPage = nil
         overviewMonitoringPageKey = nil
         serviceGeneration = UUID()
-        directoryGeneration = nil
+        directoryVersion = nil
+        eventCursor = nil
         for task in directoryTasks.values { task.cancel() }
         directoryTasks = [:]
         loadedDirectories = []
@@ -141,6 +162,8 @@ final class ManagementStore {
         clientSummary = nil
         supportsClientSummary = version.features?.contains("client_summary") == true
         overviewRequestGeneration = UUID()
+        authorizationGroupsRequestID = UUID()
+        dnsRequestGeneration = UUID()
         if serviceChanged {
             historyCache = [:]
             overview = nil
@@ -184,43 +207,28 @@ final class ManagementStore {
         restoreDNSSnapshot()
         let connectionGeneration = serviceGeneration
         do {
-            try await loadData(using: client)
-            guard connectionGeneration == serviceGeneration else { throw CancellationError() }
-            isConnected = true
+            try await synchronizeEvents(using: client)
             await templateWindows.reconcile(store: self)
-            errorMessage = nil
-            await (nodeNotifications ?? .shared).deliver(nodes: clientSummary?.notificationNodes ?? nodes, service: serviceAddress)
-            await (nodeNotifications ?? .shared).deliver(credentials: clientSummary?.notificationCredentials ?? credentials, service: serviceAddress)
         } catch {
             guard connectionGeneration == serviceGeneration else { throw CancellationError() }
             isConnected = false
             errorMessage = error.localizedDescription
             throw error
         }
-        supportsDNSManagement = version.features?.contains("dns_management") == true
-        supportsNodePackages = version.features?.contains("node_packages") == true
-        supportsSSHDNSSync = version.features?.contains("ssh_dns_sync") == true
-        supportsOverviewMonitoring = version.features?.contains("overview_monitoring") == true
-        supportsJobRetryLinks = version.features?.contains("job_retry_links") == true
-        supportsNodeRecordRemoval = version.features?.contains("node_record_removal") == true
-        directoryGeneration = version.directoryGeneration
-        await refreshAuthorizationGroups()
-        await refreshOverview()
-        await refreshDNS()
         startEventUpdates(using: client)
     }
 
-    func refresh(forceDirectories: Bool = true) async {
-        guard let api else { isConnected = false; return }
+    @discardableResult
+    func refresh(forceDirectories: Bool = true) async -> Bool {
+        guard let api else { isConnected = false; return false }
         if let flight = refreshFlight {
             if forceDirectories { pendingForcedRefresh = true }
-            await flight.value
-            return
+            return await flight.value
         }
         let generation = serviceGeneration
         isLoading = true
         pendingForcedRefresh = false
-        let flight = Task { [self] in
+        let flight = Task<Bool, Never> { [self] in
             defer {
                 if generation == serviceGeneration {
                     refreshFlight = nil
@@ -229,36 +237,44 @@ final class ManagementStore {
                 }
             }
             var force = forceDirectories
+            var success = false
             repeat {
-                await performRefresh(using: api, forceDirectories: force)
-                guard generation == serviceGeneration, !Task.isCancelled else { return }
+                success = await performRefresh(using: api, forceDirectories: force)
+                guard generation == serviceGeneration, !Task.isCancelled else { return false }
                 force = pendingForcedRefresh
                 pendingForcedRefresh = false
             } while force
+            return success
         }
         refreshFlight = flight
-        await flight.value
+        return await flight.value
     }
 
-    private func performRefresh(using api: APIClient, forceDirectories: Bool) async {
+    private func performRefresh(using api: APIClient, forceDirectories: Bool) async -> Bool {
         let refreshGeneration = serviceGeneration
-        if forceDirectories { listPageCache.invalidate() }
+        if forceDirectories {
+            listPageCache.invalidate()
+            historyCache = [:]
+            overviewMonitoringPage = nil
+            overviewMonitoringPageKey = nil
+            overviewHistoryRefreshToken = UUID()
+        }
         do {
             let version: APIVersion = try await api.get(APIEndpoints.getAPIVersion)
-            guard refreshGeneration == serviceGeneration, !Task.isCancelled else { return }
+            guard refreshGeneration == serviceGeneration, !Task.isCancelled else { return false }
             currentAdminTokenID = version.currentAdminTokenId
-            guard version.apiVersion == "1.0.0" else { throw APIClientError.incompatibleAPI(version.apiVersion) }
+            guard version.apiVersion == "2.0.0" && version.managementProtocol == 2 else { throw APIClientError.incompatibleAPI(version.apiVersion) }
             supportsClientSummary = version.features?.contains("client_summary") == true
-            let changed=forceDirectories || directoryGeneration != version.directoryGeneration || !isConnected
+            let changed=forceDirectories || directoryVersion != version.directoryVersion || !isConnected
             if changed && !forceDirectories { listPageCache.invalidate() }
             if changed {
                 for task in directoryTasks.values { task.cancel() }
                 directoryTasks = [:]; loadedDirectories = []; loadingDirectories = []
                 try await loadData(using: api, bypassCache: forceDirectories)
-                guard refreshGeneration == serviceGeneration, !Task.isCancelled else { return }
-                directoryGeneration=version.directoryGeneration
+                guard refreshGeneration == serviceGeneration, !Task.isCancelled else { return false }
+                directoryVersion=version.directoryVersion
             }
-            guard refreshGeneration == serviceGeneration, !Task.isCancelled else { return }
+            guard refreshGeneration == serviceGeneration, !Task.isCancelled else { return false }
             supportsDNSManagement = version.features?.contains("dns_management") == true
             supportsNodePackages = version.features?.contains("node_packages") == true
             supportsSSHDNSSync = version.features?.contains("ssh_dns_sync") == true
@@ -266,44 +282,50 @@ final class ManagementStore {
             supportsJobRetryLinks = version.features?.contains("job_retry_links") == true
             supportsNodeRecordRemoval = version.features?.contains("node_record_removal") == true
             isConnected = true
-            if changed { await refreshAuthorizationGroups() }
-            guard refreshGeneration == serviceGeneration, !Task.isCancelled else { return }
+            if changed, !(await refreshAuthorizationGroups()) { return false }
+            guard refreshGeneration == serviceGeneration, !Task.isCancelled else { return false }
             errorMessage = nil
             if !changed {
-                await refreshClientSummary(using: api)
+                guard await refreshClientSummary(using: api) else { throw APIClientError.invalidResponse }
                 let monitoring=await fetchServerMonitoring(using:api)
-                guard refreshGeneration==serviceGeneration,!Task.isCancelled else {return}
+                guard refreshGeneration==serviceGeneration,!Task.isCancelled else {return false}
                 serverMonitoring=monitoring.value ?? serverMonitoring; serverMonitoringError=monitoring.error
             }
             await (nodeNotifications ?? .shared).deliver(nodes: clientSummary?.notificationNodes ?? nodes, service: serviceAddress)
             await (nodeNotifications ?? .shared).deliver(credentials: clientSummary?.notificationCredentials ?? credentials, service: serviceAddress)
-            await refreshOverview(bypassCache: forceDirectories)
-            guard refreshGeneration == serviceGeneration, !Task.isCancelled else { return }
+            guard await refreshOverview(bypassCache: forceDirectories) else { return false }
+            guard refreshGeneration == serviceGeneration, !Task.isCancelled else { return false }
             dataRefreshToken=UUID()
-            if changed { await refreshDNS(bypassCache: forceDirectories) }
+            if changed, !(await refreshDNS(bypassCache: forceDirectories)) { return false }
+            guard refreshGeneration == serviceGeneration, !Task.isCancelled else { return false }
+            return true
         } catch {
-            guard refreshGeneration == serviceGeneration, !Task.isCancelled else { return }
+            guard refreshGeneration == serviceGeneration, !Task.isCancelled else { return false }
             isConnected = false
             errorMessage = error.localizedDescription
+            return false
         }
     }
 
-    func refreshOverview(bypassCache: Bool = false) async {
-        guard supportsOverviewMonitoring else { overview = nil; overviewError = nil; return }
-        guard let api else { return }
+    @discardableResult
+    func refreshOverview(bypassCache: Bool = false) async -> Bool {
+        guard supportsOverviewMonitoring else { overview = nil; overviewError = nil; return true }
+        guard let api else { return false }
         let generation = serviceGeneration
         let request = UUID()
         overviewRequestGeneration = request
         do {
             let value = try await api.get(APIEndpoints.getOverview, bypassCache: bypassCache)
-            guard generation == serviceGeneration, request == overviewRequestGeneration, !Task.isCancelled else { return }
+            guard generation == serviceGeneration, request == overviewRequestGeneration, !Task.isCancelled else { return false }
             overview = value
             overviewError = nil
             let snapshot = ClientDisplaySnapshot(credentials: Array(credentials.prefix(50)), nodes: Array(nodes.prefix(50)), users: Array(users.prefix(50)), jobs: jobs, auditRecords: auditRecords, updatedAt: lastUpdated ?? Date(), serverMonitoring: serverMonitoring, overview: value, clientSummary: clientSummary)
             if let data = try? JSONEncoder().encode(snapshot) { UserDefaults.standard.set(data, forKey: displaySnapshotKey) }
+            return true
         } catch {
-            guard generation == serviceGeneration, request == overviewRequestGeneration, !Task.isCancelled else { return }
+            guard generation == serviceGeneration, request == overviewRequestGeneration, !Task.isCancelled else { return false }
             overviewError = L10n.text("概览监控暂不可用：{0}", String(describing: (error.localizedDescription)))
+            return false
         }
     }
 
@@ -675,6 +697,17 @@ final class ManagementStore {
             errorMessage = L10n.text("令牌已创建，但无法保存到 Keychain；请立即复制并安全保存此令牌。{0}", String(describing: (error.localizedDescription)))
             return receipt
         }
+        eventTask?.cancel()
+        refreshTask?.cancel()
+        refreshFlight?.cancel()
+        refreshFlight = nil
+        pendingForcedRefresh = false
+        serviceGeneration = UUID()
+        eventCursor = nil
+        listPageCache.invalidate(clear: true)
+        listCacheSession = UUID()
+        authorizationGroupsRequestID = UUID()
+        dnsRequestGeneration = UUID()
         api = nextAPI
         currentAdminTokenID = receipt.id
         UserDefaults.standard.set(receipt.id, forKey: adminTokenIDKey)
@@ -682,14 +715,10 @@ final class ManagementStore {
             let _: APIHealth = try await nextAPI.get(APIEndpoints.readinessCheck)
             let version: APIVersion = try await nextAPI.get(APIEndpoints.getAPIVersion)
             currentAdminTokenID = version.currentAdminTokenId
-            guard version.apiVersion == "1.0.0" else {
+            guard version.apiVersion == "2.0.0" && version.managementProtocol == 2 else {
                 throw APIClientError.incompatibleAPI(version.apiVersion)
             }
-            try await loadData(using: nextAPI)
-            isConnected = true
-            errorMessage = nil
-            await (nodeNotifications ?? .shared).deliver(nodes: clientSummary?.notificationNodes ?? nodes, service: serviceAddress)
-            await (nodeNotifications ?? .shared).deliver(credentials: clientSummary?.notificationCredentials ?? credentials, service: serviceAddress)
+            try await synchronizeEvents(using: nextAPI)
         } catch {
             isConnected = false
             errorMessage = L10n.text("新令牌已保存并切换，但服务暂不可用：{0}", String(describing: (error.localizedDescription)))
@@ -751,7 +780,7 @@ final class ManagementStore {
             nodes = legacy.0; users = legacy.1; credentials = legacy.2
             loadedDirectories = [.nodes, .users, .credentials]
         }
-        await refreshClientSummary(using: client)
+        guard await refreshClientSummary(using: client) else { throw APIClientError.invalidResponse }
         guard generation == serviceGeneration, !Task.isCancelled else { throw CancellationError() }
         lastUpdated = snapshot.updatedAt
         var display = snapshot
@@ -761,15 +790,17 @@ final class ManagementStore {
         }
     }
 
-    private func refreshClientSummary(using client: APIClient) async {
-        guard supportsClientSummary else { clientSummary = nil; return }
+    private func refreshClientSummary(using client: APIClient) async -> Bool {
+        guard supportsClientSummary else { clientSummary = nil; return true }
         let generation = serviceGeneration
         do {
             let value = try await client.get(APIEndpoints.getClientSummary)
-            guard generation == serviceGeneration, !Task.isCancelled else { return }
+            guard generation == serviceGeneration, !Task.isCancelled else { return false }
             clientSummary = value
+            return true
         } catch {
-            // Keep the last complete summary; list pages are never treated as global totals.
+            // Keep the last complete summary without acknowledging an incomplete refresh.
+            return false
         }
     }
 
@@ -875,13 +906,25 @@ final class ManagementStore {
             var sourceOrder: [Int64] = []
             while !Task.isCancelled {
                 do {
-                    let events = try await client.events(APIEndpoints.streamEvents, lastEventID: self.lastEventID)
+                    if self.eventCursor == nil {
+                        try await self.synchronizeEvents(using: client)
+                        appliedSources = []; sourceOrder = []
+                    }
+                    let events = try await client.events(APIEndpoints.streamEvents, lastEventID: self.eventCursor)
                     for try await event in events {
                         guard generation == self.serviceGeneration, address == self.serviceAddress, !Task.isCancelled else { return }
+                        let incoming = try ManagementEventCursor(event.cursor)
+                        guard let saved = self.eventCursor else { throw APIClientError.invalidResponse }
+                        let previous = try ManagementEventCursor(saved)
+                        guard incoming.epoch == previous.epoch else { throw APIClientError.eventCursorExpired }
+                        guard incoming.sequence > previous.sequence else {
+                            if incoming.sequence == previous.sequence { continue }
+                            throw APIClientError.invalidResponse
+                        }
                         let duplicate = event.sourceID.map { appliedSources.contains($0) } == true
                         if event.kind != "stream.cursor", !duplicate {
                             self.listPageCache.invalidate(types: [NodesPage.self, UsersPage.self, JobsPage.self, OverviewNodesPage.self].map { String(reflecting: $0) })
-                            await self.refresh(forceDirectories: true)
+                            guard await self.refresh(forceDirectories: true) else { throw APIClientError.invalidResponse }
                         }
                         guard generation == self.serviceGeneration, address == self.serviceAddress, !Task.isCancelled else { return }
                         guard self.isConnected else { throw APIClientError.invalidResponse }
@@ -889,12 +932,15 @@ final class ManagementStore {
                             sourceOrder.append(source)
                             if sourceOrder.count > 1024 { appliedSources.remove(sourceOrder.removeFirst()) }
                         }
-                        UserDefaults.standard.set(event.cursor, forKey: "lastEventID.\(address)")
+                        try self.saveEventCursor(event.cursor)
                     }
                     retryDelay = 1
                 } catch {
                     guard generation == self.serviceGeneration, address == self.serviceAddress, !Task.isCancelled else { return }
-                    await self.refresh(forceDirectories: false)
+                    if case APIClientError.eventCursorExpired = error {
+                        self.eventCursor = nil
+                        appliedSources = []; sourceOrder = []
+                    }
                 }
                 guard !Task.isCancelled else { return }
                 try? await Task.sleep(for: .seconds(retryDelay))

@@ -8,7 +8,7 @@ struct DNSClientTests {
         let page = try JSONDecoder().decode(DNSRecordsPage.self, from: Data(#"{"items":[{"id":"a","zone_id":"zone","name":"hk.example.test","record_type":"A","content":"8.8.8.8","ttl":1,"proxied":false,"origin":"external","revision":1,"state":"synced","resolution_status":"verified","bound_node_id":"node","updated_at":"2026-10-06T00:00:00Z"}],"total":235,"page":3,"page_size":25}"#.utf8))
         precondition(page.total == 235 && page.page == 3 && page.pageSize == 25 && page.items[0].boundNodeId == "node")
         let pageEndpoint = APIEndpoints.listDNSRecords(page: 3, pageSize: 25, connectionId: "connection", zoneId: "zone", q: "历史 %_&", sort: "content", order: "desc")
-        precondition(pageEndpoint.path == "api/v1/dns/records" && pageEndpoint.method == "GET")
+        precondition(pageEndpoint.path == "api/v2/dns/records" && pageEndpoint.method == "GET")
         precondition(pageEndpoint.queryParameters == ["page": "3", "page_size": "25", "connection_id": "connection", "zone_id": "zone", "q": "历史 %_&", "sort": "content", "order": "desc"])
         for parameters in [
             APIEndpoints.listNodes().queryParameters,
@@ -47,7 +47,7 @@ struct DNSClientTests {
         let encoded = try JSONEncoder().encode(DNSBindingSetRequest(expectedRevision: 12, allocation: allocation))
         let body = try JSONSerialization.jsonObject(with: encoded) as! [String: Any]
         precondition(body["expected_revision"] as? Int == 12)
-        precondition((body["allocation"] as! [String: Any])["idempotency_key"] as? String == draft.idempotencyKey)
+        precondition((body["allocation"] as! [String: Any])["idempotency_key"] == nil)
         for mode in ["auto", "manual"] {
             var addressDraft = draft
             addressDraft.mode = mode
@@ -74,7 +74,7 @@ struct DNSClientTests {
         let existing = try draft.allocation(zones: [zone], records: records)!
         precondition(existing.recordIds == ["a", "aaaa"])
         let endpoint = APIEndpoints.setDNSBinding(id: "node")
-        precondition(endpoint.method == "PUT" && endpoint.path == "api/v1/nodes/node/dns-binding")
+        precondition(endpoint.method == "PUT" && endpoint.path == "api/v2/nodes/node/dns-binding")
         let delete = APIEndpoints.deleteDNSRecord(id: "record")
         precondition(delete.method == "DELETE")
         let response = try JSONDecoder().decode(DNSBindingResponse.self, from: Data(#"{"binding":null}"#.utf8))

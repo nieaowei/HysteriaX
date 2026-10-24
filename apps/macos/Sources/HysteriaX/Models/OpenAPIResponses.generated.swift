@@ -1640,7 +1640,8 @@ struct APIHealth: Codable, Sendable {
 }
 
 struct APIVersion: Codable, Sendable {
-    let directoryGeneration: Int64
+    let directoryVersion: String
+    let managementProtocol: Int
     let currentAdminTokenId: String?
     let features: [String]?
     let apiVersion: String
@@ -1649,13 +1650,26 @@ struct APIVersion: Codable, Sendable {
     let mihomoVersion: String
 
     enum CodingKeys: String, CodingKey {
-        case directoryGeneration = "directory_generation"
+        case directoryVersion = "directory_version"
+        case managementProtocol = "management_protocol"
         case currentAdminTokenId = "current_admin_token_id"
         case features
         case apiVersion = "api_version"
         case serviceVersion = "service_version"
         case hysteriaVersion = "hysteria_version"
         case mihomoVersion = "mihomo_version"
+    }
+}
+
+struct EventStreamHead: Codable, Sendable {
+    let cursor: String
+    let epoch: String
+    let publicationSeq: Int64
+
+    enum CodingKeys: String, CodingKey {
+        case cursor
+        case epoch
+        case publicationSeq = "publication_seq"
     }
 }
 

@@ -19,6 +19,8 @@ swiftc -swift-version 6 -parse-as-library \
   "$root/apps/macos/Sources/HysteriaX/Models/TemplateReferenceIndex.swift" \
   "$root/apps/macos/Sources/HysteriaX/Stores/SubscriptionTemplateStore.swift" \
   "$root/apps/macos/Sources/HysteriaX/Services/APIClient.swift" \
+  "$root/apps/macos/Sources/HysteriaX/Services/ManagementEvent.swift" \
+  "$root/apps/macos/Sources/HysteriaX/Services/ManagementWriteJournal.swift" \
   "$root/apps/macos/Sources/HysteriaX/Views/TemplateCollectionFields.swift" \
   "$root/apps/macos/Sources/HysteriaX/Views/TemplateHTTPClientFields.swift" \
   "$root/apps/macos/Sources/HysteriaX/Models/TemplateFieldLayout.swift" \

@@ -14,6 +14,8 @@ swiftc -swift-version 6 -parse-as-library \
   "$root/apps/macos/Sources/HysteriaX/Support/DateDisplayParser.swift" \
   "$root/apps/macos/Sources/HysteriaX/Models/ServerConfigurationDraft.swift" \
   "$root/apps/macos/Sources/HysteriaX/Services/APIClient.swift" \
+  "$root/apps/macos/Sources/HysteriaX/Services/ManagementEvent.swift" \
+  "$root/apps/macos/Sources/HysteriaX/Services/ManagementWriteJournal.swift" \
   "$root/apps/macos/Sources/HysteriaX/Services/NodeAlertNotifications.swift" \
   "$root/tests/node-package-client.swift" -o "$tmp_dir/node-package-client-tests"
 "$tmp_dir/node-package-client-tests"

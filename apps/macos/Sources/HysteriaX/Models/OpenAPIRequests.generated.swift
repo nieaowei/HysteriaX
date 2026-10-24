@@ -43,19 +43,15 @@ struct DNSConnectionPatchRequest: Encodable, Sendable {
 
 struct DNSActionRequest: Encodable, Sendable {
     let expectedRevision: Int
-    let idempotencyKey: String
 
     init(
-        expectedRevision: Int,
-        idempotencyKey: String
+        expectedRevision: Int
     ) {
         self.expectedRevision = expectedRevision
-        self.idempotencyKey = idempotencyKey
     }
 
     enum CodingKeys: String, CodingKey {
         case expectedRevision = "expected_revision"
-        case idempotencyKey = "idempotency_key"
     }
 }
 
@@ -79,44 +75,36 @@ struct DNSZonePatchRequest: Encodable, Sendable {
 
 struct DNSRecordCreateRequest: Encodable, Sendable {
     let zoneId: String
-    let idempotencyKey: String
     let record: DNSRecordInput
 
     init(
         zoneId: String,
-        idempotencyKey: String,
         record: DNSRecordInput
     ) {
         self.zoneId = zoneId
-        self.idempotencyKey = idempotencyKey
         self.record = record
     }
 
     enum CodingKeys: String, CodingKey {
         case zoneId = "zone_id"
-        case idempotencyKey = "idempotency_key"
         case record
     }
 }
 
 struct DNSRecordUpdateRequest: Encodable, Sendable {
     let expectedRevision: Int
-    let idempotencyKey: String
     let record: DNSRecordInput
 
     init(
         expectedRevision: Int,
-        idempotencyKey: String,
         record: DNSRecordInput
     ) {
         self.expectedRevision = expectedRevision
-        self.idempotencyKey = idempotencyKey
         self.record = record
     }
 
     enum CodingKeys: String, CodingKey {
         case expectedRevision = "expected_revision"
-        case idempotencyKey = "idempotency_key"
         case record
     }
 }
@@ -141,22 +129,18 @@ struct DNSBindingSetRequest: Encodable, Sendable {
 
 struct DNSBindingRemoveRequest: Encodable, Sendable {
     let expectedRevision: Int
-    let idempotencyKey: String
     let publicHost: String
 
     init(
         expectedRevision: Int,
-        idempotencyKey: String,
         publicHost: String
     ) {
         self.expectedRevision = expectedRevision
-        self.idempotencyKey = idempotencyKey
         self.publicHost = publicHost
     }
 
     enum CodingKeys: String, CodingKey {
         case expectedRevision = "expected_revision"
-        case idempotencyKey = "idempotency_key"
         case publicHost = "public_host"
     }
 }
@@ -192,7 +176,6 @@ struct DNSRecordInput: Encodable, Sendable {
 }
 
 struct DNSAllocation: Encodable, Sendable {
-    let idempotencyKey: String
     let zoneId: String
     let mode: String
     let prefix: String?
@@ -202,7 +185,6 @@ struct DNSAllocation: Encodable, Sendable {
     let recordIds: [String]?
 
     init(
-        idempotencyKey: String,
         zoneId: String,
         mode: String,
         prefix: String? = nil,
@@ -211,7 +193,6 @@ struct DNSAllocation: Encodable, Sendable {
         ipv6: String? = nil,
         recordIds: [String]? = nil
     ) {
-        self.idempotencyKey = idempotencyKey
         self.zoneId = zoneId
         self.mode = mode
         self.prefix = prefix
@@ -222,7 +203,6 @@ struct DNSAllocation: Encodable, Sendable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case idempotencyKey = "idempotency_key"
         case zoneId = "zone_id"
         case mode
         case prefix
@@ -239,22 +219,19 @@ struct CAIdentityCreateRequest: Encodable, Sendable {
     let certificate: String?
     let privateKey: String?
     let policy: ManagedCAPolicy?
-    let idempotencyKey: String
 
     init(
         name: String,
         source: String,
         certificate: String? = nil,
         privateKey: String? = nil,
-        policy: ManagedCAPolicy? = nil,
-        idempotencyKey: String
+        policy: ManagedCAPolicy? = nil
     ) {
         self.name = name
         self.source = source
         self.certificate = certificate
         self.privateKey = privateKey
         self.policy = policy
-        self.idempotencyKey = idempotencyKey
     }
 
     enum CodingKeys: String, CodingKey {
@@ -263,29 +240,24 @@ struct CAIdentityCreateRequest: Encodable, Sendable {
         case certificate
         case privateKey = "private_key"
         case policy
-        case idempotencyKey = "idempotency_key"
     }
 }
 
 struct CAPolicyUpdateRequest: Encodable, Sendable {
     let expectedRevision: Int
     let policy: ManagedCAPolicy
-    let idempotencyKey: String
 
     init(
         expectedRevision: Int,
-        policy: ManagedCAPolicy,
-        idempotencyKey: String
+        policy: ManagedCAPolicy
     ) {
         self.expectedRevision = expectedRevision
         self.policy = policy
-        self.idempotencyKey = idempotencyKey
     }
 
     enum CodingKeys: String, CodingKey {
         case expectedRevision = "expected_revision"
         case policy
-        case idempotencyKey = "idempotency_key"
     }
 }
 
@@ -294,20 +266,17 @@ struct CAIdentityPublishRequest: Encodable, Sendable {
     let certificate: String?
     let privateKey: String?
     let replaceRotationId: String?
-    let idempotencyKey: String
 
     init(
         expectedRevision: Int,
         certificate: String? = nil,
         privateKey: String? = nil,
-        replaceRotationId: String? = nil,
-        idempotencyKey: String
+        replaceRotationId: String? = nil
     ) {
         self.expectedRevision = expectedRevision
         self.certificate = certificate
         self.privateKey = privateKey
         self.replaceRotationId = replaceRotationId
-        self.idempotencyKey = idempotencyKey
     }
 
     enum CodingKeys: String, CodingKey {
@@ -315,29 +284,24 @@ struct CAIdentityPublishRequest: Encodable, Sendable {
         case certificate
         case privateKey = "private_key"
         case replaceRotationId = "replace_rotation_id"
-        case idempotencyKey = "idempotency_key"
     }
 }
 
 struct ManagedUserReissueRequest: Encodable, Sendable {
     let caCredentialId: String?
     let expectedRevisions: [String: JSONValue]
-    let idempotencyKey: String
 
     init(
         caCredentialId: String? = nil,
-        expectedRevisions: [String: JSONValue],
-        idempotencyKey: String
+        expectedRevisions: [String: JSONValue]
     ) {
         self.caCredentialId = caCredentialId
         self.expectedRevisions = expectedRevisions
-        self.idempotencyKey = idempotencyKey
     }
 
     enum CodingKeys: String, CodingKey {
         case caCredentialId = "ca_credential_id"
         case expectedRevisions = "expected_revisions"
-        case idempotencyKey = "idempotency_key"
     }
 }
 
@@ -1122,208 +1086,209 @@ struct APIOperation<Request: Sendable, Response: Sendable>: Sendable {
 
 enum APIEndpoints {
     static func refactorSubscriptionTemplate(id: String) -> APIOperation<RefactorSubscriptionTemplateRequest, [String: JSONValue]> {
-        APIOperation(method: "POST", path: "api/v1/subscription-templates/\(id)/refactor", queryParameters: [:])
+        APIOperation(method: "POST", path: "api/v2/subscription-templates/\(id)/refactor", queryParameters: [:])
     }
     static func getSubscriptionTemplateVersion(id: String, version: String) -> APIOperation<NoRequest, SubscriptionTemplateDraft> {
-        APIOperation(method: "GET", path: "api/v1/subscription-templates/\(id)/versions/\(version)", queryParameters: [:])
+        APIOperation(method: "GET", path: "api/v2/subscription-templates/\(id)/versions/\(version)", queryParameters: [:])
     }
     static func listSubscriptionTemplates(page: Int? = nil, pageSize: Int? = nil, format: String? = nil, archived: Bool? = nil) -> APIOperation<NoRequest, SubscriptionTemplatesPage> {
-        APIOperation(method: "GET", path: "api/v1/subscription-templates", queryParameters: ["page": page.map { String($0) }, "page_size": pageSize.map { String($0) }, "format": format.map { String($0) }, "archived": archived.map { String($0) }].compactMapValues { $0 })
+        APIOperation(method: "GET", path: "api/v2/subscription-templates", queryParameters: ["page": page.map { String($0) }, "page_size": pageSize.map { String($0) }, "format": format.map { String($0) }, "archived": archived.map { String($0) }].compactMapValues { $0 })
     }
-    static let createSubscriptionTemplate: APIOperation<CreateSubscriptionTemplateRequest, SubscriptionTemplate> = APIOperation<CreateSubscriptionTemplateRequest, SubscriptionTemplate>(method: "POST", path: "api/v1/subscription-templates", queryParameters: [:])
+    static let createSubscriptionTemplate: APIOperation<CreateSubscriptionTemplateRequest, SubscriptionTemplate> = APIOperation<CreateSubscriptionTemplateRequest, SubscriptionTemplate>(method: "POST", path: "api/v2/subscription-templates", queryParameters: [:])
     static func subscriptionTemplateFields(format: String) -> APIOperation<NoRequest, [String: JSONValue]> {
-        APIOperation(method: "GET", path: "api/v1/subscription-templates/fields", queryParameters: ["format": format])
+        APIOperation(method: "GET", path: "api/v2/subscription-templates/fields", queryParameters: ["format": format])
     }
-    static let subscriptionTemplateSource: APIOperation<SubscriptionTemplateSourceRequest, [String: JSONValue]> = APIOperation<SubscriptionTemplateSourceRequest, [String: JSONValue]>(method: "POST", path: "api/v1/subscription-templates/source", queryParameters: [:])
-    static let importSubscriptionTemplate: APIOperation<ImportSubscriptionTemplateRequest, [String: JSONValue]> = APIOperation<ImportSubscriptionTemplateRequest, [String: JSONValue]>(method: "POST", path: "api/v1/subscription-templates/import", queryParameters: [:])
+    static let subscriptionTemplateSource: APIOperation<SubscriptionTemplateSourceRequest, [String: JSONValue]> = APIOperation<SubscriptionTemplateSourceRequest, [String: JSONValue]>(method: "POST", path: "api/v2/subscription-templates/source", queryParameters: [:])
+    static let importSubscriptionTemplate: APIOperation<ImportSubscriptionTemplateRequest, [String: JSONValue]> = APIOperation<ImportSubscriptionTemplateRequest, [String: JSONValue]>(method: "POST", path: "api/v2/subscription-templates/import", queryParameters: [:])
     static func getSubscriptionTemplate(id: String) -> APIOperation<NoRequest, SubscriptionTemplate> {
-        APIOperation(method: "GET", path: "api/v1/subscription-templates/\(id)", queryParameters: [:])
+        APIOperation(method: "GET", path: "api/v2/subscription-templates/\(id)", queryParameters: [:])
     }
     static func updateSubscriptionTemplate(id: String) -> APIOperation<UpdateSubscriptionTemplateRequest, SubscriptionTemplate> {
-        APIOperation(method: "PATCH", path: "api/v1/subscription-templates/\(id)", queryParameters: [:])
+        APIOperation(method: "PATCH", path: "api/v2/subscription-templates/\(id)", queryParameters: [:])
     }
     static func getSubscriptionTemplateDraft(id: String) -> APIOperation<NoRequest, SubscriptionTemplateDraft> {
-        APIOperation(method: "GET", path: "api/v1/subscription-templates/\(id)/draft", queryParameters: [:])
+        APIOperation(method: "GET", path: "api/v2/subscription-templates/\(id)/draft", queryParameters: [:])
     }
     static func saveSubscriptionTemplateDraft(id: String) -> APIOperation<SaveSubscriptionTemplateDraftRequest, SubscriptionTemplate> {
-        APIOperation(method: "PUT", path: "api/v1/subscription-templates/\(id)/draft", queryParameters: [:])
+        APIOperation(method: "PUT", path: "api/v2/subscription-templates/\(id)/draft", queryParameters: [:])
     }
     static func validateSubscriptionTemplate(id: String) -> APIOperation<ValidateSubscriptionTemplateRequest, [String: JSONValue]> {
-        APIOperation(method: "POST", path: "api/v1/subscription-templates/\(id)/validate", queryParameters: [:])
+        APIOperation(method: "POST", path: "api/v2/subscription-templates/\(id)/validate", queryParameters: [:])
     }
     static func previewSubscriptionTemplate(id: String) -> APIOperation<PreviewSubscriptionTemplateRequest, [String: JSONValue]> {
-        APIOperation(method: "POST", path: "api/v1/subscription-templates/\(id)/preview", queryParameters: [:])
+        APIOperation(method: "POST", path: "api/v2/subscription-templates/\(id)/preview", queryParameters: [:])
     }
     static func publishSubscriptionTemplate(id: String) -> APIOperation<PublishSubscriptionTemplateRequest, SubscriptionTemplate> {
-        APIOperation(method: "POST", path: "api/v1/subscription-templates/\(id)/publish", queryParameters: [:])
+        APIOperation(method: "POST", path: "api/v2/subscription-templates/\(id)/publish", queryParameters: [:])
     }
     static func rollbackSubscriptionTemplate(id: String) -> APIOperation<RollbackSubscriptionTemplateRequest, SubscriptionTemplate> {
-        APIOperation(method: "POST", path: "api/v1/subscription-templates/\(id)/rollback", queryParameters: [:])
+        APIOperation(method: "POST", path: "api/v2/subscription-templates/\(id)/rollback", queryParameters: [:])
     }
     static func listSubscriptionTemplateVersions(id: String, page: Int? = nil, pageSize: Int? = nil) -> APIOperation<NoRequest, [String: JSONValue]> {
-        APIOperation(method: "GET", path: "api/v1/subscription-templates/\(id)/versions", queryParameters: ["page": page.map { String($0) }, "page_size": pageSize.map { String($0) }].compactMapValues { $0 })
+        APIOperation(method: "GET", path: "api/v2/subscription-templates/\(id)/versions", queryParameters: ["page": page.map { String($0) }, "page_size": pageSize.map { String($0) }].compactMapValues { $0 })
     }
     static func exportSubscriptionTemplate(id: String) -> APIOperation<NoRequest, [String: JSONValue]> {
-        APIOperation(method: "GET", path: "api/v1/subscription-templates/\(id)/export", queryParameters: [:])
+        APIOperation(method: "GET", path: "api/v2/subscription-templates/\(id)/export", queryParameters: [:])
     }
-    static let createCAIdentity: APIOperation<CAIdentityCreateRequest, CAIdentityReceipt> = APIOperation<CAIdentityCreateRequest, CAIdentityReceipt>(method: "POST", path: "api/v1/credentials/ca-identities", queryParameters: [:])
+    static let createCAIdentity: APIOperation<CAIdentityCreateRequest, CAIdentityReceipt> = APIOperation<CAIdentityCreateRequest, CAIdentityReceipt>(method: "POST", path: "api/v2/credentials/ca-identities", queryParameters: [:])
     static func updateCAPolicy(id: String) -> APIOperation<CAPolicyUpdateRequest, CAPolicyReceipt> {
-        APIOperation(method: "PATCH", path: "api/v1/credentials/\(id)/ca-policy", queryParameters: [:])
+        APIOperation(method: "PATCH", path: "api/v2/credentials/\(id)/ca-policy", queryParameters: [:])
     }
     static func publishCAIdentityVersion(id: String) -> APIOperation<CAIdentityPublishRequest, CAIdentityReceipt> {
-        APIOperation(method: "POST", path: "api/v1/credentials/\(id)/ca-versions", queryParameters: [:])
+        APIOperation(method: "POST", path: "api/v2/credentials/\(id)/ca-versions", queryParameters: [:])
     }
     static func reissueManagedUserCertificates(id: String) -> APIOperation<ManagedUserReissueRequest, ManagedUserReissueReceipt> {
-        APIOperation(method: "POST", path: "api/v1/users/\(id)/managed-certificates/reissue", queryParameters: [:])
+        APIOperation(method: "POST", path: "api/v2/users/\(id)/managed-certificates/reissue", queryParameters: [:])
     }
-    static let getClientSummary: APIOperation<NoRequest, ClientSummary> = APIOperation<NoRequest, ClientSummary>(method: "GET", path: "api/v1/client/summary", queryParameters: [:])
-    static let getCacheStatistics: APIOperation<NoRequest, [String: JSONValue]> = APIOperation<NoRequest, [String: JSONValue]>(method: "GET", path: "api/v1/cache", queryParameters: [:])
+    static let getClientSummary: APIOperation<NoRequest, ClientSummary> = APIOperation<NoRequest, ClientSummary>(method: "GET", path: "api/v2/client/summary", queryParameters: [:])
+    static let getCacheStatistics: APIOperation<NoRequest, [String: JSONValue]> = APIOperation<NoRequest, [String: JSONValue]>(method: "GET", path: "api/v2/cache", queryParameters: [:])
     static func listCredentials(page: Int? = nil, pageSize: Int? = nil, category: String? = nil, kind: String? = nil, includeInternal: Bool? = nil, q: String? = nil, sort: String? = nil, order: String? = nil) -> APIOperation<NoRequest, CredentialsPage> {
-        APIOperation(method: "GET", path: "api/v1/credentials", queryParameters: ["page": page.map { String($0) }, "page_size": pageSize.map { String($0) }, "category": category.map { String($0) }, "kind": kind.map { String($0) }, "include_internal": includeInternal.map { String($0) }, "q": q.map { String($0) }, "sort": sort.map { String($0) }, "order": order.map { String($0) }].compactMapValues { $0 })
+        APIOperation(method: "GET", path: "api/v2/credentials", queryParameters: ["page": page.map { String($0) }, "page_size": pageSize.map { String($0) }, "category": category.map { String($0) }, "kind": kind.map { String($0) }, "include_internal": includeInternal.map { String($0) }, "q": q.map { String($0) }, "sort": sort.map { String($0) }, "order": order.map { String($0) }].compactMapValues { $0 })
     }
-    static let createCredential: APIOperation<CredentialCreateRequest, CredentialReceipt> = APIOperation<CredentialCreateRequest, CredentialReceipt>(method: "POST", path: "api/v1/credentials", queryParameters: [:])
+    static let createCredential: APIOperation<CredentialCreateRequest, CredentialReceipt> = APIOperation<CredentialCreateRequest, CredentialReceipt>(method: "POST", path: "api/v2/credentials", queryParameters: [:])
     static func getCredential(id: String) -> APIOperation<NoRequest, CredentialDetail> {
-        APIOperation(method: "GET", path: "api/v1/credentials/\(id)", queryParameters: [:])
+        APIOperation(method: "GET", path: "api/v2/credentials/\(id)", queryParameters: [:])
     }
     static func updateCredential(id: String) -> APIOperation<CredentialPatchRequest, CredentialReceipt> {
-        APIOperation(method: "PATCH", path: "api/v1/credentials/\(id)", queryParameters: [:])
+        APIOperation(method: "PATCH", path: "api/v2/credentials/\(id)", queryParameters: [:])
     }
     static func deleteCredential(id: String, expectedRevision: Int) -> APIOperation<NoRequest, NoResponse> {
-        APIOperation(method: "DELETE", path: "api/v1/credentials/\(id)", queryParameters: ["expected_revision": String(expectedRevision)])
+        APIOperation(method: "DELETE", path: "api/v2/credentials/\(id)", queryParameters: ["expected_revision": String(expectedRevision)])
     }
     static func publishCredentialVersion(id: String) -> APIOperation<CredentialPublishRequest, CredentialReceipt> {
-        APIOperation(method: "POST", path: "api/v1/credentials/\(id)/versions", queryParameters: [:])
+        APIOperation(method: "POST", path: "api/v2/credentials/\(id)/versions", queryParameters: [:])
     }
     static func getCredentialReferences(id: String) -> APIOperation<NoRequest, [CredentialReference]> {
-        APIOperation(method: "GET", path: "api/v1/credentials/\(id)/references", queryParameters: [:])
+        APIOperation(method: "GET", path: "api/v2/credentials/\(id)/references", queryParameters: [:])
     }
     static func getCredentialBatch(id: String) -> APIOperation<NoRequest, CredentialBatch> {
-        APIOperation(method: "GET", path: "api/v1/credential-batches/\(id)", queryParameters: [:])
+        APIOperation(method: "GET", path: "api/v2/credential-batches/\(id)", queryParameters: [:])
     }
     static func retryCredentialBatch(id: String) -> APIOperation<NoRequest, CredentialBatchReceipt> {
-        APIOperation(method: "POST", path: "api/v1/credential-batches/\(id)/retry", queryParameters: [:])
+        APIOperation(method: "POST", path: "api/v2/credential-batches/\(id)/retry", queryParameters: [:])
     }
-    static let getOverview: APIOperation<NoRequest, OverviewResponse> = APIOperation<NoRequest, OverviewResponse>(method: "GET", path: "api/v1/overview", queryParameters: [:])
+    static let getOverview: APIOperation<NoRequest, OverviewResponse> = APIOperation<NoRequest, OverviewResponse>(method: "GET", path: "api/v2/overview", queryParameters: [:])
     static func listOverviewNodes(page: Int? = nil, pageSize: Int? = nil, q: String? = nil) -> APIOperation<NoRequest, OverviewNodesPage> {
-        APIOperation(method: "GET", path: "api/v1/overview/nodes", queryParameters: ["page": page.map { String($0) }, "page_size": pageSize.map { String($0) }, "q": q.map { String($0) }].compactMapValues { $0 })
+        APIOperation(method: "GET", path: "api/v2/overview/nodes", queryParameters: ["page": page.map { String($0) }, "page_size": pageSize.map { String($0) }, "q": q.map { String($0) }].compactMapValues { $0 })
     }
     static func getOverviewHistory(metrics: String? = nil, range: String, timezone: String, nodeID: String? = nil, source: String? = nil) -> APIOperation<NoRequest, OverviewHistory> {
-        APIOperation(method: "GET", path: "api/v1/overview/history", queryParameters: ["metrics": metrics.map { String($0) }, "range": range, "timezone": timezone, "node_id": nodeID.map { String($0) }, "source": source.map { String($0) }].compactMapValues { $0 })
+        APIOperation(method: "GET", path: "api/v2/overview/history", queryParameters: ["metrics": metrics.map { String($0) }, "range": range, "timezone": timezone, "node_id": nodeID.map { String($0) }, "source": source.map { String($0) }].compactMapValues { $0 })
     }
     static func listNodes(page: Int? = nil, pageSize: Int? = nil, q: String? = nil, stateMatches: String? = nil, sort: String? = nil, order: String? = nil) -> APIOperation<NoRequest, NodesPage> {
-        APIOperation(method: "GET", path: "api/v1/nodes", queryParameters: ["page": page.map { String($0) }, "page_size": pageSize.map { String($0) }, "q": q.map { String($0) }, "state_matches": stateMatches.map { String($0) }, "sort": sort.map { String($0) }, "order": order.map { String($0) }].compactMapValues { $0 })
+        APIOperation(method: "GET", path: "api/v2/nodes", queryParameters: ["page": page.map { String($0) }, "page_size": pageSize.map { String($0) }, "q": q.map { String($0) }, "state_matches": stateMatches.map { String($0) }, "sort": sort.map { String($0) }, "order": order.map { String($0) }].compactMapValues { $0 })
     }
-    static let createNode: APIOperation<NodeCreateRequest, CreatedEntity> = APIOperation<NodeCreateRequest, CreatedEntity>(method: "POST", path: "api/v1/nodes", queryParameters: [:])
+    static let createNode: APIOperation<NodeCreateRequest, CreatedEntity> = APIOperation<NodeCreateRequest, CreatedEntity>(method: "POST", path: "api/v2/nodes", queryParameters: [:])
     static func getNode(id: String) -> APIOperation<NoRequest, NodeDetail> {
-        APIOperation(method: "GET", path: "api/v1/nodes/\(id)", queryParameters: [:])
+        APIOperation(method: "GET", path: "api/v2/nodes/\(id)", queryParameters: [:])
     }
     static func updateNode(id: String) -> APIOperation<NodePatchRequest, NodeUpdateResponse> {
-        APIOperation(method: "PATCH", path: "api/v1/nodes/\(id)", queryParameters: [:])
+        APIOperation(method: "PATCH", path: "api/v2/nodes/\(id)", queryParameters: [:])
     }
     static func deleteNode(id: String, expectedRevision: Int) -> APIOperation<NoRequest, JobReceipt> {
-        APIOperation(method: "DELETE", path: "api/v1/nodes/\(id)", queryParameters: ["expected_revision": String(expectedRevision)])
+        APIOperation(method: "DELETE", path: "api/v2/nodes/\(id)", queryParameters: ["expected_revision": String(expectedRevision)])
     }
     static func removeNodeRecord(id: String, expectedRevision: Int) -> APIOperation<NoRequest, NoResponse> {
-        APIOperation(method: "DELETE", path: "api/v1/nodes/\(id)/record", queryParameters: ["expected_revision": String(expectedRevision)])
+        APIOperation(method: "DELETE", path: "api/v2/nodes/\(id)/record", queryParameters: ["expected_revision": String(expectedRevision)])
     }
     static func updateNodeUsage(id: String) -> APIOperation<NodeUsageUpdateRequest, NodeUsageUpdateResponse> {
-        APIOperation(method: "PUT", path: "api/v1/nodes/\(id)/usage", queryParameters: [:])
+        APIOperation(method: "PUT", path: "api/v2/nodes/\(id)/usage", queryParameters: [:])
     }
     static func testNodeSSH(id: String) -> APIOperation<RevisionRequest, JobReceipt> {
-        APIOperation(method: "POST", path: "api/v1/nodes/\(id)/ssh-test", queryParameters: [:])
+        APIOperation(method: "POST", path: "api/v2/nodes/\(id)/ssh-test", queryParameters: [:])
     }
     static func deployNode(id: String) -> APIOperation<RevisionRequest, JobReceipt> {
-        APIOperation(method: "POST", path: "api/v1/nodes/\(id)/deploy", queryParameters: [:])
+        APIOperation(method: "POST", path: "api/v2/nodes/\(id)/deploy", queryParameters: [:])
     }
     static func syncNode(id: String) -> APIOperation<RevisionRequest, JobReceipt> {
-        APIOperation(method: "POST", path: "api/v1/nodes/\(id)/sync", queryParameters: [:])
+        APIOperation(method: "POST", path: "api/v2/nodes/\(id)/sync", queryParameters: [:])
     }
     static func rollbackNode(id: String) -> APIOperation<RevisionRequest, JobReceipt> {
-        APIOperation(method: "POST", path: "api/v1/nodes/\(id)/rollback", queryParameters: [:])
+        APIOperation(method: "POST", path: "api/v2/nodes/\(id)/rollback", queryParameters: [:])
     }
     static func listNodeResources(id: String) -> APIOperation<NoRequest, [NodeResource]> {
-        APIOperation(method: "GET", path: "api/v1/nodes/\(id)/resources", queryParameters: [:])
+        APIOperation(method: "GET", path: "api/v2/nodes/\(id)/resources", queryParameters: [:])
     }
     static func uploadNodeResource(id: String) -> APIOperation<ResourceUploadRequest, ResourceReceipt> {
-        APIOperation(method: "POST", path: "api/v1/nodes/\(id)/resources", queryParameters: [:])
+        APIOperation(method: "POST", path: "api/v2/nodes/\(id)/resources", queryParameters: [:])
     }
     static func deleteNodeResource(id: String, resourceId: String) -> APIOperation<NoRequest, NoResponse> {
-        APIOperation(method: "DELETE", path: "api/v1/nodes/\(id)/resources/\(resourceId)", queryParameters: [:])
+        APIOperation(method: "DELETE", path: "api/v2/nodes/\(id)/resources/\(resourceId)", queryParameters: [:])
     }
     static func listUsers(page: Int? = nil, pageSize: Int? = nil, q: String? = nil, sort: String? = nil, order: String? = nil) -> APIOperation<NoRequest, UsersPage> {
-        APIOperation(method: "GET", path: "api/v1/users", queryParameters: ["page": page.map { String($0) }, "page_size": pageSize.map { String($0) }, "q": q.map { String($0) }, "sort": sort.map { String($0) }, "order": order.map { String($0) }].compactMapValues { $0 })
+        APIOperation(method: "GET", path: "api/v2/users", queryParameters: ["page": page.map { String($0) }, "page_size": pageSize.map { String($0) }, "q": q.map { String($0) }, "sort": sort.map { String($0) }, "order": order.map { String($0) }].compactMapValues { $0 })
     }
-    static let createUser: APIOperation<UserCreateRequest, CreatedEntity> = APIOperation<UserCreateRequest, CreatedEntity>(method: "POST", path: "api/v1/users", queryParameters: [:])
+    static let createUser: APIOperation<UserCreateRequest, CreatedEntity> = APIOperation<UserCreateRequest, CreatedEntity>(method: "POST", path: "api/v2/users", queryParameters: [:])
     static func getUser(id: String) -> APIOperation<NoRequest, UserSummary> {
-        APIOperation(method: "GET", path: "api/v1/users/\(id)", queryParameters: [:])
+        APIOperation(method: "GET", path: "api/v2/users/\(id)", queryParameters: [:])
     }
     static func updateUser(id: String) -> APIOperation<UserPatchRequest, UserUpdateResponse> {
-        APIOperation(method: "PATCH", path: "api/v1/users/\(id)", queryParameters: [:])
+        APIOperation(method: "PATCH", path: "api/v2/users/\(id)", queryParameters: [:])
     }
     static func deleteUser(id: String, expectedRevision: Int) -> APIOperation<NoRequest, NoResponse> {
-        APIOperation(method: "DELETE", path: "api/v1/users/\(id)", queryParameters: ["expected_revision": String(expectedRevision)])
+        APIOperation(method: "DELETE", path: "api/v2/users/\(id)", queryParameters: ["expected_revision": String(expectedRevision)])
     }
     static func previewUserAuthorizationGroups(id: String) -> APIOperation<UserAuthorizationGroupsPreviewRequest, AuthorizationChangePreview> {
-        APIOperation(method: "POST", path: "api/v1/users/\(id)/authorization-groups/preview", queryParameters: [:])
+        APIOperation(method: "POST", path: "api/v2/users/\(id)/authorization-groups/preview", queryParameters: [:])
     }
     static func updateUserAuthorizationGroups(id: String) -> APIOperation<UserAuthorizationGroupsUpdateRequest, UserAuthorizationGroupsMutationResponse> {
-        APIOperation(method: "PUT", path: "api/v1/users/\(id)/authorization-groups", queryParameters: [:])
+        APIOperation(method: "PUT", path: "api/v2/users/\(id)/authorization-groups", queryParameters: [:])
     }
-    static let previewAuthorizationGroupCreate: APIOperation<AuthorizationGroupPreviewRequest, AuthorizationChangePreview> = APIOperation<AuthorizationGroupPreviewRequest, AuthorizationChangePreview>(method: "POST", path: "api/v1/authorization-groups/preview", queryParameters: [:])
-    static let listAuthorizationGroups: APIOperation<NoRequest, [AuthorizationGroupSummary]> = APIOperation<NoRequest, [AuthorizationGroupSummary]>(method: "GET", path: "api/v1/authorization-groups", queryParameters: [:])
-    static let createAuthorizationGroup: APIOperation<AuthorizationGroupCreateRequest, AuthorizationGroupMutationResponse> = APIOperation<AuthorizationGroupCreateRequest, AuthorizationGroupMutationResponse>(method: "POST", path: "api/v1/authorization-groups", queryParameters: [:])
+    static let previewAuthorizationGroupCreate: APIOperation<AuthorizationGroupPreviewRequest, AuthorizationChangePreview> = APIOperation<AuthorizationGroupPreviewRequest, AuthorizationChangePreview>(method: "POST", path: "api/v2/authorization-groups/preview", queryParameters: [:])
+    static let listAuthorizationGroups: APIOperation<NoRequest, [AuthorizationGroupSummary]> = APIOperation<NoRequest, [AuthorizationGroupSummary]>(method: "GET", path: "api/v2/authorization-groups", queryParameters: [:])
+    static let createAuthorizationGroup: APIOperation<AuthorizationGroupCreateRequest, AuthorizationGroupMutationResponse> = APIOperation<AuthorizationGroupCreateRequest, AuthorizationGroupMutationResponse>(method: "POST", path: "api/v2/authorization-groups", queryParameters: [:])
     static func previewAuthorizationGroupChange(groupID: String) -> APIOperation<AuthorizationGroupPreviewRequest, AuthorizationChangePreview> {
-        APIOperation(method: "POST", path: "api/v1/authorization-groups/\(groupID)/preview", queryParameters: [:])
+        APIOperation(method: "POST", path: "api/v2/authorization-groups/\(groupID)/preview", queryParameters: [:])
     }
     static func getAuthorizationGroup(groupID: String) -> APIOperation<NoRequest, AuthorizationGroupSummary> {
-        APIOperation(method: "GET", path: "api/v1/authorization-groups/\(groupID)", queryParameters: [:])
+        APIOperation(method: "GET", path: "api/v2/authorization-groups/\(groupID)", queryParameters: [:])
     }
     static func updateAuthorizationGroup(groupID: String) -> APIOperation<AuthorizationGroupUpdateRequest, AuthorizationGroupMutationResponse> {
-        APIOperation(method: "PUT", path: "api/v1/authorization-groups/\(groupID)", queryParameters: [:])
+        APIOperation(method: "PUT", path: "api/v2/authorization-groups/\(groupID)", queryParameters: [:])
     }
     static func deleteAuthorizationGroup(groupID: String) -> APIOperation<AuthorizationGroupDeleteRequest, AuthorizationGroupMutationResponse> {
-        APIOperation(method: "DELETE", path: "api/v1/authorization-groups/\(groupID)", queryParameters: [:])
+        APIOperation(method: "DELETE", path: "api/v2/authorization-groups/\(groupID)", queryParameters: [:])
     }
     static func rotateUserCredentials(id: String) -> APIOperation<RevisionRequest, RotatedCredentials> {
-        APIOperation(method: "POST", path: "api/v1/users/\(id)/credentials/rotate", queryParameters: [:])
+        APIOperation(method: "POST", path: "api/v2/users/\(id)/credentials/rotate", queryParameters: [:])
     }
     static func getSubscription(id: String) -> APIOperation<NoRequest, SubscriptionStatus> {
-        APIOperation(method: "GET", path: "api/v1/users/\(id)/subscription", queryParameters: [:])
+        APIOperation(method: "GET", path: "api/v2/users/\(id)/subscription", queryParameters: [:])
     }
     static func rotateSubscription(id: String) -> APIOperation<RevisionRequest, SubscriptionReceipt> {
-        APIOperation(method: "POST", path: "api/v1/users/\(id)/subscription", queryParameters: [:])
+        APIOperation(method: "POST", path: "api/v2/users/\(id)/subscription", queryParameters: [:])
     }
     static func getUserUsage(id: String) -> APIOperation<NoRequest, UserUsageResponse> {
-        APIOperation(method: "GET", path: "api/v1/users/\(id)/usage", queryParameters: [:])
+        APIOperation(method: "GET", path: "api/v2/users/\(id)/usage", queryParameters: [:])
     }
     static func resetUserQuota(id: String) -> APIOperation<RevisionRequest, QuotaResetResponse> {
-        APIOperation(method: "POST", path: "api/v1/users/\(id)/quota/reset", queryParameters: [:])
+        APIOperation(method: "POST", path: "api/v2/users/\(id)/quota/reset", queryParameters: [:])
     }
     static func listJobs(page: Int? = nil, pageSize: Int? = nil, q: String? = nil, sort: String? = nil, order: String? = nil) -> APIOperation<NoRequest, JobsPage> {
-        APIOperation(method: "GET", path: "api/v1/jobs", queryParameters: ["page": page.map { String($0) }, "page_size": pageSize.map { String($0) }, "q": q.map { String($0) }, "sort": sort.map { String($0) }, "order": order.map { String($0) }].compactMapValues { $0 })
+        APIOperation(method: "GET", path: "api/v2/jobs", queryParameters: ["page": page.map { String($0) }, "page_size": pageSize.map { String($0) }, "q": q.map { String($0) }, "sort": sort.map { String($0) }, "order": order.map { String($0) }].compactMapValues { $0 })
     }
-    static let getServerMonitoring: APIOperation<NoRequest, ServerMonitoring> = APIOperation<NoRequest, ServerMonitoring>(method: "GET", path: "api/v1/server/monitoring", queryParameters: [:])
-    static let getAPIVersion: APIOperation<NoRequest, APIVersion> = APIOperation<NoRequest, APIVersion>(method: "GET", path: "api/v1/version", queryParameters: [:])
+    static let getServerMonitoring: APIOperation<NoRequest, ServerMonitoring> = APIOperation<NoRequest, ServerMonitoring>(method: "GET", path: "api/v2/server/monitoring", queryParameters: [:])
+    static let getAPIVersion: APIOperation<NoRequest, APIVersion> = APIOperation<NoRequest, APIVersion>(method: "GET", path: "api/v2/version", queryParameters: [:])
     static func getJob(id: String) -> APIOperation<NoRequest, JobDetailResponse> {
-        APIOperation(method: "GET", path: "api/v1/jobs/\(id)", queryParameters: [:])
+        APIOperation(method: "GET", path: "api/v2/jobs/\(id)", queryParameters: [:])
     }
     static func confirmJobFingerprint(id: String) -> APIOperation<JobFingerprintConfirmationRequest, JobReceipt> {
-        APIOperation(method: "POST", path: "api/v1/jobs/\(id)/confirm-fingerprint", queryParameters: [:])
+        APIOperation(method: "POST", path: "api/v2/jobs/\(id)/confirm-fingerprint", queryParameters: [:])
     }
     static func retryJob(id: String) -> APIOperation<RevisionRequest, JobReceipt> {
-        APIOperation(method: "POST", path: "api/v1/jobs/\(id)/retry", queryParameters: [:])
+        APIOperation(method: "POST", path: "api/v2/jobs/\(id)/retry", queryParameters: [:])
     }
     static func streamJobEvents(id: String) -> APIOperation<NoRequest, NoResponse> {
-        APIOperation(method: "GET", path: "api/v1/jobs/\(id)/events", queryParameters: [:])
+        APIOperation(method: "GET", path: "api/v2/jobs/\(id)/events", queryParameters: [:])
     }
-    static let streamEvents: APIOperation<NoRequest, NoResponse> = APIOperation<NoRequest, NoResponse>(method: "GET", path: "api/v1/events", queryParameters: [:])
+    static let getEventStreamHead: APIOperation<NoRequest, EventStreamHead> = APIOperation<NoRequest, EventStreamHead>(method: "GET", path: "api/v2/events/head", queryParameters: [:])
+    static let streamEvents: APIOperation<NoRequest, NoResponse> = APIOperation<NoRequest, NoResponse>(method: "GET", path: "api/v2/events", queryParameters: [:])
     static func listAuditRecords(page: Int? = nil, pageSize: Int? = nil, q: String? = nil, sort: String? = nil, order: String? = nil, actionMatches: String? = nil, entityTypeMatches: String? = nil, actorMatches: String? = nil) -> APIOperation<NoRequest, AuditPage> {
-        APIOperation(method: "GET", path: "api/v1/audit", queryParameters: ["page": page.map { String($0) }, "page_size": pageSize.map { String($0) }, "q": q.map { String($0) }, "sort": sort.map { String($0) }, "order": order.map { String($0) }, "action_matches": actionMatches.map { String($0) }, "entity_type_matches": entityTypeMatches.map { String($0) }, "actor_matches": actorMatches.map { String($0) }].compactMapValues { $0 })
+        APIOperation(method: "GET", path: "api/v2/audit", queryParameters: ["page": page.map { String($0) }, "page_size": pageSize.map { String($0) }, "q": q.map { String($0) }, "sort": sort.map { String($0) }, "order": order.map { String($0) }, "action_matches": actionMatches.map { String($0) }, "entity_type_matches": entityTypeMatches.map { String($0) }, "actor_matches": actorMatches.map { String($0) }].compactMapValues { $0 })
     }
-    static let listAdminTokens: APIOperation<NoRequest, [AdminTokenSummary]> = APIOperation<NoRequest, [AdminTokenSummary]>(method: "GET", path: "api/v1/admin/tokens", queryParameters: [:])
-    static let createAdminToken: APIOperation<CreateAdminTokenRequest, AdminTokenReceipt> = APIOperation<CreateAdminTokenRequest, AdminTokenReceipt>(method: "POST", path: "api/v1/admin/tokens", queryParameters: [:])
+    static let listAdminTokens: APIOperation<NoRequest, [AdminTokenSummary]> = APIOperation<NoRequest, [AdminTokenSummary]>(method: "GET", path: "api/v2/admin/tokens", queryParameters: [:])
+    static let createAdminToken: APIOperation<CreateAdminTokenRequest, AdminTokenReceipt> = APIOperation<CreateAdminTokenRequest, AdminTokenReceipt>(method: "POST", path: "api/v2/admin/tokens", queryParameters: [:])
     static func revokeAdminToken(id: String) -> APIOperation<NoRequest, NoResponse> {
-        APIOperation(method: "DELETE", path: "api/v1/admin/tokens/\(id)", queryParameters: [:])
+        APIOperation(method: "DELETE", path: "api/v2/admin/tokens/\(id)", queryParameters: [:])
     }
     static let healthCheck: APIOperation<NoRequest, APIHealth> = APIOperation<NoRequest, APIHealth>(method: "GET", path: "healthz", queryParameters: [:])
     static let readinessCheck: APIOperation<NoRequest, APIHealth> = APIOperation<NoRequest, APIHealth>(method: "GET", path: "readyz", queryParameters: [:])
@@ -1334,53 +1299,53 @@ enum APIEndpoints {
     static func authenticateHysteriaUser(nodeID: String, nodeToken: String) -> APIOperation<AuthenticateHysteriaUserRequest, HysteriaAuthResponse> {
         APIOperation(method: "POST", path: "hy2/auth/\(nodeID)/\(nodeToken)", queryParameters: [:])
     }
-    static let listDNSConnections: APIOperation<NoRequest, [DNSConnection]> = APIOperation<NoRequest, [DNSConnection]>(method: "GET", path: "api/v1/dns/connections", queryParameters: [:])
-    static let createDNSConnection: APIOperation<DNSConnectionCreateRequest, DNSConnection> = APIOperation<DNSConnectionCreateRequest, DNSConnection>(method: "POST", path: "api/v1/dns/connections", queryParameters: [:])
+    static let listDNSConnections: APIOperation<NoRequest, [DNSConnection]> = APIOperation<NoRequest, [DNSConnection]>(method: "GET", path: "api/v2/dns/connections", queryParameters: [:])
+    static let createDNSConnection: APIOperation<DNSConnectionCreateRequest, DNSConnection> = APIOperation<DNSConnectionCreateRequest, DNSConnection>(method: "POST", path: "api/v2/dns/connections", queryParameters: [:])
     static func getDNSConnection(id: String) -> APIOperation<NoRequest, DNSConnection> {
-        APIOperation(method: "GET", path: "api/v1/dns/connections/\(id)", queryParameters: [:])
+        APIOperation(method: "GET", path: "api/v2/dns/connections/\(id)", queryParameters: [:])
     }
     static func updateDNSConnection(id: String) -> APIOperation<DNSConnectionPatchRequest, DNSConnection> {
-        APIOperation(method: "PATCH", path: "api/v1/dns/connections/\(id)", queryParameters: [:])
+        APIOperation(method: "PATCH", path: "api/v2/dns/connections/\(id)", queryParameters: [:])
     }
     static func deleteDNSConnection(id: String, expectedRevision: Int) -> APIOperation<NoRequest, NoResponse> {
-        APIOperation(method: "DELETE", path: "api/v1/dns/connections/\(id)", queryParameters: ["expected_revision": String(expectedRevision)])
+        APIOperation(method: "DELETE", path: "api/v2/dns/connections/\(id)", queryParameters: ["expected_revision": String(expectedRevision)])
     }
     static func verifyDNSConnection(id: String) -> APIOperation<DNSActionRequest, DNSActionReceipt> {
-        APIOperation(method: "POST", path: "api/v1/dns/connections/\(id)/verify", queryParameters: [:])
+        APIOperation(method: "POST", path: "api/v2/dns/connections/\(id)/verify", queryParameters: [:])
     }
     static func refreshDNSConnection(id: String) -> APIOperation<DNSActionRequest, DNSActionReceipt> {
-        APIOperation(method: "POST", path: "api/v1/dns/connections/\(id)/refresh", queryParameters: [:])
+        APIOperation(method: "POST", path: "api/v2/dns/connections/\(id)/refresh", queryParameters: [:])
     }
-    static let listDNSZones: APIOperation<NoRequest, [DNSZone]> = APIOperation<NoRequest, [DNSZone]>(method: "GET", path: "api/v1/dns/zones", queryParameters: [:])
+    static let listDNSZones: APIOperation<NoRequest, [DNSZone]> = APIOperation<NoRequest, [DNSZone]>(method: "GET", path: "api/v2/dns/zones", queryParameters: [:])
     static func updateDNSZone(id: String) -> APIOperation<DNSZonePatchRequest, DNSZone> {
-        APIOperation(method: "PATCH", path: "api/v1/dns/zones/\(id)", queryParameters: [:])
+        APIOperation(method: "PATCH", path: "api/v2/dns/zones/\(id)", queryParameters: [:])
     }
     static func refreshDNSZone(id: String) -> APIOperation<DNSActionRequest, DNSActionReceipt> {
-        APIOperation(method: "POST", path: "api/v1/dns/zones/\(id)/refresh", queryParameters: [:])
+        APIOperation(method: "POST", path: "api/v2/dns/zones/\(id)/refresh", queryParameters: [:])
     }
     static func listDNSRecords(page: Int? = nil, pageSize: Int? = nil, connectionId: String? = nil, zoneId: String? = nil, q: String? = nil, sort: String? = nil, order: String? = nil) -> APIOperation<NoRequest, DNSRecordsPage> {
-        APIOperation(method: "GET", path: "api/v1/dns/records", queryParameters: ["page": page.map { String($0) }, "page_size": pageSize.map { String($0) }, "connection_id": connectionId.map { String($0) }, "zone_id": zoneId.map { String($0) }, "q": q.map { String($0) }, "sort": sort.map { String($0) }, "order": order.map { String($0) }].compactMapValues { $0 })
+        APIOperation(method: "GET", path: "api/v2/dns/records", queryParameters: ["page": page.map { String($0) }, "page_size": pageSize.map { String($0) }, "connection_id": connectionId.map { String($0) }, "zone_id": zoneId.map { String($0) }, "q": q.map { String($0) }, "sort": sort.map { String($0) }, "order": order.map { String($0) }].compactMapValues { $0 })
     }
-    static let createDNSRecord: APIOperation<DNSRecordCreateRequest, DNSActionReceipt> = APIOperation<DNSRecordCreateRequest, DNSActionReceipt>(method: "POST", path: "api/v1/dns/records", queryParameters: [:])
+    static let createDNSRecord: APIOperation<DNSRecordCreateRequest, DNSActionReceipt> = APIOperation<DNSRecordCreateRequest, DNSActionReceipt>(method: "POST", path: "api/v2/dns/records", queryParameters: [:])
     static func getDNSRecord(id: String) -> APIOperation<NoRequest, DNSRecord> {
-        APIOperation(method: "GET", path: "api/v1/dns/records/\(id)", queryParameters: [:])
+        APIOperation(method: "GET", path: "api/v2/dns/records/\(id)", queryParameters: [:])
     }
     static func updateDNSRecord(id: String) -> APIOperation<DNSRecordUpdateRequest, DNSActionReceipt> {
-        APIOperation(method: "PATCH", path: "api/v1/dns/records/\(id)", queryParameters: [:])
+        APIOperation(method: "PATCH", path: "api/v2/dns/records/\(id)", queryParameters: [:])
     }
     static func deleteDNSRecord(id: String) -> APIOperation<DNSActionRequest, DNSActionReceipt> {
-        APIOperation(method: "DELETE", path: "api/v1/dns/records/\(id)", queryParameters: [:])
+        APIOperation(method: "DELETE", path: "api/v2/dns/records/\(id)", queryParameters: [:])
     }
     static func checkDNSRecord(id: String) -> APIOperation<DNSActionRequest, DNSActionReceipt> {
-        APIOperation(method: "POST", path: "api/v1/dns/records/\(id)/check", queryParameters: [:])
+        APIOperation(method: "POST", path: "api/v2/dns/records/\(id)/check", queryParameters: [:])
     }
     static func getDNSBinding(id: String) -> APIOperation<NoRequest, DNSBindingResponse> {
-        APIOperation(method: "GET", path: "api/v1/nodes/\(id)/dns-binding", queryParameters: [:])
+        APIOperation(method: "GET", path: "api/v2/nodes/\(id)/dns-binding", queryParameters: [:])
     }
     static func setDNSBinding(id: String) -> APIOperation<DNSBindingSetRequest, DNSActionReceipt> {
-        APIOperation(method: "PUT", path: "api/v1/nodes/\(id)/dns-binding", queryParameters: [:])
+        APIOperation(method: "PUT", path: "api/v2/nodes/\(id)/dns-binding", queryParameters: [:])
     }
     static func removeDNSBinding(id: String) -> APIOperation<DNSBindingRemoveRequest, DNSActionReceipt> {
-        APIOperation(method: "DELETE", path: "api/v1/nodes/\(id)/dns-binding", queryParameters: [:])
+        APIOperation(method: "DELETE", path: "api/v2/nodes/\(id)/dns-binding", queryParameters: [:])
     }
 }

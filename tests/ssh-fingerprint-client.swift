@@ -50,7 +50,7 @@ final class FingerprintTransport: URLProtocol, @unchecked Sendable {
             if let retryID { job["retry_job_id"] = retryID }
             func json(_ value: Any, _ status: Int = 200) -> (Int, Data) { (status, try! JSONSerialization.data(withJSONObject: value)) }
             if path.hasSuffix("version") {
-                return json(["api_version": "1.0.0", "directory_generation":1, "service_version": "test", "hysteria_version": "test", "mihomo_version": "test", "features": ["job_retry_links"]])
+                return json(["api_version": "2.0.0", "management_protocol":2, "directory_version":"b3:test", "service_version": "test", "hysteria_version": "test", "mihomo_version": "test", "features": ["job_retry_links"]])
             }
             if path.hasSuffix("server/monitoring") { return (503, Data()) }
             if path.hasSuffix("/nodes/node-1"), request.httpMethod == "PATCH" {
@@ -81,7 +81,7 @@ final class FingerprintTransport: URLProtocol, @unchecked Sendable {
             if path.hasSuffix("/nodes") { return json(["items": [node], "total": 1, "page": 1, "page_size": 200]) }
             if path.hasSuffix("/jobs") { return json(["items": [job], "total": 1, "page": 1, "page_size": 200]) }
             if path.hasSuffix("/audit") { return json(["items": [], "total": 0, "page": 1, "page_size": 200]) }
-            if ["/api/v1/users", "/api/v1/credentials", "/api/v1/dns/records"].contains(path) { return json(["items": [], "total": 0, "page": 1, "page_size": 200]) }
+            if ["/api/v2/users", "/api/v2/credentials", "/api/v2/dns/records"].contains(path) { return json(["items": [], "total": 0, "page": 1, "page_size": 200]) }
             return json([])
         }
 

@@ -1,8 +1,9 @@
 import Foundation
 
 extension ManagementStore {
-    func refreshAuthorizationGroups() async {
-        guard let client = try? requireConnectedAPI() else { return }
+    @discardableResult
+    func refreshAuthorizationGroups() async -> Bool {
+        guard let client = try? requireConnectedAPI() else { return false }
 
         let requestID = UUID()
         let service = serviceAddress
@@ -16,12 +17,14 @@ extension ManagementStore {
 
         do {
             let groups: [AuthorizationGroupSummary] = try await client.get(APIEndpoints.listAuthorizationGroups)
-            guard serviceAddress == service, authorizationGroupsRequestID == requestID, !Task.isCancelled else { return }
+            guard serviceAddress == service, authorizationGroupsRequestID == requestID, !Task.isCancelled else { return false }
             authorizationGroups = groups
             authorizationGroupsError = nil
+            return true
         } catch {
-            guard serviceAddress == service, authorizationGroupsRequestID == requestID, !Task.isCancelled else { return }
+            guard serviceAddress == service, authorizationGroupsRequestID == requestID, !Task.isCancelled else { return false }
             authorizationGroupsError = error.localizedDescription
+            return false
         }
     }
 

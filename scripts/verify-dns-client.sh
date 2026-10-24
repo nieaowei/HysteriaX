@@ -10,5 +10,7 @@ swiftc -swift-version 6 -parse-as-library \
   "$root/apps/macos/Sources/HysteriaX/Models/OpenAPIResponses.generated.swift" \
   "$root/apps/macos/Sources/HysteriaX/Models/DNSAllocationDraft.swift" \
   "$root/apps/macos/Sources/HysteriaX/Services/APIClient.swift" \
+  "$root/apps/macos/Sources/HysteriaX/Services/ManagementEvent.swift" \
+  "$root/apps/macos/Sources/HysteriaX/Services/ManagementWriteJournal.swift" \
   "$root/tests/dns-client.swift" -o "$tmp_dir/dns-client-tests"
 "$tmp_dir/dns-client-tests"

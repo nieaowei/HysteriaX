@@ -17,6 +17,10 @@ private final class ProtocolTransport: URLProtocol, @unchecked Sendable {
         var storeMode = false
         var failState = false
         var failedStateReads = 0
+        var resetNextStream = false
+        var headSequence: Int64 = 0
+        var failGroups = false
+        var failedGroupsReads = 0
         func reset(lost: Int = 0, statuses: [Int] = [], corrupt: Bool = false, events: String = "", store: Bool = false) {
             lock.lock(); defer { lock.unlock() }
             self.lost=lost; self.statuses=statuses; self.corrupt=corrupt; self.events=events
@@ -25,18 +29,29 @@ private final class ProtocolTransport: URLProtocol, @unchecked Sendable {
         func recorded() -> [URLRequest] { lock.lock(); defer { lock.unlock() }; return requests }
         func commits() -> Int { lock.lock(); defer { lock.unlock() }; return writes }
         func failedReads() -> Int { lock.lock(); defer { lock.unlock() }; return failedStateReads }
+        func expireCursor() {
+            lock.lock(); defer { lock.unlock() }
+            resetNextStream=true; headSequence=5; failGroups=true
+            events="id: v2:77777777-7777-4777-8777-777777777777:6\nevent: job.progress\ndata: {\"event_id\":2}\n\n"
+        }
+        func groupFailures() -> Int { lock.lock(); defer { lock.unlock() }; return failedGroupsReads }
+        func recoverGroups() { lock.lock(); defer { lock.unlock() }; failGroups=false }
         func recover() { lock.lock(); defer { lock.unlock() }; failState=false }
         func result(_ request: URLRequest) -> Result {
             lock.lock(); defer { lock.unlock() }
             requests.append(request)
             let path=request.url!.path
             if path.hasSuffix("/events") {
+                if resetNextStream { resetNextStream=false; return .response(410,Data(),"application/json") }
                 if storeMode { failState = failedStateReads == 0 }
                 if statuses.first == 410 { statuses.removeFirst(); return .response(410,Data(),"application/json") }
                 return .response(200,Data(events.utf8),"text/event-stream")
             }
             if storeMode {
-                if path.hasSuffix("/version") { return .response(200,Data("{\"api_version\":\"1.0.0\",\"directory_generation\":1,\"service_version\":\"test\",\"hysteria_version\":\"test\",\"mihomo_version\":\"test\",\"features\":[]}".utf8),"application/json") }
+                if path.hasSuffix("/events/head") { return .response(200,try! JSONSerialization.data(withJSONObject:["cursor":"v2:77777777-7777-4777-8777-777777777777:\(headSequence)","epoch":"77777777-7777-4777-8777-777777777777","publication_seq":headSequence]),"application/json") }
+                if path.hasSuffix("/authorization-groups"), failGroups { failedGroupsReads += 1; return .response(503,Data(),"application/json") }
+                if path.hasSuffix("/authorization-groups") { return .response(200,Data("[]".utf8),"application/json") }
+                if path.hasSuffix("/version") { return .response(200,Data("{\"api_version\":\"2.0.0\",\"management_protocol\":2,\"current_admin_token_id\":\"fixture-admin\",\"directory_version\":\"b3:test\",\"service_version\":\"test\",\"hysteria_version\":\"test\",\"mihomo_version\":\"test\",\"features\":[]}".utf8),"application/json") }
                 if path == "/readyz" { return .response(200,Data("{\"status\":\"ok\"}".utf8),"application/json") }
                 if path.hasSuffix("/users"), failState { failedStateReads += 1; return .response(503,Data(),"application/json") }
                 if path.hasSuffix("/tokens") { return .response(200,Data("[]".utf8),"application/json") }
@@ -220,21 +235,43 @@ struct ManagementProtocolChecks {
 
     @MainActor static func acknowledgementCheck(session:URLSession) async throws {
         let address="https://ack-\(UUID().uuidString.lowercased()).invalid"
-        let key="lastEventID.\(address)"
+        let key=ManagementStore.eventCursorStorageKey(service:address,actor:"fixture-admin")
         let oldAddress=UserDefaults.standard.object(forKey:"serviceAddress")
         defer {
             for prefix in ["lastEventID.","displaySnapshot.","overviewHistory.","dnsSnapshot.","currentAdminTokenID."] {UserDefaults.standard.removeObject(forKey:prefix+address)}
             if let oldAddress {UserDefaults.standard.set(oldAddress,forKey:"serviceAddress")} else {UserDefaults.standard.removeObject(forKey:"serviceAddress")}
         }
-        ProtocolTransport.backend.reset(events:"id: 1\nevent: job.progress\ndata: {\"event_id\":1}\n\n",store:true)
+        let prefix="v2:77777777-7777-4777-8777-777777777777:"
+        UserDefaults.standard.set("9999", forKey:"lastEventID.\(address)")
+        UserDefaults.standard.set(prefix+"9999", forKey:key)
+        defer { UserDefaults.standard.removeObject(forKey:key) }
+        ProtocolTransport.backend.reset(events:"id: \(prefix)1\nevent: job.progress\ndata: {\"event_id\":1}\n\n",store:true)
         let notifications=NodeAlertNotifications(transport:SilentNotifications(),defaults:UserDefaults(suiteName:"hysteriax.protocol.notifications")!)
         let store=ManagementStore(restoreSnapshot:false,nodeNotifications:notifications)
         try await store.connect(serviceAddress:address,token:"test-store-token",session:session)
         for _ in 0..<100 where ProtocolTransport.backend.failedReads()==0 {try await Task.sleep(for:.milliseconds(10))}
+        let initial = ProtocolTransport.backend.recorded()
+        let headIndex = initial.firstIndex { $0.url!.path.hasSuffix("/events/head") }!
+        let stateIndex = initial.firstIndex { $0.url!.path.hasSuffix("/users") }!
+        let streamIndex = initial.firstIndex { $0.url!.path.hasSuffix("/events") }!
+        precondition(headIndex < stateIndex && stateIndex < streamIndex)
+        precondition(initial[streamIndex].value(forHTTPHeaderField:"Last-Event-ID") == prefix+"0", "persisted cursors cannot skip a new connection's state load")
         precondition(ProtocolTransport.backend.failedReads()>0)
-        precondition(UserDefaults.standard.string(forKey:key)==nil,"failed state refresh must not acknowledge the event")
+        precondition(UserDefaults.standard.string(forKey:key)==prefix+"0","failed state refresh must not acknowledge the event")
         ProtocolTransport.backend.recover()
-        for _ in 0..<400 where UserDefaults.standard.string(forKey:key)==nil {try await Task.sleep(for:.milliseconds(10))}
-        precondition(UserDefaults.standard.string(forKey:key)=="1","the original event must be recovered after state refresh succeeds")
+        for _ in 0..<400 where UserDefaults.standard.string(forKey:key) != prefix+"1" {try await Task.sleep(for:.milliseconds(10))}
+        precondition(UserDefaults.standard.string(forKey:key)==prefix+"1","the original event must be recovered after state refresh succeeds")
+        ProtocolTransport.backend.expireCursor()
+        for _ in 0..<500 where ProtocolTransport.backend.groupFailures() == 0 { try await Task.sleep(for:.milliseconds(10)) }
+        precondition(ProtocolTransport.backend.groupFailures() > 0)
+        precondition(UserDefaults.standard.string(forKey:key)==prefix+"1", "a failed authorization projection must not acknowledge a resync head")
+        ProtocolTransport.backend.recoverGroups()
+        for _ in 0..<800 where UserDefaults.standard.string(forKey:key) != prefix+"6" { try await Task.sleep(for:.milliseconds(10)) }
+        precondition(UserDefaults.standard.string(forKey:key)==prefix+"6", "410 must obtain a new head, reload state and resume")
+        let resumed = ProtocolTransport.backend.recorded()
+        let secondHead = resumed.lastIndex { $0.url!.path.hasSuffix("/events/head") }!
+        let newState = resumed[(secondHead+1)...].firstIndex { $0.url!.path.hasSuffix("/users") }!
+        let newStream = resumed[(secondHead+1)...].firstIndex { $0.url!.path.hasSuffix("/events") }!
+        precondition(newState < newStream && resumed[newStream].value(forHTTPHeaderField:"Last-Event-ID")==prefix+"5")
     }
 }

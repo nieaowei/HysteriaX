@@ -1,13 +1,16 @@
 openapi: 3.1.0
 info:
   title: HysteriaX Management API
-  version: 1.0.0
-  description: Versioned API for the HysteriaX management service.
+  version: 2.0.0
+  description: >-
+    Management protocol 2. All management writes require Idempotency-Key and atomically
+    retain their successful response. The former /api/v1 management endpoints return 426.
+    Node authentication callbacks and user subscription download URLs remain unchanged.
   license:
     name: MIT
     identifier: MIT
 servers:
-  - url: https://{domain}/api/v1
+  - url: https://{domain}/api/v2
     variables:
       domain:
         default: localhost
@@ -23,6 +26,8 @@ paths:
         type: string
     post:
       operationId: refactorSubscriptionTemplate
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
       summary: Rename a group or rule set and references in all local draft layers without
         persisting
       requestBody:
@@ -131,6 +136,8 @@ paths:
       x-swift-include-optional-query: true
     post:
       operationId: createSubscriptionTemplate
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
       summary: Create a fixed-format encrypted draft
       responses:
         '400':
@@ -205,6 +212,8 @@ paths:
   /subscription-templates/source:
     post:
       operationId: subscriptionTemplateSource
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
       summary: Parse or serialize exactly one native configuration layer
       responses:
         '200':
@@ -245,6 +254,8 @@ paths:
   /subscription-templates/import:
     post:
       operationId: importSubscriptionTemplate
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
       summary: Analyze node removal and reference mapping before draft acceptance
       responses:
         '200':
@@ -313,6 +324,8 @@ paths:
           $ref: '#/components/responses/Error'
     patch:
       operationId: updateSubscriptionTemplate
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
       summary: Rename, set default, or archive with same-format replacement
       responses:
         '200':
@@ -385,6 +398,8 @@ paths:
           $ref: '#/components/responses/Error'
     put:
       operationId: saveSubscriptionTemplateDraft
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
       summary: Save a syntax-valid draft; incomplete semantics are allowed
       responses:
         '200':
@@ -429,6 +444,8 @@ paths:
         type: string
     post:
       operationId: validateSubscriptionTemplate
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
       summary: Check structure, platform applicability and references on all five targets
       responses:
         '200':
@@ -470,6 +487,8 @@ paths:
         type: string
     post:
       operationId: previewSubscriptionTemplate
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
       summary: Render authorized eligible nodes; no-store and redacted by default
       responses:
         '200':
@@ -521,6 +540,8 @@ paths:
         type: string
     post:
       operationId: publishSubscriptionTemplate
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
       summary: Atomically publish a validated immutable version
       responses:
         '200':
@@ -561,6 +582,8 @@ paths:
         type: string
     post:
       operationId: rollbackSubscriptionTemplate
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
       summary: Revalidate and republish historical content as a new version
       responses:
         '200':
@@ -670,6 +693,8 @@ paths:
   /credentials/ca-identities:
     post:
       operationId: createCAIdentity
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
       summary: Generate a P-256 CA or import a validated CA chain and matching private key
       description: Signing and chain validation run outside the global write transaction. Repeating the same actor/idempotency key returns the original receipt; changed requests conflict. CA private keys are never returned.
       requestBody:
@@ -691,6 +716,7 @@ paths:
       summary: Update client certificate policy using its independent revision
       description: Applies to future issuance and renewal; does not change CA key versions or deploy nodes.
       parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
         - { name: id, in: path, required: true, schema: { type: string } }
       requestBody:
         required: true
@@ -711,6 +737,7 @@ paths:
       summary: Publish a new CA version through the managed rotation coordinator
       description: Generated CAs accept no imported material. Imported CAs require a replacement chain and matching key. Referenced CAs retain their old published generation until all participating nodes prepare new trust. Unused CAs publish immediately.
       parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
         - { name: id, in: path, required: true, schema: { type: string } }
       requestBody:
         required: true
@@ -731,6 +758,7 @@ paths:
       summary: Reissue the user's shared identity for one CA or all CAs
       description: Expected revisions are keyed by CA credential ID. Reports every affected authorized node. Paused users retain pending identities. Ordinary reissuance does not disconnect sessions or revoke old certificates.
       parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
         - { name: id, in: path, required: true, schema: { type: string } }
       requestBody:
         required: true
@@ -793,6 +821,8 @@ paths:
           $ref: '#/components/responses/Error'
     post:
       operationId: createCredential
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
       summary: Create a managed credential
       responses:
         '201':
@@ -828,6 +858,8 @@ paths:
           $ref: '#/components/responses/Error'
     patch:
       operationId: updateCredential
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
       summary: Update credential metadata
       responses:
         '200':
@@ -850,6 +882,7 @@ paths:
       operationId: deleteCredential
       summary: Delete an unreferenced managed credential
       parameters:
+      - $ref: '#/components/parameters/IdempotencyKey'
       - name: expected_revision
         in: query
         required: true
@@ -869,6 +902,8 @@ paths:
   /credentials/{id}/versions:
     post:
       operationId: publishCredentialVersion
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
       summary: Publish a new immutable credential version
       responses:
         '202':
@@ -940,6 +975,8 @@ paths:
   /credential-batches/{id}/retry:
     post:
       operationId: retryCredentialBatch
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
       summary: Retry failed credential application targets
       responses:
         '202':
@@ -1057,6 +1094,8 @@ paths:
         '400': { $ref: '#/components/responses/Error' }
     post:
       operationId: createNode
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
       summary: Create node
       requestBody:
         required: true
@@ -1085,6 +1124,8 @@ paths:
         '404': { $ref: '#/components/responses/Error' }
     patch:
       operationId: updateNode
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
       summary: Update node
       requestBody:
         required: true
@@ -1102,6 +1143,7 @@ paths:
       operationId: deleteNode
       summary: Delete node and queue managed remote uninstall
       parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
         - name: expected_revision
           in: query
           required: true
@@ -1122,6 +1164,7 @@ paths:
       summary: Remove only the management record without SSH or remote uninstall
       description: Removes node assignments, configuration and pending revocations, cancels queued and cancellable running jobs, and retains job history and audit. Large histories are removed by a durable record-remove job in bounded transactions; the node remains in deleting state until completion, and interrupted jobs resume after restart. Repeated requests reuse an active removal. The remote service may remain running. Conflicts while a remote deployment, uninstall or credential update is running; wait for that operation to finish. Requires the node_record_removal feature.
       parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
         - name: expected_revision
           in: query
           required: true
@@ -1137,6 +1180,8 @@ paths:
       - $ref: '#/components/parameters/Id'
     put:
       operationId: updateNodeUsage
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
       summary: Correct or reset whole-host package usage without deploying the node
       requestBody:
         required: true
@@ -1157,6 +1202,8 @@ paths:
       - $ref: '#/components/parameters/Id'
     post:
       operationId: testNodeSSH
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
       summary: Test node SSH
       description: Allowed for delete_failed nodes to diagnose and confirm fingerprints while preserving deletion intent. Active deletion still rejects new tests. A successful recovery test does not automatically retry uninstall.
       requestBody:
@@ -1176,6 +1223,8 @@ paths:
       - $ref: '#/components/parameters/Id'
     post:
       operationId: deployNode
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
       summary: Deploy node
       requestBody:
         required: true
@@ -1194,6 +1243,8 @@ paths:
       - $ref: '#/components/parameters/Id'
     post:
       operationId: syncNode
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
       summary: Sync node
       requestBody:
         required: true
@@ -1212,6 +1263,8 @@ paths:
       - $ref: '#/components/parameters/Id'
     post:
       operationId: rollbackNode
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
       summary: Rollback node
       requestBody:
         required: true
@@ -1241,6 +1294,8 @@ paths:
                 items: { $ref: '#/components/schemas/NodeResource' }
     post:
       operationId: uploadNodeResource
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
       summary: Upload a node resource
       requestBody:
         required: true
@@ -1263,6 +1318,8 @@ paths:
         schema: { type: string, format: uuid }
     delete:
       operationId: deleteNodeResource
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
       summary: Delete an unreferenced node resource
       responses:
         '204': { description: Deleted resource }
@@ -1288,6 +1345,8 @@ paths:
         '400': { $ref: '#/components/responses/Error' }
     post:
       operationId: createUser
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
       summary: Create user
       requestBody:
         required: true
@@ -1314,6 +1373,8 @@ paths:
               schema: { $ref: '#/components/schemas/UserSummary' }
     patch:
       operationId: updateUser
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
       summary: Update user
       requestBody:
         required: true
@@ -1331,6 +1392,7 @@ paths:
       operationId: deleteUser
       summary: Delete user
       parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
         - name: expected_revision
           in: query
           required: true
@@ -1342,6 +1404,8 @@ paths:
       - $ref: '#/components/parameters/Id'
     post:
       operationId: previewUserAuthorizationGroups
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
       summary: Preview a user's authorization-group membership change
       requestBody:
         required: true
@@ -1362,6 +1426,8 @@ paths:
       - $ref: '#/components/parameters/Id'
     put:
       operationId: updateUserAuthorizationGroups
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
       summary: Replace a user's authorization-group memberships
       requestBody:
         required: true
@@ -1380,6 +1446,8 @@ paths:
   /authorization-groups/preview:
     post:
       operationId: previewAuthorizationGroupCreate
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
       summary: Preview authorization-group creation
       requestBody:
         required: true
@@ -1409,6 +1477,8 @@ paths:
                 items: { $ref: '#/components/schemas/AuthorizationGroupSummary' }
     post:
       operationId: createAuthorizationGroup
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
       summary: Create an authorization group from a validated preview
       requestBody:
         required: true
@@ -1431,6 +1501,8 @@ paths:
         schema: { type: string }
     post:
       operationId: previewAuthorizationGroupChange
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
       summary: Preview an authorization-group update or deletion
       requestBody:
         required: true
@@ -1464,6 +1536,8 @@ paths:
         '404': { $ref: '#/components/responses/Error' }
     put:
       operationId: updateAuthorizationGroup
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
       summary: Replace an authorization group's members and nodes
       requestBody:
         required: true
@@ -1481,6 +1555,8 @@ paths:
         '409': { $ref: '#/components/responses/Error' }
     delete:
       operationId: deleteAuthorizationGroup
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
       summary: Delete an authorization group from a validated preview
       requestBody:
         required: true
@@ -1501,6 +1577,8 @@ paths:
       - $ref: '#/components/parameters/Id'
     post:
       operationId: rotateUserCredentials
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
       summary: Rotate user credentials
       requestBody:
         required: true
@@ -1527,6 +1605,8 @@ paths:
               schema: { $ref: '#/components/schemas/SubscriptionStatus' }
     post:
       operationId: rotateSubscription
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
       summary: Rotate subscription
       requestBody:
         required: true
@@ -1556,6 +1636,8 @@ paths:
       - $ref: '#/components/parameters/Id'
     post:
       operationId: resetUserQuota
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
       summary: Reset user quota
       requestBody:
         required: true
@@ -1627,6 +1709,8 @@ paths:
       - $ref: '#/components/parameters/Id'
     post:
       operationId: confirmJobFingerprint
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
       summary: Trust the observed SSH host key and resume the same operation
       description: Supports SSH tests and first-time trust during deploy, sync and rollback. Requires waiting_confirmation, the exact observed fingerprint and the unchanged node revision. Saves trust and queues the original job atomically. Rollback preserves its historical target; deploy/sync advance a current target only over the identical trust-only snapshot. SSH tests may recover delete_failed nodes without clearing deletion intent. A fresh connection verifies the key before authentication.
       requestBody:
@@ -1647,6 +1731,8 @@ paths:
       - $ref: '#/components/parameters/Id'
     post:
       operationId: retryJob
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
       summary: Retry a failed job with an explicit link to its prior attempt
       description: Supports SSH test, deployment/sync, rollback and pending kick requests. Kick executions are bounded to five attempts; transport failures retain a durable request resumed after trusted SSH recovery, while other exhausted or permanent failures require explicit retry. Active duplicate requests return the same retry. Retry success resolves only the linked failure reminders.
       requestBody:
@@ -1669,31 +1755,45 @@ paths:
     get:
       operationId: streamJobEvents
       summary: Stream job events
+      description: Provide after or Last-Event-ID from the stream head or a processed frame. Both values must match when supplied together. Business frames contain stable event_id values; stream.cursor acknowledges filtered rows. Process prior frames before saving a cursor. A 410 requires a new head and complete state reload; a live stream.reset without an ID closes an invalidated stream.
       parameters:
         - name: after
           in: query
-          schema: { type: integer, minimum: 0 }
+          schema: { $ref: '#/components/schemas/EventCursor' }
         - name: Last-Event-ID
           in: header
           description: Resume after the last event ID previously received.
-          schema: { type: string, pattern: '^[0-9]+$' }
+          schema: { $ref: '#/components/schemas/EventCursor' }
       responses:
         '200':
           description: Resumable server-sent event stream
           content:
             text/event-stream: { schema: { type: string } }
+        '400': { $ref: '#/components/responses/Error' }
+        '410': { $ref: '#/components/responses/Error' }
+  /events/head:
+    get:
+      operationId: getEventStreamHead
+      summary: Read the committed event stream head before loading complete client state
+      responses:
+        '200':
+          description: Uncached publication cursor; this read does not publish pending events.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EventStreamHead' }
   /events:
     get:
       operationId: streamEvents
       summary: Stream events
+      description: Obtain the stream head, load complete state, then subscribe after that head. Use publication cursors to resume and stable event_id values to deduplicate; duplicate delivery is allowed. stream.cursor acknowledges filtered rows. Save cursors only after processing prior frames. A 410 requires complete resynchronization; live stream.reset closes without acknowledging a new cursor.
       parameters:
         - name: after
           in: query
-          schema: { type: integer, minimum: 0 }
+          schema: { $ref: '#/components/schemas/EventCursor' }
         - name: Last-Event-ID
           in: header
           description: Resume after the last event ID previously received.
-          schema: { type: string, pattern: '^[0-9]+$' }
+          schema: { $ref: '#/components/schemas/EventCursor' }
         - name: job_id
           in: query
           schema: { type: string, format: uuid }
@@ -1702,6 +1802,8 @@ paths:
           description: Resumable server-sent event stream
           content:
             text/event-stream: { schema: { type: string } }
+        '400': { $ref: '#/components/responses/Error' }
+        '410': { $ref: '#/components/responses/Error' }
   /audit:
     get:
       operationId: listAuditRecords
@@ -1738,6 +1840,8 @@ paths:
                 items: { $ref: '#/components/schemas/AdminTokenSummary' }
     post:
       operationId: createAdminToken
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
       summary: Create admin token
       requestBody:
         required: true
@@ -1759,6 +1863,8 @@ paths:
       - $ref: '#/components/parameters/Id'
     delete:
       operationId: revokeAdminToken
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
       summary: Revoke admin token
       responses:
         '204': { description: Revoked token }
@@ -1788,10 +1894,11 @@ paths:
       security: []
       responses:
         '200':
-          description: Readiness check including database
+          description: Database, initialized schema, management protocol and shared key are ready; Redis is optional
           content:
             application/json:
               schema: { $ref: '#/components/schemas/APIHealth' }
+        '503': { $ref: '#/components/responses/Error' }
   /openapi.yaml:
     get:
       summary: Download the OpenAPI contract
@@ -1916,6 +2023,8 @@ paths:
                   $ref: '#/components/schemas/DNSConnection'
     post:
       operationId: createDNSConnection
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
       tags:
       - DNS
       summary: createDNSConnection
@@ -1970,6 +2079,7 @@ paths:
             schema:
               $ref: '#/components/schemas/DNSConnectionPatch'
       parameters:
+      - $ref: '#/components/parameters/IdempotencyKey'
       - name: id
         in: path
         required: true
@@ -1984,6 +2094,7 @@ paths:
         '204':
           description: Successful operation
       parameters:
+      - $ref: '#/components/parameters/IdempotencyKey'
       - name: id
         in: path
         required: true
@@ -2014,6 +2125,7 @@ paths:
             schema:
               $ref: '#/components/schemas/DNSAction'
       parameters:
+      - $ref: '#/components/parameters/IdempotencyKey'
       - name: id
         in: path
         required: true
@@ -2039,6 +2151,7 @@ paths:
             schema:
               $ref: '#/components/schemas/DNSAction'
       parameters:
+      - $ref: '#/components/parameters/IdempotencyKey'
       - name: id
         in: path
         required: true
@@ -2079,6 +2192,7 @@ paths:
             schema:
               $ref: '#/components/schemas/DNSZonePatch'
       parameters:
+      - $ref: '#/components/parameters/IdempotencyKey'
       - name: id
         in: path
         required: true
@@ -2104,6 +2218,7 @@ paths:
             schema:
               $ref: '#/components/schemas/DNSAction'
       parameters:
+      - $ref: '#/components/parameters/IdempotencyKey'
       - name: id
         in: path
         required: true
@@ -2134,6 +2249,8 @@ paths:
         '400': { $ref: '#/components/responses/Error' }
     post:
       operationId: createDNSRecord
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
       tags:
       - DNS
       summary: createDNSRecord
@@ -2188,6 +2305,7 @@ paths:
             schema:
               $ref: '#/components/schemas/DNSRecordUpdate'
       parameters:
+      - $ref: '#/components/parameters/IdempotencyKey'
       - name: id
         in: path
         required: true
@@ -2212,6 +2330,7 @@ paths:
             schema:
               $ref: '#/components/schemas/DNSAction'
       parameters:
+      - $ref: '#/components/parameters/IdempotencyKey'
       - name: id
         in: path
         required: true
@@ -2237,6 +2356,7 @@ paths:
             schema:
               $ref: '#/components/schemas/DNSAction'
       parameters:
+      - $ref: '#/components/parameters/IdempotencyKey'
       - name: id
         in: path
         required: true
@@ -2280,6 +2400,7 @@ paths:
             schema:
               $ref: '#/components/schemas/DNSBindingSet'
       parameters:
+      - $ref: '#/components/parameters/IdempotencyKey'
       - name: id
         in: path
         required: true
@@ -2304,6 +2425,7 @@ paths:
             schema:
               $ref: '#/components/schemas/DNSBindingRemove'
       parameters:
+      - $ref: '#/components/parameters/IdempotencyKey'
       - name: id
         in: path
         required: true
@@ -2316,6 +2438,12 @@ components:
       type: http
       scheme: bearer
   parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: Reuse the same key for the same request until its exact success response is recovered. Keys are scoped to administrator and operation; changed request content returns 409.
+      schema: { type: string, minLength: 1, maxLength: 200, pattern: '^[!-~]{1,200}$' }
     Id:
       name: id
       in: path
@@ -3332,11 +3460,24 @@ components:
       properties:
         status: { type: string }
         database: { type: string }
+    EventCursor:
+      type: string
+      maxLength: 59
+      pattern: '^v2:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}:(0|[1-9][0-9]*)$'
+      description: Canonical epoch and signed 64-bit nonnegative publication sequence; this is not a source event ID.
+    EventStreamHead:
+      type: object
+      required: [cursor, epoch, publication_seq]
+      properties:
+        cursor: { $ref: '#/components/schemas/EventCursor' }
+        epoch: { type: string, format: uuid }
+        publication_seq: { type: integer, format: int64, minimum: 0 }
     APIVersion:
       type: object
-      required: [api_version, service_version, hysteria_version, mihomo_version, directory_generation]
+      required: [api_version, service_version, hysteria_version, mihomo_version, directory_version, management_protocol]
       properties:
-        directory_generation: { type: integer, format: int64 }
+        directory_version: { type: string, description: Committed directory epoch and 64-bucket version-vector digest. }
+        management_protocol: { type: integer, const: 2 }
         current_admin_token_id: { type: string }
         features: { type: array, items: { type: string }, description: Optional supported features; node_packages enables node package writes and authorization_groups enables group-based access management. }
         api_version: { type: string }
@@ -3696,26 +3837,24 @@ components:
     CAIdentityCreate:
       type: object
       additionalProperties: false
-      required: [name, source, idempotency_key]
+      required: [name, source]
       properties:
         name: { type: string, minLength: 1, maxLength: 180 }
         source: { type: string, enum: [generated, imported] }
         certificate: { type: string, writeOnly: true, description: "Issuing CA first, followed by a complete validated chain to a self-signed root. Required for imported CAs." }
         private_key: { type: string, writeOnly: true }
         policy: { $ref: '#/components/schemas/ManagedCAPolicy' }
-        idempotency_key: { type: string, minLength: 1, maxLength: 180 }
     CAPolicyUpdate:
       type: object
       additionalProperties: false
-      required: [expected_revision, policy, idempotency_key]
+      required: [expected_revision, policy]
       properties:
         expected_revision: { type: integer, minimum: 1, description: Independent CA policy revision. }
         policy: { $ref: '#/components/schemas/ManagedCAPolicy' }
-        idempotency_key: { type: string, minLength: 1, maxLength: 180 }
     CAIdentityPublish:
       type: object
       additionalProperties: false
-      required: [expected_revision, idempotency_key]
+      required: [expected_revision]
       properties:
         expected_revision: { type: integer, minimum: 1 }
         certificate: { type: string, writeOnly: true }
@@ -3723,7 +3862,6 @@ components:
         replace_rotation_id:
           type: string
           description: Explicitly supersede this unfinished rotation. Unpublished targets may be replaced; a published target may be replaced only after its CA expires.
-        idempotency_key: { type: string, minLength: 1, maxLength: 180 }
     CAIdentityReceipt:
       type: object
       required: [id, revision, version]
@@ -3775,13 +3913,12 @@ components:
     ManagedUserReissue:
       type: object
       additionalProperties: false
-      required: [expected_revisions, idempotency_key]
+      required: [expected_revisions]
       properties:
         ca_credential_id: { type: [string, 'null'] }
         expected_revisions:
           type: object
           additionalProperties: { type: integer, minimum: 1 }
-        idempotency_key: { type: string, minLength: 1, maxLength: 180 }
     ManagedUserReissueReceipt:
       type: object
       required: [user_id, identities, refresh_subscription]
@@ -4136,12 +4273,9 @@ components:
       type: object
       required:
       - expected_revision
-      - idempotency_key
       properties:
         expected_revision:
           type: integer
-        idempotency_key:
-          type: string
     DNSZonePatch:
       type: object
       required:
@@ -4179,12 +4313,9 @@ components:
       type: object
       required:
       - zone_id
-      - idempotency_key
       - record
       properties:
         zone_id:
-          type: string
-        idempotency_key:
           type: string
         record:
           $ref: '#/components/schemas/DNSRecordInput'
@@ -4192,24 +4323,18 @@ components:
       type: object
       required:
       - expected_revision
-      - idempotency_key
       - record
       properties:
         expected_revision:
           type: integer
-        idempotency_key:
-          type: string
         record:
           $ref: '#/components/schemas/DNSRecordInput'
     DNSAllocation:
       type: object
       required:
-      - idempotency_key
       - zone_id
       - mode
       properties:
-        idempotency_key:
-          type: string
         zone_id:
           type: string
         mode:
@@ -4244,13 +4369,10 @@ components:
       type: object
       required:
       - expected_revision
-      - idempotency_key
       - public_host
       properties:
         expected_revision:
           type: integer
-        idempotency_key:
-          type: string
         public_host:
           type: string
     DNSConnection:

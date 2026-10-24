@@ -9,7 +9,6 @@ struct DNSAllocationDraft {
     var ipv4 = ""
     var ipv6 = ""
     var selectedHostname = ""
-    var idempotencyKey = UUID().uuidString
 
     mutating func updateSSHAddress(from previous: String, to current: String) {
         let previous = previous.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -33,7 +32,7 @@ struct DNSAllocationDraft {
         let ipv4 = ipv4.trimmingCharacters(in: .whitespacesAndNewlines)
         let ipv6 = ipv6.trimmingCharacters(in: .whitespacesAndNewlines)
         if mode != "existing", ipv4.isEmpty && ipv6.isEmpty { throw APIClientError.server(L10n.text("请输入至少一个公网 IPv4 或 IPv6 地址。")) }
-        return DNSAllocation(idempotencyKey: idempotencyKey, zoneId: zoneID, mode: mode,
+        return DNSAllocation(zoneId: zoneID, mode: mode,
             prefix: mode == "auto" ? prefix : nil, hostname: mode == "manual" ? name : nil,
             ipv4: ipv4.isEmpty ? nil : ipv4, ipv6: ipv6.isEmpty ? nil : ipv6, recordIds: ids)
     }

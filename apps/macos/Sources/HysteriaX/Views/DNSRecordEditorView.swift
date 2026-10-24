@@ -15,7 +15,6 @@ struct DNSRecordEditorView: View {
     @State private var saving = false
     @State private var loading = false
     @State private var error: String?
-    @State private var requestKey = UUID().uuidString
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -64,7 +63,7 @@ struct DNSRecordEditorView: View {
             defer { saving = false }
             do {
                 try await store.saveDNSRecord(loaded, zoneID: zoneID,
-                    input: DNSRecordInput(name: name, recordType: recordType, content: content, ttl: ttlValue, proxied: proxied), idempotencyKey: requestKey)
+                    input: DNSRecordInput(name: name, recordType: recordType, content: content, ttl: ttlValue, proxied: proxied))
                 dismiss()
             } catch { self.error = error.localizedDescription }
         }

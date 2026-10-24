@@ -24,8 +24,10 @@ extension ManagementStore {
         await refreshDNS()
     }
 
-    func refreshDNS(bypassCache: Bool = false) async {
-        guard supportsDNSManagement, isConnected else { return }
+    @discardableResult
+    func refreshDNS(bypassCache: Bool = false) async -> Bool {
+        guard supportsDNSManagement else { return true }
+        guard isConnected else { return false }
         listPageCache.invalidate(types: [String(reflecting: DNSRecordsPage.self)])
         let generation = UUID()
         dnsRequestGeneration = generation
@@ -38,16 +40,18 @@ extension ManagementStore {
             async let zones = client.get(APIEndpoints.listDNSZones, bypassCache: bypassCache)
             async let records = client.collectPages(bypassCache: bypassCache) { APIEndpoints.listDNSRecords(page: $0, pageSize: 200) }
             let snapshot = try await DNSDisplaySnapshot(connections: connections, zones: zones, records: records, updatedAt: Date())
-            guard service == serviceAddress, dnsRequestGeneration == generation, !Task.isCancelled else { return }
+            guard service == serviceAddress, dnsRequestGeneration == generation, !Task.isCancelled else { return false }
             dnsConnections = snapshot.connections
             dnsZones = snapshot.zones
             dnsRecords = snapshot.records
             dnsUpdatedAt = snapshot.updatedAt
             dnsError = nil
             if let data = try? JSONEncoder().encode(snapshot) { UserDefaults.standard.set(data, forKey: dnsSnapshotKey) }
+            return true
         } catch {
-            guard service == serviceAddress, dnsRequestGeneration == generation, !Task.isCancelled else { return }
+            guard service == serviceAddress, dnsRequestGeneration == generation, !Task.isCancelled else { return false }
             dnsError = error.localizedDescription
+            return false
         }
     }
 
@@ -63,7 +67,7 @@ extension ManagementStore {
     func verifyDNSConnection(_ connection: DNSConnection, refresh: Bool = false) async throws {
         let operation = refresh ? APIEndpoints.refreshDNSConnection(id: connection.id) : APIEndpoints.verifyDNSConnection(id: connection.id)
         let _: DNSActionReceipt = try await requireConnectedAPI().post(operation,
-            body: DNSActionRequest(expectedRevision: connection.revision, idempotencyKey: UUID().uuidString))
+            body: DNSActionRequest(expectedRevision: connection.revision))
         await self.refresh()
     }
 
@@ -75,7 +79,7 @@ extension ManagementStore {
 
     func refreshDNSZone(_ zone: DNSZone) async throws {
         let _: DNSActionReceipt = try await requireConnectedAPI().post(APIEndpoints.refreshDNSZone(id: zone.id),
-            body: DNSActionRequest(expectedRevision: zone.revision, idempotencyKey: UUID().uuidString))
+            body: DNSActionRequest(expectedRevision: zone.revision))
         await refresh()
     }
 
@@ -87,27 +91,27 @@ extension ManagementStore {
         try await requireConnectedAPI().get(APIEndpoints.getDNSRecord(id: id))
     }
 
-    func saveDNSRecord(_ record: DNSRecord?, zoneID: String, input: DNSRecordInput, idempotencyKey: String) async throws {
+    func saveDNSRecord(_ record: DNSRecord?, zoneID: String, input: DNSRecordInput) async throws {
         let client = try requireConnectedAPI()
         if let record {
             let _: DNSActionReceipt = try await client.patch(APIEndpoints.updateDNSRecord(id: record.id),
-                body: DNSRecordUpdateRequest(expectedRevision: record.revision, idempotencyKey: idempotencyKey, record: input))
+                body: DNSRecordUpdateRequest(expectedRevision: record.revision, record: input))
         } else {
             let _: DNSActionReceipt = try await client.post(APIEndpoints.createDNSRecord,
-                body: DNSRecordCreateRequest(zoneId: zoneID, idempotencyKey: idempotencyKey, record: input))
+                body: DNSRecordCreateRequest(zoneId: zoneID, record: input))
         }
         await refresh()
     }
 
     func deleteDNSRecord(_ record: DNSRecord) async throws {
         let _: DNSActionReceipt = try await requireConnectedAPI().delete(APIEndpoints.deleteDNSRecord(id: record.id),
-            body: DNSActionRequest(expectedRevision: record.revision, idempotencyKey: UUID().uuidString))
+            body: DNSActionRequest(expectedRevision: record.revision))
         await refresh()
     }
 
     func checkDNSRecord(_ record: DNSRecord) async throws {
         let _: DNSActionReceipt = try await requireConnectedAPI().post(APIEndpoints.checkDNSRecord(id: record.id),
-            body: DNSActionRequest(expectedRevision: record.revision, idempotencyKey: UUID().uuidString))
+            body: DNSActionRequest(expectedRevision: record.revision))
         await refresh()
     }
 
@@ -134,9 +138,9 @@ extension ManagementStore {
         await refresh()
     }
 
-    func removeDNSBinding(nodeID: String, revision: Int, publicHost: String, idempotencyKey: String) async throws {
+    func removeDNSBinding(nodeID: String, revision: Int, publicHost: String) async throws {
         let _: DNSActionReceipt = try await requireConnectedAPI().delete(APIEndpoints.removeDNSBinding(id: nodeID),
-            body: DNSBindingRemoveRequest(expectedRevision: revision, idempotencyKey: idempotencyKey, publicHost: publicHost))
+            body: DNSBindingRemoveRequest(expectedRevision: revision, publicHost: publicHost))
         await refresh()
     }
 

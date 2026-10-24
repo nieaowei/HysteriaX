@@ -15,8 +15,8 @@ import Foundation
 @main struct NodePackageClientTests {
     @MainActor static func main() async throws {
         let decoder = JSONDecoder()
-        let oldVersion = try decoder.decode(APIVersion.self, from: Data(#"{"api_version":"1.0.0","directory_generation":1,"service_version":"0.1.0","hysteria_version":"app/v2.12.3","mihomo_version":"v1.19.31"}"#.utf8))
-        precondition(oldVersion.features == nil)
+        let versionWithoutFeatures = try decoder.decode(APIVersion.self, from: Data(#"{"api_version":"2.0.0","management_protocol":2,"directory_version":"b3:test","service_version":"0.1.0","hysteria_version":"app/v2.12.3","mihomo_version":"v1.19.31"}"#.utf8))
+        precondition(versionWithoutFeatures.features == nil)
         let legacy = try decoder.decode(NodeSummary.self, from: Data(#"{"id":"node","name":"Node","revision":1,"state":"deployed"}"#.utf8))
         precondition(legacy.package == nil && legacy.packageUsage == nil)
         let cached = try decoder.decode(NodeSummary.self, from: JSONEncoder().encode(legacy))
@@ -77,7 +77,7 @@ import Foundation
         let oldNodeUpdate = try decoder.decode(NodeUpdateResponse.self, from: Data(#"{"id":"node","name":"Node","revision":2,"state":"deployed","sync_job_queued":false}"#.utf8))
         precondition(oldNodeUpdate.dnsJobIds == nil)
         let usageOperation = APIEndpoints.updateNodeUsage(id: "node")
-        precondition(usageOperation.method == "PUT" && usageOperation.path == "api/v1/nodes/node/usage")
+        precondition(usageOperation.method == "PUT" && usageOperation.path == "api/v2/nodes/node/usage")
         let modern = try decoder.decode(NodeSummary.self, from: Data(#"{"id":"node","name":"Node","revision":1,"state":"deployed","package_usage":{"usage_bytes":800,"restricted":false,"reasons":[],"freshness":"fresh","alerts":[{"id":"event","kind":"traffic_warning","created_at":"2026-10-03T00:00:00Z"}]}}"#.utf8))
         let suite = "NodePackageTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!
