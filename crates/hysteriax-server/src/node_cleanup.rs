@@ -262,11 +262,11 @@ pub async fn purge_history(pool: &PgPool, job: &JobInput) -> Result<i64, sqlx::E
             .as_ref()
             .filter(|cursor| cursor.matches(history))
             .map(|cursor| (cursor.at, cursor.id.clone()));
-        let mut limit = if history.table == "online_samples" {
-            128_i64
-        } else {
-            512_i64
-        };
+        // Online refreshes now claim at most 256 dirty keys per transaction.
+        // They no longer need the smaller purge pages used by the global
+        // writer implementation. Every purge still has a two-second statement
+        // budget and reduces its page size on statement timeout below.
+        let mut limit = 512_i64;
         loop {
             let batch = purge_batch(pool, job, node, history, cursor.as_ref(), limit, total).await;
             let (rows, next) = match batch {
@@ -311,8 +311,7 @@ pub async fn purge_history(pool: &PgPool, job: &JobInput) -> Result<i64, sqlx::E
             }
             total += rows;
             cursor = next;
-            // Rebuild small online batches before their dirty cycles accumulate
-            // into another long global write transaction.
+            // Drain committed online changes through bounded refresh pages.
             if history.table == "online_samples" {
                 refresh_analytics(pool, job).await?;
             }
@@ -331,8 +330,10 @@ pub async fn purge_history(pool: &PgPool, job: &JobInput) -> Result<i64, sqlx::E
                 }
                 last_progress = Instant::now();
             }
-            // Give queued writes a chance between committed batches.
-            tokio::time::sleep(Duration::from_millis(25)).await;
+            // Yield between committed pages. There is no shared writer lock
+            // to hand over now; a long fixed delay accumulates across thousands
+            // of pages without improving unrelated resource concurrency.
+            tokio::time::sleep(Duration::from_millis(5)).await;
         }
     }
     refresh_analytics(pool, job).await?;

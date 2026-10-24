@@ -19,7 +19,12 @@ async fn restored_snapshot_removal_completes_while_reads_and_writes_continue() {
         "only a disposable hx_readyz_repro_ database is allowed"
     );
     let node = std::env::var("NODE_CLEANUP_SNAPSHOT_NODE").expect("snapshot target node required");
-    db::run_migrations(&pool).await.unwrap();
+    let key = std::env::var("NODE_CLEANUP_SNAPSHOT_MASTER_KEY")
+        .expect("explicit disposable snapshot master key required");
+    let secrets = SecretBox::from_base64(&key).unwrap();
+    crate::bootstrap::check_runtime(&pool, &secrets)
+        .await
+        .expect("snapshot must be initialized by --migrate-only before the test");
     sqlx::query("UPDATE jobs SET status='cancelled',finished_at=now() WHERE status IN ('queued','running','waiting_confirmation')").execute(&pool).await.unwrap();
     let revision: i64 = sqlx::query_scalar("SELECT desired_revision FROM nodes WHERE id=$1")
         .bind(&node)
@@ -41,10 +46,7 @@ async fn restored_snapshot_removal_completes_while_reads_and_writes_continue() {
         before.push((table, counts));
     }
     sqlx::query("INSERT INTO admin_tokens(id,token_hash,label,created_at) VALUES('snapshot-probe',$1,'Snapshot validation',now())").bind(crate::security::token_digest("snapshot-probe-token")).execute(&pool).await.unwrap();
-    let state = AppState::new(
-        pool.clone(),
-        SecretBox::from_base64("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA").unwrap(),
-    );
+    let state = AppState::new(pool.clone(), secrets);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
     let router = crate::api::router(state.clone());
@@ -71,8 +73,17 @@ async fn restored_snapshot_removal_completes_while_reads_and_writes_continue() {
     let mut reads = 0;
     let mut writes = 0;
     let mut max_read = Duration::ZERO;
-    tokio::time::timeout(Duration::from_secs(180), async {
+    let mut max_write = Duration::ZERO;
+    let mut last_progress = std::time::Instant::now() - Duration::from_secs(5);
+    let completed = tokio::time::timeout(Duration::from_secs(180), async {
         while !worker.is_finished() {
+            if last_progress.elapsed() >= Duration::from_secs(5) {
+                let progress: (String, String, Option<i64>, Option<String>) = sqlx::query_as(
+                    "SELECT status,stage,(result_json#>>'{result,removed_history_rows}')::bigint,result_json#>>'{result,cleanup_cursor,table}' FROM jobs WHERE id=$1",
+                ).bind(&id).fetch_one(&pool).await.unwrap();
+                println!("snapshot progress elapsed={:?} status={} stage={} removed={:?} table={:?} reads={reads} writes={writes} max_read={max_read:?} max_write={max_write:?}", started.elapsed(), progress.0, progress.1, progress.2, progress.3);
+                last_progress = std::time::Instant::now();
+            }
             let at = std::time::Instant::now();
             assert_eq!(
                 client
@@ -85,17 +96,26 @@ async fn restored_snapshot_removal_completes_while_reads_and_writes_continue() {
             );
             max_read = max_read.max(at.elapsed());
             reads += 1;
-            let tx = tokio::time::timeout(Duration::from_secs(3), db::begin_write(&pool))
+            let at = std::time::Instant::now();
+            let mut tx = tokio::time::timeout(Duration::from_secs(3), db::begin_write(&pool))
                 .await
                 .unwrap()
                 .unwrap();
-            tx.rollback().await.unwrap();
+            sqlx::query("UPDATE admin_tokens SET label='Snapshot validation' WHERE id='snapshot-probe'")
+                .execute(&mut *tx).await.unwrap();
+            tx.commit().await.unwrap();
+            max_write = max_write.max(at.elapsed());
             writes += 1;
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
     })
-    .await
-    .unwrap();
+    .await;
+    println!(
+        "snapshot observation completed={} elapsed={:?} reads={reads} writes={writes} max_read={max_read:?} max_write={max_write:?}",
+        completed.is_ok(),
+        started.elapsed()
+    );
+    completed.expect("snapshot cleanup exceeded 180 seconds; inspect committed progress above");
     worker.await.unwrap();
     assert_eq!(
         sqlx::query_scalar::<_, String>("SELECT status FROM jobs WHERE id=$1")
