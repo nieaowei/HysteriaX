@@ -7,7 +7,7 @@
   "source_sha256": {
     "crates/hysteriax-server/src/background/maintenance.rs": "9c9b19f35af1851467c5924e3e8688d8945a165be1ead8557a9f79d8e0d1fe65",
     "crates/hysteriax-server/src/background/maintenance/admission_tests.rs": "f30a0fb3b1a3366703b0dc4cff5e30ab439eb3b42ed7ac8f18329e77f09c08be",
-    "crates/hysteriax-server/src/error.rs": "07ecef6af3c56a15a8da81cad18f224df5c0b787d2c23a7b575e0a4675858fa5"
+    "crates/hysteriax-server/src/error.rs": "52bb4b967917aa6b6197969649a28cbb49810cf4fb85b148970918ab7286e678"
   },
   "regression_evidence": {
     "before": "Both held-worker and due-completed-row admission tests exceeded their 750ms observation budget under the original UPSERT.",
@@ -21,13 +21,18 @@
     },
     "http_pool_pressure": {
       "passed": 2,
-      "seconds": 5.84,
-      "invariant": "No write receipt consumed while pool is exhausted; the same request key commits one user/receipt after capacity recovers."
+      "seconds": 5.7,
+      "invariant": "No write receipt consumed while pool is exhausted; the same request key commits one user/receipt after capacity recovers.",
+      "wrappers": [
+        "SQLx error inside anyhow context",
+        "already converted ApiError inside anyhow context"
+      ]
     }
   },
   "verification": {
     "cargo_check": "passed",
-    "clippy": "passed with the three existing warning category allowances"
+    "clippy": "passed with the three existing warning category allowances",
+    "wrapped_error_clippy_log": "/tmp/hx0034-phase97-clippy-wrapped.log"
   },
   "prior_workspace_results": [
     {

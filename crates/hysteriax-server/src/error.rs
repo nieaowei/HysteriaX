@@ -147,7 +147,9 @@ impl From<anyhow::Error> for ApiError {
             matches!(
                 cause.downcast_ref::<sqlx::Error>(),
                 Some(sqlx::Error::PoolTimedOut)
-            )
+            ) || cause
+                .downcast_ref::<ApiError>()
+                .is_some_and(|error| error.code == "database_pool_busy")
         }) {
             tracing::warn!("database pool capacity unavailable");
             return Self::pool_busy();
@@ -177,15 +179,18 @@ mod tests {
 
     #[test]
     fn pool_pressure_is_not_a_serialization_retry_for_a_database_closure() {
-        let error = ApiError::from(
-            anyhow::Error::new(sqlx::Error::PoolTimedOut).context("load current state"),
-        );
-        assert_eq!(error.status, StatusCode::SERVICE_UNAVAILABLE);
-        assert_eq!(error.code, "database_pool_busy");
-        assert!(
-            !error.retryable_transaction(),
-            "only native transaction conflicts may rerun a closure"
-        );
+        for cause in [
+            anyhow::Error::new(sqlx::Error::PoolTimedOut),
+            anyhow::Error::new(ApiError::from(sqlx::Error::PoolTimedOut)),
+        ] {
+            let error = ApiError::from(cause.context("load current state"));
+            assert_eq!(error.status, StatusCode::SERVICE_UNAVAILABLE);
+            assert_eq!(error.code, "database_pool_busy");
+            assert!(
+                !error.retryable_transaction(),
+                "only native transaction conflicts may rerun a closure"
+            );
+        }
     }
 
     #[tokio::test]
