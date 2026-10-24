@@ -18,6 +18,7 @@ use axum::{
 };
 use document::Document;
 pub use runtime_checks::check_runtime;
+pub(crate) use store::v2;
 pub use store::*;
 
 pub(super) fn response_from_nodes(

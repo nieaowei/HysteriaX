@@ -46,7 +46,7 @@ fn decode(secrets: &SecretBox, cipher: &str) -> Result<Document, ApiError> {
 async fn row(state: &AppState, id: &str) -> Result<PgRow, ApiError> {
     sqlx::query("SELECT * FROM subscription_templates WHERE id=$1")
         .bind(id)
-        .fetch_optional(&state.pool)
+        .fetch_optional(&mut *crate::read_snapshot::begin(&state.pool).await?)
         .await?
         .ok_or_else(|| ApiError::not_found("template"))
 }
@@ -107,9 +107,10 @@ pub async fn list(
     if page < 1 || !(1..=200).contains(&size) || page.checked_mul(size).is_none() {
         return Err(ApiError::bad_request("invalid pagination"));
     }
+    let mut snapshot = crate::read_snapshot::begin(&state.pool).await?;
     let rows=sqlx::query("SELECT * FROM subscription_templates WHERE ($1::text IS NULL OR format=$1) AND archived=$2 ORDER BY name,id LIMIT $3 OFFSET $4")
-        .bind(&query.format).bind(query.archived.unwrap_or(false)).bind(size).bind((page-1)*size).fetch_all(&state.pool).await?;
-    let total:i64=sqlx::query_scalar("SELECT count(*) FROM subscription_templates WHERE ($1::text IS NULL OR format=$1) AND archived=$2").bind(&query.format).bind(query.archived.unwrap_or(false)).fetch_one(&state.pool).await?;
+        .bind(&query.format).bind(query.archived.unwrap_or(false)).bind(size).bind((page-1)*size).fetch_all(&mut *snapshot).await?;
+    let total:i64=sqlx::query_scalar("SELECT count(*) FROM subscription_templates WHERE ($1::text IS NULL OR format=$1) AND archived=$2").bind(&query.format).bind(query.archived.unwrap_or(false)).fetch_one(&mut *snapshot).await?;
     Ok(Json(
         json!({"items":rows.iter().map(metadata).collect::<Vec<_>>(),"page":page,"page_size":size,"total":total}),
     ))
@@ -135,30 +136,12 @@ async fn create_inner(
     State(state): State<AppState>,
     Json(input): Json<Create>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
-    if input.expected_revision != 0 || !["mihomo", "singbox"].contains(&input.format.as_str()) {
-        return Err(ApiError::bad_request(
-            "new templates require revision 0 and a supported format",
-        ));
-    }
-    let name = name(&input.name)?;
-    let document = input
-        .document
-        .unwrap_or_else(|| render::single_seed(&input.format));
-    document.shape()?;
-    let id = Uuid::new_v4().to_string();
-    let name = name.to_owned();
-    let encrypted = state
-        .secrets
-        .encrypt(&serde_json::to_string(&document).map_err(|_| ApiError::internal())?)?;
+    let prepared = PreparedCreation::new(&state, input)?;
     db::serializable(&state.pool, move |tx| {
-        let (id,name,format,encrypted)=(id.clone(),name.clone(),input.format.clone(),encrypted.clone());
-        Box::pin(async move {
-            let row=sqlx::query("INSERT INTO subscription_templates(id,name,format,draft_enc) VALUES($1,$2,$3,$4) RETURNING *")
-                .bind(&id).bind(name).bind(format).bind(encrypted).fetch_one(&mut **tx).await?;
-            audit(tx,&id,"template.created",1,None).await?;
-            Ok((StatusCode::CREATED,Json(metadata(&row))))
-        })
-    }).await
+        let prepared = prepared.clone();
+        Box::pin(async move { prepared.commit_on(tx).await })
+    })
+    .await
 }
 
 pub async fn get(
@@ -323,19 +306,12 @@ async fn save_inner(
     Path(id): Path<String>,
     Json(input): Json<Save>,
 ) -> Result<Json<Value>, ApiError> {
-    input.document.shape()?;
-    let encrypted = state
-        .secrets
-        .encrypt(&serde_json::to_string(&input.document).map_err(|_| ApiError::internal())?)?;
-    db::serializable(&state.pool,move |tx| {
-        let (id,encrypted)=(id.clone(),encrypted.clone());
-        Box::pin(async move {
-            locked(tx,&id,input.expected_revision).await?;
-            let row=sqlx::query("UPDATE subscription_templates SET draft_enc=$2,revision=revision+1,updated_at=now() WHERE id=$1 RETURNING *").bind(&id).bind(encrypted).fetch_one(&mut **tx).await?;
-            audit(tx,&id,"template.draft_saved",row.get("revision"),None).await?;
-            Ok(Json(metadata(&row)))
-        })
-    }).await
+    let encrypted = prepare_save(&state, &input)?;
+    db::serializable(&state.pool, move |tx| {
+        let (id, encrypted) = (id.clone(), encrypted.clone());
+        Box::pin(async move { save_on(tx, id, input.expected_revision, encrypted).await })
+    })
+    .await
 }
 
 #[derive(Deserialize)]
@@ -348,14 +324,11 @@ pub async fn validate_draft(
     Path(id): Path<String>,
     Json(input): Json<Validate>,
 ) -> Result<Response, ApiError> {
-    let row = row(&state, &id).await?;
-    let document = input
-        .document
-        .unwrap_or(decode(&state.secrets, &row.get::<String, _>("draft_enc"))?);
     Ok(no_store(
-        json!({"diagnostics":validate(&row.get::<String,_>("format"),&document)?}),
+        crate::read_snapshot::scope(&state.pool, validate_draft_value(&state, &id, input)).await?,
     ))
 }
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Revision {
@@ -367,49 +340,12 @@ async fn publish_document(
     revision: i64,
     version: Option<i64>,
 ) -> Result<Json<Value>, ApiError> {
-    let (id, secrets) = (id.to_owned(), state.secrets.clone());
+    let prepared = PreparedPublication::new(state, id, revision, version).await?;
     db::serializable(&state.pool, move |tx| {
-        let (id, secrets) = (id.clone(), secrets.clone());
-        Box::pin(async move { publish_on(tx, &secrets, &id, revision, version).await })
+        let prepared = prepared.clone();
+        Box::pin(async move { prepared.commit_on(tx).await })
     })
     .await
-}
-async fn publish_on(
-    tx: &mut Transaction<'_, Postgres>,
-    secrets: &SecretBox,
-    id: &str,
-    revision: i64,
-    version: Option<i64>,
-) -> Result<Json<Value>, ApiError> {
-    let current = locked(tx, id, revision).await?;
-    let format: String = current.get("format");
-    let cipher = if let Some(version) = version {
-        sqlx::query_scalar::<_,String>("SELECT document_enc FROM subscription_template_versions WHERE template_id=$1 AND version=$2").bind(id).bind(version).fetch_optional(&mut **tx).await?.ok_or_else(||ApiError::not_found("template version"))?
-    } else {
-        current.get("draft_enc")
-    };
-    let document = decode(secrets, &cipher)?;
-    let diagnostics = validate(&format, &document)?;
-    ensure_valid(&diagnostics)?;
-    // Use the exact production renderer for both empty and representative node sets on every platform.
-    super::verify_rendering(&format, &document)?;
-    let next:i64=sqlx::query_scalar("SELECT coalesce(max(version),0)+1 FROM subscription_template_versions WHERE template_id=$1").bind(id).fetch_one(&mut **tx).await?;
-    sqlx::query("INSERT INTO subscription_template_versions(template_id,version,document_enc) VALUES($1,$2,$3)").bind(id).bind(next).bind(&cipher).execute(&mut **tx).await?;
-    let row=sqlx::query("UPDATE subscription_templates SET published_version=$2,draft_enc=$3,revision=revision+1,updated_at=now() WHERE id=$1 RETURNING *").bind(id).bind(next).bind(&cipher).fetch_one(&mut **tx).await?;
-    audit_with_source(
-        tx,
-        id,
-        if version.is_some() {
-            "template.rolled_back"
-        } else {
-            "template.published"
-        },
-        row.get("revision"),
-        Some(next),
-        version,
-    )
-    .await?;
-    Ok(Json(metadata(&row)))
 }
 
 async fn publish_inner(
@@ -472,19 +408,9 @@ pub struct Source {
     pub config: Option<Value>,
 }
 pub async fn source(Json(input): Json<Source>) -> Result<Response, ApiError> {
-    let config = match (&input.source, &input.config) {
-        (Some(source), None) => parse(&input.format, source)?,
-        (None, Some(config)) if config.is_object() => config.clone(),
-        _ => {
-            return Err(ApiError::bad_request(
-                "supply either source or config object",
-            ));
-        }
-    };
-    Ok(no_store(
-        json!({"source":serialize(&input.format,&config)?,"config":config}),
-    ))
+    Ok(no_store(source_value(input)?))
 }
+
 pub async fn export(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -531,43 +457,11 @@ pub async fn preview(
     Path(id): Path<String>,
     Json(input): Json<Preview>,
 ) -> Result<Response, ApiError> {
-    let current = row(&state, &id).await?;
-    let format: String = current.get("format");
-    let document = input.document.unwrap_or(decode(
-        &state.secrets,
-        &current.get::<String, _>("draft_enc"),
-    )?);
-    super::super::validate_user(&state, &input.user_id).await?;
-    let query = url::form_urlencoded::Serializer::new(String::new())
-        .append_pair("platform", &input.platform)
-        .finish();
-    let platform = super::super::formats::Platform::requested(Some(&query))?
-        .ok_or_else(|| ApiError::bad_request("explicit preview platform required"))?;
-    let client = super::super::formats::ClientInfo::detect(&format!(
-        "{}/{}",
-        if format == "singbox" {
-            "sing-box"
-        } else {
-            "mihomo"
-        },
-        input.kernel_version.as_deref().unwrap_or("")
-    ));
-    if input.kernel_version.is_some() && client.version.is_none() {
-        return Err(ApiError::bad_request("invalid stable kernel version"));
-    }
-    let client = super::super::formats::ClientInfo { platform, ..client };
-    let eligible = super::super::eligible_nodes(&state, &input.user_id).await?;
-    let nodes =
-        super::super::load_subscription_nodes_eligible(&state, &input.user_id, Some(&eligible))
-            .await?;
-    let mut output = render::render(&format, &document, &nodes, &client)?;
-    if !input.reveal_secrets {
-        redact(&mut output["config"]);
-    }
-    output["source"] = json!(serialize(&format, &output["config"])?);
-    output["redacted"] = json!(!input.reveal_secrets);
-    Ok(no_store(output))
+    Ok(no_store(
+        crate::read_snapshot::scope(&state.pool, preview_value(&state, &id, input)).await?,
+    ))
 }
+
 fn redact(value: &mut Value) {
     match value {
         Value::Object(map) => {
@@ -614,152 +508,7 @@ pub struct Import {
     pub package: Option<Value>,
 }
 pub async fn import(Json(input): Json<Import>) -> Result<Response, ApiError> {
-    if !["mihomo", "singbox"].contains(&input.format.as_str()) {
-        return Err(ApiError::bad_request("unsupported format"));
-    }
-    if input.source.is_some() && input.package.is_some() {
-        return Err(ApiError::bad_request(
-            "supply native source or a template package, not both",
-        ));
-    }
-    let inferred = input
-        .source
-        .as_deref()
-        .and_then(|source| super::native_source::jsonc(source).ok())
-        .filter(|value| {
-            value.get("package_version").is_some()
-                && value.get("document").is_some()
-                && value.get("format").is_some()
-        });
-    if let Some(package) = input.package.or(inferred) {
-        if package["package_version"] != 1 || package["format"] != input.format {
-            return Err(ApiError::bad_request("invalid template package or format"));
-        }
-        let document: Document = serde_json::from_value(package["document"].clone())
-            .map_err(|e| ApiError::bad_request(e.to_string()))?;
-        document.shape()?;
-        return Ok(no_store(
-            json!({"diagnostics":validate(&input.format,&document)?,"document":document,"removed_nodes":[],"reference_mapping":[]}),
-        ));
-    }
-    let mut common = parse(
-        &input.format,
-        input
-            .source
-            .as_deref()
-            .ok_or_else(|| ApiError::bad_request("source or package is required"))?,
-    )?;
-    let mut removed = Vec::new();
-    let mut mapping = Vec::new();
-    let mut injections = Vec::new();
-    let mut removed_providers = Vec::new();
-    if input.format == "mihomo" {
-        removed = common
-            .as_object_mut()
-            .unwrap()
-            .remove("proxies")
-            .and_then(|v| v.as_array().cloned())
-            .unwrap_or_default();
-        common["proxies"] = json!([]);
-        if let Some(providers) = common
-            .as_object_mut()
-            .unwrap()
-            .remove("proxy-providers")
-            .and_then(|v| v.as_object().cloned())
-        {
-            removed_providers = providers.keys().cloned().collect();
-        }
-    } else if let Some(outbounds) = common["outbounds"].as_array_mut() {
-        outbounds.retain(|v| {
-            let keep = ["direct", "selector", "urltest", "block", "dns"]
-                .contains(&v["type"].as_str().unwrap_or(""));
-            if !keep {
-                removed.push(v.clone());
-            }
-            keep
-        });
-    }
-    if input.format == "singbox"
-        && let Some(endpoints) = common
-            .as_object_mut()
-            .unwrap()
-            .remove("endpoints")
-            .and_then(|v| v.as_array().cloned())
-    {
-        removed.extend(endpoints);
-    }
-    let (groups_key, name_key, entries_key) = if input.format == "mihomo" {
-        ("proxy-groups", "name", "proxies")
-    } else {
-        ("outbounds", "tag", "outbounds")
-    };
-    let names: Vec<String> = removed
-        .iter()
-        .filter_map(|n| n[name_key].as_str().map(str::to_owned))
-        .collect();
-    if let Some(groups) = common[groups_key].as_array_mut() {
-        for group in groups {
-            let mut provider_refs = Vec::new();
-            if input.format == "mihomo"
-                && let Some(map) = group.as_object_mut()
-            {
-                if let Some(uses) = map.remove("use").and_then(|v| v.as_array().cloned()) {
-                    provider_refs.extend(uses.iter().filter_map(Value::as_str).map(str::to_owned));
-                }
-                for flag in [
-                    "include-all",
-                    "include-all-proxies",
-                    "include-all-providers",
-                ] {
-                    if map.remove(flag) == Some(json!(true)) {
-                        provider_refs.push(flag.into());
-                    }
-                }
-                if !provider_refs.is_empty() {
-                    map.entry(entries_key).or_insert(json!([]));
-                }
-            }
-            let mut refs = Vec::new();
-            if let Some(entries) = group.get_mut(entries_key).and_then(Value::as_array_mut) {
-                refs = entries
-                    .iter()
-                    .filter_map(Value::as_str)
-                    .filter(|s| names.iter().any(|n| n == s))
-                    .map(str::to_owned)
-                    .collect();
-                entries.retain(|v| !v.as_str().is_some_and(|s| names.iter().any(|n| n == s)));
-            }
-            if !refs.is_empty() || !provider_refs.is_empty() {
-                let name = group[name_key].as_str().unwrap_or("").to_string();
-                mapping.push(json!({"group":name,"removed_references":refs,"removed_provider_references":provider_refs,"replacement":"authorized dynamic nodes"}));
-                injections.push(Injection {
-                    group: name,
-                    ids: vec![],
-                    contains: String::new(),
-                    prefix: String::new(),
-                    exclude: vec![],
-                    descending: false,
-                    preferred_prefix: String::new(),
-                    on_empty: EmptyPolicy::Direct,
-                });
-            }
-        }
-    }
-    let document = Document {
-        schema_version: 2,
-        common,
-        platforms: Default::default(),
-        injections,
-    };
-    let platform_moves: Vec<Value> = vec![];
-    // Do not return credentials from removed nodes in import analysis.
-    let removed: Vec<_> = removed
-        .iter()
-        .map(|n| json!({"name":n[name_key],"type":n["type"]}))
-        .collect();
-    Ok(no_store(
-        json!({"diagnostics":validate(&input.format,&document)?,"document":document,"removed_nodes":removed,"reference_mapping":mapping,"platform_moves":platform_moves,"removed_providers":removed_providers}),
-    ))
+    Ok(no_store(import_value(input)?))
 }
 
 pub async fn version(
@@ -789,24 +538,10 @@ pub struct Refactor {
 pub async fn refactor(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    Json(mut input): Json<Refactor>,
+    Json(input): Json<Refactor>,
 ) -> Result<Response, ApiError> {
-    let current = row(&state, &id).await?;
-    if current.get::<i64, _>("revision") != input.expected_revision {
-        return Err(ApiError::conflict(
-            "template changed; reload metadata before refactoring references",
-        ));
-    }
-    let format: String = current.get("format");
-    rename(
-        &mut input.document,
-        &format,
-        &input.kind,
-        &input.old_name,
-        &input.new_name,
-    )?;
     Ok(no_store(
-        json!({"document":input.document,"diagnostics":validate(&format,&input.document)?}),
+        crate::read_snapshot::scope(&state.pool, refactor_value(&state, &id, input)).await?,
     ))
 }
 
@@ -927,3 +662,11 @@ pub async fn rollback(
     )
     .await
 }
+
+mod preparation;
+use preparation::*;
+
+mod computation;
+use computation::*;
+
+pub(crate) mod v2;

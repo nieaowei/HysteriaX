@@ -48,6 +48,59 @@ pub fn router(state: AppState) -> Router {
     use subscriptions::templates as st;
     let admin = Router::new()
         .route(
+            "/api/v2/subscription-templates",
+            get(st::list).post(st::v2::create),
+        )
+        .route("/api/v2/subscription-templates/fields", get(st::fields))
+        .route(
+            "/api/v2/subscription-templates/source",
+            post(st::v2::compute_source),
+        )
+        .route(
+            "/api/v2/subscription-templates/import",
+            post(st::v2::compute_source),
+        )
+        .route(
+            "/api/v2/subscription-templates/{id}",
+            get(st::get).patch(st::v2::patch),
+        )
+        .route(
+            "/api/v2/subscription-templates/{id}/draft",
+            get(st::draft).put(st::v2::save),
+        )
+        .route(
+            "/api/v2/subscription-templates/{id}/validate",
+            post(st::v2::compute_template),
+        )
+        .route(
+            "/api/v2/subscription-templates/{id}/refactor",
+            post(st::v2::compute_template),
+        )
+        .route(
+            "/api/v2/subscription-templates/{id}/preview",
+            post(st::v2::compute_template),
+        )
+        .route(
+            "/api/v2/subscription-templates/{id}/publish",
+            post(st::v2::publication),
+        )
+        .route(
+            "/api/v2/subscription-templates/{id}/rollback",
+            post(st::v2::publication),
+        )
+        .route(
+            "/api/v2/subscription-templates/{id}/versions",
+            get(st::versions),
+        )
+        .route(
+            "/api/v2/subscription-templates/{id}/versions/{version}",
+            get(st::version),
+        )
+        .route(
+            "/api/v2/subscription-templates/{id}/export",
+            get(st::export),
+        )
+        .route(
             "/api/v2/authorization-groups",
             get(authorization_groups::list).post(authorization_groups::v2::create),
         )
