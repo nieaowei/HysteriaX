@@ -11,10 +11,11 @@ fn step() -> RemoteStep {
         step: "ssh-command:0".into(),
         kind: "ssh-command".into(),
         request_digest: crate::security::token_digest("fixture-command"),
+        predecessor: Some("empty".into()),
     }
 }
 fn receipt(step: &RemoteStep) -> Value {
-    json!({"protocol":1,"context":step,"state":"completed","exit_code":0,"stdout_bytes":0,"stderr_bytes":0,"stdout_sha256":hash(b""),"stderr_sha256":hash(b"")})
+    json!({"protocol":2,"context":step,"state":"completed","exit_code":0,"stdout_bytes":0,"stderr_bytes":0,"stdout_sha256":hash(b""),"stderr_sha256":hash(b"")})
 }
 #[test]
 fn receipt_requires_exact_incarnation_protocol_and_bounded_complete_output() {
@@ -22,7 +23,7 @@ fn receipt_requires_exact_incarnation_protocol_and_bounded_complete_output() {
     let good = receipt(&s);
     assert!(parse(&serde_json::to_vec(&good).unwrap(), &s, 128).is_ok());
     for (pointer, value) in [
-        ("/protocol", json!(2)),
+        ("/protocol", json!(3)),
         ("/state", json!("running")),
         ("/exit_code", json!(256)),
         ("/stdout_bytes", json!(129)),
@@ -73,15 +74,35 @@ fn render_rejects_invalid_bindings_and_never_embeds_commands_in_persisted_intent
     assert!(inspect(&s).is_err());
 }
 
-fn script(step: &mut RemoteStep, command: &str, cap: usize) -> String {
-    step.request_digest = crate::security::token_digest(command);
-    wrap(step, command, cap).unwrap()
+#[test]
+fn predecessor_requires_an_exact_opaque_head_and_is_part_of_the_completion_context() {
+    assert_eq!(parse_head("empty\n").unwrap(), "empty");
+    let id = uuid::Uuid::new_v4().to_string();
+    assert_eq!(parse_head(&format!("{id}\n")).unwrap(), id);
+    for bad in ["", "../foreign", " empty", "empty\r\n", "not-a-uuid"] {
+        assert!(parse_head(bad).is_err());
+    }
+    let mut s = step();
+    let good = receipt(&s);
+    s.predecessor = Some(uuid::Uuid::new_v4().to_string());
+    assert!(parse(&serde_json::to_vec(&good).unwrap(), &s, 128).is_err());
+    s.predecessor = None;
+    assert!(inspect(&s).is_err());
 }
+
 struct Linux {
     container: String,
     home: String,
 }
 impl Linux {
+    fn script(&self, step: &mut RemoteStep, command: &str, cap: usize) -> String {
+        let output = self.run(&head(&step.resource).unwrap());
+        assert!(output.status.success(), "remote predecessor unavailable");
+        step.predecessor = Some(parse_head(std::str::from_utf8(&output.stdout).unwrap()).unwrap());
+        step.request_digest = crate::security::token_digest(command);
+        wrap(step, command, cap).unwrap()
+    }
+
     fn command(&self, script: &str) -> std::process::Command {
         let mut c = std::process::Command::new("docker");
         c.args([
@@ -126,11 +147,8 @@ fn linux_journal_preserves_outputs_fences_replays_and_keeps_unknown_barriers() {
             .success()
     );
     let mut first = step();
-    let output = linux.run(&script(
-        &mut first,
-        "printf hello; printf warning >&2; exit 7",
-        128,
-    ));
+    let output =
+        linux.run(&linux.script(&mut first, "printf hello; printf warning >&2; exit 7", 128));
     assert_eq!(output.status.code(), Some(7));
     assert_eq!(output.stdout, b"hello");
     assert_eq!(output.stderr, b"warning");
@@ -141,7 +159,7 @@ fn linux_journal_preserves_outputs_fences_replays_and_keeps_unknown_barriers() {
     assert_eq!(saved.stdout_sha256, hash(b"hello"));
     assert_eq!(saved.stderr_sha256, hash(b"warning"));
     let directory = format!(
-        "{}/.hysteriax-executions-v1/{}/ops/{}",
+        "{}/.hysteriax-executions-v2/{}/ops/{}",
         linux.home,
         hash(first.resource.as_bytes()),
         first.operation_id
@@ -151,11 +169,8 @@ fn linux_journal_preserves_outputs_fences_replays_and_keeps_unknown_barriers() {
         String::from_utf8(files.stdout).unwrap(),
         "intent.json\nresult.json\n"
     );
-    let repeated = linux.run(&script(
-        &mut first,
-        "printf hello; printf warning >&2; exit 7",
-        128,
-    ));
+    let repeated =
+        linux.run(&wrap(&first, "printf hello; printf warning >&2; exit 7", 128).unwrap());
     assert_eq!(repeated.status.code(), Some(125));
     assert!(repeated.stdout.is_empty() && repeated.stderr.is_empty());
     let mut next = first.clone();
@@ -164,7 +179,7 @@ fn linux_journal_preserves_outputs_fences_replays_and_keeps_unknown_barriers() {
     next.generation = 2;
     assert!(
         linux
-            .run(&script(&mut next, "printf next", 128))
+            .run(&linux.script(&mut next, "printf next", 128))
             .status
             .success()
     );
@@ -174,7 +189,7 @@ fn linux_journal_preserves_outputs_fences_replays_and_keeps_unknown_barriers() {
     stale.operation_id = uuid::Uuid::new_v4().to_string();
     assert!(
         !linux
-            .run(&script(&mut stale, "touch \"$HOME/stale\"", 128))
+            .run(&linux.script(&mut stale, "touch \"$HOME/stale\"", 128))
             .status
             .success()
     );
@@ -183,7 +198,7 @@ fn linux_journal_preserves_outputs_fences_replays_and_keeps_unknown_barriers() {
     collision.owner = "foreign".into();
     assert!(
         !linux
-            .run(&script(&mut collision, "touch \"$HOME/collision\"", 128))
+            .run(&linux.script(&mut collision, "touch \"$HOME/collision\"", 128))
             .status
             .success()
     );
@@ -194,7 +209,7 @@ fn linux_journal_preserves_outputs_fences_replays_and_keeps_unknown_barriers() {
     restored.generation = 1;
     assert!(
         linux
-            .run(&script(&mut restored, "printf restored", 128))
+            .run(&linux.script(&mut restored, "printf restored", 128))
             .status
             .success()
     );
@@ -202,15 +217,38 @@ fn linux_journal_preserves_outputs_fences_replays_and_keeps_unknown_barriers() {
     stale.operation_id = uuid::Uuid::new_v4().to_string();
     assert!(
         !linux
-            .run(&script(&mut stale, "touch \"$HOME/stale\"", 128))
+            .run(&linux.script(&mut stale, "touch \"$HOME/stale\"", 128))
             .status
             .success()
     );
     assert!(!linux.run("test -e \"$HOME/stale\"").status.success());
+    // A queued E2 never reached this host before restore; E3 must still fence it.
+    let mut queued = step();
+    queued.resource = restored.resource.clone();
+    queued.epoch = uuid::Uuid::new_v4().to_string();
+    let delayed = linux.script(&mut queued, "touch \"$HOME/unseen-old-epoch\"", 128);
+    let mut newer = queued.clone();
+    newer.operation_id = uuid::Uuid::new_v4().to_string();
+    newer.epoch = uuid::Uuid::new_v4().to_string();
+    assert!(
+        linux
+            .run(&linux.script(&mut newer, "printf newest", 128))
+            .status
+            .success()
+    );
+    assert_eq!(linux.run(&delayed).status.code(), Some(125));
+    assert!(
+        !linux
+            .run("test -e \"$HOME/unseen-old-epoch\"")
+            .status
+            .success()
+    );
+    assert!(linux.read(&newer, 128).is_ok());
+    restored = newer;
     // Bounded output leaves a real incomplete active operation after lock release.
     let mut overflow = restored.clone();
     overflow.operation_id = uuid::Uuid::new_v4().to_string();
-    let flooded = linux.run(&script(&mut overflow, "head -c 1000 /dev/zero", 128));
+    let flooded = linux.run(&linux.script(&mut overflow, "head -c 1000 /dev/zero", 128));
     assert!(!flooded.status.success());
     assert!(flooded.stdout.len() > 128);
     assert!(flooded.stdout.len() <= 129);
@@ -220,7 +258,7 @@ fn linux_journal_preserves_outputs_fences_replays_and_keeps_unknown_barriers() {
     after.generation += 1;
     assert!(
         !linux
-            .run(&script(&mut after, "touch \"$HOME/unsafe-takeover\"", 128))
+            .run(&linux.script(&mut after, "touch \"$HOME/unsafe-takeover\"", 128))
             .status
             .success()
     );
@@ -235,7 +273,7 @@ fn linux_journal_preserves_outputs_fences_replays_and_keeps_unknown_barriers() {
     other.resource = "node:independent".into();
     assert!(
         linux
-            .run(&script(&mut other, "printf independent", 128))
+            .run(&linux.script(&mut other, "printf independent", 128))
             .status
             .success()
     );
@@ -243,7 +281,7 @@ fn linux_journal_preserves_outputs_fences_replays_and_keeps_unknown_barriers() {
     other.operation_id = uuid::Uuid::new_v4().to_string();
     assert!(
         linux
-            .run(&script(
+            .run(&linux.script(
                 &mut other,
                 "head -c 1000000 /dev/zero > \"$HOME/binary\"; printf installed",
                 128
@@ -252,11 +290,39 @@ fn linux_journal_preserves_outputs_fences_replays_and_keeps_unknown_barriers() {
             .success()
     );
     assert_eq!(linux.read(&other, 128).unwrap().stdout_bytes, 9);
+    let mut legacy = step();
+    legacy.resource = "node:legacy-v1".into();
+    legacy.request_digest = crate::security::token_digest("touch \"$HOME/legacy-bypass\"");
+    let legacy_dir = format!(
+        "{}/.hysteriax-executions-v1/{}",
+        linux.home,
+        hash(legacy.resource.as_bytes())
+    );
+    assert!(
+        linux
+            .run(&format!("mkdir -p {}", quote(&legacy_dir)))
+            .status
+            .success()
+    );
+    assert!(!linux.run(&head(&legacy.resource).unwrap()).status.success());
+    assert_eq!(
+        linux
+            .run(&wrap(&legacy, "touch \"$HOME/legacy-bypass\"", 128).unwrap())
+            .status
+            .code(),
+        Some(125)
+    );
+    assert!(
+        !linux
+            .run("test -e \"$HOME/legacy-bypass\"")
+            .status
+            .success()
+    );
     // A live resource lock cannot be mistaken for a completed request.
     let mut live = step();
     live.resource = "node:live".into();
     let mut child = linux
-        .command(&script(
+        .command(&linux.script(
             &mut live,
             "printf ready > \"$HOME/ready\"; sleep 2; printf done",
             128,
@@ -448,6 +514,9 @@ async fn actual_ssh_response_loss_keeps_intent_and_exact_remote_receipt_without_
         step: row.get("step"),
         kind: intent["kind"].as_str().unwrap().into(),
         request_digest: intent["request_digest"].as_str().unwrap().into(),
+        predecessor: intent["verification"]["expected_head"]
+            .as_str()
+            .map(str::to_owned),
     };
     sqlx::query("UPDATE resource_leases SET expires_at=clock_timestamp()-interval '1 second' WHERE resource_key='node:lost-ssh'").execute(&pool).await.unwrap();
     let mut tx = pool.begin().await.unwrap();
@@ -521,5 +590,64 @@ async fn actual_ssh_response_loss_keeps_intent_and_exact_remote_receipt_without_
         .unwrap(),
         "reconciling"
     );
+    // A held remote predecessor must persist a DB barrier without constructing
+    // or sending the requested payload, including after its lock is released.
+    let mut busy = step();
+    busy.resource = "node:busy-head".into();
+    let held=linux.script(&mut busy,"printf ready > \"$HOME/busy-ready\"; while [ -d \"$HOME\" ] && [ ! -e \"$HOME/busy-release\" ]; do sleep 0.05; done; printf done",128);
+    let mut child = linux
+        .command(&held)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let started = std::time::Instant::now();
+    while !linux.run("test -e \"$HOME/busy-ready\"").status.success() {
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let mut tx = pool.begin().await.unwrap();
+    let blocked = execution::acquire(&mut tx, "node:busy-head", "owner", "busy-work")
+        .await
+        .unwrap()
+        .unwrap();
+    tx.commit().await.unwrap();
+    assert!(
+        execution::supervise(
+            pool.clone(),
+            vec![blocked],
+            session.execute("touch \"$HOME/should-not-run\"")
+        )
+        .await
+        .unwrap()
+        .is_err()
+    );
+    let barrier =
+        sqlx::query("SELECT state,intent FROM execution_operations WHERE work_id='busy-work'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(barrier.get::<String, _>("state"), "dispatching");
+    assert_eq!(
+        barrier.get::<Value, _>("intent")["verification"]["preparation"],
+        "unverified"
+    );
+    assert!(
+        !linux
+            .run("test -e \"$HOME/should-not-run\"")
+            .status
+            .success()
+    );
+    assert!(linux.run("touch \"$HOME/busy-release\"").status.success());
+    assert!(child.wait().unwrap().success());
+    sqlx::query("UPDATE resource_leases SET expires_at=clock_timestamp()-interval '1 second' WHERE resource_key='node:busy-head'").execute(&pool).await.unwrap();
+    let mut tx = pool.begin().await.unwrap();
+    assert!(
+        execution::acquire(&mut tx, "node:busy-head", "next", "next-busy")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    tx.commit().await.unwrap();
     server.abort();
 }

@@ -2,7 +2,9 @@ set -eu
 LC_ALL=C; export LC_ALL
 umask 077
 [ -n "${HOME:-}" ] && [ -d "$HOME" ] || exit 125
-base="$HOME/.hysteriax-executions-v1"
+base="$HOME/.hysteriax-executions-v2"
+legacy="$HOME/.hysteriax-executions-v1/$resource_hash"
+[ ! -e "$legacy" ] && [ ! -L "$legacy" ] || exit 125
 private_dir() {
     [ ! -L "$1" ] || exit 125
     if [ ! -e "$1" ]; then mkdir -m 700 "$1"; fi
@@ -18,6 +20,15 @@ private_dir "$resource/retired"
 [ ! -e "$resource/lock" ] || [ -f "$resource/lock" ] || exit 125
 exec 8>>"$resource/lock"
 flock -n 8 || exit 125
+current_head=empty
+if [ -e "$resource/head" ] || [ -L "$resource/head" ]; then
+    [ -f "$resource/head" ] && [ ! -L "$resource/head" ] || exit 125
+    current_head=$(head -c 38 "$resource/head")
+else
+    # A partial or legacy resource cannot masquerade as a new empty resource.
+    [ ! -e "$resource/active" ] && [ ! -e "$resource/fence" ] || exit 125
+fi
+[ "$current_head" = "$expected_head" ] || exit 125
 op="$resource/ops/$op_id"
 [ ! -e "$op" ] && [ ! -L "$op" ] || exit 125
 previous=''
@@ -61,6 +72,8 @@ mv -f -- "$op/fence.new" "$resource/fence"
 printf '%s\n' "$intent" > "$op/intent.json"
 printf '%s\n' "$op_id" > "$op/active.new"
 mv -f -- "$op/active.new" "$resource/active"
+printf '%s\n' "$op_id" > "$op/head.new"
+mv -f -- "$op/head.new" "$resource/head"
 cleanup() {
     exec 6>&- 7>&-
     rm -f -- "$op/stdout.fifo" "$op/stderr.fifo" "$op/stdout" "$op/stderr" "$op/result.new"
@@ -90,7 +103,7 @@ if [ "$((out_bytes+err_bytes))" -gt "$cap" ]; then
 fi
 out_digest=$(sha256sum "$op/stdout"); out_digest=${out_digest%% *}
 err_digest=$(sha256sum "$op/stderr"); err_digest=${err_digest%% *}
-printf '{"protocol":1,"context":%s,"state":"completed","exit_code":%s,"stdout_bytes":%s,"stderr_bytes":%s,"stdout_sha256":"%s","stderr_sha256":"%s"}\n' "$intent" "$code" "$out_bytes" "$err_bytes" "$out_digest" "$err_digest" > "$op/result.new"
+printf '{"protocol":2,"context":%s,"state":"completed","exit_code":%s,"stdout_bytes":%s,"stderr_bytes":%s,"stdout_sha256":"%s","stderr_sha256":"%s"}\n' "$intent" "$code" "$out_bytes" "$err_bytes" "$out_digest" "$err_digest" > "$op/result.new"
 mv -f -- "$op/result.new" "$op/result.json"
 cat "$op/stdout"
 cat "$op/stderr" >&2

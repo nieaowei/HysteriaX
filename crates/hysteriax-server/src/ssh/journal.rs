@@ -31,6 +31,26 @@ fn quote(value: &str) -> String {
 fn hash(value: &[u8]) -> String {
     hex::encode(Sha256::digest(value))
 }
+fn valid_head(value: &str) -> bool {
+    value == "empty" || uuid::Uuid::parse_str(value).is_ok_and(|id| id.to_string() == value)
+}
+pub(crate) fn parse_head(text: &str) -> Result<String> {
+    ensure!(text.len() <= 38, "remote predecessor is too large");
+    let head = text.trim_end_matches('\n');
+    ensure!(valid_head(head), "invalid remote predecessor");
+    Ok(head.into())
+}
+pub(crate) fn head(resource: &str) -> Result<String> {
+    ensure!(
+        !resource.is_empty() && resource.len() <= 512,
+        "invalid remote resource"
+    );
+    Ok(format!(
+        "resource_hash={}\n{}",
+        quote(&hash(resource.as_bytes())),
+        include_str!("head.sh")
+    ))
+}
 fn validate(step: &RemoteStep) -> Result<()> {
     ensure!(
         uuid::Uuid::parse_str(&step.operation_id)
@@ -55,6 +75,10 @@ fn validate(step: &RemoteStep) -> Result<()> {
         );
     }
     ensure!(
+        step.predecessor.as_deref().is_some_and(valid_head),
+        "remote predecessor is missing or invalid"
+    );
+    ensure!(
         serde_json::to_vec(step)?.len() <= 8 * 1024,
         "remote execution binding is too large"
     );
@@ -63,12 +87,13 @@ fn validate(step: &RemoteStep) -> Result<()> {
 fn prefix(step: &RemoteStep) -> Result<String> {
     validate(step)?;
     Ok(format!(
-        "op_id={}\nresource_hash={}\nepoch={}\ngeneration={}\nbinding={}\n",
+        "op_id={}\nresource_hash={}\nepoch={}\ngeneration={}\nbinding={}\nexpected_head={}\n",
         quote(&step.operation_id),
         quote(&hash(step.resource.as_bytes())),
         quote(&step.epoch),
         step.generation,
-        quote(&hash(&serde_json::to_vec(&(&step.owner, &step.work))?))
+        quote(&hash(&serde_json::to_vec(&(&step.owner, &step.work))?)),
+        quote(step.predecessor.as_deref().unwrap())
     ))
 }
 pub(crate) fn wrap(step: &RemoteStep, command: &str, cap: usize) -> Result<String> {
@@ -101,7 +126,7 @@ pub(crate) fn parse(bytes: &[u8], step: &RemoteStep, cap: usize) -> Result<Recei
     );
     let receipt: Receipt = serde_json::from_slice(bytes)?;
     ensure!(
-        receipt.protocol == 1
+        receipt.protocol == 2
             && receipt.state == "completed"
             && receipt.context == *step
             && receipt.exit_code <= 255,

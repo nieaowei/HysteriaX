@@ -198,10 +198,37 @@ impl SshSession {
         timeout: Duration,
         max_output: usize,
     ) -> Result<CommandOutput> {
+        let prepared_head = if let Some(lease) =
+            crate::execution::remote::resource_for("ssh-command")?
+        {
+            let observed = async {
+                let text = self
+                    .execute_read_only_checked(&journal::head(&lease.resource)?)
+                    .await?;
+                let head = journal::parse_head(&text)?;
+                crate::execution::check_current().await?;
+                Ok::<_, anyhow::Error>(head)
+            }
+            .await;
+            match observed {
+                Ok(head) => Some(head),
+                Err(error) => {
+                    // No requested payload is sent when its remote predecessor
+                    // is unreadable. Persist the resulting safety barrier.
+                    return crate::execution::remote::with_context(
+                        "ssh-command",crate::security::token_digest(command),
+                        serde_json::json!({"protocol":"ssh-journal-v2","endpoint":self.endpoint,"max_output":max_output,"preparation":"unverified"}),
+                        move |_|async move {Err(error)},|_:&CommandOutput|serde_json::Value::Null,
+                    ).await;
+                }
+            }
+        } else {
+            None
+        };
         crate::execution::remote::with_context(
             "ssh-command",
             crate::security::token_digest(command),
-            serde_json::json!({"protocol":"ssh-journal-v1","endpoint":self.endpoint,"max_output":max_output}),
+            serde_json::json!({"protocol":"ssh-journal-v2","endpoint":self.endpoint,"max_output":max_output,"expected_head":prepared_head}),
             |context| async move {
                 let Some(context)=context else {return self.execute_remote(command,timeout,max_output).await;};
                 let wrapped=journal::wrap(&context,command,max_output)?;
