@@ -1039,6 +1039,24 @@ struct RollbackSubscriptionTemplateRequest: Encodable, Sendable {
     }
 }
 
+struct ReverifyExecutionOperationRequest: Encodable, Sendable {
+    let expectedEpoch: String
+    let expectedGeneration: Int64
+
+    init(
+        expectedEpoch: String,
+        expectedGeneration: Int64
+    ) {
+        self.expectedEpoch = expectedEpoch
+        self.expectedGeneration = expectedGeneration
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case expectedEpoch = "expected_epoch"
+        case expectedGeneration = "expected_generation"
+    }
+}
+
 struct CreateAdminTokenRequest: Encodable, Sendable {
     let label: String
 
@@ -1273,6 +1291,12 @@ enum APIEndpoints {
     }
     static func confirmJobFingerprint(id: String) -> APIOperation<JobFingerprintConfirmationRequest, JobReceipt> {
         APIOperation(method: "POST", path: "api/v2/jobs/\(id)/confirm-fingerprint", queryParameters: [:])
+    }
+    static func listExecutionOperations(workId: String? = nil, after: String? = nil) -> APIOperation<NoRequest, ExecutionOperationsPage> {
+        APIOperation(method: "GET", path: "api/v2/execution-operations", queryParameters: ["work_id": workId.map { String($0) }, "after": after.map { String($0) }].compactMapValues { $0 })
+    }
+    static func reverifyExecutionOperation(id: String) -> APIOperation<ReverifyExecutionOperationRequest, ExecutionRecheckResult> {
+        APIOperation(method: "POST", path: "api/v2/execution-operations/\(id)/reverify", queryParameters: [:])
     }
     static func retryJob(id: String) -> APIOperation<RevisionRequest, JobReceipt> {
         APIOperation(method: "POST", path: "api/v2/jobs/\(id)/retry", queryParameters: [:])

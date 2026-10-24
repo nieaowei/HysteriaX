@@ -245,7 +245,7 @@ struct ManagementProtocolChecks {
         UserDefaults.standard.set("9999", forKey:"lastEventID.\(address)")
         UserDefaults.standard.set(prefix+"9999", forKey:key)
         defer { UserDefaults.standard.removeObject(forKey:key) }
-        ProtocolTransport.backend.reset(events:"id: \(prefix)1\nevent: job.progress\ndata: {\"event_id\":1}\n\n",store:true)
+        ProtocolTransport.backend.reset(events:"id: \(prefix)1\nevent: job.reverified\ndata: {\"event_id\":1}\n\n",store:true)
         let notifications=NodeAlertNotifications(transport:SilentNotifications(),defaults:UserDefaults(suiteName:"hysteriax.protocol.notifications")!)
         let store=ManagementStore(restoreSnapshot:false,nodeNotifications:notifications)
         try await store.connect(serviceAddress:address,token:"test-store-token",session:session)

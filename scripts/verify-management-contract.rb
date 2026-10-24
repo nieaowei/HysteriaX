@@ -28,8 +28,10 @@ spec.fetch('paths').each do |path, item|
     check(refs.count('#/components/parameters/IdempotencyKey') == 1, "missing or repeated header identity: #{method} #{path}")
   end
 end
-check(writes.length == 60 && writes.to_set.length == 60, 'expected all 60 distinct management write operations')
+check(writes.length == 61 && writes.to_set.length == 61, 'expected all 61 distinct management write operations')
+check(writes.include?('reverifyExecutionOperation'), 'missing explicit remote verification write')
 schemas = spec.dig('components', 'schemas')
+check(schemas.dig('ExecutionRecheckResult','required').include?('resource_blocked'), 'verification must expose its resource barrier')
 schemas.each do |name, schema|
   check(!schema.fetch('properties', {}).key?('idempotency_key'), "obsolete body identity in #{name}")
 end
@@ -46,4 +48,4 @@ check(schemas.dig('EventStreamHead', 'properties', 'cursor', '$ref') == '#/compo
   check(operation.fetch('responses').key?('410'), "missing resynchronization response for #{path}")
 end
 check(spec.dig('paths', '/events/head', 'get', 'operationId') == 'getEventStreamHead', 'missing stream head operation')
-puts 'Management v2 contract: 60 header identities, typed handshake/cursors, unchanged callback/download roots passed.'
+puts 'Management v2 contract: 61 header identities, typed handshake/cursors, unchanged callback/download roots passed.'

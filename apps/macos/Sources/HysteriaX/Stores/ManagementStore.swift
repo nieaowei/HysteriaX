@@ -461,6 +461,25 @@ final class ManagementStore {
         return try await api.get(APIEndpoints.getJob(id: jobID))
     }
 
+    func executionOperations(workID: String, after: String? = nil) async throws -> ExecutionOperationsPage {
+        let client = try requireConnectedAPI()
+        let generation = serviceGeneration
+        let page = try await client.get(APIEndpoints.listExecutionOperations(workId: workID, after: after), bypassCache: true)
+        guard generation == serviceGeneration, api === client, !Task.isCancelled else { throw CancellationError() }
+        guard page.items.count <= 100, page.items.allSatisfy({ $0.workId == workID }), Set(page.items.map(\.operationId)).count == page.items.count else { throw APIClientError.invalidResponse }
+        return page
+    }
+
+    func reverifyExecution(_ operation: ExecutionOperation) async throws -> ExecutionRecheckResult {
+        let client = try requireConnectedAPI()
+        let generation = serviceGeneration
+        let result = try await client.post(APIEndpoints.reverifyExecutionOperation(id: operation.operationId), body: ReverifyExecutionOperationRequest(expectedEpoch: operation.epoch, expectedGeneration: operation.generation))
+        guard generation == serviceGeneration, api === client, !Task.isCancelled else { throw CancellationError() }
+        guard result.operationId == operation.operationId, ["verified", "needs_attention"].contains(result.state), result.state == "verified" || (result.resourceBlocked && !result.retryAllowed) else { throw APIClientError.invalidResponse }
+        await refresh()
+        return result
+    }
+
     func userUsage(_ userID: String) async throws -> UserUsageResponse {
         let api = try requireConnectedAPI()
         return try await api.get(APIEndpoints.getUserUsage(id: userID))

@@ -1691,6 +1691,58 @@ struct APIErrorResponse: Codable, Sendable {
     }
 }
 
+struct ExecutionOperation: Codable, Sendable {
+    let operationId: String
+    let resourceKey: String
+    let workId: String
+    let generation: Int64
+    let epoch: String
+    let step: String
+    let state: String
+    let kind: String?
+    let verificationProtocol: String?
+
+    enum CodingKeys: String, CodingKey {
+        case operationId = "operation_id"
+        case resourceKey = "resource_key"
+        case workId = "work_id"
+        case generation
+        case epoch
+        case step
+        case state
+        case kind
+        case verificationProtocol = "protocol"
+    }
+}
+
+struct ExecutionOperationsPage: Codable, Sendable {
+    let items: [ExecutionOperation]
+    let nextCursor: String?
+
+    enum CodingKeys: String, CodingKey {
+        case items
+        case nextCursor = "next_cursor"
+    }
+}
+
+struct ExecutionRecheckResult: Codable, Sendable {
+    let operationId: String
+    let recheckId: String?
+    let state: String
+    let resourceBlocked: Bool
+    let retryAllowed: Bool
+    let reason: String
+
+    enum CodingKeys: String, CodingKey {
+        case operationId = "operation_id"
+        case recheckId = "recheck_id"
+        case state
+        case resourceBlocked = "resource_blocked"
+        case retryAllowed = "retry_allowed"
+        case reason
+    }
+}
+
 struct ClientSummary: Codable, Sendable {
     let nodeCount: Int
     let userTotal: Int

@@ -17,6 +17,11 @@ final class FingerprintTransport: URLProtocol, @unchecked Sendable {
         var confirmations: [[String: Any]] = []
         var patches: [[String: Any]] = []
         var retries: [[String: Any]] = []
+        var rechecks: [(String, [String: Any])] = []
+        var executionFilters: [String: String] = [:]
+        var verificationComplete = false
+        var wrongVerificationResult = false
+
 
         func reset() {
             lock.lock(); defer { lock.unlock() }
@@ -24,10 +29,14 @@ final class FingerprintTransport: URLProtocol, @unchecked Sendable {
             conflict = false; retryID = nil
             error = "SSH host key changed: expected \(oldFingerprint); observed \(newFingerprint)"
             patches = []; retries = []; confirmations = []; testStatus = "failed"; kind = "ssh-test"
+            rechecks = []; executionFilters = [:]; verificationComplete = false; wrongVerificationResult = false
+
         }
         func confirmationBodies() -> [[String: Any]] { lock.lock(); defer { lock.unlock() }; return confirmations }
         func patchBodies() -> [[String: Any]] { lock.lock(); defer { lock.unlock() }; return patches }
         func retryBodies() -> [[String: Any]] { lock.lock(); defer { lock.unlock() }; return retries }
+        func verificationRequests() -> [(String, [String: Any])] { lock.lock(); defer { lock.unlock() }; return rechecks }
+
         func mutate(_ block: (Responses) -> Void) { lock.lock(); defer { lock.unlock() }; block(self) }
 
         func response(_ request: URLRequest) -> (Int, Data) {
@@ -51,6 +60,16 @@ final class FingerprintTransport: URLProtocol, @unchecked Sendable {
             func json(_ value: Any, _ status: Int = 200) -> (Int, Data) { (status, try! JSONSerialization.data(withJSONObject: value)) }
             if path.hasSuffix("version") {
                 return json(["api_version": "2.0.0", "management_protocol":2, "directory_version":"b3:test", "service_version": "test", "hysteria_version": "test", "mihomo_version": "test", "features": ["job_retry_links"]])
+            }
+            if path.hasSuffix("/execution-operations") {
+                executionFilters = Dictionary(uniqueKeysWithValues: URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!.queryItems!.map { ($0.name, $0.value!) })
+                return json(["items": [["operation_id":"operation-1", "resource_key":"node:node-1", "work_id":"job-1", "generation":5, "epoch":"ec829402-b930-4c88-a949-bd9450eb3b38", "step":"ssh-command:0", "state":"needs_attention", "kind":"ssh-command", "protocol":"ssh-journal-v2"]], "next_cursor":NSNull()])
+            }
+            if path.hasSuffix("/execution-operations/operation-1/reverify") {
+                let key = request.value(forHTTPHeaderField: "Idempotency-Key") ?? ""
+                rechecks.append((key, try! JSONSerialization.jsonObject(with: Self.body(request)) as! [String: Any]))
+                if conflict { return json(["error":["code":"revision_conflict", "message":"execution changed"]],409) }
+                return json(["operation_id":wrongVerificationResult ? "other-operation" : "operation-1", "recheck_id":"check-1", "state":verificationComplete ? "verified" : "needs_attention", "resource_blocked":!verificationComplete, "retry_allowed":verificationComplete, "reason":"fixture"])
             }
             if path.hasSuffix("server/monitoring") { return (503, Data()) }
             if path.hasSuffix("/nodes/node-1"), request.httpMethod == "PATCH" {
@@ -208,11 +227,33 @@ struct SSHFingerprintClientChecks {
             precondition(FingerprintTransport.responses.confirmationBodies().count == 1)
             precondition(FingerprintTransport.responses.patchBodies().isEmpty && FingerprintTransport.responses.retryBodies().isEmpty)
         }
+        FingerprintTransport.responses.reset()
+        let operations = try await store.executionOperations(workID: "job-1", after: "prior cursor")
+        let operation = operations.items[0]
+        precondition(operation.verificationProtocol == "ssh-journal-v2")
+        precondition(FingerprintTransport.responses.executionFilters == ["work_id":"job-1", "after":"prior cursor"])
+        let unresolved = try await store.reverifyExecution(operation)
+        precondition(unresolved.state == "needs_attention" && unresolved.resourceBlocked && !unresolved.retryAllowed)
+        precondition(FingerprintTransport.responses.retryBodies().isEmpty, "Verification never retries the job")
+        FingerprintTransport.responses.mutate { $0.verificationComplete = true }
+        let verified = try await store.reverifyExecution(operation)
+        precondition(verified.state == "verified" && !verified.resourceBlocked && verified.retryAllowed)
+        let requests = FingerprintTransport.responses.verificationRequests()
+        precondition(requests.count == 2 && !requests[0].0.isEmpty && requests[0].0 != requests[1].0)
+        precondition(requests.allSatisfy { $0.1.count == 2 && $0.1["expected_generation"] as? Int == 5 && $0.1["expected_epoch"] as? String == operation.epoch })
+        precondition(store.jobs[0].status == "failed" && FingerprintTransport.responses.retryBodies().isEmpty)
+        FingerprintTransport.responses.mutate { $0.wrongVerificationResult = true }
+        do { _ = try await store.reverifyExecution(operation); preconditionFailure("Wrong-operation proof must be rejected") } catch {}
+        FingerprintTransport.responses.mutate { $0.wrongVerificationResult = false; $0.conflict = true }
+        do { _ = try await store.reverifyExecution(operation); preconditionFailure("Verification conflicts must be surfaced") } catch {}
         store.isConnected = false
         let count = FingerprintTransport.responses.patchBodies().count
         do { try await store.confirmChangedHostFingerprint(job); preconditionFailure("Offline writes must be rejected") } catch {}
         precondition(FingerprintTransport.responses.patchBodies().count == count)
         do { try await store.confirmJobFingerprint(waiting, fingerprint: newFingerprint); preconditionFailure("Offline continuation must be rejected") } catch {}
+        let verificationCount = FingerprintTransport.responses.verificationRequests().count
+        do { _ = try await store.reverifyExecution(operation); preconditionFailure("Offline verification must be rejected") } catch {}
+        precondition(FingerprintTransport.responses.verificationRequests().count == verificationCount)
         print("SSH test continuation on the original task, SSH fingerprint parsing, confirmation, fresh revisions, linked retry, stale-state rejection, conflicts and offline checks passed")
     }
 }

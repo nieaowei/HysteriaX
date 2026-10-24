@@ -227,6 +227,10 @@ struct JobsView: View {
                                 .padding(.vertical, 4)
                         }
                     }
+                    if ["failed", "reconciling", "needs_attention", "cancelled", "rolled_back"].contains(job.status) {
+                        JobExecutionRechecksView(store: store, jobID: job.id)
+                            .id("\(store.serviceAddress):\(job.id)")
+                    }
                     fingerprintResult(job)
                     if job.retryOfJobId != nil {
                         Label(L10n.text("此任务为关联重试，成功后会移除原失败提醒。"), systemImage: "arrow.triangle.2.circlepath")

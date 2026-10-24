@@ -68,6 +68,7 @@ response_models = %w[
   ActiveSubscription SubscriptionStatus NodeUsageSummary DataFreshness PendingRevocation
   UserUsageResponse JobDetailResponse HysteriaAuthResponse
   CreatedEntity NodeReceipt APIHealth APIVersion EventStreamHead APIErrorDetail APIErrorResponse
+  ExecutionOperation ExecutionOperationsPage ExecutionRecheckResult
   ClientSummary AdminTokenSummary AdminTokenReceipt ServerMonitoring
   OverviewIssue OverviewNode OverviewNodesPage OverviewResponse OverviewBucket OverviewHistory
 ]
@@ -125,6 +126,7 @@ def swift_name(name, response = false)
   if response
     overrides.merge!(
       "entity_id" => "entityID",
+      "protocol" => "verificationProtocol",
       "content_sha256" => "contentSHA256",
       "api_version" => "apiVersion",
       "service_version" => "serviceVersion",

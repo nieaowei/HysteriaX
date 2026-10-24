@@ -7,6 +7,9 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		F03400000000000000000006 /* Services/ManagementEvent.swift in Sources */ = {isa = PBXBuildFile; fileRef = F03400000000000000000005; };
+		F03400000000000000000004 /* Services/ManagementWriteJournal.swift in Sources */ = {isa = PBXBuildFile; fileRef = F03400000000000000000003; };
+		F03400000000000000000002 /* JobExecutionRechecksView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F03400000000000000000001; };
 		F01100000000000000000203 /* TemplateStructuredFieldEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = F01100000000000000000103; };
 		F01100000000000000000202 /* TemplateCollectionFields.swift in Sources */ = {isa = PBXBuildFile; fileRef = F01100000000000000000102; };
 		F01100000000000000000201 /* TemplateStringListEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = F01100000000000000000101; };
@@ -120,6 +123,9 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		F03400000000000000000005 /* Services/ManagementEvent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Services/ManagementEvent.swift; sourceTree = "<group>"; };
+		F03400000000000000000003 /* Services/ManagementWriteJournal.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Services/ManagementWriteJournal.swift; sourceTree = "<group>"; };
+		F03400000000000000000001 /* JobExecutionRechecksView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/JobExecutionRechecksView.swift; sourceTree = "<group>"; };
 		F01100000000000000000103 /* TemplateStructuredFieldEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/TemplateStructuredFieldEditor.swift; sourceTree = "<group>"; };
 		F01100000000000000000102 /* TemplateCollectionFields.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/TemplateCollectionFields.swift; sourceTree = "<group>"; };
 		F01100000000000000000101 /* TemplateStringListEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/TemplateStringListEditor.swift; sourceTree = "<group>"; };
@@ -347,6 +353,9 @@
 				000000000000000000001B03 /* Views/DetailHeaderLayout.swift */,
 				000000000000000000001B00 /* Views/MainVerticalSplitView.swift */,
 				000000000000000000001007 /* Views/JobsView.swift */,
+				F03400000000000000000005 /* Services/ManagementEvent.swift */,
+				F03400000000000000000003 /* Services/ManagementWriteJournal.swift */,
+				F03400000000000000000001 /* JobExecutionRechecksView.swift */,
 				000000000000000000001801 /* Views/SSHHostFingerprintChangeView.swift */,
 				000000000000000000001802 /* Views/SSHJobFingerprintConfirmationView.swift */,
 				000000000000000000001800 /* Models/SSHHostFingerprintChange.swift */,
@@ -545,6 +554,9 @@
 				000000000000000000002B03 /* Views/DetailHeaderLayout.swift in Sources */,
 				000000000000000000002B00 /* Views/MainVerticalSplitView.swift in Sources */,
 				000000000000000000002007 /* Views/JobsView.swift in Sources */,
+				F03400000000000000000006 /* Services/ManagementEvent.swift in Sources */,
+				F03400000000000000000004 /* Services/ManagementWriteJournal.swift in Sources */,
+				F03400000000000000000002 /* JobExecutionRechecksView.swift in Sources */,
 				000000000000000000002801 /* Views/SSHHostFingerprintChangeView.swift in Sources */,
 				000000000000000000002802 /* Views/SSHJobFingerprintConfirmationView.swift in Sources */,
 				000000000000000000002800 /* Models/SSHHostFingerprintChange.swift in Sources */,
