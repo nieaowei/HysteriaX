@@ -237,7 +237,15 @@ mod shutdown_tests {
             Duration::from_secs(2),
         ));
         let mut stream = reqwest::Client::new()
-            .get(format!("{base}/api/v1/events"))
+            .get(format!("{base}/api/v2/events"))
+            .header("Last-Event-ID", {
+                let (epoch, head): (String, i64) =
+                    sqlx::query_as("SELECT epoch,head FROM event_publication_stream WHERE id")
+                        .fetch_one(&state.pool)
+                        .await
+                        .unwrap();
+                format!("v2:{epoch}:{head}")
+            })
             .bearer_auth("test")
             .send()
             .await

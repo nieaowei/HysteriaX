@@ -114,7 +114,7 @@ async fn actual_authentication_survives_locked_or_failed_metadata_and_observes_r
         .unwrap();
     assert_eq!(
         client
-            .get(format!("{base}/api/v1/version"))
+            .get(format!("{base}/api/v2/version"))
             .bearer_auth("one")
             .send()
             .await
@@ -130,7 +130,7 @@ async fn actual_authentication_survives_locked_or_failed_metadata_and_observes_r
         .unwrap();
     assert_eq!(
         client
-            .get(format!("{base}/api/v1/version"))
+            .get(format!("{base}/api/v2/version"))
             .bearer_auth("one")
             .send()
             .await
@@ -142,7 +142,7 @@ async fn actual_authentication_survives_locked_or_failed_metadata_and_observes_r
         .execute(&pool).await.unwrap();
     assert_eq!(
         client
-            .get(format!("{base}/api/v1/version"))
+            .get(format!("{base}/api/v2/version"))
             .bearer_auth("two")
             .send()
             .await

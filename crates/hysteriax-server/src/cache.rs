@@ -610,6 +610,7 @@ mod tests {
     }
 }
 
+#[cfg(test)]
 pub async fn configuration_generation(pool: &sqlx::PgPool) -> Result<i64, ApiError> {
     Ok(
         sqlx::query_scalar("SELECT coalesce(sum(generation),0)::bigint FROM cache_bucket_versions WHERE domain='directory'")

@@ -2013,7 +2013,7 @@ mod removal_tests {
             axum::serve(listener, app).await.unwrap();
         });
         let client = reqwest::Client::new();
-        let endpoint = format!("http://{address}/api/v1/nodes/node/record");
+        let endpoint = format!("http://{address}/api/v2/nodes/node/record");
         assert_eq!(
             client
                 .delete(format!("{endpoint}?expected_revision=1"))
@@ -2024,8 +2024,9 @@ mod removal_tests {
             StatusCode::UNAUTHORIZED
         );
         let version: Value = client
-            .get(format!("http://{address}/api/v1/version"))
+            .get(format!("http://{address}/api/v2/version"))
             .bearer_auth(token)
+            .header("Idempotency-Key", Uuid::new_v4().to_string())
             .send()
             .await
             .unwrap()
@@ -2042,6 +2043,7 @@ mod removal_tests {
             client
                 .delete(&endpoint)
                 .bearer_auth(token)
+                .header("Idempotency-Key", Uuid::new_v4().to_string())
                 .send()
                 .await
                 .unwrap()
@@ -2052,6 +2054,7 @@ mod removal_tests {
             client
                 .delete(format!("{endpoint}?expected_revision=99"))
                 .bearer_auth(token)
+                .header("Idempotency-Key", Uuid::new_v4().to_string())
                 .send()
                 .await
                 .unwrap()
@@ -2061,6 +2064,7 @@ mod removal_tests {
         let response = client
             .delete(format!("{endpoint}?expected_revision=1"))
             .bearer_auth(token)
+            .header("Idempotency-Key", Uuid::new_v4().to_string())
             .send()
             .await
             .unwrap();
@@ -2070,6 +2074,7 @@ mod removal_tests {
             client
                 .delete(format!("{endpoint}?expected_revision=1"))
                 .bearer_auth(token)
+                .header("Idempotency-Key", Uuid::new_v4().to_string())
                 .send()
                 .await
                 .unwrap()

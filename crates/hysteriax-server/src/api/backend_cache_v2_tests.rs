@@ -74,23 +74,34 @@ async fn v2_reads_are_authenticated_and_remain_available_with_the_same_business_
 }
 
 #[tokio::test]
-async fn protocol_namespaces_keep_separate_cache_entries_and_committed_versions_invalidate_both() {
+async fn retired_namespace_never_fills_cache_and_v2_versions_track_committed_changes() {
     let (state, base, server) = server().await;
     let client = client();
-    for prefix in ["v1", "v2"] {
+    for prefix in ["v2"] {
         assert_eq!(
             get(&client, &base, &format!("/api/{prefix}/users")).await["items"][0]["name"],
             "Before"
         );
     }
-    assert_eq!(state.caches.responses.stats()["entries"], 2);
+    assert_eq!(state.caches.responses.stats()["entries"], 1);
+    assert_eq!(
+        client
+            .get(format!("{base}/api/v1/users"))
+            .bearer_auth("cache-admin-v2")
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::UPGRADE_REQUIRED
+    );
+    assert_eq!(state.caches.responses.stats()["entries"], 1);
     let before = state.caches.responses.stats()["hits"].as_u64().unwrap();
-    for prefix in ["v1", "v2"] {
+    for prefix in ["v2"] {
         get(&client, &base, &format!("/api/{prefix}/users")).await;
     }
     assert_eq!(
         state.caches.responses.stats()["hits"].as_u64().unwrap(),
-        before + 2
+        before + 1
     );
     let mut tx = state.pool.begin().await.unwrap();
     sqlx::query("UPDATE users SET name='Rolled back' WHERE id='user'")
@@ -106,7 +117,7 @@ async fn protocol_namespaces_keep_separate_cache_entries_and_committed_versions_
         .execute(&state.pool)
         .await
         .unwrap();
-    for prefix in ["v1", "v2"] {
+    for prefix in ["v2"] {
         assert_eq!(
             get(&client, &base, &format!("/api/{prefix}/users")).await["items"][0]["name"],
             "Committed"
@@ -199,6 +210,167 @@ async fn v2_terminal_job_cache_survives_unrelated_jobs_and_tracks_retry_links() 
     assert_eq!(
         get(&client, &base, path).await["job"]["retry_job_id"],
         "retry"
+    );
+    server.abort();
+}
+
+#[tokio::test]
+async fn retired_management_rejects_every_method_before_authentication_and_database_access() {
+    let (state, base, server) = server().await;
+    // Closing the pool proves the rejection doesn't depend on authentication,
+    // request decoding, a receipt reservation or any business transaction.
+    state.pool.close().await;
+    let client = client();
+    for method in [
+        reqwest::Method::GET,
+        reqwest::Method::POST,
+        reqwest::Method::PUT,
+        reqwest::Method::PATCH,
+        reqwest::Method::DELETE,
+        reqwest::Method::HEAD,
+        reqwest::Method::OPTIONS,
+    ] {
+        for path in [
+            "/api/v1",
+            "/api/v1/version",
+            "/api/v1/users",
+            "/api/v1/missing?after=123",
+        ] {
+            let response = client
+                .request(method.clone(), format!("{base}{path}"))
+                .header("Content-Type", "application/json")
+                .body("malformed-json")
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                StatusCode::UPGRADE_REQUIRED,
+                "{method} {path}"
+            );
+            if method != reqwest::Method::HEAD {
+                assert_eq!(
+                    response.json::<Value>().await.unwrap()["error"]["code"],
+                    "management_protocol_upgrade_required"
+                );
+            }
+        }
+    }
+    assert_eq!(
+        client
+            .get(format!("{base}/api/v10/version"))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        client
+            .get(format!("{base}/healthz"))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::OK
+    );
+    server.abort();
+}
+
+#[tokio::test]
+async fn version_advertises_protocol_two_and_an_epoch_scoped_directory_digest() {
+    let (state, base, server) = server().await;
+    let client = client();
+    assert_eq!(
+        client
+            .get(format!("{base}/api/v2/version"))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    let before = get(&client, &base, "/api/v2/version").await;
+    assert_eq!(before["api_version"], "2.0.0");
+    assert_eq!(before["management_protocol"], 2);
+    assert_eq!(before["current_admin_token_id"], "cache-operator");
+    assert!(before["directory_generation"].is_null());
+    assert!(
+        before["directory_version"]
+            .as_str()
+            .unwrap()
+            .starts_with("b3:")
+    );
+    sqlx::query("UPDATE users SET usage_bytes=10 WHERE id='user'")
+        .execute(&state.pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        get(&client, &base, "/api/v2/version").await["directory_version"],
+        before["directory_version"]
+    );
+    sqlx::query("UPDATE users SET name='Changed' WHERE id='user'")
+        .execute(&state.pool)
+        .await
+        .unwrap();
+    assert_ne!(
+        get(&client, &base, "/api/v2/version").await["directory_version"],
+        before["directory_version"]
+    );
+    server.abort();
+}
+
+#[tokio::test]
+async fn readiness_requires_the_current_database_protocol_schema_and_shared_key_without_repairing_them()
+ {
+    let (state, base, server) = server().await;
+    let client = client();
+    let url = format!("{base}/readyz");
+    assert_eq!(
+        client.get(&url).send().await.unwrap().status(),
+        StatusCode::SERVICE_UNAVAILABLE
+    );
+    sqlx::query("INSERT INTO runtime_contract(id,schema_version,management_protocol,master_key_fingerprint) VALUES(true,$1,$2,$3)")
+        .bind(db::MIGRATOR.iter().last().unwrap().version).bind(crate::bootstrap::MANAGEMENT_PROTOCOL).bind(state.secrets.fingerprint()).execute(&state.pool).await.unwrap();
+    assert_eq!(
+        client.get(&url).send().await.unwrap().status(),
+        StatusCode::OK
+    );
+    for mutation in [
+        "UPDATE runtime_contract SET management_protocol=1 WHERE id",
+        "UPDATE runtime_contract SET schema_version=0 WHERE id",
+        "UPDATE runtime_contract SET master_key_fingerprint='different' WHERE id",
+    ] {
+        let mut tx = state.pool.begin().await.unwrap();
+        sqlx::query(mutation).execute(&mut *tx).await.unwrap();
+        tx.commit().await.unwrap();
+        let before: Value =
+            sqlx::query_scalar("SELECT to_jsonb(c) FROM runtime_contract c WHERE id")
+                .fetch_one(&state.pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            client.get(&url).send().await.unwrap().status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, Value>("SELECT to_jsonb(c) FROM runtime_contract c WHERE id")
+                .fetch_one(&state.pool)
+                .await
+                .unwrap(),
+            before
+        );
+        sqlx::query("UPDATE runtime_contract SET schema_version=$1,management_protocol=$2,master_key_fingerprint=$3 WHERE id")
+            .bind(db::MIGRATOR.iter().last().unwrap().version).bind(crate::bootstrap::MANAGEMENT_PROTOCOL).bind(state.secrets.fingerprint()).execute(&state.pool).await.unwrap();
+    }
+    assert_eq!(
+        client.get(&url).send().await.unwrap().status(),
+        StatusCode::OK
+    );
+    state.pool.close().await;
+    assert_eq!(
+        client.get(&url).send().await.unwrap().status(),
+        StatusCode::SERVICE_UNAVAILABLE
     );
     server.abort();
 }

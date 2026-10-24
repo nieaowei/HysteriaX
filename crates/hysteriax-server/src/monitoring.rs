@@ -159,7 +159,7 @@ mod tests {
         let address = listener.local_addr().unwrap();
         let app = crate::api::router(disconnected_state());
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        let result = reqwest::get(format!("http://{address}/api/v1/server/monitoring")).await;
+        let result = reqwest::get(format!("http://{address}/api/v2/server/monitoring")).await;
         server.abort();
         assert_eq!(result.unwrap().status(), reqwest::StatusCode::UNAUTHORIZED);
     }

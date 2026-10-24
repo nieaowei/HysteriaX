@@ -56,9 +56,10 @@ async fn restored_snapshot_removal_completes_while_reads_and_writes_continue() {
     let started = std::time::Instant::now();
     let receipt = client
         .delete(format!(
-            "{base}/api/v1/nodes/{node}/record?expected_revision={revision}"
+            "{base}/api/v2/nodes/{node}/record?expected_revision={revision}"
         ))
         .bearer_auth("snapshot-probe-token")
+        .header("Idempotency-Key", uuid::Uuid::new_v4().to_string())
         .send()
         .await
         .unwrap();

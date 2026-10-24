@@ -15,6 +15,8 @@ async fn authenticated_reads_remain_available_while_writer_lock_is_held() {
         pool.clone(),
         SecretBox::from_base64("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA").unwrap(),
     );
+    sqlx::query("INSERT INTO runtime_contract(id,schema_version,management_protocol,master_key_fingerprint) VALUES(true,$1,$2,$3)")
+        .bind(db::MIGRATOR.iter().last().unwrap().version).bind(crate::bootstrap::MANAGEMENT_PROTOCOL).bind(state.secrets.fingerprint()).execute(&pool).await.unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
     let server = tokio::spawn(async move { axum::serve(listener, router(state)).await.unwrap() });
@@ -23,7 +25,7 @@ async fn authenticated_reads_remain_available_while_writer_lock_is_held() {
         .build()
         .unwrap();
     let holder = db::begin_write(&pool).await.unwrap();
-    for path in ["/readyz", "/api/v1/version", "/api/v1/nodes?page_size=1"] {
+    for path in ["/readyz", "/api/v2/version", "/api/v2/nodes?page_size=1"] {
         let response = client
             .get(format!("{base}{path}"))
             .bearer_auth("active-token")
@@ -33,7 +35,7 @@ async fn authenticated_reads_remain_available_while_writer_lock_is_held() {
         assert_eq!(response.status(), StatusCode::OK, "{path}");
     }
     let denied = client
-        .get(format!("{base}/api/v1/version"))
+        .get(format!("{base}/api/v2/version"))
         .bearer_auth("revoked-token")
         .send()
         .await
@@ -48,7 +50,7 @@ async fn authenticated_reads_remain_available_while_writer_lock_is_held() {
     assert!(independent_touch);
     assert_eq!(
         client
-            .get(format!("{base}/api/v1/version"))
+            .get(format!("{base}/api/v2/version"))
             .bearer_auth("active-token")
             .send()
             .await

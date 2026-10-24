@@ -48,6 +48,7 @@ pub(crate) fn audit_actor() -> String {
 pub fn router(state: AppState) -> Router {
     use subscriptions::templates as st;
     let admin = Router::new()
+        .route("/api/v2/version", get(api_version))
         .route("/api/v2/client/summary", get(client_summary::get))
         .route("/api/v2/overview", get(crate::overview::get))
         .route("/api/v2/overview/nodes", get(crate::overview::list_nodes))
@@ -512,6 +513,7 @@ pub fn router(state: AppState) -> Router {
             post(subscriptions::hy2_auth),
         )
         .with_state(state)
+        .layer(middleware::from_fn(reject_old_management))
         .layer(
             tower_http::trace::TraceLayer::new_for_http().make_span_with(
                 |request: &axum::http::Request<_>| {
@@ -527,6 +529,19 @@ pub fn router(state: AppState) -> Router {
                 },
             ),
         )
+}
+
+async fn reject_old_management(request: axum::extract::Request, next: Next) -> Response {
+    let path = request.uri().path();
+    if path == "/api/v1" || path.starts_with("/api/v1/") {
+        return ApiError::new(
+            StatusCode::UPGRADE_REQUIRED,
+            "management_protocol_upgrade_required",
+            "management protocol 2 and an updated client are required; use /api/v2",
+        )
+        .into_response();
+    }
+    next.run(request).await
 }
 
 async fn require_admin(
@@ -604,11 +619,12 @@ async fn api_version(
     State(state): State<AppState>,
     Extension(actor): Extension<AdminActor>,
 ) -> Result<Json<Value>, ApiError> {
-    let directory_generation = crate::cache::configuration_generation(&state.pool).await?;
+    let directory_version = crate::cache_domains::version(&state.pool, &["directory"]).await?;
     Ok(Json(json!({
-        "api_version": "1.0.0",
-        "features": ["subscription_templates", "job_fingerprint_confirmation", "ssh_test_confirmation", "ssh_dns_sync", "client_summary", "node_packages", "overview_monitoring", "job_retry_links", "credentials", "node_record_removal", "dns_management", "authorization_groups", "managed_mtls"],
-        "directory_generation":directory_generation,
+        "api_version": "2.0.0",
+        "management_protocol":crate::bootstrap::MANAGEMENT_PROTOCOL,
+        "features": ["idempotent_management", "publication_cursors", "subscription_templates", "job_fingerprint_confirmation", "ssh_test_confirmation", "ssh_dns_sync", "client_summary", "node_packages", "overview_monitoring", "job_retry_links", "credentials", "node_record_removal", "dns_management", "authorization_groups", "managed_mtls"],
+        "directory_version":directory_version,
         "current_admin_token_id": actor.id,
         "service_version": env!("CARGO_PKG_VERSION"),
         "hysteria_version": "app/v2.12.3",
@@ -617,10 +633,26 @@ async fn api_version(
 }
 
 async fn readyz(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
-    sqlx::query_scalar::<_, i64>("SELECT 1::BIGINT")
-        .fetch_one(&state.pool)
-        .await?;
-    Ok(Json(json!({"status": "ready", "database": "ok"})))
+    let check = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS(SELECT 1 FROM runtime_contract WHERE id AND schema_version=$1 AND management_protocol=$2 AND master_key_fingerprint=$3)",
+    )
+    .bind(db::MIGRATOR.iter().last().unwrap().version)
+    .bind(crate::bootstrap::MANAGEMENT_PROTOCOL)
+    .bind(state.secrets.fingerprint())
+    .fetch_one(&state.pool);
+    if !matches!(
+        tokio::time::timeout(Duration::from_secs(2), check).await,
+        Ok(Ok(true))
+    ) {
+        return Err(ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "service_not_ready",
+            "database or runtime protocol is not ready",
+        ));
+    }
+    Ok(Json(
+        json!({"status": "ready", "database": "ok", "management_protocol":crate::bootstrap::MANAGEMENT_PROTOCOL}),
+    ))
 }
 
 async fn openapi(headers: HeaderMap) -> Response {
@@ -1289,7 +1321,7 @@ mod tests {
             .build()
             .unwrap();
         for path in ["nodes", "users", "dns/records", "credentials"] {
-            let url = format!("{base}/api/v1/{path}");
+            let url = format!("{base}/api/v2/{path}");
             let all = client.get(&url).bearer_auth(token).send().await.unwrap();
             assert_eq!(all.status(), StatusCode::OK);
             let all: Value = all.json().await.unwrap();
@@ -1356,7 +1388,7 @@ mod tests {
             );
         }
         let filtered = client
-            .get(format!("{base}/api/v1/dns/records?zone_id=missing"))
+            .get(format!("{base}/api/v2/dns/records?zone_id=missing"))
             .bearer_auth(token)
             .send()
             .await
@@ -1366,7 +1398,7 @@ mod tests {
         assert_eq!(filtered["items"], json!([]));
         assert_eq!(filtered["total"], 0);
         let searched: Value = client
-            .get(format!("{base}/api/v1/users?q=User%2065"))
+            .get(format!("{base}/api/v2/users?q=User%2065"))
             .bearer_auth(token)
             .send()
             .await

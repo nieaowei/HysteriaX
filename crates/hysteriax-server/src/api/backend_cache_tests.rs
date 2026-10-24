@@ -100,7 +100,7 @@ async fn server() -> (AppState, String, tokio::task::JoinHandle<()>) {
 async fn authenticated_cache_invalidation_rollback_refresh_and_revocation() {
     let (state, base, task) = server().await;
     let client = reqwest::Client::new();
-    let url = format!("{base}/api/v1/users");
+    let url = format!("{base}/api/v2/users");
     let get = |token: &str| client.get(&url).bearer_auth(token);
     let first: Value = get("admin-a").send().await.unwrap().json().await.unwrap();
     assert_eq!(first["items"][0]["name"], "Before");
@@ -217,7 +217,7 @@ async fn directory_cache_ignores_sampling_and_tracks_membership_changes() {
     let client = reqwest::Client::new();
     let get = || {
         client
-            .get(format!("{base}/api/v1/authorization-groups"))
+            .get(format!("{base}/api/v2/authorization-groups"))
             .bearer_auth("admin-a")
     };
     assert!(
@@ -230,7 +230,7 @@ async fn directory_cache_ignores_sampling_and_tracks_membership_changes() {
             .unwrap()
             .is_empty()
     );
-    let dependencies = crate::cache_domains::dependencies("/api/v1/authorization-groups", &[]);
+    let dependencies = crate::cache_domains::dependencies("/api/v2/authorization-groups", &[]);
     let before = crate::cache_domains::version(&state.pool, &dependencies)
         .await
         .unwrap();
@@ -267,7 +267,7 @@ async fn directory_cache_ignores_sampling_and_tracks_membership_changes() {
         .unwrap();
     assert_eq!(response[0]["name"], "Committed");
     assert!(
-        state.caches.stats()["routes"]["/api/v1/authorization-groups"]["reused"]
+        state.caches.stats()["routes"]["/api/v2/authorization-groups"]["reused"]
             .as_u64()
             .unwrap()
             > 0
@@ -282,7 +282,7 @@ async fn terminal_job_cache_survives_unrelated_jobs_and_invalidates_on_retry() {
     let client = reqwest::Client::new();
     let get = || {
         client
-            .get(format!("{base}/api/v1/jobs/terminal"))
+            .get(format!("{base}/api/v2/jobs/terminal"))
             .bearer_auth("admin-a")
     };
     let first: Value = get().send().await.unwrap().json().await.unwrap();
@@ -302,15 +302,27 @@ async fn revoked_administrator_loses_existing_global_and_job_streams() {
     let (state, base, task) = server().await;
     sqlx::query("INSERT INTO jobs(id,kind,status,stage,available_at,created_at,updated_at) VALUES('stream-job','sync','succeeded','done',now(),now(),now())").execute(&state.pool).await.unwrap();
     let client = reqwest::Client::new();
-    let mut global = client
-        .get(format!("{base}/api/v1/events"))
+    let head: Value = client
+        .get(format!("{base}/api/v2/events/head"))
         .bearer_auth("admin-a")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let cursor = head["cursor"].as_str().unwrap();
+    let mut global = client
+        .get(format!("{base}/api/v2/events"))
+        .bearer_auth("admin-a")
+        .header("Last-Event-ID", cursor)
         .send()
         .await
         .unwrap();
     let mut job = client
-        .get(format!("{base}/api/v1/jobs/stream-job/events"))
+        .get(format!("{base}/api/v2/jobs/stream-job/events"))
         .bearer_auth("admin-a")
+        .header("Last-Event-ID", cursor)
         .send()
         .await
         .unwrap();
@@ -318,8 +330,10 @@ async fn revoked_administrator_loses_existing_global_and_job_streams() {
     assert_eq!(job.status(), StatusCode::OK);
     assert_eq!(
         client
-            .delete(format!("{base}/api/v1/admin/tokens/admin-a"))
+            .delete(format!("{base}/api/v2/admin/tokens/admin-a"))
             .bearer_auth("admin-b")
+            .header("Last-Event-ID", cursor)
+            .header("Idempotency-Key", "revoke-stream-admin")
             .send()
             .await
             .unwrap()
@@ -337,8 +351,10 @@ async fn revoked_administrator_loses_existing_global_and_job_streams() {
     }
     assert_eq!(
         client
-            .get(format!("{base}/api/v1/version"))
+            .get(format!("{base}/api/v2/version"))
             .bearer_auth("admin-b")
+            .header("Last-Event-ID", cursor)
+            .header("Idempotency-Key", "revoke-stream-admin")
             .send()
             .await
             .unwrap()
@@ -347,8 +363,9 @@ async fn revoked_administrator_loses_existing_global_and_job_streams() {
     );
     assert_eq!(
         client
-            .get(format!("{base}/api/v1/events"))
+            .get(format!("{base}/api/v2/events"))
             .bearer_auth("admin-a")
+            .header("Last-Event-ID", cursor)
             .send()
             .await
             .unwrap()
@@ -357,8 +374,10 @@ async fn revoked_administrator_loses_existing_global_and_job_streams() {
     );
     // A database-only revocation is caught by the periodic fallback.
     let mut survivor = client
-        .get(format!("{base}/api/v1/events"))
+        .get(format!("{base}/api/v2/events"))
         .bearer_auth("admin-b")
+        .header("Last-Event-ID", cursor)
+        .header("Idempotency-Key", "revoke-stream-admin")
         .send()
         .await
         .unwrap();
@@ -392,7 +411,7 @@ async fn client_summary_counts_all_users_and_finds_notifications_beyond_first_pa
     sqlx::query("INSERT INTO credential_versions(credential_id,version,payload_enc,metadata,created_at) SELECT id,1,'PRIVATE-CREDENTIAL',CASE WHEN id='credential-235' THEN '{\"expires_at\":\"invalid\"}'::jsonb WHEN id='credential-234' THEN jsonb_build_object('expires_at',now()+interval '1 day') ELSE '{}'::jsonb END,now() FROM credentials").execute(&state.pool).await.unwrap();
     let client = reqwest::Client::new();
     let response = client
-        .get(format!("{base}/api/v1/client/summary"))
+        .get(format!("{base}/api/v2/client/summary"))
         .bearer_auth("admin-a")
         .send()
         .await
@@ -422,7 +441,7 @@ async fn client_summary_counts_all_users_and_finds_notifications_beyond_first_pa
     );
     assert_eq!(
         client
-            .get(format!("{base}/api/v1/client/summary"))
+            .get(format!("{base}/api/v2/client/summary"))
             .send()
             .await
             .unwrap()

@@ -1345,7 +1345,7 @@ async fn http_batch_cache_tracks_ca_phases_and_post_publication_user_eligibility
     sqlx::query("INSERT INTO admin_tokens(id,token_hash,label,created_at) VALUES('ca-test-admin',$1,'CA cache test',now())").bind(crate::security::token_digest(token)).execute(&state.pool).await.unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!(
-        "http://{}/api/v1/credential-batches/{}",
+        "http://{}/api/v2/credential-batches/{}",
         listener.local_addr().unwrap(),
         receipt["batch_id"].as_str().unwrap()
     );
@@ -1376,7 +1376,7 @@ async fn http_batch_cache_tracks_ca_phases_and_post_publication_user_eligibility
         "trust"
     );
     assert!(
-        state.caches.stats()["routes"]["/api/v1/credential-batches/:id"]["reused"]
+        state.caches.stats()["routes"]["/api/v2/credential-batches/:id"]["reused"]
             .as_u64()
             .unwrap()
             > 0,

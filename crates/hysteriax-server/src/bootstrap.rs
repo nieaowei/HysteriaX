@@ -5,7 +5,7 @@ use sqlx::PgPool;
 use crate::{db::MIGRATOR, security::SecretBox};
 
 // Bumped together with routing, OpenAPI and the macOS client at v2 cutover.
-pub const MANAGEMENT_PROTOCOL: i32 = 1;
+pub const MANAGEMENT_PROTOCOL: i32 = 2;
 
 pub async fn check_schema(pool: &PgPool) -> Result<()> {
     let installed: Vec<(i64, bool, Vec<u8>)> =
@@ -208,7 +208,7 @@ mod tests {
             1
         );
         check_runtime(&pool, &secrets).await.unwrap();
-        sqlx::query("UPDATE runtime_contract SET management_protocol=999 WHERE id")
+        sqlx::query("UPDATE runtime_contract SET management_protocol=1 WHERE id")
             .execute(&pool)
             .await
             .unwrap();

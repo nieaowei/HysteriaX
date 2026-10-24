@@ -498,16 +498,16 @@ async fn http_contract_authentication_and_current_token_protection() {
     let client = reqwest::Client::new();
     assert_eq!(
         client
-            .get(format!("{base}/api/v2/version"))
+            .get(format!("{base}/api/v1/version"))
             .send()
             .await
             .unwrap()
             .status(),
-        reqwest::StatusCode::NOT_FOUND
+        reqwest::StatusCode::UPGRADE_REQUIRED
     );
     assert_eq!(
         client
-            .get(format!("{base}/api/v1/credentials"))
+            .get(format!("{base}/api/v2/credentials"))
             .send()
             .await
             .unwrap()
@@ -515,20 +515,22 @@ async fn http_contract_authentication_and_current_token_protection() {
         reqwest::StatusCode::UNAUTHORIZED
     );
     let version: Value = client
-        .get(format!("{base}/api/v1/version"))
+        .get(format!("{base}/api/v2/version"))
         .bearer_auth("first-administrator-token")
+        .header("Idempotency-Key", uuid::Uuid::new_v4().to_string())
         .send()
         .await
         .unwrap()
         .json()
         .await
         .unwrap();
-    assert_eq!(version["api_version"], "1.0.0");
+    assert_eq!(version["api_version"], "2.0.0");
     assert_eq!(version["current_admin_token_id"], "admin-one");
     assert_eq!(
         client
-            .delete(format!("{base}/api/v1/admin/tokens/admin-one"))
+            .delete(format!("{base}/api/v2/admin/tokens/admin-one"))
             .bearer_auth("first-administrator-token")
+            .header("Idempotency-Key", uuid::Uuid::new_v4().to_string())
             .send()
             .await
             .unwrap()
@@ -537,23 +539,25 @@ async fn http_contract_authentication_and_current_token_protection() {
     );
     assert_eq!(
         client
-            .delete(format!("{base}/api/v1/admin/tokens/admin-two"))
+            .delete(format!("{base}/api/v2/admin/tokens/admin-two"))
             .bearer_auth("first-administrator-token")
+            .header("Idempotency-Key", uuid::Uuid::new_v4().to_string())
             .send()
             .await
             .unwrap()
             .status(),
         reqwest::StatusCode::NO_CONTENT
     );
-    let result=client.post(format!("{base}/api/v1/credentials")).bearer_auth("first-administrator-token").json(&json!({"name":"HTTP token","kind":"api_token","payload":{"token":"secret-never-returned"}})).send().await.unwrap();
+    let result=client.post(format!("{base}/api/v2/credentials")).bearer_auth("first-administrator-token").header("Idempotency-Key",uuid::Uuid::new_v4().to_string()).json(&json!({"name":"HTTP token","kind":"api_token","payload":{"token":"secret-never-returned"}})).send().await.unwrap();
     assert_eq!(result.status(), reqwest::StatusCode::CREATED);
     let receipt: Value = result.json().await.unwrap();
     let detail = client
         .get(format!(
-            "{base}/api/v1/credentials/{}",
+            "{base}/api/v2/credentials/{}",
             receipt["id"].as_str().unwrap()
         ))
         .bearer_auth("first-administrator-token")
+        .header("Idempotency-Key", uuid::Uuid::new_v4().to_string())
         .send()
         .await
         .unwrap()
