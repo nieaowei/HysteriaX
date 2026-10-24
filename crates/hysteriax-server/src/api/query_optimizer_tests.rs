@@ -142,7 +142,10 @@ async fn query_index_upgrade_can_roll_back_without_losing_source_rows() {
         .await
         .unwrap();
     assert_eq!(source, 1);
-    crate::db::MIGRATOR.run(&pool).await.unwrap();
+    // Re-upgrade through the maintenance boundary, which restores runtime
+    // timeouts afterward. A raw SQLx run inherits the one-second runtime lock
+    // deadline while other isolated schemas share its database migration lock.
+    crate::db::run_migrations(&pool).await.unwrap();
     let total: i64 = sqlx::query_scalar("SELECT total FROM audit_totals WHERE id")
         .fetch_one(&pool)
         .await
