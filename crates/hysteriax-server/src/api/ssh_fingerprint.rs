@@ -29,19 +29,22 @@ pub async fn confirm(
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
     let pool = state.pool.clone();
     let actor = super::audit_actor();
+    let history_id = Uuid::new_v4().to_string();
     db::serializable(&pool, move |tx| {
         let (state, id, input, actor) = (state.clone(), id.clone(), input.clone(), actor.clone());
-        Box::pin(async move { confirm_on(tx, &state, id, input, actor).await })
+        let history_id = history_id.clone();
+        Box::pin(async move { confirm_on(tx, &state, id, input, actor, history_id).await })
     })
     .await
 }
 
-async fn confirm_on(
+pub(super) async fn confirm_on(
     tx: &mut Transaction<'_, Postgres>,
     state: &AppState,
     id: String,
     input: Confirmation,
     actor: String,
+    history_id: String,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
     let node_id: Option<String> = sqlx::query_scalar("SELECT node_id FROM jobs WHERE id=$1")
         .bind(&id)
@@ -105,7 +108,7 @@ async fn confirm_on(
     .await?;
     // Trust changes the node revision, while the deployment snapshot is unchanged.
     let copied = sqlx::query("INSERT INTO config_versions(id,node_id,revision,config_enc,content_sha256,created_at) SELECT $1,node_id,$2,config_enc,content_sha256,now() FROM config_versions WHERE node_id=$3 AND revision=$4")
-        .bind(Uuid::new_v4().to_string()).bind(next_revision).bind(&node_id).bind(revision).execute(&mut **tx).await?;
+        .bind(history_id).bind(next_revision).bind(&node_id).bind(revision).execute(&mut **tx).await?;
     if copied.rows_affected() != 1 {
         return Err(ApiError::internal());
     }

@@ -47,6 +47,13 @@ pub(crate) fn audit_actor() -> String {
 pub fn router(state: AppState) -> Router {
     use subscriptions::templates as st;
     let admin = Router::new()
+        .route("/api/v2/jobs", get(list_jobs))
+        .route("/api/v2/jobs/{id}", get(get_job))
+        .route("/api/v2/jobs/{id}/retry", post(job_retries::v2::retry))
+        .route(
+            "/api/v2/jobs/{id}/confirm-fingerprint",
+            post(job_retries::v2::confirm_fingerprint),
+        )
         .route(
             "/api/v2/subscription-templates",
             get(st::list).post(st::v2::create),

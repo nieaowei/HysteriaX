@@ -8,6 +8,8 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use sqlx::Row;
 
+pub(crate) mod v2;
+
 #[derive(Clone, Deserialize)]
 pub struct RetryRequest {
     pub expected_revision: i64,
