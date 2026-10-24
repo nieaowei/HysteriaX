@@ -1,0 +1,70 @@
+{
+  "scope": "isolated-compose-backup-restore",
+  "passed": true,
+  "full_service_replicas": 3,
+  "before_epochs": [
+    "4f7c2f7e-4fcc-40f2-adc2-be81ce413c7e",
+    "74cf3d67-c2a0-4716-a187-76ce04608759",
+    "4f7c2f7e-4fcc-40f2-adc2-be81ce413c7e"
+  ],
+  "rollback_epochs": [
+    "d31077cd-4fb8-49a4-bd6d-a34c9cbc4c17",
+    "68fcf710-7f84-472c-a06c-1fd6aca00622",
+    "d31077cd-4fb8-49a4-bd6d-a34c9cbc4c17"
+  ],
+  "restored_epochs": [
+    "438c0d4a-78bf-4daa-8c1b-1774031ea4be",
+    "68596ceb-ede7-4669-bbbc-f8b7ccd37a07",
+    "438c0d4a-78bf-4daa-8c1b-1774031ea4be"
+  ],
+  "retained_counts": {
+    "users": 1,
+    "credentials": 1,
+    "credential_versions": 1,
+    "jobs": 1,
+    "job_events": 1,
+    "audit_records": 2,
+    "management_receipts": 2
+  },
+  "retained_sha256": "d407c9a9afcfdde8a3f43afaee2e52552d9b9d0e9d20bb63eb722240da6d5750",
+  "checks": [
+    "explicit-fresh-migration",
+    "ordinary-backup-resume-no-epoch-rewrite",
+    "restore-epoch-rotation",
+    "business-rows-and-ciphertext-retained",
+    "same-key-encrypted-response-replay",
+    "usage-and-task-query",
+    "Redis-cleared",
+    "maintenance-failure-restores-current-DB",
+    "rollback-maintenance-rotation",
+    "persistent-maintenance-failure-leaves-API-stopped"
+  ],
+  "limitations": [
+    "fixture covers listed tables, not all historical production business tables",
+    "no remote node/provider side effects are present; absent post-backup operations still need separate fencing acceptance"
+  ],
+  "source_sha256": {
+    "scripts/backup-restore.py": "f97fdcf75219d7408b23a63c746dcf3e3c652a74aca937a2cc030427f18552eb",
+    "scripts/verify-backup-restore-compose.py": "50123bba3afa9c789872f4fdc5188a805ba0f05f47c0d250a683bbc8f743302c",
+    "Dockerfile": "bfb4503477fd9a2a0a6f92241b12d9fec3b9accbec6a011cb6769d33939f27dc"
+  },
+  "local_image": {
+    "tag": "hysteriax-server:0034-restore-20261024",
+    "id": "sha256:05969a5c311037fbad38d6f79b5df52d532ce8ce1e7253e4091ec725ed48fde4",
+    "server_sha256": "46af18eb8d68649ce244a61ceeecde6f626a3e71d31785060d8b4ce216a629f8",
+    "build_log": "/tmp/hx0034-phase104-image-build.log",
+    "base_commit": "b94b48e",
+    "note": "Release image built locally from current worktree including preserved unrelated server/OpenAPI changes; no push or deployment."
+  },
+  "validation": {
+    "archive_unit_tests": "5 passed",
+    "python_compile": "passed",
+    "compose_report": "/tmp/hx0034-phase104-restore-final.json",
+    "compose_log": "/tmp/hx0034-phase104-restore-final.log",
+    "cleanup": "owned Compose containers and volumes removed; local verified image retained for subsequent acceptance"
+  },
+  "first_run": {
+    "report": "/tmp/hx0034-phase104-restore.json",
+    "result": "fixture failed reading a top-level task ID instead of the documented job envelope; corrected and full scenario rerun"
+  }
+}

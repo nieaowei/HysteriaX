@@ -267,6 +267,14 @@ def start_api(project_root):
     wait_ready(project_root)
 
 
+def prepare_restored_api(project_root):
+    # A restored snapshot contains old execution, cache and SSE incarnations.
+    # Ordinary startup deliberately cannot rewrite them. Run the maintenance
+    # entrypoint with every API replica stopped, including when falling back to
+    # the retained database after a failed restore. Failure leaves the API down.
+    compose(project_root, "run", "--rm", "--no-deps", "api", "--migrate-only")
+
+
 def default_archive(project_root):
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     return project_root / "backups" / f"hysteriax-postgresql-{stamp}.tar.gz"
@@ -395,6 +403,7 @@ def restore(project_root, archive_path):
             _rename_database(project_root, staging_db, DATABASE_NAME)
             restored_renamed = True
             _clear_redis_cache(project_root)
+            prepare_restored_api(project_root)
             start_api(project_root)
         except Exception:
             if api_stopped:
@@ -416,6 +425,7 @@ def restore(project_root, archive_path):
                 )
             if api_stopped:
                 _clear_redis_cache(project_root)
+                prepare_restored_api(project_root)
                 start_api(project_root)
             raise
 
