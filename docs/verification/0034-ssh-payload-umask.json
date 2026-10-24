@@ -1,0 +1,87 @@
+{
+  "phase": 94,
+  "regression": "Private journal umask unintentionally restricted directories created by installation commands, preventing the service account from executing Hysteria.",
+  "fix": "Capture the original SSH shell umask before making journal files private, and restore only in the payload subshell.",
+  "source_sha256": {
+    "crates/hysteriax-server/src/ssh/journal.sh": "623513a59b8cc7e81b8040622d06493622158b8b615ff628f103b71ff1bb3b25",
+    "crates/hysteriax-server/src/ssh/journal/tests.rs": "5f910e98ce06c052d861c87f7e38a26633dc3644ce21c06838a3be07e3d86fbe"
+  },
+  "linux_explicit_tests": {
+    "passed": 4,
+    "seconds": 24.5,
+    "log": "/tmp/hx0034-phase94-journal.log",
+    "umasks": [
+      "022",
+      "027",
+      "077"
+    ],
+    "private_directory_mode": "700",
+    "private_receipt_mode": "600"
+  },
+  "clippy": "passed with the three existing warning category allowances",
+  "three_process_smoke": {
+    "scope": "three-process-cutover-smoke",
+    "logs": "/var/folders/5q/drsf84850pbcyk9rvyl6yd6h0000gn/T/hx0034-multi-6nnx3sm5",
+    "passed": true,
+    "process_instances": [
+      "4d7bea6d-0549-4299-8858-5e4e6072cb98",
+      "0bbee136-5096-43ca-add8-3dbea660a9db",
+      "97204d79-4447-428f-9323-97a31a5090f2",
+      "60d4228c-5da5-4b45-88ee-a05654e80910"
+    ],
+    "users": 31,
+    "unique_audits": 31,
+    "retired_locks": 0,
+    "round_robin_hits": {
+      "57959": 11,
+      "57976": 8,
+      "57990": 11
+    },
+    "checks": [
+      "management-protocol-two",
+      "legacy-management-rejected-before-decoding",
+      "same-write-receipt-across-three-processes",
+      "ordinary-start-does-not-migrate",
+      "migrate-only",
+      "wrong-shared-key-rejected",
+      "three-full-processes",
+      "round-robin-writes-and-cache-reads",
+      "SIGSTOP-expiry",
+      "SIGCONT",
+      "SIGKILL-restart-new-instance-id",
+      "database-outage-reconnect",
+      "no-retired-advisory-locks"
+    ]
+  },
+  "three_process_deployment": {
+    "passed": true,
+    "instances": 3,
+    "full_service_processes": 3,
+    "round_robin_hits": {
+      "59386": 21,
+      "59402": 21,
+      "59417": 20
+    },
+    "matrix_nodes": 1,
+    "extra_ssh_nodes": 2,
+    "logs": "/tmp/hx0034-phase94-matrix-logs-f782g78v",
+    "registered_instances": 3,
+    "operation_states": {
+      "verified": 60
+    },
+    "execution_owners": [
+      "1b11cb75-c1e9-4d57-9a43-1b7f45f3021e",
+      "995cee73-41de-4b69-bd23-fc697f815a98",
+      "dbdc97ed-b980-413b-beab-0aecc5d865d7"
+    ],
+    "jobs_by_status": {
+      "succeeded": 9
+    },
+    "blocked_resources": 0
+  },
+  "limits": [
+    "This live run covered Debian12 arm64 and two sudo authentication variants, not the complete distribution/architecture matrix.",
+    "Expanded CA and authorization business regression remains pending.",
+    "No production deployment."
+  ]
+}

@@ -1,5 +1,7 @@
 set -eu
 LC_ALL=C; export LC_ALL
+# Receipt privacy must not change the installation command's creation modes.
+payload_umask=$(umask)
 umask 077
 [ -n "${HOME:-}" ] && [ -d "$HOME" ] || exit 125
 base="$HOME/.hysteriax-executions-v2"
@@ -88,7 +90,7 @@ out_pid=$!
 (head -c "$((cap+1))" < "$op/stderr.fifo" > "$op/stderr" 6>&- 7>&- 8>&-) &
 err_pid=$!
 set +e
-(sh -c "$command" 6>&- 7>&- 8>&-) > "$op/stdout.fifo" 2> "$op/stderr.fifo"
+(umask "$payload_umask"; sh -c "$command" 6>&- 7>&- 8>&-) > "$op/stdout.fifo" 2> "$op/stderr.fifo"
 code=$?
 set -e
 exec 6>&- 7>&-

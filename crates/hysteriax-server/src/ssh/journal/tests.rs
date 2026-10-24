@@ -819,3 +819,45 @@ fn linux_recheck_resumes_partial_fences_and_never_replays_payload_or_stale_autho
         assert_eq!(linux.run("cat \"$HOME/payload\"").stdout, b"once");
     }
 }
+
+#[test]
+#[ignore = "requires an owned Linux Docker fixture via TEST_SSH_JOURNAL_CONTAINER"]
+fn linux_journal_preserves_payload_umask_while_receipt_files_remain_private() {
+    for (mask, directory_mode, file_mode) in [
+        ("022", "755", "644"),
+        ("027", "750", "640"),
+        ("077", "700", "600"),
+    ] {
+        let linux = Linux {
+            container: std::env::var("TEST_SSH_JOURNAL_CONTAINER").unwrap(),
+            home: format!("/tmp/hx-0034-umask-{}", uuid::Uuid::new_v4()),
+        };
+        assert!(linux.run("mkdir -m 755 \"$HOME\"").status.success());
+        let mut context = step();
+        let script = linux.script(
+            &mut context,
+            "mkdir \"$HOME/installed\"; : > \"$HOME/installed/file\"",
+            128,
+        );
+        assert!(
+            linux
+                .run(&format!("umask {mask}\n{script}"))
+                .status
+                .success()
+        );
+        assert_eq!(linux.read(&context, 128).unwrap().exit_code, 0);
+        let public = linux.run("stat -c '%a' \"$HOME/installed\" \"$HOME/installed/file\"");
+        assert_eq!(
+            String::from_utf8(public.stdout).unwrap(),
+            format!("{directory_mode}\n{file_mode}\n")
+        );
+        let resource = format!(
+            "{}/.hysteriax-executions-v2/{}",
+            linux.home,
+            hash(context.resource.as_bytes())
+        );
+        let private=linux.run(&format!("stat -c '%a' {0} {0}/ops/{1} {0}/ops/{1}/intent.json {0}/ops/{1}/result.json {0}/fence {0}/head",quote(&resource),context.operation_id));
+        assert!(private.status.success());
+        assert_eq!(private.stdout, b"700\n700\n600\n600\n600\n600\n");
+    }
+}
