@@ -81,6 +81,12 @@ async fn commands_bound_active_output_and_execution_time() {
     );
     let session = SshSession {
         handle,
+        endpoint: journal::Endpoint {
+            host: "fixture".into(),
+            port: 22,
+            username: "user".into(),
+            fingerprint: fingerprint.clone(),
+        },
         fingerprint,
     };
     let output = session.execute("ok").await.unwrap();

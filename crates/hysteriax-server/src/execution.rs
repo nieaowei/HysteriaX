@@ -87,11 +87,23 @@ impl Execution {
     /// Persist and COMMIT this intent before sending an external request. A
     /// returned operation ID already exists on retry; callers must reconcile it
     /// instead of sending the request again.
+    #[cfg(test)]
     pub async fn dispatch(
         &self,
         connection: &mut PgConnection,
         step: &str,
         intent: &Value,
+    ) -> Result<(String, bool), sqlx::Error> {
+        let id = uuid::Uuid::new_v4().to_string();
+        self.dispatch_prepared(connection, step, intent, &id).await
+    }
+
+    pub(crate) async fn dispatch_prepared(
+        &self,
+        connection: &mut PgConnection,
+        step: &str,
+        intent: &Value,
+        id: &str,
     ) -> Result<(String, bool), sqlx::Error> {
         self.guard(connection).await?;
         // A caller may catch a network error and attempt rollback or cleanup
@@ -104,9 +116,8 @@ impl Execution {
                 "a previous remote step requires verification before another dispatch".into(),
             ));
         }
-        let id = uuid::Uuid::new_v4().to_string();
         let inserted=sqlx::query("INSERT INTO execution_operations(operation_id,resource_key,owner,generation,work_id,step,state,intent,epoch) VALUES($1,$2,$3,$4,$5,$6,'dispatching',$7,$8) ON CONFLICT(work_id,step) DO NOTHING")
-            .bind(&id).bind(&self.resource).bind(&self.owner).bind(self.generation).bind(&self.work).bind(step).bind(intent).bind(&self.epoch)
+            .bind(id).bind(&self.resource).bind(&self.owner).bind(self.generation).bind(&self.work).bind(step).bind(intent).bind(&self.epoch)
             .execute(&mut *connection).await?.rows_affected()==1;
         let row = sqlx::query(
             "SELECT operation_id,intent,epoch FROM execution_operations WHERE work_id=$1 AND step=$2",
@@ -520,66 +531,9 @@ pub async fn check_current() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Commit dispatch intent before polling a mutating network future. Persist
-/// only a digest of request content: shell scripts and bodies can hold secrets.
-/// A failed/aborted future deliberately leaves an uncertain operation behind.
-pub async fn remote<T>(
-    kind: &str,
-    digest: String,
-    request: impl std::future::Future<Output = anyhow::Result<T>>,
-    evidence: impl FnOnce(&T) -> Value,
-) -> anyhow::Result<T> {
-    let Some(scope) = CURRENT.try_with(Clone::clone).ok() else {
-        return request.await;
-    };
-    let prefix = if kind.starts_with("dns") {
-        "dns-"
-    } else {
-        "node:"
-    };
-    let lease = scope
-        .leases
-        .iter()
-        .find(|lease| lease.resource.starts_with(prefix))
-        .or_else(|| scope.leases.first())
-        .ok_or_else(|| anyhow::anyhow!("remote work requires a resource lease"))?;
-    let index = scope
-        .sequence
-        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let step = format!("{kind}:{index}");
-    let mut tx = scope.pool.begin().await?;
-    guard_current(&mut tx).await?;
-    // Pin the source through the durable intent commit. A replacement may
-    // follow an already dispatched step, whose uncertain result stays recorded.
-    if let Some(job) = scope.leases.iter().find(|l| l.resource.starts_with("job:")) {
-        let outcome: Option<(Option<String>,)> = sqlx::query_as("SELECT r.outcome FROM mtls_node_operations o JOIN mtls_rotations r ON r.id=o.rotation_id WHERE o.job_id=$1 FOR KEY SHARE OF r")
-            .bind(&job.work).fetch_optional(&mut *tx).await?;
-        anyhow::ensure!(
-            outcome.is_none_or(|(outcome,)| outcome.is_none()),
-            "CA target was superseded before dispatch"
-        );
-    }
-    let (operation, fresh) = lease
-        .dispatch(
-            &mut tx,
-            &step,
-            &serde_json::json!({"kind":kind,"request_digest":digest}),
-        )
-        .await?;
-    tx.commit().await?;
-    anyhow::ensure!(
-        fresh,
-        "operation was previously dispatched; remote verification is required before recovery"
-    );
-    let output = request.await?;
-    let mut tx = scope.pool.begin().await?;
-    guard_current(&mut tx).await?;
-    lease
-        .verified(&mut tx, &operation, &evidence(&output))
-        .await?;
-    tx.commit().await?;
-    Ok(output)
-}
+// Dispatch metadata is public; request bodies and commands remain digests.
+pub(crate) mod remote;
+pub use remote::run as remote;
 
 #[cfg(test)]
 mod boundary_tests {

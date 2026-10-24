@@ -40,9 +40,12 @@ pub enum SshError {
     Command { code: u32, stderr: String },
 }
 
+pub(crate) mod journal;
+
 pub struct SshSession {
     handle: Handle<HostKeyHandler>,
     pub fingerprint: String,
+    pub(crate) endpoint: journal::Endpoint,
 }
 
 #[derive(Clone, Debug)]
@@ -163,6 +166,12 @@ pub async fn connect(node: &SshNode) -> Result<FingerprintResult> {
     }
     Ok(FingerprintResult::Trusted(SshSession {
         handle,
+        endpoint: journal::Endpoint {
+            host: node.host.clone(),
+            port: node.port,
+            username: node.username.clone(),
+            fingerprint: fingerprint.clone(),
+        },
         fingerprint,
     }))
 }
@@ -189,12 +198,42 @@ impl SshSession {
         timeout: Duration,
         max_output: usize,
     ) -> Result<CommandOutput> {
-        crate::execution::remote(
+        crate::execution::remote::with_context(
             "ssh-command",
             crate::security::token_digest(command),
-            self.execute_remote(command,timeout,max_output),
+            serde_json::json!({"protocol":"ssh-journal-v1","endpoint":self.endpoint,"max_output":max_output}),
+            |context| async move {
+                let Some(context)=context else {return self.execute_remote(command,timeout,max_output).await;};
+                let wrapped=journal::wrap(&context,command,max_output)?;
+                let output=self.execute_remote(&wrapped,timeout,max_output).await?;
+                let receipt=self.inspect_command(&context,&self.endpoint,max_output).await?;
+                anyhow::ensure!(receipt.exit_code==output.code,"remote command receipt differs from its acknowledgement");
+                Ok(output)
+            },
             |output| serde_json::json!({"exit_code":output.code,"stdout_digest":crate::security::token_digest(&output.stdout),"stderr_digest":crate::security::token_digest(&output.stderr)}),
         ).await
+    }
+
+    /// Read only a completed original-command receipt, with exact endpoint binding.
+    pub(crate) async fn inspect_command(
+        &self,
+        step: &crate::execution::remote::RemoteStep,
+        endpoint: &journal::Endpoint,
+        max_output: usize,
+    ) -> Result<journal::Receipt> {
+        anyhow::ensure!(
+            &self.endpoint == endpoint,
+            "remote verification endpoint changed"
+        );
+        let output = self
+            .execute_remote(
+                &journal::inspect(step)?,
+                Duration::from_secs(10),
+                journal::RECEIPT_LIMIT,
+            )
+            .await?;
+        let text = Self::check_output(output)?;
+        journal::parse(text.as_bytes(), step, max_output)
     }
 
     async fn execute_remote(
@@ -462,8 +501,8 @@ fn sanitize_remote_output(value: &str) -> String {
 
 pub async fn inspect_connected(session: &SshSession) -> Result<RemoteEnvironment> {
     let output = session
-        .execute_checked(
-            "set -eu; . /etc/os-release; printf '%s\\n%s\\n%s\\n' \"$ID\" \"$VERSION_ID\" \"$(uname -m)\"; command -v systemctl >/dev/null; systemctl --version | head -n1; if [ \"$(id -u)\" -eq 0 ]; then printf 'root\\n'; else sudo -n true && printf 'sudo\\n'; fi; df -Pk / | tail -n1",
+        .execute_read_only_checked(
+            "set -eu; for tool in flock head wc sha256sum mkfifo grep; do command -v \"$tool\" >/dev/null; done; . /etc/os-release; printf '%s\\n%s\\n%s\\n' \"$ID\" \"$VERSION_ID\" \"$(uname -m)\"; command -v systemctl >/dev/null; systemctl --version | head -n1; if [ \"$(id -u)\" -eq 0 ]; then printf 'root\\n'; else sudo -n true && printf 'sudo\\n'; fi; df -Pk / | tail -n1",
         )
         .await?;
     let lines: Vec<&str> = output.lines().collect();
