@@ -263,7 +263,7 @@ async fn activation_blocks_user_and_subscription_but_only_bound_live_job_probe_b
             .await
             .unwrap()
             .unwrap();
-    sqlx::query("INSERT INTO deployment_probe_tokens(node_id,token_hash,expires_at,job_id,owner,node_generation,job_generation) VALUES($1,$2,clock_timestamp()+interval '1 minute',$3,$4,$5,$6)").bind(id).bind(crate::security::token_digest("probe")).bind(&job).bind(&job_lease.owner).bind(node_lease.generation).bind(job_lease.generation).execute(&mut *probe_tx).await.unwrap();
+    sqlx::query("INSERT INTO deployment_probe_tokens(node_id,token_hash,expires_at,job_id,owner,node_generation,job_generation,epoch) VALUES($1,$2,clock_timestamp()+interval '1 minute',$3,$4,$5,$6,$7)").bind(id).bind(crate::security::token_digest("probe")).bind(&job).bind(&job_lease.owner).bind(node_lease.generation).bind(job_lease.generation).bind(&job_lease.epoch).execute(&mut *probe_tx).await.unwrap();
     probe_tx.commit().await.unwrap();
     assert!(auth(&state, id, &token, "probe").await);
     sqlx::query(

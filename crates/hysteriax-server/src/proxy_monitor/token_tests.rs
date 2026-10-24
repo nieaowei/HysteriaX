@@ -4,6 +4,14 @@ use crate::{background::Work, execution};
 /// Build an actual persisted proxy work and both resource leases for callback
 /// fixtures which do not run a sampling executor.
 pub(crate) async fn install_fixture(state: &AppState, node: &str, token: &str) -> Work {
+    let work = work_fixture(state, node).await;
+    install_token(state, &work, &token_digest(token))
+        .await
+        .unwrap();
+    work
+}
+
+async fn work_fixture(state: &AppState, node: &str) -> Work {
     let cycle = Uuid::new_v4();
     let id = format!("{cycle}:{node}");
     let mut tx = state.pool.begin().await.unwrap();
@@ -34,7 +42,7 @@ pub(crate) async fn install_fixture(state: &AppState, node: &str, token: &str) -
     sqlx::query("INSERT INTO background_work(id,kind,cycle_id,node_id,payload,state,owner,generation,deadline_at) VALUES($1,'proxy',$2,$3,$4,'running',$5,$6,$7+interval '1 hour')")
         .bind(&id).bind(cycle).bind(node).bind(&payload).bind(&state.instance_id).bind(generation).bind(at).execute(&mut *tx).await.unwrap();
     tx.commit().await.unwrap();
-    let work = Work {
+    Work {
         id,
         kind: "proxy".into(),
         cycle,
@@ -43,11 +51,7 @@ pub(crate) async fn install_fixture(state: &AppState, node: &str, token: &str) -
         expected: 1,
         payload,
         leases,
-    };
-    install_token(state, &work, &token_digest(token))
-        .await
-        .unwrap();
-    work
+    }
 }
 
 async fn fixture_on(pool: sqlx::PgPool) -> AppState {
@@ -201,31 +205,53 @@ async fn source_and_scope_mismatch_cannot_issue_or_clear_another_attempts_creden
 
 #[tokio::test]
 async fn migration_preserves_legacy_rows_and_requires_fresh_execution_proof() {
-    let state = fixture_on(crate::db::test_pool_through_version(8, 62).await).await;
-    sqlx::query("INSERT INTO monitoring_probe_tokens(node_id,token_hash,expires_at) VALUES('a',$1,clock_timestamp()+interval '1 minute')")
+    for through in [62, 68] {
+        let state = fixture_on(crate::db::test_pool_through_version(8, through).await).await;
+        let work = if through == 68 {
+            Some(work_fixture(&state, "a").await)
+        } else {
+            None
+        };
+        sqlx::query("INSERT INTO monitoring_probe_tokens(node_id,token_hash,expires_at) VALUES('a',$1,clock_timestamp()+interval '1 minute')")
         .bind(token_digest("legacy")).execute(&state.pool).await.unwrap();
-    let before = row(&state).await;
-    let nodes: Value = sqlx::query_scalar("SELECT jsonb_agg(to_jsonb(n) ORDER BY id) FROM nodes n")
-        .fetch_one(&state.pool)
-        .await
-        .unwrap();
-    crate::db::run_migrations(&state.pool).await.unwrap();
-    crate::db::run_migrations(&state.pool).await.unwrap();
-    let after = row(&state).await;
-    for (key, value) in before.as_object().unwrap() {
-        assert_eq!(&after[key], value);
-    }
-    assert_eq!(
-        sqlx::query_scalar::<_, Value>("SELECT jsonb_agg(to_jsonb(n) ORDER BY id) FROM nodes n")
+        if let Some(work) = &work {
+            let (primary, node) = token_leases(work).unwrap();
+            sqlx::query("UPDATE monitoring_probe_tokens SET work_id=$1,owner=$2,node_generation=$3,work_generation=$4 WHERE node_id='a'")
+            .bind(&work.id).bind(&primary.owner).bind(node.generation).bind(primary.generation).execute(&state.pool).await.unwrap();
+        }
+        let before = row(&state).await;
+        let nodes: Value =
+            sqlx::query_scalar("SELECT jsonb_agg(to_jsonb(n) ORDER BY id) FROM nodes n")
+                .fetch_one(&state.pool)
+                .await
+                .unwrap();
+        crate::db::run_migrations(&state.pool).await.unwrap();
+        crate::db::run_migrations(&state.pool).await.unwrap();
+        let after = row(&state).await;
+        for (key, value) in before.as_object().unwrap() {
+            assert_eq!(&after[key], value);
+        }
+        assert_eq!(
+            sqlx::query_scalar::<_, Value>(
+                "SELECT jsonb_agg(to_jsonb(n) ORDER BY id) FROM nodes n"
+            )
             .fetch_one(&state.pool)
             .await
             .unwrap(),
-        nodes
-    );
-    assert_eq!(auth(&state, "legacy").await["ok"], false);
-    install_fixture(&state, "a", "fresh").await;
-    assert_eq!(auth(&state, "fresh").await["ok"], true);
-    assert_eq!(auth(&state, "legacy").await["ok"], false);
+            nodes
+        );
+        assert_eq!(auth(&state, "legacy").await["ok"], false);
+        assert!(after["epoch"].is_null());
+        if let Some(work) = work {
+            install_token(&state, &work, &token_digest("fresh"))
+                .await
+                .unwrap();
+        } else {
+            install_fixture(&state, "a", "fresh").await;
+        }
+        assert_eq!(auth(&state, "fresh").await["ok"], true);
+        assert_eq!(auth(&state, "legacy").await["ok"], false);
+    }
 }
 
 #[tokio::test]
@@ -338,6 +364,81 @@ async fn native_retry_and_failed_cleanup_commit_one_sample_with_its_health_and_c
         .fetch_one(&state.pool)
         .await
         .unwrap(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn restored_counter_collision_does_not_authenticate_or_publish_the_old_probe() {
+    let state = fixture().await;
+    let old = install_fixture(&state, "a", "old").await;
+    assert_eq!(auth(&state, "old").await["ok"], true);
+    let epoch = Uuid::new_v4().to_string();
+    sqlx::query("UPDATE cache_version_epoch SET epoch=$1 WHERE id")
+        .bind(&epoch)
+        .execute(&state.pool)
+        .await
+        .unwrap();
+    assert_eq!(auth(&state, "old").await["ok"], false);
+    sqlx::query("UPDATE resource_leases SET epoch=$1 WHERE work_id=$2")
+        .bind(&epoch)
+        .bind(&old.id)
+        .execute(&state.pool)
+        .await
+        .unwrap();
+    assert_eq!(auth(&state, "old").await["ok"], false);
+    let mut current = old.clone();
+    for lease in &mut current.leases {
+        lease.epoch = epoch.clone();
+    }
+    install_token(&state, &current, &token_digest("fresh"))
+        .await
+        .unwrap();
+    assert_eq!(auth(&state, "fresh").await["ok"], true);
+    let before = row(&state).await;
+    assert!(
+        install_token(&state, &old, &token_digest("late"))
+            .await
+            .is_err()
+    );
+    assert!(
+        save_result(
+            &state,
+            &old,
+            ProbeResult {
+                status: "ok".into(),
+                ..Default::default()
+            },
+            &token_digest("fresh")
+        )
+        .await
+        .is_err()
+    );
+    assert_eq!(before, row(&state).await);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM proxy_probe_samples")
+            .fetch_one(&state.pool)
+            .await
+            .unwrap(),
+        0
+    );
+    save_result(
+        &state,
+        &current,
+        ProbeResult {
+            status: "ok".into(),
+            ..Default::default()
+        },
+        &token_digest("fresh"),
+    )
+    .await
+    .unwrap();
+    assert_eq!(auth(&state, "fresh").await["ok"], false);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM proxy_probe_samples")
+            .fetch_one(&state.pool)
+            .await
+            .unwrap(),
         1
     );
 }

@@ -319,6 +319,7 @@ fn token_leases(
             l.resource == format!("node:{}", work.node)
                 && l.work == work.id
                 && l.owner == primary.owner
+                && l.epoch == primary.epoch
                 && l.generation > 0
         })
         .context("missing monitoring node lease")?;
@@ -352,8 +353,8 @@ async fn install_token(state: &AppState, work: &crate::background::Work, hash: &
             let revision=work.payload["deployed_revision"].as_i64().context("missing proxy revision")?;
             sqlx::query("SELECT id FROM nodes WHERE id=$1 AND deployed_revision=$2 AND mtls_state='ready' AND state NOT IN ('deleting','delete_failed') FOR NO KEY UPDATE")
                 .bind(&node).bind(revision).fetch_optional(&mut **tx).await?.context("monitoring node source changed")?;
-            sqlx::query("INSERT INTO monitoring_probe_tokens(node_id,token_hash,expires_at,work_id,owner,node_generation,work_generation) VALUES($1,$2,clock_timestamp()+interval '30 seconds',$3,$4,$5,$6) ON CONFLICT(node_id) DO UPDATE SET token_hash=excluded.token_hash,expires_at=excluded.expires_at,work_id=excluded.work_id,owner=excluded.owner,node_generation=excluded.node_generation,work_generation=excluded.work_generation")
-                .bind(node).bind(hash).bind(&work.id).bind(&primary.owner).bind(node_lease.generation).bind(primary.generation).execute(&mut **tx).await?;
+            sqlx::query("INSERT INTO monitoring_probe_tokens(node_id,token_hash,expires_at,work_id,owner,node_generation,work_generation,epoch) VALUES($1,$2,clock_timestamp()+interval '30 seconds',$3,$4,$5,$6,$7) ON CONFLICT(node_id) DO UPDATE SET token_hash=excluded.token_hash,expires_at=excluded.expires_at,work_id=excluded.work_id,owner=excluded.owner,node_generation=excluded.node_generation,work_generation=excluded.work_generation,epoch=excluded.epoch")
+                .bind(node).bind(hash).bind(&work.id).bind(&primary.owner).bind(node_lease.generation).bind(primary.generation).bind(&primary.epoch).execute(&mut **tx).await?;
             Ok(())
         })
     }).await
@@ -390,8 +391,8 @@ async fn save_result(
                         .bind(id).bind(revision).bind(health.0).bind(health.1).bind(health.2).bind(started).execute(&mut **tx).await?;
                 }
             }
-            sqlx::query("DELETE FROM monitoring_probe_tokens WHERE node_id=$1 AND token_hash=$2 AND work_id=$3 AND owner=$4 AND node_generation=$5 AND work_generation=$6")
-                .bind(id).bind(token_hash).bind(&work.id).bind(&primary.owner).bind(node_lease.generation).bind(primary.generation).execute(&mut **tx).await?;
+            sqlx::query("DELETE FROM monitoring_probe_tokens WHERE node_id=$1 AND token_hash=$2 AND work_id=$3 AND owner=$4 AND node_generation=$5 AND work_generation=$6 AND epoch=$7")
+                .bind(id).bind(token_hash).bind(&work.id).bind(&primary.owner).bind(node_lease.generation).bind(primary.generation).bind(&primary.epoch).execute(&mut **tx).await?;
             Ok(())
         })
     }).await
