@@ -1,0 +1,48 @@
+{
+  "phase": 92,
+  "feature": "Explicit SSH completion recheck with durable receiver fencing",
+  "source_sha256": {
+    "crates/hysteriax-server/migrations/0070_execution_rechecks.sql": "75de185f846ba0638845004cd4a55f6259464649bbafa3e5d08e260fb2554ad1",
+    "crates/hysteriax-server/src/api/execution_rechecks.rs": "0ce4788585af6a8246e34d91a853b02031d98414fb0d997d061a037f351a872a",
+    "crates/hysteriax-server/src/api/execution_rechecks/tests.rs": "ec16335388edfa3d2b8ddaee434ae244072652ff86b97d49f54c3d608fd6c3d4",
+    "crates/hysteriax-server/src/ssh/journal/recheck.rs": "ed809d142c6b9532eb3d2853b049ab1b4fc49a6ae9e83f3eaa5bcb5b367c0fee",
+    "crates/hysteriax-server/src/ssh/journal/recheck/recheck.sh": "29d93f144bf3e6c9175ed4d28ad08d26339a8120a2e024270fd1e4e069fb20ca"
+  },
+  "validation": {
+    "api": {
+      "passed": 8,
+      "ignored": 1,
+      "log": "/tmp/hx0034-phase92-api-final2.log"
+    },
+    "ssh_unit": {
+      "passed": 7,
+      "ignored": 3,
+      "log": "/tmp/hx0034-phase92-ssh.log"
+    },
+    "linux_journal_explicit": {
+      "passed": 3,
+      "log": "/tmp/hx0034-phase92-journal-linux-all.log"
+    },
+    "linux_new_recheck_and_http_explicit": {
+      "passed": 2,
+      "log": "/tmp/hx0034-phase92-linux-final.log"
+    },
+    "cargo_check": "passed",
+    "clippy": "passed with existing type_complexity/large_enum_variant/too_many_arguments allowances"
+  },
+  "previous_workspace": {
+    "phase": 91,
+    "passed": 1035,
+    "failed": 0,
+    "ignored": 4,
+    "seconds": 1915.67
+  },
+  "limits": [
+    "Only exact ssh-journal-v2 completed operations with unchanged sources can be resolved.",
+    "No generic manual unlock or original payload replay.",
+    "A complete operation does not mark its whole job successful.",
+    "Restore evidence for absent post-backup non-journal requests remains a separate gate.",
+    "Remote recheck retention and capacity remain in the final capacity audit.",
+    "No deployment performed."
+  ]
+}

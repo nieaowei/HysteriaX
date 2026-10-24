@@ -263,6 +263,27 @@ impl SshSession {
         journal::parse(text.as_bytes(), step, max_output)
     }
 
+    pub(crate) async fn fence_command(
+        &self,
+        request: &journal::recheck::Request,
+        endpoint: &journal::Endpoint,
+    ) -> Result<journal::recheck::Proof> {
+        anyhow::ensure!(
+            &self.endpoint == endpoint,
+            "remote verification endpoint changed"
+        );
+        crate::execution::check_current().await?;
+        let output = self
+            .execute_remote(
+                &journal::recheck::render(request)?,
+                Duration::from_secs(15),
+                journal::RECEIPT_LIMIT,
+            )
+            .await?;
+        let text = Self::check_output(output)?;
+        journal::recheck::parse(text.as_bytes(), request)
+    }
+
     async fn execute_remote(
         &self,
         command: &str,

@@ -90,9 +90,9 @@ fn predecessor_requires_an_exact_opaque_head_and_is_part_of_the_completion_conte
     assert!(inspect(&s).is_err());
 }
 
-struct Linux {
-    container: String,
-    home: String,
+pub(crate) struct Linux {
+    pub(crate) container: String,
+    pub(crate) home: String,
 }
 impl Linux {
     fn script(&self, step: &mut RemoteStep, command: &str, cap: usize) -> String {
@@ -116,7 +116,7 @@ impl Linux {
         ]);
         c
     }
-    fn run(&self, script: &str) -> std::process::Output {
+    pub(crate) fn run(&self, script: &str) -> std::process::Output {
         self.command(script).output().unwrap()
     }
     fn read(&self, s: &RemoteStep, cap: usize) -> Result<Receipt> {
@@ -345,6 +345,12 @@ struct JournalServer {
     container: String,
     home: String,
 }
+pub(crate) fn fixture_handler(
+    container: String,
+    home: String,
+) -> impl russh::server::Handler<Error = russh::Error> + Send {
+    JournalServer { container, home }
+}
 impl russh::server::Handler for JournalServer {
     type Error = russh::Error;
     async fn auth_password(
@@ -374,7 +380,23 @@ impl russh::server::Handler for JournalServer {
         let (container, home, handle) =
             (self.container.clone(), self.home.clone(), session.handle());
         tokio::spawn(async move {
-            let drop_ack = command.contains("HX_DROP_ACK_AFTER_EXECUTION");
+            let mut drop_ack = command.contains("HX_DROP_ACK_AFTER_EXECUTION");
+            if command.contains("check_id=") {
+                drop_ack |= tokio::process::Command::new("docker")
+                    .args([
+                        "exec",
+                        "-e",
+                        &format!("HOME={home}"),
+                        &container,
+                        "sh",
+                        "-c",
+                        "test -f \"$HOME/drop-recheck-ack\" && rm -- \"$HOME/drop-recheck-ack\"",
+                    ])
+                    .status()
+                    .await
+                    .unwrap()
+                    .success();
+            }
             let output = tokio::process::Command::new("docker")
                 .args([
                     "exec",
@@ -650,4 +672,150 @@ async fn actual_ssh_response_loss_keeps_intent_and_exact_remote_receipt_without_
     );
     tx.commit().await.unwrap();
     server.abort();
+}
+
+#[test]
+fn recheck_proof_binds_exact_original_receipt_target_and_nonce() {
+    let original = step();
+    let completion: Receipt = serde_json::from_value(receipt(&original)).unwrap();
+    let request = recheck::Request {
+        id: uuid::Uuid::new_v4().to_string(),
+        original,
+        receipt_sha256: recheck::digest(&completion).unwrap(),
+        target_epoch: uuid::Uuid::new_v4().to_string(),
+        target_generation: 2,
+    };
+    let proof = recheck::Proof {
+        protocol: 2,
+        request: request.clone(),
+        completion,
+        state: "fenced".into(),
+    };
+    let bytes = serde_json::to_vec(&proof).unwrap();
+    assert_eq!(recheck::parse(&bytes, &request).unwrap(), proof);
+    for (pointer, value) in [
+        ("/protocol", json!(1)),
+        ("/state", json!("prepared")),
+        ("/request/id", json!(uuid::Uuid::new_v4().to_string())),
+        ("/request/target_generation", json!(3)),
+        ("/completion/exit_code", json!(1)),
+        (
+            "/completion/context/epoch",
+            json!(uuid::Uuid::new_v4().to_string()),
+        ),
+    ] {
+        let mut changed = serde_json::to_value(&proof).unwrap();
+        *changed.pointer_mut(pointer).unwrap() = value;
+        assert!(
+            recheck::parse(&serde_json::to_vec(&changed).unwrap(), &request).is_err(),
+            "{pointer}"
+        );
+    }
+    assert!(recheck::parse(&vec![b' '; RECEIPT_LIMIT + 1], &request).is_err());
+    let mut invalid = request.clone();
+    invalid.target_generation = 1;
+    assert!(recheck::render(&invalid).is_err());
+}
+
+#[test]
+#[ignore = "requires an owned Linux Docker fixture via TEST_SSH_JOURNAL_CONTAINER"]
+fn linux_recheck_resumes_partial_fences_and_never_replays_payload_or_stale_authority() {
+    for crash in ["none", "before_fence", "after_fence", "after_head"] {
+        let linux = Linux {
+            container: std::env::var("TEST_SSH_JOURNAL_CONTAINER").unwrap(),
+            home: format!("/tmp/hx-0034-recheck-{}", uuid::Uuid::new_v4()),
+        };
+        assert!(linux.run("mkdir -m 700 \"$HOME\"").status.success());
+        let mut original = step();
+        assert!(
+            linux
+                .run(&linux.script(&mut original, "printf once >> \"$HOME/payload\"", 128))
+                .status
+                .success()
+        );
+        let completion = linux.read(&original, 128).unwrap();
+        let resource = format!(
+            "{}/.hysteriax-executions-v2/{}",
+            linux.home,
+            hash(original.resource.as_bytes())
+        );
+        let mut delayed = original.clone();
+        delayed.operation_id = uuid::Uuid::new_v4().to_string();
+        delayed.generation = 2;
+        let delayed_script = linux.script(&mut delayed, "touch \"$HOME/stale\"", 128);
+        let old_fence = linux.run(&format!("cat {}/fence", quote(&resource))).stdout;
+        let request = recheck::Request {
+            id: uuid::Uuid::new_v4().to_string(),
+            original: original.clone(),
+            receipt_sha256: recheck::digest(&completion).unwrap(),
+            target_epoch: original.epoch.clone(),
+            target_generation: 2,
+        };
+        let script = recheck::render(&request).unwrap();
+        let output = linux.run(&script);
+        assert!(
+            output.status.success(),
+            "{crash}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let proof = recheck::parse(&output.stdout, &request).unwrap();
+        assert_eq!(proof.completion, completion);
+        assert_eq!(
+            parse_head(
+                std::str::from_utf8(&linux.run(&head(&original.resource).unwrap()).stdout).unwrap()
+            )
+            .unwrap(),
+            request.id
+        );
+        let directory = format!("{resource}/rechecks/{}", request.id);
+        if crash != "none" {
+            let mut reset = format!("rm -- {}/result.json", quote(&directory));
+            if crash == "before_fence" || crash == "after_fence" {
+                reset.push_str(&format!(
+                    "\nprintf '%s\\n' {} > {}/head",
+                    quote(&original.operation_id),
+                    quote(&resource)
+                ));
+            }
+            if crash == "before_fence" {
+                reset.push_str(&format!(
+                    "\nprintf '%s' {} > {}/fence",
+                    quote(std::str::from_utf8(&old_fence).unwrap()),
+                    quote(&resource)
+                ));
+            }
+            assert!(linux.run(&reset).status.success());
+            let resumed = linux.run(&script);
+            assert!(resumed.status.success(), "{crash}");
+            assert_eq!(recheck::parse(&resumed.stdout, &request).unwrap(), proof);
+        }
+        assert_eq!(linux.run(&delayed_script).status.code(), Some(125));
+        assert!(!linux.run("test -e \"$HOME/stale\"").status.success());
+        let mut wrong = request.clone();
+        wrong.id = uuid::Uuid::new_v4().to_string();
+        assert_eq!(
+            linux.run(&recheck::render(&wrong).unwrap()).status.code(),
+            Some(125)
+        );
+        let mut next = original.clone();
+        next.operation_id = uuid::Uuid::new_v4().to_string();
+        next.generation = 3;
+        assert!(
+            linux
+                .run(&linux.script(&mut next, "printf healthy", 128))
+                .status
+                .success()
+        );
+        // Completed proof remains readable after a legitimate later operation has
+        // garbage-collected the original receipt and advanced its own authority.
+        let head_before = linux.run(&head(&original.resource).unwrap()).stdout;
+        let repeated = linux.run(&script);
+        assert!(repeated.status.success());
+        assert_eq!(recheck::parse(&repeated.stdout, &request).unwrap(), proof);
+        assert_eq!(
+            linux.run(&head(&original.resource).unwrap()).stdout,
+            head_before
+        );
+        assert_eq!(linux.run("cat \"$HOME/payload\"").stdout, b"once");
+    }
 }

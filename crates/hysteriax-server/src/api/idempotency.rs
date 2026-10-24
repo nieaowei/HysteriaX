@@ -22,7 +22,20 @@ pub(super) struct RequestIdentity {
 }
 
 impl RequestIdentity {
-    /// Namespace legacy child operation receipts by the authenticated request.
+    pub(super) fn actor_id(&self) -> &str {
+        &self.actor
+    }
+
+    /// Reserve the actor/action/header namespace before external preparation.
+    pub(super) fn reservation_key(&self, secrets: &SecretBox) -> Result<String, ApiError> {
+        Ok(secrets.request_digest(
+            "hysteriax.management.v2.reservation",
+            &serde_json::to_vec(&(&self.actor, &self.operation, &self.key))
+                .map_err(|_| ApiError::internal())?,
+        ))
+    }
+
+    /// Bind a child operation to the complete authenticated request.
     pub(super) fn operation_key(&self, secrets: &SecretBox) -> Result<String, ApiError> {
         Ok(format!(
             "v2:{}",

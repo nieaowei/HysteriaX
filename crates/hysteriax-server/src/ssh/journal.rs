@@ -13,7 +13,7 @@ pub(crate) struct Endpoint {
     pub username: String,
     pub fingerprint: String,
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Receipt {
     pub protocol: u8,
@@ -149,4 +149,6 @@ pub(crate) fn parse(bytes: &[u8], step: &RemoteStep, cap: usize) -> Result<Recei
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
+
+pub(crate) mod recheck;
