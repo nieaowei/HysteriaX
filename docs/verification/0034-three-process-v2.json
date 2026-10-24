@@ -1,0 +1,41 @@
+{
+  "scope": "three-process-cutover-smoke",
+  "logs": "/var/folders/5q/drsf84850pbcyk9rvyl6yd6h0000gn/T/hx0034-multi-gbaz4ac9",
+  "passed": true,
+  "process_instances": [
+    "680998d4-04a8-4103-aa41-dd455139cd6a",
+    "5870e133-6654-4864-8ee0-91aebef9c243",
+    "b6b1425f-d0c3-4040-aacb-3150a39de1cc",
+    "21b1abed-4698-48b6-a0a1-ad71f8b4842d"
+  ],
+  "users": 31,
+  "unique_audits": 31,
+  "retired_locks": 0,
+  "round_robin_hits": {
+    "53342": 11,
+    "53357": 8,
+    "53371": 11
+  },
+  "checks": [
+    "management-protocol-two",
+    "legacy-management-rejected-before-decoding",
+    "same-write-receipt-across-three-processes",
+    "ordinary-start-does-not-migrate",
+    "migrate-only",
+    "wrong-shared-key-rejected",
+    "three-full-processes",
+    "round-robin-writes-and-cache-reads",
+    "SIGSTOP-expiry",
+    "SIGCONT",
+    "SIGKILL-restart-new-instance-id",
+    "database-outage-reconnect",
+    "no-retired-advisory-locks"
+  ],
+  "verified_date": "2026-10-24",
+  "server_and_protocol_revision": "039c083",
+  "limitations": [
+    "API/readiness/receipt smoke only; does not establish serial billing equivalence or safe remote reconciliation.",
+    "The Redis process remained available; this run does not establish Redis outage or restart behavior.",
+    "No production deployment, backup restore or capacity acceptance was performed."
+  ]
+}

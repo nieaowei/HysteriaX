@@ -83,10 +83,12 @@ def main():
     proxy = None
     result = {"scope": "three-process-cutover-smoke", "logs": str(logs), "passed": False}
 
-    def request(base_url, path, payload=None):
+    def request(base_url, path, payload=None, identity=None):
         body = None if payload is None else json.dumps(payload).encode()
-        req = urllib.request.Request(base_url + path, data=body,
-                                     headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"})
+        headers = {"Authorization": "Bearer " + token, "Content-Type": "application/json"}
+        if payload is not None:
+            headers["Idempotency-Key"] = identity or str(uuid.uuid4())
+        req = urllib.request.Request(base_url + path, data=body, headers=headers)
         try:
             with urllib.request.urlopen(req, timeout=5) as response:
                 return response.status, json.loads(response.read())
@@ -132,7 +134,8 @@ def main():
                 hits[str(port)] = hits.get(str(port), 0) + 1
             body = self.rfile.read(int(self.headers.get("Content-Length", "0"))) or None
             forwarded = urllib.request.Request("http://127.0.0.1:{}{}".format(port, self.path), data=body, method=self.command,
-                                               headers={"Authorization": self.headers.get("Authorization", ""), "Content-Type": "application/json"})
+                                               headers={"Authorization": self.headers.get("Authorization", ""), "Content-Type": "application/json",
+                                                        "Idempotency-Key": self.headers.get("Idempotency-Key", "")})
             try:
                 upstream = urllib.request.urlopen(forwarded, timeout=5)
             except urllib.error.HTTPError as error:
@@ -152,7 +155,7 @@ def main():
 
     def create_users(count, prefix):
         def create(index):
-            status, data = request(front, "/api/v1/users", {"name": prefix + "-" + str(index)})
+            status, data = request(front, "/api/v2/users", {"name": prefix + "-" + str(index)})
             assert status == 201 and data.get("id"), "user creation did not commit"
             return data["id"]
         with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
@@ -189,10 +192,30 @@ def main():
         proxy.daemon_threads = True
         threading.Thread(target=proxy.serve_forever, daemon=True).start()
         front = "http://127.0.0.1:" + str(proxy.server_port)
+        for port in ports:
+            origin = "http://127.0.0.1:" + str(port)
+            version = request(origin, "/api/v2/version")[1]
+            assert version["api_version"] == "2.0.0" and version["management_protocol"] == 2
+            assert version["directory_version"].startswith("b3:")
+            assert request(origin, "/readyz")[1]["management_protocol"] == 2
+            legacy = urllib.request.Request(origin + "/api/v1/users", data=b"invalid-json", method="POST")
+            try:
+                urllib.request.urlopen(legacy, timeout=5)
+                raise AssertionError("retired management accepted a write")
+            except urllib.error.HTTPError as error:
+                assert error.code == 426
         users = create_users(12, "all-three")
+        # The same logical request reaches every independent process. All three
+        # must recover the exact original response, without another audit or user.
+        identity = str(uuid.uuid4())
+        receipts = [request("http://127.0.0.1:" + str(port), "/api/v2/users", {"name":"shared-receipt"}, identity) for port in ports]
+        assert receipts[0] == receipts[1] == receipts[2]
+        users.append(receipts[0][1]["id"])
+        assert sql("SELECT count(*) FROM management_receipts WHERE idempotency_key='{}'".format(identity)) == "1"
+
         for port in ports:
             assert hits.get(str(port), 0) > 0
-            assert request("http://127.0.0.1:" + str(port), "/api/v1/users?page_size=200")[1]["total"] == len(users)
+            assert request("http://127.0.0.1:" + str(port), "/api/v2/users?page_size=200")[1]["total"] == len(users)
         print("three independent full servers accepted writes through the round-robin proxy", flush=True)
 
         with backend_lock:
@@ -233,7 +256,7 @@ def main():
         users += create_users(3, "after-database-recovery")
         print("all service processes survived a scoped database outage and resumed API writes", flush=True)
         for port in ports:
-            assert request("http://127.0.0.1:" + str(port), "/api/v1/users?page_size=200")[1]["total"] == len(users)
+            assert request("http://127.0.0.1:" + str(port), "/api/v2/users?page_size=200")[1]["total"] == len(users)
         assert sql("SELECT count(*) FROM users") == str(len(users))
         assert sql("SELECT count(*) FROM audit_records WHERE action='user.created'") == str(len(users))
         retired = sql("SELECT count(*) FROM pg_locks WHERE database=(SELECT oid FROM pg_database WHERE datname=current_database()) AND locktype='advisory' AND objsubid=1 AND classid::bigint*4294967296+objid::bigint IN (62177345902811,62177345902812)")
@@ -241,7 +264,7 @@ def main():
         assert sql("SELECT count(*) FROM pg_proc WHERE pronamespace=current_schema()::regnamespace AND proname='hysteriax_serialize_writes'") == "0"
         result.update(passed=True, process_instances=ids + [replacement_id], users=len(users), unique_audits=len(users),
                       retired_locks=int(retired), round_robin_hits={key: value for key, value in hits.items() if key != "next"},
-                      checks=["ordinary-start-does-not-migrate", "migrate-only", "wrong-shared-key-rejected", "three-full-processes", "round-robin-writes-and-cache-reads", "SIGSTOP-expiry", "SIGCONT", "SIGKILL-restart-new-instance-id", "database-outage-reconnect", "no-retired-advisory-locks"])
+                      checks=["management-protocol-two", "legacy-management-rejected-before-decoding", "same-write-receipt-across-three-processes", "ordinary-start-does-not-migrate", "migrate-only", "wrong-shared-key-rejected", "three-full-processes", "round-robin-writes-and-cache-reads", "SIGSTOP-expiry", "SIGCONT", "SIGKILL-restart-new-instance-id", "database-outage-reconnect", "no-retired-advisory-locks"])
     finally:
         if proxy:
             proxy.shutdown()
