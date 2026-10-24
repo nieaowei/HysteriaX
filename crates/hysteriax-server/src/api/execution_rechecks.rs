@@ -177,7 +177,7 @@ fn check_input(op: &Operation, input: &Input) -> Result<(), ApiError> {
 pub(crate) async fn list(
     State(state): State<AppState>,
     Query(input): Query<ListInput>,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<(HeaderMap, Json<Value>), ApiError> {
     if input.work_id.as_ref().is_some_and(|v| v.len() > 200)
         || input.after.as_ref().is_some_and(|v| v.len() > 200)
     {
@@ -200,7 +200,12 @@ pub(crate) async fn list(
     } else {
         Value::Null
     };
-    Ok(Json(json!({"items":items,"next_cursor":next})))
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        axum::http::header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("no-store"),
+    );
+    Ok((headers, Json(json!({"items":items,"next_cursor":next}))))
 }
 
 async fn prepare(

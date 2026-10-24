@@ -205,7 +205,7 @@ async fn already_verified_recheck_cannot_quarantine_current_worker_and_reserves_
 #[tokio::test]
 async fn listing_is_bounded_filters_work_and_rejects_oversized_cursor() {
     let (state, _, _, _) = fixture().await;
-    let Json(value) = list(
+    let (headers, Json(value)) = list(
         State(state.clone()),
         Query(ListInput {
             work_id: Some("work".into()),
@@ -214,6 +214,7 @@ async fn listing_is_bounded_filters_work_and_rejects_oversized_cursor() {
     )
     .await
     .unwrap();
+    assert_eq!(headers["cache-control"], "no-store");
     assert_eq!(value["items"].as_array().unwrap().len(), 1);
     assert!(
         list(
@@ -226,7 +227,7 @@ async fn listing_is_bounded_filters_work_and_rejects_oversized_cursor() {
         .await
         .is_err()
     );
-    let Json(value) = list(
+    let (headers, Json(value)) = list(
         State(state),
         Query(ListInput {
             work_id: Some("other".into()),
@@ -235,6 +236,7 @@ async fn listing_is_bounded_filters_work_and_rejects_oversized_cursor() {
     )
     .await
     .unwrap();
+    assert_eq!(headers["cache-control"], "no-store");
     assert_eq!(value["items"].as_array().unwrap().len(), 0);
 }
 
@@ -735,4 +737,45 @@ async fn one_verified_operation_cannot_release_another_unknown_step_of_the_same_
     assert_eq!(body["resource_blocked"], true);
     assert_eq!(body["retry_allowed"], false);
     assert_eq!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM resource_leases WHERE resource_key NOT LIKE 'verify:%' AND NOT blocked").fetch_one(&state.pool).await.unwrap(),0);
+}
+
+#[tokio::test]
+async fn actual_http_listing_never_reuses_an_execution_state_without_a_version() {
+    let (state, _, id, _) = fixture().await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!(
+        "http://{}/api/v2/execution-operations?work_id=work",
+        listener.local_addr().unwrap()
+    );
+    let app = crate::api::router(state.clone());
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let client = reqwest::Client::new();
+    let initial = client.get(&url).bearer_auth("admin").send().await.unwrap();
+    let status = initial.status();
+    assert_eq!(initial.headers()["cache-control"], "no-store");
+    let initial: Value = initial.json().await.unwrap();
+    assert_eq!(status, StatusCode::OK, "{initial}");
+    assert_eq!(initial["items"].as_array().unwrap().len(), 1);
+    sqlx::query(
+        "UPDATE execution_operations SET state='verified',evidence='{}' WHERE operation_id=$1",
+    )
+    .bind(&id)
+    .execute(&state.pool)
+    .await
+    .unwrap();
+    let after = client
+        .get(&url)
+        .bearer_auth("admin")
+        .send()
+        .await
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap();
+    assert_eq!(
+        after["items"].as_array().unwrap().len(),
+        0,
+        "a completed operation must disappear immediately without a job/directory version change"
+    );
+    server.abort();
 }

@@ -384,6 +384,7 @@ pub async fn generation(pool: &sqlx::PgPool) -> Result<i64, ApiError> {
 fn ttl(path: &str) -> Option<Duration> {
     let path = crate::cache_domains::management_path(path);
     if path.starts_with("/subscription-templates")
+        || path.starts_with("/execution-operations")
         || path.ends_with("/events")
         || path == "/events"
         || path == "/events/head"
