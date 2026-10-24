@@ -10,16 +10,19 @@ import os
 import pathlib
 import platform
 import secrets
+import shutil
 import socket
 import subprocess
 import sys
 import tempfile
 import time
 import urllib.error
+import uuid
 import urllib.request
 
 from postgres_test import PostgresTestSchema
 from credential_test_fixtures import grant_group
+from multi_instance_test_fixture import MultiInstanceServer
 
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -98,8 +101,16 @@ def request(base, path, token=None, method="GET", payload=None):
 
 
 def raw_request(base, path, token=None, method="GET", payload=None):
+    identity = None
+    if method != "GET" and path.startswith("/api/v2/"):
+        identity = str(payload.get("idempotency_key")) if isinstance(payload, dict) and payload.get("idempotency_key") else str(uuid.uuid4())
+        def clean(value):
+            if isinstance(value, dict): return {key: clean(item) for key, item in value.items() if key != "idempotency_key"}
+            if isinstance(value, list): return [clean(item) for item in value]
+            return value
+        payload = clean(payload)
     body = None if payload is None else json.dumps(payload).encode()
-    headers = {}
+    headers = {"Idempotency-Key": identity} if identity else {}
     if token is not None:
         headers["Authorization"] = f"Bearer {token}"
     if body is not None:
@@ -140,7 +151,13 @@ def main():
         action="append",
         help="test one matrix entry, for example debian13-amd64 (may be repeated)",
     )
-    selected = set(parser.parse_args().only or [])
+    parser.add_argument("--instances", type=int, choices=(1, 3), default=1)
+    parser.add_argument("--report", type=pathlib.Path)
+    arguments = parser.parse_args()
+    selected = set(arguments.only or [])
+    run_id = uuid.uuid4().hex[:10]
+    verification = {"passed": False, "instances": arguments.instances}
+
     available = {
         f"{distribution}{version.replace('.', '')}-{architecture}"
         for distribution, version, _ in MATRIX
@@ -167,8 +184,8 @@ def main():
                     suffix = f"{distribution}{version.replace('.', '')}-{architecture}"
                     if selected and suffix not in selected:
                         continue
-                    image = f"hysteriax-node-matrix:{suffix}"
-                    container = f"hysteriax-matrix-{suffix}"
+                    image = f"hysteriax-node-matrix:{run_id}-{suffix}"
+                    container = f"hysteriax-matrix-{run_id}-{suffix}"
                     ssh_port = free_port()
                     hy2_port = free_port(socket.SOCK_DGRAM)
                     print(f"Building {distribution} {version} {architecture} image", flush=True)
@@ -267,12 +284,10 @@ def main():
 
             target_server = None
             with open(temp / "server.log", "wb") as log:
-                service = subprocess.Popen(
-                    [str(SERVER)], cwd=ROOT, env=environment, stdout=log, stderr=log
-                )
+                service = MultiInstanceServer(SERVER, environment, temp / "services", instances=arguments.instances, migration_log=log)
 
                 def expect(path, method="GET", payload=None, expected_status=(200, 201, 202)):
-                    if path == "/api/v1/jobs" and method == "GET":
+                    if path == "/api/v2/jobs" and method == "GET":
                         items, page = [], 1
                         while True:
                             result = expect(f"{path}?page={page}&page_size=200")
@@ -288,7 +303,7 @@ def main():
                 def wait_job(job_id, timeout=300):
                     deadline = time.time() + timeout
                     while time.time() < deadline:
-                        detail = expect(f"/api/v1/jobs/{job_id}")
+                        detail = expect(f"/api/v2/jobs/{job_id}")
                         if detail["job"]["status"] in ("succeeded", "failed", "cancelled", "rolled_back", "waiting_confirmation"):
                             return detail
                         time.sleep(1)
@@ -361,7 +376,7 @@ def main():
                     ssh_auth_type = node.get("ssh_auth_type", "private_key")
                     ssh_secret = node.get("ssh_secret", ssh_key.read_text())
                     created = expect(
-                        "/api/v1/nodes",
+                        "/api/v2/nodes",
                         "POST",
                         {
                             "name": node["name"],
@@ -381,7 +396,7 @@ def main():
                     node["node_id"] = created["node"]["id"]
                     node["node_token"] = created["node_auth_token"]
                     ssh_job = expect(
-                        f"/api/v1/nodes/{node['node_id']}/ssh-test",
+                        f"/api/v2/nodes/{node['node_id']}/ssh-test",
                         "POST",
                         {"expected_revision": 1},
                         (202,),
@@ -391,7 +406,7 @@ def main():
                     if ssh_result["job"]["status"] != "waiting_confirmation" or not fingerprint:
                         raise RuntimeError(f"SSH fingerprint discovery failed for {node['name']}")
                     expect(
-                        f"/api/v1/jobs/{ssh_job}/confirm-fingerprint",
+                        f"/api/v2/jobs/{ssh_job}/confirm-fingerprint",
                         "POST",
                         {"expected_revision": 1, "fingerprint": fingerprint},
                         (202,),
@@ -401,7 +416,7 @@ def main():
 
                     def upload_resource(name, kind, content):
                         return expect(
-                            f"/api/v1/nodes/{node['node_id']}/resources",
+                            f"/api/v2/nodes/{node['node_id']}/resources",
                             "POST",
                             {
                                 "name": name,
@@ -414,7 +429,7 @@ def main():
                     cert_ref = upload_resource("matrix-cert.pem", "certificate", cert.read_bytes())
                     key_ref = upload_resource("matrix-key.pem", "private_key", private_key.read_bytes())
                     updated = expect(
-                        f"/api/v1/nodes/{node['node_id']}",
+                        f"/api/v2/nodes/{node['node_id']}",
                         "PATCH",
                         {
                             "expected_revision": 2,
@@ -527,7 +542,7 @@ def main():
                     for node in matrix_nodes:
                         prepare_node(node)
 
-                    jobs = expect("/api/v1/jobs")
+                    jobs = expect("/api/v2/jobs")
                     for node in matrix_nodes:
                         deployment = next(
                             job
@@ -587,36 +602,36 @@ def main():
                             seen_containers.add(node["container"])
                     if len(distinct_nodes) >= 2:
                         node_one, node_two = distinct_nodes[:2]
-                        authority = expect("/api/v1/credentials/ca-identities","POST",{"name":"Shared matrix CA","source":"generated","idempotency_key":"matrix-shared-ca"},(201,))
+                        authority = expect("/api/v2/credentials/ca-identities","POST",{"name":"Shared matrix CA","source":"generated","idempotency_key":"matrix-shared-ca"},(201,))
                         ca_id = authority["id"]
                         def deploy_settings(node,settings):
-                            current = expect(f"/api/v1/nodes/{node['node_id']}")
+                            current = expect(f"/api/v2/nodes/{node['node_id']}")
                             options = current["config"]
                             if "clientCA" in options.get("tls",{}):raise RuntimeError("public config contains generated clientCA")
                             options["mtls"] = settings
-                            update = expect(f"/api/v1/nodes/{node['node_id']}","PATCH",{"expected_revision":current["revision"],"config":options})
+                            update = expect(f"/api/v2/nodes/{node['node_id']}","PATCH",{"expected_revision":current["revision"],"config":options})
                             node["revision"] = update["revision"]
-                            job = next(j for j in expect("/api/v1/jobs") if j.get("node_id")==node["node_id"] and j.get("target_revision")==node["revision"] and j["kind"]=="sync")
+                            job = next(j for j in expect("/api/v2/jobs") if j.get("node_id")==node["node_id"] and j.get("target_revision")==node["revision"] and j["kind"]=="sync")
                             result = wait_job(job["id"])
                             if result["job"]["status"]!="succeeded":raise RuntimeError("managed matrix deployment failed: "+str(result["job"].get("error_message")))
                         for node in (node_one,node_two):
                             deploy_settings(node,{"mode":"managed","ca_credential_id":ca_id,"ca_credential_version":1})
                         print("Two shared-CA managed nodes deployed with independent probes and no users",flush=True)
                         user_one = expect(
-                            "/api/v1/users", "POST", {"name": "Matrix node one only"}, (201,)
+                            "/api/v2/users", "POST", {"name": "Matrix node one only"}, (201,)
                         )["id"]
                         user_two = expect(
-                            "/api/v1/users", "POST", {"name": "Matrix node two only"}, (201,)
+                            "/api/v2/users", "POST", {"name": "Matrix node two only"}, (201,)
                         )["id"]
                         shared_user = expect(
-                            "/api/v1/users", "POST", {"name": "Matrix shared user"}, (201,)
+                            "/api/v2/users", "POST", {"name": "Matrix shared user"}, (201,)
                         )["id"]
 
                         def assign_matrix_user(user_id, node, revision):
-                            current = expect(f"/api/v1/users/{user_id}")
+                            current = expect(f"/api/v2/users/{user_id}")
                             if current["revision"] != revision:
                                 raise RuntimeError("matrix authorization business revision changed")
-                            receipt = grant_group(expect, user_id, [node["node_id"]])
+                            receipt = grant_group(expect, user_id, [node["node_id"]], api_prefix="/api/v2")
                             return next(item["hy2_credential"] for item in receipt["created_credentials"] if item["node_id"] == node["node_id"])
 
                         credential_one = assign_matrix_user(user_one, node_one, 1)
@@ -651,7 +666,7 @@ def main():
                         print("Deployed two-node/three-user auth isolation passed", flush=True)
 
                         subscription = expect(
-                            f"/api/v1/users/{shared_user}/subscription",
+                            f"/api/v2/users/{shared_user}/subscription",
                             "POST",
                             {"expected_revision": 3},
                         )
@@ -671,7 +686,7 @@ def main():
                             cert_path.write_text(material[0]);key_path.write_text(material[1]);cert_path.chmod(0o600);key_path.chmod(0o600)
                             return cert_path,key_path
                         shared_files = save_material(shared_material,"shared-generation-1")
-                        user_one_sub = expect(f"/api/v1/users/{user_one}/subscription","POST",{"expected_revision":expect(f"/api/v1/users/{user_one}")["revision"]})["token"]
+                        user_one_sub = expect(f"/api/v2/users/{user_one}/subscription","POST",{"expected_revision":expect(f"/api/v2/users/{user_one}")["revision"]})["token"]
                         status,one_yaml = request(base,f"/sub/{user_one_sub}?format=mihomo&platform=linux",method="GET")
                         one_proxy = yaml.safe_load(one_yaml)["proxies"][0]
                         if one_proxy["certificate"]==shared_material[0] or one_proxy["private-key"]==shared_material[1]:raise RuntimeError("different matrix users share client material")
@@ -721,7 +736,7 @@ def main():
                         usage = None
                         expected_node_ids = {node_one["node_id"], node_two["node_id"]}
                         for _ in range(35):
-                            usage = expect(f"/api/v1/users/{shared_user}/usage")
+                            usage = expect(f"/api/v2/users/{shared_user}/usage")
                             sampled_nodes = {entry["node_id"] for entry in usage.get("by_node", [])}
                             if usage.get("usage_bytes", 0) > 0 and expected_node_ids.issubset(sampled_nodes):
                                 break
@@ -730,9 +745,9 @@ def main():
                         if not usage or not expected_node_ids.issubset(sampled_nodes):
                             raise RuntimeError("shared-user traffic was not collected from both deployed nodes")
 
-                        shared_summary = expect(f"/api/v1/users/{shared_user}")
+                        shared_summary = expect(f"/api/v2/users/{shared_user}")
                         expect(
-                            f"/api/v1/users/{shared_user}",
+                            f"/api/v2/users/{shared_user}",
                             "PATCH",
                             {
                                 "expected_revision": shared_summary["revision"],
@@ -754,7 +769,7 @@ def main():
                         for node in (node_one, node_two):
                             kick = next(
                                 job
-                                for job in expect("/api/v1/jobs")
+                                for job in expect("/api/v2/jobs")
                                 if job.get("kind") == "kick" and job.get("node_id") == node["node_id"]
                             )
                             kick_result = wait_job(kick["id"], timeout=90)
@@ -766,9 +781,9 @@ def main():
                         )
 
                         # Restore account access before exercising issuer maintenance.
-                        current_user=expect(f"/api/v1/users/{shared_user}")
-                        expect(f"/api/v1/users/{shared_user}","PATCH",{"expected_revision":current_user["revision"],"quota_bytes":None})
-                        revisions={u:expect(f"/api/v1/users/{u}")["revision"] for u in (user_one,user_two,shared_user)}
+                        current_user=expect(f"/api/v2/users/{shared_user}")
+                        expect(f"/api/v2/users/{shared_user}","PATCH",{"expected_revision":current_user["revision"],"quota_bytes":None})
+                        revisions={u:expect(f"/api/v2/users/{u}")["revision"] for u in (user_one,user_two,shared_user)}
                         def shared_proxies():
                             status,body=request(base,f"/sub/{subscription_token}?format=mihomo&platform=linux",method="GET")
                             if status!=200:raise RuntimeError("matrix managed subscription unavailable")
@@ -776,7 +791,7 @@ def main():
                         def wait_rotation(receipt):
                             previous=None; deadline=time.monotonic()+360
                             while time.monotonic()<deadline:
-                                batch=expect(f"/api/v1/credential-batches/{receipt['batch_id']}")
+                                batch=expect(f"/api/v2/credential-batches/{receipt['batch_id']}")
                                 rotation=batch["ca_rotation"]
                                 if rotation["phase"]!=previous:
                                     print(f"Matrix CA v{receipt['version']}: {rotation['phase']}",flush=True);previous=rotation["phase"]
@@ -787,25 +802,28 @@ def main():
                             raise RuntimeError("matrix CA rotation timed out: "+json.dumps(rotation))
                         run(["docker","exec",node_two["container"],"systemctl","stop","ssh.service"])
                         try:
-                            receipt=expect(f"/api/v1/credentials/{ca_id}/ca-versions","POST",{"expected_revision":1,"idempotency_key":"matrix-ca-two"},(202,))
+                            receipt=expect(f"/api/v2/credentials/{ca_id}/ca-versions","POST",{"expected_revision":1,"idempotency_key":"matrix-ca-two"},(202,))
                             deadline=time.monotonic()+240
                             while time.monotonic()<deadline:
-                                rotation=expect(f"/api/v1/credential-batches/{receipt['batch_id']}")["ca_rotation"]
-                                first=next(n for n in rotation["nodes"] if n["node_id"]==node_one["node_id"])
-                                second=next(n for n in rotation["nodes"] if n["node_id"]==node_two["node_id"])
+                                rotation=expect(f"/api/v2/credential-batches/{receipt['batch_id']}")["ca_rotation"]
+                                first=next((n for n in rotation["nodes"] if n["node_id"]==node_one["node_id"]),None)
+                                second=next((n for n in rotation["nodes"] if n["node_id"]==node_two["node_id"]),None)
+                                if first is None or second is None:
+                                    time.sleep(1)
+                                    continue
                                 if first["trust_prepared"] and second.get("status")=="failed":break
                                 time.sleep(1)
                             else:raise RuntimeError("offline-node trust barrier did not become observable")
                             first_job=first["job_id"]
-                            if expect(f"/api/v1/credentials/{ca_id}")["ca"]["published_version"]!=1:raise RuntimeError("offline node was ignored by CA publication")
+                            if expect(f"/api/v2/credentials/{ca_id}")["ca"]["published_version"]!=1:raise RuntimeError("offline node was ignored by CA publication")
                             if any((p["certificate"],p["private-key"])!=shared_material for p in shared_proxies()):raise RuntimeError("unprepared generation escaped into subscriptions")
                             transfer_via_node(node_one,shared_one,"partial-trust",client_binary,target_port,shared_files)
                             print("Offline node blocked shared publication; prepared peer retained old-client traffic",flush=True)
                         finally:run(["docker","exec",node_two["container"],"systemctl","start","ssh.service"])
-                        expect(f"/api/v1/credential-batches/{receipt['batch_id']}/retry","POST",{})
+                        expect(f"/api/v2/credential-batches/{receipt['batch_id']}/retry","POST",{})
                         rotation=wait_rotation(receipt)
                         if next(n for n in rotation["nodes"] if n["node_id"]==node_one["node_id"])["job_id"]!=first_job:raise RuntimeError("retry redeployed an already prepared peer")
-                        receipt=expect(f"/api/v1/credentials/{ca_id}/ca-versions","POST",{"expected_revision":2,"idempotency_key":"matrix-ca-three"},(202,))
+                        receipt=expect(f"/api/v2/credentials/{ca_id}/ca-versions","POST",{"expected_revision":2,"idempotency_key":"matrix-ca-three"},(202,))
                         wait_rotation(receipt)
                         latest=shared_proxies(); current_material=(latest[0]["certificate"],latest[0]["private-key"])
                         if any((p["certificate"],p["private-key"])!=current_material for p in latest):raise RuntimeError("shared publication diverged across nodes")
@@ -813,7 +831,7 @@ def main():
                         for index,(node,password) in enumerate(((node_one,shared_one),(node_two,shared_two))):
                             transfer_via_node(node,password,f"generation-3-{index}",client_binary,target_port,current_files)
                             transfer_via_node(node,password,f"history-1-{index}",client_binary,target_port,shared_files)
-                        if any(expect(f"/api/v1/users/{u}")["revision"]!=revision for u,revision in revisions.items()):raise RuntimeError("CA maintenance changed business user revision")
+                        if any(expect(f"/api/v2/users/{u}")["revision"]!=revision for u,revision in revisions.items()):raise RuntimeError("CA maintenance changed business user revision")
                         # Explicit database time fault: exercise real cleanup deployment,
                         # while generation 2's still-valid history must remain trusted.
                         with database.connect() as connection:
@@ -822,7 +840,10 @@ def main():
                             connection.execute("UPDATE mtls_trust_cleanup SET next_action_at=now() WHERE ca_id=%s AND ca_version=1",(ca_id,))
                         deadline=time.monotonic()+360
                         while time.monotonic()<deadline:
-                            cleanup=next(c for c in expect(f"/api/v1/credentials/{ca_id}")["ca"]["cleanup"] if c["version"]==1)
+                            cleanup=next((c for c in expect(f"/api/v2/credentials/{ca_id}")["ca"]["cleanup"] if c["version"]==1),None)
+                            if cleanup is None:
+                                time.sleep(1)
+                                continue
                             if cleanup["completed_at"] is not None:break
                             if any(n.get("status")=="failed" for n in cleanup["nodes"]):raise RuntimeError("matrix old trust cleanup failed: "+json.dumps(cleanup))
                             time.sleep(1)
@@ -841,7 +862,7 @@ def main():
                         run(["openssl","req","-newkey","ec","-pkeyopt","ec_paramgen_curve:P-256","-nodes","-keyout",str(int_key),"-out",str(int_csr),"-subj","/CN=Matrix selected issuer"])
                         extensions=temp/"issuer.ext";extensions.write_text("basicConstraints=critical,CA:TRUE,pathlen:0\nkeyUsage=critical,keyCertSign,cRLSign\n")
                         run(["openssl","x509","-req","-in",str(int_csr),"-CA",str(root_cert),"-CAkey",str(root_key),"-CAcreateserial","-out",str(int_cert),"-days","365","-extfile",str(extensions)])
-                        other=expect("/api/v1/credentials/ca-identities","POST",{"name":"Selected intermediate matrix CA","source":"imported","certificate":int_cert.read_text()+root_cert.read_text(),"private_key":int_key.read_text(),"idempotency_key":"matrix-intermediate"},(201,))
+                        other=expect("/api/v2/credentials/ca-identities","POST",{"name":"Selected intermediate matrix CA","source":"imported","certificate":int_cert.read_text()+root_cert.read_text(),"private_key":int_key.read_text(),"idempotency_key":"matrix-intermediate"},(201,))
                         deploy_settings(node_one,{"mode":"managed","ca_credential_id":other["id"],"ca_credential_version":1})
                         switched=shared_proxies(); switched_proxy=next(p for p in switched if p["port"]==node_one["hy2_port"])
                         switched_material=(switched_proxy["certificate"],switched_proxy["private-key"])
@@ -860,9 +881,9 @@ def main():
                         print("Shared CA, offline barrier/retry, consecutive publication, real cleanup with metadata time fault, separate CA and selected-intermediate trust boundary passed",flush=True)
 
                     for node in matrix_nodes:
-                        node["revision"] = expect(f"/api/v1/nodes/{node['node_id']}")["revision"]
+                        node["revision"] = expect(f"/api/v2/nodes/{node['node_id']}")["revision"]
                         deletion = expect(
-                            f"/api/v1/nodes/{node['node_id']}?expected_revision={node['revision']}",
+                            f"/api/v2/nodes/{node['node_id']}?expected_revision={node['revision']}",
                             "DELETE",
                             expected_status=(202,),
                         )
@@ -872,7 +893,7 @@ def main():
 
                     for node in ssh_auth_nodes:
                         prepare_node(node)
-                        queued_jobs = expect("/api/v1/jobs")
+                        queued_jobs = expect("/api/v2/jobs")
                         deployment = next(
                             job
                             for job in queued_jobs
@@ -896,7 +917,7 @@ def main():
                             ["docker", "exec", node["container"], "systemctl", "is-active", "hysteriax.service"]
                         )
                         deletion = expect(
-                            f"/api/v1/nodes/{node['node_id']}?expected_revision={node['revision']}",
+                            f"/api/v2/nodes/{node['node_id']}?expected_revision={node['revision']}",
                             "DELETE",
                             expected_status=(202,),
                         )
@@ -905,6 +926,10 @@ def main():
                             raise RuntimeError(f"remote uninstall failed for {node['name']}")
                         print(f"Deployed and uninstalled {node['name']} successfully", flush=True)
 
+                    verification.update(**service.report(), matrix_nodes=len(matrix_nodes), extra_ssh_nodes=len(ssh_auth_nodes))
+                    if arguments.instances == 3 and len(verification["round_robin_hits"]) != 3:
+                        raise RuntimeError("not all three service processes received live business requests")
+                    verification["passed"] = True
                     print(
                         f"All {len(matrix_nodes)} selected distro/architecture deployments and "
                         f"{len(ssh_auth_nodes)} extra SSH-auth deployments passed.",
@@ -925,10 +950,30 @@ def main():
                         service.kill()
                         service.wait()
         finally:
+            if arguments.report:
+                arguments.report.parent.mkdir(parents=True, exist_ok=True)
+                saved = pathlib.Path(tempfile.mkdtemp(prefix=arguments.report.stem+"-logs-", dir=arguments.report.parent))
+                verification["logs"] = str(saved)
+                for name in ("services", "server.log"):
+                    source = temp / name
+                    if source.is_dir(): shutil.copytree(source, saved / name)
+                    elif source.is_file(): shutil.copy2(source, saved / name)
+                try:
+                    with database.connect() as connection:
+                        verification["registered_instances"] = connection.execute("SELECT count(*) FROM service_instances").fetchone()[0]
+                        verification["operation_states"] = dict(connection.execute("SELECT state,count(*) FROM execution_operations GROUP BY state").fetchall())
+                        verification["execution_owners"] = [row[0] for row in connection.execute("SELECT DISTINCT owner FROM execution_operations ORDER BY owner").fetchall()]
+                        verification["jobs_by_status"] = dict(connection.execute("SELECT status,count(*) FROM jobs GROUP BY status").fetchall())
+                        verification["blocked_resources"] = connection.execute("SELECT count(*) FROM resource_leases WHERE blocked").fetchone()[0]
+                except Exception:
+                    verification["database_snapshot_unavailable"] = True
             for container in containers:
                 run(["docker", "rm", "-f", container], check=False)
             for image in built_images:
                 run(["docker", "image", "rm", image], check=False)
+            if arguments.report:
+                arguments.report.parent.mkdir(parents=True, exist_ok=True)
+                arguments.report.write_text(json.dumps(verification, indent=2)+"\n")
 
 
 if __name__ == "__main__":

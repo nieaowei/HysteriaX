@@ -1,4 +1,4 @@
-"""Create v1 credential objects for the existing live-test fixture descriptions.
+"""Create credential objects for the existing live-test fixture descriptions.
 
 Credential fixture writes use IDs and pinned versions. Authorization fixtures
 use the real group preview/commit protocol; retired assignment routes are never
@@ -21,12 +21,13 @@ def request_with_credentials(raw_request, base, path, token=None, method="GET", 
 
     def create(name, kind, material):
         body = {"name": name, "kind": kind, "payload": material}
-        status, result = raw_request(base, "/api/v1/credentials", token, "POST", body)
+        prefix = "/api/v2" if path.startswith("/api/v2/") else "/api/v1"
+        status, result = raw_request(base, prefix + "/credentials", token, "POST", body)
         if status != 201:
             return None, (status, result)
         return json.loads(result), None
 
-    if path == "/api/v1/nodes" or (path.startswith("/api/v1/nodes/") and method == "PATCH"):
+    if path in ("/api/v1/nodes", "/api/v2/nodes") or (path.startswith(("/api/v1/nodes/", "/api/v2/nodes/")) and method == "PATCH"):
         if "ssh_secret" in payload:
             kind = "ssh_password" if payload.pop("ssh_auth_type", "private_key") == "password" else "ssh_private_key"
             material = {"secret": payload.pop("ssh_secret")}
@@ -79,14 +80,14 @@ def request_with_credentials(raw_request, base, path, token=None, method="GET", 
     return raw_request(base, path, token, method, payload)
 
 
-def grant_group(expect, user_id, node_ids, name=None):
+def grant_group(expect, user_id, node_ids, name=None, *, api_prefix="/api/v1"):
     """Exercise the actual group preview/commit protocol; no retired assignment route."""
     draft = {"action": "create", "name": name or "Live grant " + uuid.uuid4().hex[:12],
              "user_ids": [user_id], "node_ids": list(node_ids)}
-    preview = expect("/api/v1/authorization-groups/preview", "POST", draft)
+    preview = expect(api_prefix + "/authorization-groups/preview", "POST", draft)
     draft.pop("action")
     draft["preview_token"] = preview["preview_token"]
-    return expect("/api/v1/authorization-groups", "POST", draft, (201,))
+    return expect(api_prefix + "/authorization-groups", "POST", draft, (201,))
 
 
 def request_group(raw_request, base, token, user_ids, node_ids, name=None):
