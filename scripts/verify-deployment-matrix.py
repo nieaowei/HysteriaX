@@ -24,6 +24,7 @@ from postgres_test import PostgresTestSchema
 from credential_test_fixtures import grant_group
 from multi_instance_test_fixture import MultiInstanceServer
 from process_fault_test_fixture import run_installation_pause
+from pre_dispatch_fault_test_fixture import run_pre_dispatch_pause
 from live_database_diagnostics import DatabaseDiagnostics
 
 
@@ -155,7 +156,10 @@ def main():
     )
     parser.add_argument("--instances", type=int, choices=(1, 3), default=1)
     parser.add_argument("--report", type=pathlib.Path)
-    parser.add_argument("--pause-during-install", action="store_true")
+    faults = parser.add_mutually_exclusive_group()
+    faults.add_argument("--pause-during-install", action="store_true")
+    faults.add_argument("--pause-before-dispatch", action="store_true")
+    parser.add_argument("--fault-only", action="store_true")
     arguments = parser.parse_args()
     selected = set(arguments.only or [])
     run_id = uuid.uuid4().hex[:10]
@@ -168,8 +172,11 @@ def main():
     }
     if unknown := selected - available:
         parser.error(f"unknown matrix entries: {', '.join(sorted(unknown))}")
-    if arguments.pause_during_install and (arguments.instances != 3 or len(selected or available) < 2):
-        parser.error("--pause-during-install requires three instances and at least two matrix nodes")
+    process_fault = arguments.pause_during_install or arguments.pause_before_dispatch
+    if process_fault and (arguments.instances != 3 or len(selected or available) < 2):
+        parser.error("process fault tests require three instances and at least two matrix nodes")
+    if arguments.fault_only and not process_fault:
+        parser.error("--fault-only requires an explicit process fault scenario")
     subprocess.run(["cargo", "build", "-p", "hysteriax-server"], cwd=ROOT, check=True)
 
     built_images = []
@@ -380,7 +387,7 @@ def main():
                                 client.wait()
                         log_file.close()
 
-                def prepare_node(node):
+                def prepare_node(node, before_config=None):
                     ssh_username = node.get("ssh_username", "root")
                     ssh_auth_type = node.get("ssh_auth_type", "private_key")
                     ssh_secret = node.get("ssh_secret", ssh_key.read_text())
@@ -437,6 +444,8 @@ def main():
 
                     cert_ref = upload_resource("matrix-cert.pem", "certificate", cert.read_bytes())
                     key_ref = upload_resource("matrix-key.pem", "private_key", private_key.read_bytes())
+                    if before_config:
+                        before_config(node)
                     updated = expect(
                         f"/api/v2/nodes/{node['node_id']}",
                         "PATCH",
@@ -550,6 +559,8 @@ def main():
 
                     if arguments.pause_during_install:
                         verification["installation_process_fault"] = run_installation_pause(database, service, matrix_nodes, prepare_node, expect, wait_job)
+                    elif arguments.pause_before_dispatch:
+                        verification["pre_dispatch_process_fault"] = run_pre_dispatch_pause(database, service, matrix_nodes, prepare_node, expect, wait_job)
                     for node in matrix_nodes:
                         if "node_id" not in node:
                             prepare_node(node)
@@ -606,6 +617,11 @@ def main():
                             ["docker", "exec", node["container"], "systemctl", "is-active", "hysteriax.service"]
                         )
                         print(f"Deployed {node['name']} successfully", flush=True)
+
+                    if arguments.fault_only:
+                        verification.update(passed=True, scope="targeted-process-fault-only", **service.report(), matrix_nodes=len(matrix_nodes), extra_ssh_nodes=0)
+                        print("Targeted process fault and both real node deployment checks passed; remaining matrix scenarios excluded by --fault-only", flush=True)
+                        return
 
                     distinct_nodes = []
                     seen_containers = set()
