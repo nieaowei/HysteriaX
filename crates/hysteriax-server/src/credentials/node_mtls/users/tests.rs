@@ -211,3 +211,154 @@ async fn signed_candidates_roll_back_together_and_native_retry_reuses_the_prepar
         2
     );
 }
+
+async fn assign(f: &Fixture, user: &str, node: &str) {
+    sqlx::query("INSERT INTO users(id,name,enabled,created_at,updated_at) VALUES($1,$1,true,clock_timestamp(),clock_timestamp()) ON CONFLICT DO NOTHING")
+        .bind(user).execute(&f.state.pool).await.unwrap();
+    sqlx::query("INSERT INTO node_assignments(user_id,node_id,credential_hash,credential_enc,created_at) VALUES($1,$2,$1,$3,clock_timestamp())")
+        .bind(user).bind(node).bind(f.state.secrets.encrypt("fixture").unwrap()).execute(&f.state.pool).await.unwrap();
+}
+async fn generation(f: &Fixture, node: &str) -> i64 {
+    sqlx::query_scalar("SELECT generation FROM node_authorization_versions WHERE node_id=$1")
+        .bind(node)
+        .fetch_one(&f.state.pool)
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn authorization_fence_rejects_remove_and_readd_even_when_the_same_sorted_members_return() {
+    let f = fixture().await;
+    let node = f.job.node_id.as_deref().unwrap();
+    assign(&f, "alice", node).await;
+    let old = source(&f).await;
+    sqlx::query("DELETE FROM node_assignments WHERE user_id='alice'")
+        .execute(&f.state.pool)
+        .await
+        .unwrap();
+    assign(&f, "alice", node).await;
+    assert_eq!(source(&f).await.users, old.users);
+    assert!(
+        save(&f, &old).await.is_err(),
+        "an ABA authorization change must invalidate the old signing source"
+    );
+    save(&f, &source(&f).await).await.unwrap();
+}
+
+#[tokio::test]
+async fn rolled_back_membership_and_credential_updates_leave_the_membership_fence_unchanged() {
+    let f = fixture().await;
+    let node = f.job.node_id.as_deref().unwrap();
+    assign(&f, "alice", node).await;
+    let old = source(&f).await;
+    let before = generation(&f, node).await;
+    let mut tx = f.state.pool.begin().await.unwrap();
+    sqlx::query("DELETE FROM node_assignments WHERE user_id='alice'")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    tx.rollback().await.unwrap();
+    sqlx::query("UPDATE node_assignments SET credential_hash='new-hash' WHERE user_id='alice'")
+        .execute(&f.state.pool)
+        .await
+        .unwrap();
+    assert_eq!(generation(&f, node).await, before);
+    save(&f, &old).await.unwrap();
+}
+
+#[tokio::test]
+async fn another_nodes_membership_does_not_invalidate_the_source_and_moves_fence_both_nodes() {
+    let f = fixture().await;
+    let ssh = fixture_api::create(&f.state, "ssh_password", json!({"secret":"fixture"})).await;
+    let other = fixture_api::node(&f.state, "other", &ssh, json!({})).await;
+    let node = f.job.node_id.as_deref().unwrap();
+    let old = source(&f).await;
+    let initial = generation(&f, node).await;
+    assign(&f, "alice", &other).await;
+    save(&f, &old).await.unwrap();
+    let other_before = generation(&f, &other).await;
+    sqlx::query("UPDATE node_assignments SET node_id=$1 WHERE user_id='alice'")
+        .bind(node)
+        .execute(&f.state.pool)
+        .await
+        .unwrap();
+    assert_eq!(generation(&f, node).await, initial + 1);
+    assert_eq!(generation(&f, &other).await, other_before + 1);
+    assert!(save(&f, &old).await.is_err());
+}
+
+#[tokio::test]
+async fn truncation_fences_an_empty_source_and_node_deletion_cleans_its_metadata() {
+    let f = fixture().await;
+    let old = source(&f).await;
+    sqlx::query("TRUNCATE node_assignments CASCADE")
+        .execute(&f.state.pool)
+        .await
+        .unwrap();
+    assert!(save(&f, &old).await.is_err());
+    let ssh = fixture_api::create(&f.state, "ssh_password", json!({"secret":"fixture"})).await;
+    let other = fixture_api::node(&f.state, "remove", &ssh, json!({})).await;
+    assert_eq!(generation(&f, &other).await, 0);
+    assign(&f, "alice", &other).await;
+    sqlx::query("DELETE FROM nodes WHERE id=$1")
+        .bind(&other)
+        .execute(&f.state.pool)
+        .await
+        .unwrap();
+    assert!(
+        !sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS(SELECT 1 FROM node_authorization_versions WHERE node_id=$1)"
+        )
+        .bind(other)
+        .fetch_one(&f.state.pool)
+        .await
+        .unwrap()
+    );
+}
+
+#[tokio::test]
+async fn authorization_version_migration_backfills_without_rewriting_business_or_encrypted_history()
+{
+    let pool = db::test_pool_through_version(3, 66).await;
+    let state = AppState::new(
+        pool,
+        crate::security::SecretBox::from_base64("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+            .unwrap(),
+    );
+    crate::credentials::migration::migrate(&state.pool, &state.secrets)
+        .await
+        .unwrap();
+    let ssh = fixture_api::create(
+        &state,
+        "ssh_password",
+        json!({"secret":"unchanged-encrypted-material"}),
+    )
+    .await;
+    let node = fixture_api::node(&state, "retained", &ssh, json!({})).await;
+    sqlx::query("INSERT INTO users(id,name,created_at,updated_at) VALUES('retained-user','Retained',now(),now())").execute(&state.pool).await.unwrap();
+    sqlx::query("INSERT INTO node_assignments(user_id,node_id,credential_hash,credential_enc,created_at) VALUES('retained-user',$1,'hash',$2,now())")
+        .bind(&node).bind(state.secrets.encrypt("retained-password").unwrap()).execute(&state.pool).await.unwrap();
+    let query = "SELECT jsonb_build_object('nodes',(SELECT jsonb_agg(to_jsonb(n) ORDER BY id) FROM nodes n),'users',(SELECT jsonb_agg(to_jsonb(u) ORDER BY id) FROM users u),'assignments',(SELECT jsonb_agg(to_jsonb(a) ORDER BY user_id,node_id) FROM node_assignments a),'credentials',(SELECT jsonb_agg(to_jsonb(c) ORDER BY id) FROM credentials c),'versions',(SELECT jsonb_agg(to_jsonb(v) ORDER BY credential_id,version) FROM credential_versions v),'history',(SELECT jsonb_agg(to_jsonb(h) ORDER BY id) FROM config_versions h),'events',(SELECT jsonb_agg(to_jsonb(e) ORDER BY id) FROM job_events e),'audit',(SELECT jsonb_agg(to_jsonb(a) ORDER BY id) FROM audit_records a))";
+    let before: Value = sqlx::query_scalar(query)
+        .fetch_one(&state.pool)
+        .await
+        .unwrap();
+    db::run_migrations(&state.pool).await.unwrap();
+    assert_eq!(
+        sqlx::query_scalar::<_, Value>(query)
+            .fetch_one(&state.pool)
+            .await
+            .unwrap(),
+        before
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT generation FROM node_authorization_versions WHERE node_id=$1"
+        )
+        .bind(node)
+        .fetch_one(&state.pool)
+        .await
+        .unwrap(),
+        0
+    );
+}

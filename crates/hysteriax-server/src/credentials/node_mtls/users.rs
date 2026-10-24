@@ -12,6 +12,7 @@ use sqlx::{PgPool, Postgres, Row, Transaction};
 pub(super) struct Source {
     job: JobInput,
     revision: i64,
+    authorization_generation: i64,
     pub(super) users: Vec<String>,
     leases: Vec<Execution>,
 }
@@ -43,18 +44,13 @@ async fn job_on(tx: &mut Transaction<'_, Postgres>, job: &JobInput) -> Result<()
     anyhow::ensure!(!uncertain, "deployment has an unverified remote step");
     Ok(())
 }
-async fn node_on(tx: &mut Transaction<'_, Postgres>, job: &JobInput) -> Result<(i64, Vec<String>)> {
+async fn node_on(tx: &mut Transaction<'_, Postgres>, job: &JobInput) -> Result<(i64, i64)> {
     let node = job.node_id.as_deref().context("deployment node missing")?;
-    let revision=sqlx::query_scalar("SELECT desired_revision FROM nodes WHERE id=$1 AND state NOT IN ('deleting','delete_failed') FOR NO KEY UPDATE")
-        .bind(node).fetch_optional(&mut **tx).await?.context("deployment node is missing or being deleted")?;
-    let users = sqlx::query_scalar(
-        "SELECT user_id FROM node_assignments WHERE node_id=$1 ORDER BY user_id FOR SHARE",
-    )
-    .bind(node)
-    .fetch_all(&mut **tx)
-    .await?;
-    Ok((revision, users))
+    let row = sqlx::query("SELECT n.desired_revision,v.generation FROM nodes n JOIN node_authorization_versions v ON v.node_id=n.id WHERE n.id=$1 AND n.state NOT IN ('deleting','delete_failed') FOR NO KEY UPDATE OF n FOR SHARE OF v")
+        .bind(node).fetch_optional(&mut **tx).await?.context("deployment node or authorization source is missing")?;
+    Ok((row.get("desired_revision"), row.get("generation")))
 }
+
 pub(super) async fn capture(pool: &PgPool, job: &JobInput) -> Result<Source> {
     let job = job.clone();
     db::serializable(pool,move |tx|{let job=job.clone();Box::pin(async move {
@@ -65,8 +61,10 @@ pub(super) async fn capture(pool: &PgPool, job: &JobInput) -> Result<Source> {
         anyhow::ensure!(rows.len()==keys.len(),"deployment identity preparation requires full execution leases");
         let leases:Vec<Execution>=rows.iter().map(|r|Execution{resource:r.get("resource_key"),owner:r.get("owner"),generation:r.get("generation"),work:job.id.clone()}).collect();
         anyhow::ensure!(leases.iter().all(|l|l.owner==leases[0].owner),"deployment identity preparation has mixed owners");
-        let (revision,users)=node_on(tx,&job).await?;
-        Ok(Source{job,revision,users,leases})
+        let (revision,authorization_generation)=node_on(tx,&job).await?;
+        let users=sqlx::query_scalar("SELECT user_id FROM node_assignments WHERE node_id=$1 ORDER BY user_id")
+            .bind(&job.node_id).fetch_all(&mut **tx).await?;
+        Ok(Source{job,revision,authorization_generation,users,leases})
     })}).await
 }
 async fn current_on(tx: &mut Transaction<'_, Postgres>, s: &Source) -> Result<()> {
@@ -74,13 +72,13 @@ async fn current_on(tx: &mut Transaction<'_, Postgres>, s: &Source) -> Result<()
     for lease in &s.leases {
         lease.guard(tx).await?;
     }
-    let (revision, users) = node_on(tx, &s.job).await?;
+    let (revision, authorization_generation) = node_on(tx, &s.job).await?;
     anyhow::ensure!(
-        revision == s.revision && users == s.users,
+        revision == s.revision && authorization_generation == s.authorization_generation,
         "node permissions changed during signing; retry deployment"
     );
     sqlx::query("SELECT id FROM users WHERE id=ANY($1) ORDER BY id FOR NO KEY UPDATE")
-        .bind(&users)
+        .bind(&s.users)
         .fetch_all(&mut **tx)
         .await?;
     Ok(())
