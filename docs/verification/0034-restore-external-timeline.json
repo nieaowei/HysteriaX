@@ -1,0 +1,66 @@
+{
+  "scope": "isolated-compose-backup-restore",
+  "passed": true,
+  "full_service_replicas": 3,
+  "before_epochs": [
+    "cbfe668f-79ca-4e50-a2d8-b6e5058df8f0",
+    "0bf27745-f2dd-4c9c-ae2b-43d3d84f53d6",
+    "cbfe668f-79ca-4e50-a2d8-b6e5058df8f0"
+  ],
+  "rollback_epochs": [
+    "1a3487d2-cb13-469b-97d1-8512d63ce531",
+    "91496905-d444-4b3a-bb86-165d7372fb86",
+    "1a3487d2-cb13-469b-97d1-8512d63ce531"
+  ],
+  "refused_external_timelines": [
+    {
+      "state": "dispatching",
+      "current_database_retained": true,
+      "resource_blocked": true,
+      "ready_replicas": 3,
+      "external_calls_during_restore": 0
+    },
+    {
+      "state": "verified",
+      "current_database_retained": true,
+      "resource_blocked": false,
+      "ready_replicas": 3,
+      "external_calls_during_restore": 0
+    }
+  ],
+  "external_mutation_requests": 2,
+  "restored_epochs": [
+    "8330c2a3-5294-4cd2-a980-dbb87a0cef6c",
+    "233eeda3-f436-4ef8-aa7f-5ba076c34b44",
+    "8330c2a3-5294-4cd2-a980-dbb87a0cef6c"
+  ],
+  "retained_counts": {
+    "users": 1,
+    "credentials": 1,
+    "credential_versions": 1,
+    "jobs": 1,
+    "job_events": 1,
+    "audit_records": 2,
+    "management_receipts": 2
+  },
+  "retained_sha256": "a2add53e76da2cc2ec864627f07e790384cb2922663f3f2aee281b536d6239d7",
+  "checks": [
+    "explicit-fresh-migration",
+    "ordinary-backup-resume-no-epoch-rewrite",
+    "restore-epoch-rotation",
+    "business-rows-and-ciphertext-retained",
+    "same-key-encrypted-response-replay",
+    "usage-and-task-query",
+    "Redis-cleared",
+    "maintenance-failure-restores-current-DB",
+    "rollback-maintenance-rotation",
+    "persistent-maintenance-failure-leaves-API-stopped",
+    "post-backup-confirmed-and-uncertain-intents-prevent-restore",
+    "refusal-retains-current-DB-and-resource-barrier",
+    "no-external-replay-during-refused-restore"
+  ],
+  "limitations": [
+    "fixture covers listed tables, not all historical production business tables",
+    "external mutations use an isolated real HTTP fixture; this does not claim provider-specific reconciliation or remote rollback"
+  ]
+}

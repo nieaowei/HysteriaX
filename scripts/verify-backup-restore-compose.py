@@ -13,6 +13,9 @@ import shutil
 import subprocess
 import tempfile
 import uuid
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.request import urlopen, Request
 
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -265,6 +268,65 @@ def main():
                 raise RuntimeError("PostgreSQL restore did not recover the verified snapshot")
             if not backup_restore.api_is_ready(project):
                 raise RuntimeError("API did not become ready after restoring the verified archive")
+            external_calls = []
+            class ExternalFixture(BaseHTTPRequestHandler):
+                def log_message(self, *_):
+                    pass
+                def do_POST(self):
+                    external_calls.append(self.path)
+                    self.send_response(200)
+                    self.end_headers()
+                    self.wfile.write(b'{}')
+            external = ThreadingHTTPServer(("127.0.0.1", 0), ExternalFixture)
+            thread = threading.Thread(target=external.serve_forever, daemon=True)
+            thread.start()
+            refused_timelines = []
+            try:
+                for state in ("dispatching", "verified"):
+                    resource = "restore-fixture:" + state
+                    operation = "post-backup-" + state
+                    query("INSERT INTO resource_leases(resource_key,owner,generation,work_id,expires_at,blocked) VALUES('" + resource + "','restore-fixture',1,'" + operation + "',now()-interval '1 minute',true)")
+                    query("INSERT INTO execution_operations(operation_id,resource_key,owner,generation,work_id,step,state,intent) VALUES('" + operation + "','" + resource + "','restore-fixture',1,'" + operation + "','http','dispatching','{\"kind\":\"fixture-http\"}')")
+                    with urlopen(Request("http://127.0.0.1:" + str(external.server_port) + "/change", method="POST"), timeout=3) as response:
+                        if response.status != 200:
+                            raise RuntimeError("external mutation fixture failed")
+                    # dispatching deliberately loses its receipt. The other
+                    # case commits confirmation; neither exists in the backup.
+                    if state == "verified":
+                        query("UPDATE execution_operations SET state='verified',evidence='{\"fixture_receipt\":true}' WHERE operation_id='" + operation + "'")
+                        query("UPDATE resource_leases SET owner=NULL,work_id=NULL,expires_at=NULL,blocked=false WHERE resource_key='" + resource + "'")
+                    query("UPDATE backup_fixture SET content='post-backup-external-" + state + "' WHERE id=1")
+                    calls_before_restore = len(external_calls)
+                    try:
+                        backup_restore.restore(project, archive)
+                    except RuntimeError as error:
+                        if "external timeline differs" not in str(error):
+                            raise
+                    else:
+                        raise RuntimeError("restore discarded post-backup external evidence")
+                    if len(external_calls) != calls_before_restore:
+                        raise RuntimeError("refused restore replayed an external mutation")
+                    if query("SELECT content FROM backup_fixture WHERE id=1") != "post-backup-external-" + state:
+                        raise RuntimeError("refused restore replaced the current database")
+                    if query("SELECT state FROM execution_operations WHERE operation_id='" + operation + "'") != state:
+                        raise RuntimeError("refused restore lost the external intent/receipt")
+                    expected_blocked = state == "dispatching"
+                    if query("SELECT blocked FROM resource_leases WHERE resource_key='" + resource + "'") != ("t" if expected_blocked else "f"):
+                        raise RuntimeError("refused restore changed the resource barrier")
+                    if not backup_restore.api_is_ready(project):
+                        raise RuntimeError("refused restore did not resume the retained current database")
+                    for index in range(1, 4):
+                        backup_restore.compose(project, "exec", "--index", str(index), "-T", "api", "curl", "--fail", "--silent", "http://127.0.0.1:8080/readyz")
+                    if api("GET", "/api/v2/users/" + user["id"])["usage_bytes"] != 1337:
+                        raise RuntimeError("refused restore broke unrelated business reads")
+                    refused_timelines.append({"state":state,"current_database_retained":True,"resource_blocked":expected_blocked,"ready_replicas":3,"external_calls_during_restore":0})
+                    # Only remove our isolated, source-less fixture rows. This
+                    # is test teardown, not an application unlock operation.
+                    query("DELETE FROM execution_operations WHERE operation_id='" + operation + "'; DELETE FROM resource_leases WHERE resource_key='" + resource + "'")
+            finally:
+                external.shutdown()
+                external.server_close()
+                thread.join(timeout=3)
             # If maintenance also fails on the retained database, remain down.
             def always_fail(_):
                 raise RuntimeError("injected persistent maintenance failure")
@@ -282,14 +344,16 @@ def main():
             if backup_restore.api_is_ready(project):
                 raise RuntimeError("API restarted after both maintenance attempts failed")
             report.update(passed=True, full_service_replicas=3, before_epochs=before_epochs, rollback_epochs=rollback_epochs,
+                          refused_external_timelines=refused_timelines, external_mutation_requests=len(external_calls),
                           restored_epochs=restored_epochs, retained_counts={key: len(value) for key, value in retained.items()},
                           retained_sha256=hashlib.sha256(json.dumps(retained, sort_keys=True).encode()).hexdigest(),
                           checks=["explicit-fresh-migration", "ordinary-backup-resume-no-epoch-rewrite", "restore-epoch-rotation",
                                   "business-rows-and-ciphertext-retained", "same-key-encrypted-response-replay", "usage-and-task-query",
                                   "Redis-cleared", "maintenance-failure-restores-current-DB", "rollback-maintenance-rotation",
-                                  "persistent-maintenance-failure-leaves-API-stopped"],
+                                  "persistent-maintenance-failure-leaves-API-stopped", "post-backup-confirmed-and-uncertain-intents-prevent-restore",
+                                  "refusal-retains-current-DB-and-resource-barrier", "no-external-replay-during-refused-restore"],
                           limitations=["fixture covers listed tables, not all historical production business tables",
-                                       "no remote node/provider side effects are present; absent post-backup operations still need separate fencing acceptance"])
+                                       "external mutations use an isolated real HTTP fixture; this does not claim provider-specific reconciliation or remote rollback"])
             print("Compose PostgreSQL backup and restore passed, including staging validation and readiness.")
         finally:
             backup_restore.compose(project, "down", "--volumes", "--remove-orphans", check=False)

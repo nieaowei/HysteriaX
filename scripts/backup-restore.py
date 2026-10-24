@@ -363,6 +363,85 @@ def _clear_redis_cache(project_root):
                 'REDISCLI_AUTH="$HYSTERIAX_REDIS_PASSWORD" redis-cli FLUSHDB')
 
 
+def external_columns(project_root, database, table):
+    # Table names below are constants; column names are quoted as identifiers
+    # before being reused. Missing modern journals are empty in legacy backups.
+    result = compose(project_root, "exec", "-T", "postgres", "psql",
+                     "--username", app_role(project_root), "--dbname", database,
+                     "--tuples-only", "--no-align", "--set=ON_ERROR_STOP=1",
+                     "--command", "SELECT coalesce(json_agg(a.attname ORDER BY a.attnum),'[]') "
+                     "FROM pg_attribute a JOIN pg_class c ON c.oid=a.attrelid "
+                     "JOIN pg_namespace n ON n.oid=c.relnamespace "
+                     "WHERE a.attnum>0 AND NOT a.attisdropped AND n.nspname='public' AND c.relname='" + table + "'")
+    return json.loads(result.stdout)
+
+
+def external_fingerprint(project_root, database, table, columns, predicate):
+    digest, count = hashlib.sha256(), 0
+    if not columns:
+        return (count, digest.hexdigest())
+    selected = ",".join('"' + column.replace('"', '""') + '"' for column in columns)
+    statement = (
+        "BEGIN READ ONLY; SET LOCAL statement_timeout='5min'; SET LOCAL work_mem='16MB'; "
+        "SET LOCAL TIME ZONE 'UTC'; "
+        "SELECT encode(sha256(convert_to(to_jsonb(r)::text,'UTF8')),'hex') FROM "
+        f'(SELECT {selected} FROM public."{table}" WHERE {predicate}) r ORDER BY 1; COMMIT;'
+    )
+    command = compose_command(project_root, "exec", "-T", "postgres", "psql",
+                              "--username", app_role(project_root), "--dbname", database,
+                              "--quiet", "--tuples-only", "--no-align",
+                              "--set=ON_ERROR_STOP=1", "--command", statement)
+    # Stream only sorted row hashes. Neither credentials nor original intent
+    # bodies leave PostgreSQL, and large journals do not fill Python memory.
+    with tempfile.TemporaryFile() as diagnostics:
+        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=diagnostics)
+        try:
+            for line in process.stdout:
+                value = line.strip()
+                if not re.fullmatch(b"[0-9a-f]{64}", value):
+                    raise RuntimeError("external timeline audit returned invalid output")
+                digest.update(value + b"\n")
+                count += 1
+            if process.wait() != 0:
+                raise RuntimeError("external timeline audit failed; automatic restore refused")
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.wait()
+            process.stdout.close()
+    return (count, digest.hexdigest())
+
+
+def check_external_timeline(project_root, staging_database):
+    # Called only after ALL API replicas stop, before either database is renamed.
+    # Epoch rotation cannot recover intents that an older snapshot never held.
+    # Without matching evidence there is no safe automatic remote rollback:
+    # retain the current DB rather than silently replaying an obsolete intent.
+    tables = {
+        "execution_operations": "true",
+        "execution_rechecks": "true",
+        "dns_operations": "true",
+        "kick_requests": "true",
+        "jobs": "kind NOT IN ('record-remove','ssh-test')",
+    }
+    for table, predicate in tables.items():
+        current = external_columns(project_root, DATABASE_NAME, table)
+        restored = external_columns(project_root, staging_database, table)
+        common = sorted(set(current) & set(restored))
+        if current and restored and not common:
+            raise RuntimeError("external timeline schemas are incompatible; automatic restore refused")
+        # If a journal is absent in one schema, still scan every row on the
+        # other side: only an actually empty journal may match its absence.
+        left = external_fingerprint(project_root, DATABASE_NAME, table, common or current, predicate)
+        right = external_fingerprint(project_root, staging_database, table, common or restored, predicate)
+        if left != right:
+            raise RuntimeError(
+                "external timeline differs from the backup (" + table + "); "
+                "automatic restore refused; current database retained; "
+                "reconcile external resources before attempting a coordinated recovery"
+            )
+
+
 def restore(project_root, archive_path):
     project_root = pathlib.Path(project_root).resolve()
     master_key = read_master_key(project_root)
@@ -398,6 +477,7 @@ def restore(project_root, archive_path):
                 project_root,
                 f"SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '{DATABASE_NAME}' AND pid <> pg_backend_pid()",
             )
+            check_external_timeline(project_root, staging_db)
             _rename_database(project_root, DATABASE_NAME, previous_db)
             previous_renamed = True
             _rename_database(project_root, staging_db, DATABASE_NAME)

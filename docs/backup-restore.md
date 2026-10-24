@@ -22,7 +22,11 @@ Restore with the matching encryption key already set in `.env`:
 scripts/backup-restore.py restore backups/hysteriax-postgresql-YYYYMMDDTHHMMSSZ.tar.gz
 ```
 
-The command verifies archive paths, checksums, format, and key fingerprint, then restores into a temporary PostgreSQL database and checks its schema version. It stops the API only after this validation, renames the current database aside, promotes the restored database, and waits for `/readyz`. If readiness fails, it moves the failed database aside and restores the previous database. The previous database is retained after a successful restore and its name is printed.
+The command verifies archive paths, checksums, format, and key fingerprint, then restores into a temporary PostgreSQL database and checks its schema version. It stops every API replica only after this validation. Before renaming either database, it compares the external execution, verification, DNS, disconnect and remote-task journals against the current database using sorted row hashes. A missing journal in an older schema matches only an empty current journal; shared original columns are compared across schema versions.
+
+If those journals differ or cannot be checked, automatic restore is refused and the current database is retained. This includes confirmed and uncertain external changes after the backup: rotating an epoch cannot recreate their missing intent records or undo their remote effects. The script resumes the retained current database only after maintenance succeeds; existing uncertainty barriers remain in place. There is no bypass flag. Reconcile the external resources and prepare a coordinated recovery before retrying; do not delete journal rows or clear blocked leases to make the check pass. Database-only updates that do not alter those journals can still be restored.
+
+When the check passes, the command renames the current database aside, promotes the restored database, clears Redis, runs `--migrate-only` with all replicas stopped, and only then starts the API and waits for `/readyz`. Maintenance rotates execution, cache and event epochs without deleting historical events. If maintenance or readiness fails, it moves the failed database aside and restores the previous database, which must also pass maintenance before restart. If both maintenance attempts fail, the API stays stopped. The previous database is retained after a successful restore and its name is printed.
 
 SQLite archive format version 1 is not accepted. This release does not include an SQLite importer.
 
@@ -33,11 +37,11 @@ python3 -m unittest discover -s tests -p 'test_backup_restore.py'
 scripts/verify-backup-restore-compose.py
 ```
 
-The integration restores a real PostgreSQL dump, verifies a stored row, checks API readiness, and exercises staging before promotion. `.dockerignore` excludes `.env*`, backups, and production data from image build context.
+The integration uses three full API containers, restores a real PostgreSQL dump, checks retained business rows and ciphertext, and exercises maintenance before startup and rollback. It also changes an isolated HTTP service after backup and verifies that both confirmed and unconfirmed intents prevent restore without repeating the request or losing the current database. This tests refusal, not provider-specific remote rollback. `.dockerignore` excludes `.env*`, backups, and production data from image build context.
 
 ## Credential version recovery
 
-Backups include encrypted credential versions, batch items, application completion markers and pinned configuration snapshots. Keep the matching master key outside the database. The credentials upgrade removes legacy secret columns after transactional conversion; downgrade recovery requires the pre-upgrade database backup and original image together. The migration-only mode is suitable for validating a restored copy without starting SSH, quota or deployment workers. Unfinished application jobs recover after restart; already committed applications acknowledge their completion marker instead of changing bindings again.
+Backups include encrypted credential versions, batch items, application completion markers and pinned configuration snapshots. Keep the matching master key outside the database. The credentials upgrade removes legacy secret columns after transactional conversion; downgrade recovery requires the pre-upgrade database backup and original image together. The migration-only mode is suitable for validating a restored copy without starting SSH, quota or deployment workers. Work that never dispatched an external mutation can recover after lease expiry. Uncertain external work remains quarantined for explicit verification; already committed applications acknowledge their completion marker instead of changing bindings again.
 
 The [managed mTLS upgrade](managed-mtls.md) removes old user certificate bindings
 and invalidates old mTLS rollback snapshots. Restore the pre-upgrade database and
