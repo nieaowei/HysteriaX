@@ -382,23 +382,24 @@ pub async fn generation(pool: &sqlx::PgPool) -> Result<i64, ApiError> {
     )
 }
 fn ttl(path: &str) -> Option<Duration> {
-    if path.starts_with("/api/v1/subscription-templates")
+    let path = crate::cache_domains::management_path(path);
+    if path.starts_with("/subscription-templates")
         || path.ends_with("/events")
-        || path == "/api/v1/events"
-        || path == "/api/v2/events/head"
-        || path == "/api/v1/version"
-        || path.starts_with("/api/v1/admin/")
+        || path == "/events"
+        || path == "/events/head"
+        || path == "/version"
+        || path.starts_with("/admin/")
         || path.ends_with("/subscription")
-        || path == "/api/v1/server/monitoring"
-        || path == "/api/v1/cache"
+        || path == "/server/monitoring"
+        || path == "/cache"
     {
         return None;
     }
-    Some(Duration::from_secs(if path == "/api/v1/overview/history" {
+    Some(Duration::from_secs(if path == "/overview/history" {
         60
-    } else if path == "/api/v1/overview" || path == "/api/v1/overview/nodes" {
+    } else if path == "/overview" || path == "/overview/nodes" {
         3
-    } else if path.starts_with("/api/v1/jobs") || path.starts_with("/api/v1/credential-batches") {
+    } else if path.starts_with("/jobs") || path.starts_with("/credential-batches") {
         1
     } else {
         5
@@ -408,11 +409,11 @@ pub async fn middleware(State(state): State<AppState>, request: Request, next: N
     if request.method() != Method::GET || ttl(request.uri().path()).is_none() {
         return next.run(request).await;
     }
-    let path = request.uri().path();
-    let prepared = if path.starts_with("/api/v1/credentials") {
+    let path = crate::cache_domains::management_path(request.uri().path());
+    let prepared = if path.starts_with("/credentials") {
         crate::credentials::reference_index::begin_read_transaction(&state.pool, &state.secrets)
             .await
-    } else if path == "/api/v1/overview/history" {
+    } else if path == "/overview/history" {
         let query: std::collections::BTreeMap<_, _> =
             url::form_urlencoded::parse(request.uri().query().unwrap_or("").as_bytes()).collect();
         let source = query.get("source").map(|v| v.as_ref()).unwrap_or("users");

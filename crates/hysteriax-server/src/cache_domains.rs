@@ -2,6 +2,18 @@
 use crate::{error::ApiError, state::AppState};
 use sqlx::{PgPool, Row};
 use std::time::Duration;
+/// Version-independent policy path; cache keys retain the complete wire URI.
+pub fn management_path(path: &str) -> &str {
+    for prefix in ["/api/v1", "/api/v2"] {
+        if let Some(suffix) = path.strip_prefix(prefix)
+            && (suffix.is_empty() || suffix.starts_with('/'))
+        {
+            return suffix;
+        }
+    }
+    path
+}
+
 pub async fn version(pool: &PgPool, domains: &[&str]) -> Result<String, ApiError> {
     let mut connection = crate::read_snapshot::begin(pool).await?;
     version_on(&mut connection, domains).await
@@ -20,7 +32,8 @@ pub async fn version_on(
 }
 
 pub fn dependencies(path: &str, query: &[(String, String)]) -> Vec<&'static str> {
-    if path == "/api/v1/overview/history" {
+    let path = management_path(path);
+    if path == "/overview/history" {
         let get = |key: &str| {
             query
                 .iter()
@@ -45,7 +58,7 @@ pub fn dependencies(path: &str, query: &[(String, String)]) -> Vec<&'static str>
         }
         return deps;
     }
-    if path == "/api/v1/overview/nodes" {
+    if path == "/overview/nodes" {
         return vec![
             "node_config",
             "nodes",
@@ -56,7 +69,7 @@ pub fn dependencies(path: &str, query: &[(String, String)]) -> Vec<&'static str>
             "jobs",
         ];
     }
-    if path == "/api/v1/overview" {
+    if path == "/overview" {
         return vec![
             "node_config",
             "nodes",
@@ -69,13 +82,13 @@ pub fn dependencies(path: &str, query: &[(String, String)]) -> Vec<&'static str>
             "jobs",
         ];
     }
-    if path.starts_with("/api/v1/dns/") {
+    if path.starts_with("/dns/") {
         return vec!["dns", "node_config", "credentials"];
     }
-    if path.starts_with("/api/v1/authorization-groups") {
+    if path.starts_with("/authorization-groups") {
         return vec!["groups", "user_config", "node_config"];
     }
-    if path.starts_with("/api/v1/credential-batches") {
+    if path.starts_with("/credential-batches") {
         return vec![
             "credentials",
             "jobs",
@@ -86,14 +99,14 @@ pub fn dependencies(path: &str, query: &[(String, String)]) -> Vec<&'static str>
             "groups",
         ];
     }
-    if path.starts_with("/api/v1/credentials") {
+    if path.starts_with("/credentials") {
         let mut d = vec!["credentials", "user_config", "node_config", "dns", "jobs"];
-        if path == "/api/v1/credentials" {
+        if path == "/credentials" {
             d.push("users");
         }
         return d;
     }
-    if path.starts_with("/api/v1/users") {
+    if path.starts_with("/users") {
         return vec![
             "user_config",
             "users",
@@ -105,7 +118,7 @@ pub fn dependencies(path: &str, query: &[(String, String)]) -> Vec<&'static str>
             "gaps",
         ];
     }
-    if path.starts_with("/api/v1/nodes") {
+    if path.starts_with("/nodes") {
         if path.contains("/resources") {
             return vec!["resources", "node_config"];
         }
@@ -122,10 +135,10 @@ pub fn dependencies(path: &str, query: &[(String, String)]) -> Vec<&'static str>
             "gaps",
         ];
     }
-    if path.starts_with("/api/v1/jobs") {
+    if path.starts_with("/jobs") {
         return vec!["jobs"];
     }
-    if path == "/api/v1/audit" {
+    if path == "/audit" {
         return vec!["audit"];
     }
     vec![
@@ -152,7 +165,8 @@ pub async fn policy(
     query: &[(String, String)],
     ttl: Duration,
 ) -> Result<(String, Duration), ApiError> {
-    if let Some(id) = path.strip_prefix("/api/v1/jobs/")
+    let path = management_path(path);
+    if let Some(id) = path.strip_prefix("/jobs/")
         && !id.contains('/')
     {
         let row=sqlx::query("SELECT j.status,(SELECT generation FROM job_cache_versions WHERE job_id=j.id) revision,md5(((to_jsonb(j)-ARRAY['lease_owner','lease_expires_at'])||jsonb_build_object('retry_job_id',(SELECT child.id FROM jobs child WHERE child.retry_of_job_id=j.id)))::text) digest FROM jobs j WHERE j.id=$1").bind(id).fetch_optional(&mut *crate::read_snapshot::begin(&state.pool).await?).await?;
@@ -173,7 +187,7 @@ pub async fn policy(
             ));
         }
     }
-    if let Some(id) = path.strip_prefix("/api/v1/credential-batches/")
+    if let Some(id) = path.strip_prefix("/credential-batches/")
         && !id.contains('/')
     {
         let row = sqlx::query(include_str!("cache_batch_version.sql"))
@@ -194,8 +208,8 @@ pub async fn policy(
             ));
         }
     }
-    let ttl = if path.starts_with("/api/v1/authorization-groups")
-        || path.starts_with("/api/v1/dns/")
+    let ttl = if path.starts_with("/authorization-groups")
+        || path.starts_with("/dns/")
         || path.contains("/resources")
     {
         Duration::from_secs(60)
@@ -205,14 +219,14 @@ pub async fn policy(
     let mut revision = version(&state.pool, &dependencies(path, query)).await?;
     let parts: Vec<_> = path.trim_matches('/').split('/').collect();
     let primary = match parts.as_slice() {
-        ["api", "v1", "nodes", id] => Some(("nodes", *id)),
-        ["api", "v1", "users", id] => Some(("users", *id)),
-        ["api", "v1", "credentials", id] => Some(("credentials", *id)),
-        ["api", "v1", "authorization-groups", id] => Some(("authorization_groups", *id)),
-        ["api", "v1", "jobs", id] => Some(("jobs", *id)),
-        ["api", "v1", "credential-batches", id] => Some(("credential_batches", *id)),
-        ["api", "v1", "dns", "connections", id] => Some(("dns_connections", *id)),
-        ["api", "v1", "dns", "records", id] => Some(("dns_records", *id)),
+        ["nodes", id] => Some(("nodes", *id)),
+        ["users", id] => Some(("users", *id)),
+        ["credentials", id] => Some(("credentials", *id)),
+        ["authorization-groups", id] => Some(("authorization_groups", *id)),
+        ["jobs", id] => Some(("jobs", *id)),
+        ["credential-batches", id] => Some(("credential_batches", *id)),
+        ["dns", "connections", id] => Some(("dns_connections", *id)),
+        ["dns", "records", id] => Some(("dns_records", *id)),
         _ => None,
     };
     if let Some((kind, id)) = primary {
@@ -225,13 +239,13 @@ pub async fn policy(
         .await?;
         revision.push_str(&format!(";entity={kind}:{id}:{entity:?}"));
     }
-    if path == "/api/v1/overview" || path == "/api/v1/overview/nodes" {
+    if path == "/overview" || path == "/overview/nodes" {
         revision.push_str(";overview_schema=3");
     }
-    if path == "/api/v1/overview" {
+    if path == "/overview" {
         revision.push_str(&format!(";quota_second={}", chrono::Utc::now().timestamp()));
     }
-    if path == "/api/v1/overview/history" {
+    if path == "/overview/history" {
         revision.push_str(&format!(
             ";minute={}",
             chrono::Utc::now().timestamp().div_euclid(60)

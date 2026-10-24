@@ -48,6 +48,13 @@ pub(crate) fn audit_actor() -> String {
 pub fn router(state: AppState) -> Router {
     use subscriptions::templates as st;
     let admin = Router::new()
+        .route("/api/v2/client/summary", get(client_summary::get))
+        .route("/api/v2/overview", get(crate::overview::get))
+        .route("/api/v2/overview/nodes", get(crate::overview::list_nodes))
+        .route("/api/v2/overview/history", get(crate::overview::history))
+        .route("/api/v2/server/monitoring", get(crate::monitoring::get))
+        .route("/api/v2/audit", get(list_audit_records))
+        .route("/api/v2/cache", get(cache_stats))
         .route("/api/v2/events/head", get(event_stream_v2::head))
         .route("/api/v2/events", get(event_stream_v2::events))
         .route("/api/v2/jobs/{id}/events", get(event_stream_v2::job_events))
@@ -1398,6 +1405,9 @@ mod tests {
 
 #[cfg(test)]
 mod backend_cache_tests;
+
+#[cfg(test)]
+mod backend_cache_v2_tests;
 
 #[cfg(test)]
 mod query_optimizer_tests;
