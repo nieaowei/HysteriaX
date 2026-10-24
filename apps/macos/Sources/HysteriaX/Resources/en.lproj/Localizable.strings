@@ -2168,3 +2168,6 @@
 "将删除所选对象及依赖规则，并处理下列引用。整次操作可以一次撤销。" = "Delete the selected object and dependent rules, and update the references below. Undo restores the entire operation.";
 "查看完整变更" = "View all changes";
 "级联删除" = "Delete with dependencies";
+
+"有过多结果待确认的请求，请先恢复并重试原请求。" = "Too many requests have unconfirmed results. Reconnect and retry the original requests first.";
+"事件游标已失效，需要重新同步。" = "The event cursor has expired. State must be synchronized again.";

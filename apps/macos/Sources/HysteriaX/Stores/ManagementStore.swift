@@ -868,24 +868,32 @@ final class ManagementStore {
 
         eventTask = Task { [weak self] in
             guard let self else { return }
+            let generation = self.serviceGeneration
+            let address = self.serviceAddress
             var retryDelay = 1.0
-            var lastRefresh = Date()
+            var appliedSources = Set<Int64>()
+            var sourceOrder: [Int64] = []
             while !Task.isCancelled {
                 do {
                     let events = try await client.events(APIEndpoints.streamEvents, lastEventID: self.lastEventID)
-                    for try await eventID in events {
-                        guard !Task.isCancelled else { return }
-                        UserDefaults.standard.set(eventID, forKey: "lastEventID.\(self.serviceAddress)")
-                        let now = Date()
-                        if now.timeIntervalSince(lastRefresh) >= 1 {
+                    for try await event in events {
+                        guard generation == self.serviceGeneration, address == self.serviceAddress, !Task.isCancelled else { return }
+                        let duplicate = event.sourceID.map { appliedSources.contains($0) } == true
+                        if event.kind != "stream.cursor", !duplicate {
                             self.listPageCache.invalidate(types: [NodesPage.self, UsersPage.self, JobsPage.self, OverviewNodesPage.self].map { String(reflecting: $0) })
-                            await self.refresh(forceDirectories: false)
-                            lastRefresh = now
+                            await self.refresh(forceDirectories: true)
                         }
+                        guard generation == self.serviceGeneration, address == self.serviceAddress, !Task.isCancelled else { return }
+                        guard self.isConnected else { throw APIClientError.invalidResponse }
+                        if let source = event.sourceID, appliedSources.insert(source).inserted {
+                            sourceOrder.append(source)
+                            if sourceOrder.count > 1024 { appliedSources.remove(sourceOrder.removeFirst()) }
+                        }
+                        UserDefaults.standard.set(event.cursor, forKey: "lastEventID.\(address)")
                     }
                     retryDelay = 1
                 } catch {
-                    guard !Task.isCancelled else { return }
+                    guard generation == self.serviceGeneration, address == self.serviceAddress, !Task.isCancelled else { return }
                     await self.refresh(forceDirectories: false)
                 }
                 guard !Task.isCancelled else { return }

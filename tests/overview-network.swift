@@ -325,7 +325,7 @@ struct OverviewNetworkChecks {
         let credentialsRequest = OverviewTransport.responses.recordedCredentialsPage()!
         precondition(credentialsRequest.url!.path == "/api/v1/credentials" && credentialsRequest.httpMethod == "GET")
         let credentialsQuery = URLComponents(url: credentialsRequest.url!, resolvingAgainstBaseURL: false)!.queryItems!
-        precondition(Dictionary(uniqueKeysWithValues: credentialsQuery.map { ($0.name, $0.value!) }) == ["page": "3", "page_size": "25", "category": "user", "kind": "tls_identity", "q": "历史 %_&", "sort": "status", "order": "desc"])
+        precondition(Dictionary(uniqueKeysWithValues: credentialsQuery.map { ($0.name, $0.value!) }) == ["page": "3", "page_size": "25", "category": "user", "kind": "tls_identity", "include_internal": "false", "q": "历史 %_&", "sort": "status", "order": "desc"])
         let dnsPage = try await store.dnsRecordsPage(page: 4, pageSize: 25, connectionID: "connection-1", zoneID: "zone-1", query: "历史 %_&", sort: "content", order: "desc")
         precondition(dnsPage.items.isEmpty && dnsPage.total == 0 && dnsPage.page == 1)
         let dnsRequest = OverviewTransport.responses.recordedDNSPage()!
