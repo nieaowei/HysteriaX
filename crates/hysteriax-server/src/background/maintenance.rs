@@ -22,8 +22,22 @@ pub async fn ensure(pool: &PgPool, key: &str, kind: &str, payload: Value) -> Res
     db::write(pool,move |tx| {
         let (id,kind,payload)=(id.clone(),kind.clone(),payload.clone());
         Box::pin(async move {
-            sqlx::query("INSERT INTO background_work(id,kind,payload) VALUES($1,$2,$3) ON CONFLICT(id) DO UPDATE SET state='queued',finished_at=NULL,error_code=NULL WHERE background_work.state IN ('complete','failed') AND background_work.available_at<=clock_timestamp() AND background_work.kind=excluded.kind")
-                .bind(id).bind(kind).bind(payload).execute(&mut **tx).await?;
+            // ON CONFLICT DO UPDATE waits for the conflicting tuple before
+            // evaluating its WHERE clause. Re-admitting a healthy worker must
+            // not consume a pool connection waiting for its guarded batch.
+            let existing:Option<bool>=sqlx::query_scalar("SELECT kind=$2 AND state IN ('complete','failed') AND available_at<=clock_timestamp() FROM background_work WHERE id=$1")
+                .bind(&id).bind(&kind).fetch_optional(&mut **tx).await?;
+            match existing {
+                Some(false) => {},
+                Some(true) => {
+                    sqlx::query("UPDATE background_work w SET state='queued',finished_at=NULL,error_code=NULL FROM (SELECT id FROM background_work WHERE id=$1 AND kind=$2 AND state IN ('complete','failed') AND available_at<=clock_timestamp() FOR UPDATE SKIP LOCKED) due WHERE w.id=due.id")
+                        .bind(&id).bind(&kind).execute(&mut **tx).await?;
+                },
+                None => {
+                    sqlx::query("INSERT INTO background_work(id,kind,payload) VALUES($1,$2,$3) ON CONFLICT(id) DO NOTHING")
+                        .bind(&id).bind(&kind).bind(payload).execute(&mut **tx).await?;
+                },
+            }
             Ok(())
         })
     }).await
@@ -315,3 +329,6 @@ mod tests {
 #[cfg(test)]
 #[path = "maintenance_scope_tests.rs"]
 mod scope_tests;
+
+#[cfg(test)]
+mod admission_tests;

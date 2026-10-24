@@ -1,0 +1,54 @@
+{
+  "phase": 97,
+  "changes": [
+    "Skip re-admission of existing healthy/not-due work without taking a row update lock. Requeue due completed/failed work with SKIP LOCKED; retain source payload and execution generation.",
+    "Return HTTP503/database_pool_busy for SQLx pool acquisition timeouts, including wrapped errors. Do not classify pool pressure as a native transaction conflict."
+  ],
+  "source_sha256": {
+    "crates/hysteriax-server/src/background/maintenance.rs": "9c9b19f35af1851467c5924e3e8688d8945a165be1ead8557a9f79d8e0d1fe65",
+    "crates/hysteriax-server/src/background/maintenance/admission_tests.rs": "f30a0fb3b1a3366703b0dc4cff5e30ab439eb3b42ed7ac8f18329e77f09c08be",
+    "crates/hysteriax-server/src/error.rs": "07ecef6af3c56a15a8da81cad18f224df5c0b787d2c23a7b575e0a4675858fa5"
+  },
+  "regression_evidence": {
+    "before": "Both held-worker and due-completed-row admission tests exceeded their 750ms observation budget under the original UPSERT.",
+    "after": {
+      "maintenance_tests_passed": 9,
+      "seconds": 5.96
+    },
+    "rotation_regression": {
+      "passed": 148,
+      "seconds": 294.51
+    },
+    "http_pool_pressure": {
+      "passed": 2,
+      "seconds": 5.84,
+      "invariant": "No write receipt consumed while pool is exhausted; the same request key commits one user/receipt after capacity recovers."
+    }
+  },
+  "verification": {
+    "cargo_check": "passed",
+    "clippy": "passed with the three existing warning category allowances"
+  },
+  "prior_workspace_results": [
+    {
+      "phase": 94,
+      "passed": 1044,
+      "failed": 0,
+      "ignored": 7,
+      "seconds": 2188.35
+    },
+    {
+      "phase": 95,
+      "passed": 1045,
+      "failed": 0,
+      "ignored": 7,
+      "seconds": 2141.72
+    }
+  ],
+  "limits": [
+    "The first live process-fault matrix later encountered a pool timeout while reading a CA credential. No lock snapshot existed for that exact failure, so this report does not claim the unnecessary UPSERT wait was its only cause.",
+    "A subsequent stronger process-fault matrix passed before this server change, demonstrating the earlier failure was intermittent. It recorded 827 private database samples without sampler errors.",
+    "The latest server is undergoing a fresh full live matrix and workspace run; no uncompleted check is counted as passed.",
+    "No production deployment."
+  ]
+}
