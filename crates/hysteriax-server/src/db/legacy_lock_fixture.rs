@@ -1,10 +1,13 @@
 //! Test-only adversarial lock holder. Runtime code cannot call this module.
 //! Existing regressions hold the retired key to prove business transactions
 //! never depend on it. This is not the production transaction implementation.
+//! Ordinary fixture setup uses `pool.begin()` and writer probes use `db::write`.
 use sqlx::{PgPool, Postgres, Transaction};
 use std::time::Duration;
 
-pub async fn begin_write(pool: &PgPool) -> Result<Transaction<'static, Postgres>, sqlx::Error> {
+pub async fn hold_retired_global_write_lock(
+    pool: &PgPool,
+) -> Result<Transaction<'static, Postgres>, sqlx::Error> {
     let deadline = tokio::time::Instant::now() + pool.options().get_acquire_timeout();
     loop {
         let mut tx = pool.begin().await?;
@@ -17,7 +20,9 @@ pub async fn begin_write(pool: &PgPool) -> Result<Transaction<'static, Postgres>
         }
         tx.rollback().await?;
         if tokio::time::Instant::now() >= deadline {
-            return Err(sqlx::Error::PoolTimedOut);
+            return Err(sqlx::Error::Protocol(
+                "retired global write lock fixture acquisition exceeded its deadline".into(),
+            ));
         }
         tokio::time::sleep(Duration::from_millis(rand::random_range(25..75))).await;
     }

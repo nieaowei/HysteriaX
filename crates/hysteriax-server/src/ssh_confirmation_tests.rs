@@ -127,7 +127,7 @@ async fn fixture_with_preflight_stop(
 }
 
 async fn start(state: &AppState, node: &str) -> String {
-    let mut tx = db::begin_write(&state.pool).await.unwrap();
+    let mut tx = state.pool.begin().await.unwrap();
     let id = crate::api::enqueue_job_in_tx(&mut tx, "ssh-test", Some(node), Some(1))
         .await
         .unwrap();
@@ -406,7 +406,7 @@ async fn first_trust_deploy_sync_and_rollback_resume_original_snapshot_and_task(
         } else {
             1
         };
-        let mut tx = db::begin_write(&state.pool).await.unwrap();
+        let mut tx = state.pool.begin().await.unwrap();
         let id = crate::api::enqueue_job_with_payload_in_tx(
             &mut tx,
             kind,
@@ -793,7 +793,9 @@ async fn concurrent_confirmations_commit_one_trust_revision_without_legacy_lock(
     let id = start(&state, &node).await;
     let fp = fingerprint(&row(&state, &id).await);
     disable_confirmation_legacy_lock(&state).await;
-    let legacy = db::begin_write(&state.pool).await.unwrap();
+    let legacy = db::hold_retired_global_write_lock(&state.pool)
+        .await
+        .unwrap();
     let (a, b) = tokio::join!(confirm(&state, &id, 1, &fp), confirm(&state, &id, 1, &fp));
     legacy.rollback().await.unwrap();
     assert_eq!([&a, &b].iter().filter(|result| result.is_ok()).count(), 1);

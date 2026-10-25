@@ -43,7 +43,7 @@ async fn success_uses_database_time_without_the_global_lock_or_another_job_row()
     enqueue(&pool, "one", Some("node-a"), None).await;
     let one = claim(&pool, "owner").await;
     enqueue(&pool, "two", Some("node-b"), None).await;
-    let legacy = db::begin_write(&pool).await.unwrap();
+    let legacy = db::hold_retired_global_write_lock(&pool).await.unwrap();
     let mut held = pool.begin().await.unwrap();
     sqlx::query("SELECT id FROM jobs WHERE id='two' FOR UPDATE")
         .fetch_one(&mut *held)

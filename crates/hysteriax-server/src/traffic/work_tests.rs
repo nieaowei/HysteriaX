@@ -72,7 +72,9 @@ async fn maintenance_upgrade_preserves_partial_captures_and_recovers_original_id
         2
     );
     disable_old_sql_lock(&state.pool).await;
-    let legacy = db::begin_write(&state.pool).await.unwrap();
+    let legacy = db::hold_retired_global_write_lock(&state.pool)
+        .await
+        .unwrap();
     for _ in 0..2 {
         let work = background::claim(&state.pool, "traffic", &state.instance_id)
             .await

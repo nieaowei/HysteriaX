@@ -101,7 +101,9 @@ async fn count(f: &Fixture, q: &str) -> i64 {
 #[tokio::test]
 async fn config_worker_handoff_snapshot_refs_and_receipt_commit_once_without_global_lock() {
     let f = fixture(true).await;
-    let legacy = db::begin_write(&f.state.pool).await.unwrap();
+    let legacy = db::hold_retired_global_write_lock(&f.state.pool)
+        .await
+        .unwrap();
     let result = execution::supervise(
         f.state.pool.clone(),
         f.leases.clone(),

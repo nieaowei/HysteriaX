@@ -129,7 +129,9 @@ async fn count(f: &Fixture, q: &str) -> i64 {
 async fn record_receipt_check_and_audit_commit_once_without_the_old_global_lock() {
     let f = fixture().await;
     let s = source(&f).await;
-    let legacy = db::begin_write(&f.state.pool).await.unwrap();
+    let legacy = db::hold_retired_global_write_lock(&f.state.pool)
+        .await
+        .unwrap();
     let before: i64 = sqlx::query_scalar("SELECT revision FROM dns_records WHERE id=$1")
         .bind(&f.id)
         .fetch_one(&f.state.pool)

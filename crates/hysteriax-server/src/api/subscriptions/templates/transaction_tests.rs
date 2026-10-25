@@ -64,7 +64,9 @@ fn default_patch(revision: i64) -> Patch {
 #[tokio::test]
 async fn concurrent_initialization_creates_exactly_one_seed_set_without_old_locks() {
     let state = empty().await;
-    let legacy = db::begin_write(&state.pool).await.unwrap();
+    let legacy = db::hold_retired_global_write_lock(&state.pool)
+        .await
+        .unwrap();
     let (a, b) = tokio::join!(
         initialize(&state.pool, &state.secrets),
         initialize(&state.pool, &state.secrets)
@@ -209,7 +211,9 @@ async fn publication_retries_keep_one_version_cipher_and_success_audit() {
 #[tokio::test]
 async fn same_revision_publications_commit_only_one_new_version() {
     let state = fixture().await;
-    let legacy = db::begin_write(&state.pool).await.unwrap();
+    let legacy = db::hold_retired_global_write_lock(&state.pool)
+        .await
+        .unwrap();
     let (a, b) = tokio::join!(
         publish(
             State(state.clone()),

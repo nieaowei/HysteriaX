@@ -41,7 +41,7 @@ async fn logs(pool: &PgPool, id: &str) -> Value {
 async fn leased_progress_does_not_wait_for_the_old_global_lock_or_an_unrelated_job_row() {
     let pool = fixture().await;
     let leases = owner(&pool, "one", "instance").await;
-    let legacy = db::begin_write(&pool).await.unwrap();
+    let legacy = db::hold_retired_global_write_lock(&pool).await.unwrap();
     let mut held = pool.begin().await.unwrap();
     sqlx::query("SELECT id FROM jobs WHERE id='two' FOR UPDATE")
         .fetch_one(&mut *held)

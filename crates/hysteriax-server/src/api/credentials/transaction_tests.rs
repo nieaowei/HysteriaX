@@ -82,7 +82,9 @@ async fn creation_audit_failure_rolls_back_both_parent_and_encrypted_version() {
 async fn concurrent_edits_commit_one_revision_without_either_old_global_lock() {
     let (state, id) = fixture().await;
     disable_legacy_lock(&state).await;
-    let holder = db::begin_write(&state.pool).await.unwrap();
+    let holder = db::hold_retired_global_write_lock(&state.pool)
+        .await
+        .unwrap();
     let edit = || {
         Json(PatchCredential {
             expected_revision: 1,

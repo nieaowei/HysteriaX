@@ -1792,7 +1792,7 @@ mod removal_tests {
             .execute(&state.pool)
             .await
             .unwrap();
-        let mut tx = db::begin_write(&state.pool).await.unwrap();
+        let mut tx = state.pool.begin().await.unwrap();
         let queued = enqueue_job_in_tx(&mut tx, "sync", Some("node"), Some(1))
             .await
             .unwrap();
@@ -1855,7 +1855,7 @@ mod removal_tests {
                 .unwrap(),
             0
         );
-        let mut tx = db::begin_write(&state.pool).await.unwrap();
+        let mut tx = state.pool.begin().await.unwrap();
         crate::kick_requests::schedule(&mut tx, None, true)
             .await
             .unwrap();
@@ -1882,7 +1882,7 @@ mod removal_tests {
             remove(&state, Some(99)).await.unwrap_err().status,
             StatusCode::CONFLICT
         );
-        let mut tx = db::begin_write(&state.pool).await.unwrap();
+        let mut tx = state.pool.begin().await.unwrap();
         let id = enqueue_job_in_tx(&mut tx, "uninstall", Some("node"), None)
             .await
             .unwrap();

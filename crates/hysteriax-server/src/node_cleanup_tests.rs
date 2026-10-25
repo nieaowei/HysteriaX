@@ -97,13 +97,14 @@ async fn restored_snapshot_removal_completes_while_reads_and_writes_continue() {
             max_read = max_read.max(at.elapsed());
             reads += 1;
             let at = std::time::Instant::now();
-            let mut tx = tokio::time::timeout(Duration::from_secs(3), db::begin_write(&pool))
-                .await
-                .unwrap()
-                .unwrap();
-            sqlx::query("UPDATE admin_tokens SET label='Snapshot validation' WHERE id='snapshot-probe'")
-                .execute(&mut *tx).await.unwrap();
-            tx.commit().await.unwrap();
+            tokio::time::timeout(Duration::from_secs(3), db::write(&pool, |tx| {
+                Box::pin(async move {
+                    sqlx::query("UPDATE admin_tokens SET label='Snapshot validation' WHERE id='snapshot-probe'")
+                        .execute(&mut **tx).await?;
+                    Ok::<_, sqlx::Error>(())
+                })
+            }))
+            .await.unwrap().unwrap();
             max_write = max_write.max(at.elapsed());
             writes += 1;
             tokio::time::sleep(Duration::from_millis(100)).await;
@@ -164,6 +165,8 @@ use axum::{
 
 async fn fixture(rows: i64) -> AppState {
     let pool = crate::db::test_pool_with_max_connections(3).await;
+    sqlx::query("CREATE TABLE node_cleanup_writer_probe(id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY)")
+        .execute(&pool).await.unwrap();
     sqlx::raw_sql("INSERT INTO users(id,name,created_at,updated_at) VALUES('user','User',now(),now());
         INSERT INTO nodes(id,name,ssh_host,ssh_port,ssh_username,ssh_auth_type,ssh_secret_enc,public_host,public_port,listen_addr,node_token_hash,node_token_enc,traffic_stats_secret_enc,desired_config_enc,created_at,updated_at)
         SELECT 'n'||i,'Node '||i,'127.0.0.1',22,'root','private_key','unused','example.test',443,':443','hash'||i,'unused','unused','{}',now(),now() FROM generate_series(1,2)i;")
@@ -175,6 +178,18 @@ async fn fixture(rows: i64) -> AppState {
         pool,
         SecretBox::from_base64("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA").unwrap(),
     )
+}
+
+async fn write_probe(pool: &PgPool) -> Result<(), sqlx::Error> {
+    db::write(pool, |tx| {
+        Box::pin(async move {
+            sqlx::query("INSERT INTO node_cleanup_writer_probe DEFAULT VALUES")
+                .execute(&mut **tx)
+                .await?;
+            Ok(())
+        })
+    })
+    .await
 }
 
 async fn request(state: &AppState) -> StatusCode {
@@ -320,6 +335,9 @@ async fn retry_after_history_is_empty_keeps_the_durable_background_path() {
 #[tokio::test]
 async fn large_record_removal_is_queued_idempotent_and_completes_without_ssh() {
     let state = fixture(3000).await;
+    // A separate fixture's holder reproduces the parallel-suite interference
+    // without consuming any of the three application pool connections.
+    let other = crate::db::test_pool().await;
     sqlx::raw_sql("INSERT INTO node_network_samples(node_id,period_id,delta_tx,delta_rx,sampled_at)
         SELECT n,'period',10,20,'2026-01-01'::timestamptz+(i/100)*interval '1 second' FROM unnest(ARRAY['n1','n2'])n CROSS JOIN generate_series(1,3000)i;
         INSERT INTO proxy_probe_samples(node_id,revision,status,sampled_at)
@@ -346,14 +364,22 @@ async fn large_record_removal_is_queued_idempotent_and_completes_without_ssh() {
     assert_eq!(job.kind, "record-remove");
     let worker_state = state.clone();
     let worker = tokio::spawn(async move { execute_one(worker_state, job).await });
+    let legacy = db::hold_retired_global_write_lock(&other).await.unwrap();
     for _ in 0..10 {
-        let tx = tokio::time::timeout(Duration::from_secs(2), db::begin_write(&state.pool))
+        tokio::time::timeout(Duration::from_secs(2), write_probe(&state.pool))
             .await
             .expect("cleanup must yield to other writers")
             .unwrap();
-        tx.rollback().await.unwrap();
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
+    legacy.rollback().await.unwrap();
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM node_cleanup_writer_probe")
+            .fetch_one(&state.pool)
+            .await
+            .unwrap(),
+        10
+    );
     tokio::time::timeout(Duration::from_secs(30), worker)
         .await
         .unwrap()
@@ -512,7 +538,7 @@ async fn interrupted_removal_resumes_committed_batches_after_recovery() {
 async fn old_node_cleanup_seeks_its_own_index_despite_newer_other_node_history() {
     let state = fixture(1200).await;
     for start in (1..=60000_i64).step_by(1000) {
-        let mut tx = db::begin_write(&state.pool).await.unwrap();
+        let mut tx = state.pool.begin().await.unwrap();
         sqlx::query("INSERT INTO traffic_records(id,node_id,user_id,instance_id,baseline_tx,baseline_rx,delta_tx,delta_rx,sampled_at)
             SELECT 'recent'||i,'n2','user','instance',0,0,10,20,'2026-10-01'::timestamptz+i*interval '1 second' FROM generate_series($1::bigint,$2::bigint)i")
             .bind(start).bind(start+999).execute(&mut *tx).await.unwrap();
@@ -558,7 +584,9 @@ async fn retired_global_write_lock_does_not_block_cleanup_or_consume_an_attempt(
     assert_eq!(request(&state).await, StatusCode::ACCEPTED);
     let job = claim_next(&state.pool).await.unwrap().unwrap();
     let id = job.id.clone();
-    let holder = db::begin_write(&state.pool).await.unwrap();
+    let holder = db::hold_retired_global_write_lock(&state.pool)
+        .await
+        .unwrap();
     let worker_state = state.clone();
     let worker = tokio::spawn(async move { execute_one(worker_state, job).await });
     assert_eq!(
@@ -609,11 +637,10 @@ async fn analytics_backlog_commits_progress_and_yields_before_it_is_fully_draine
     })
     .await
     .unwrap();
-    let tx = tokio::time::timeout(Duration::from_secs(1), db::begin_write(&state.pool))
+    tokio::time::timeout(Duration::from_secs(1), write_probe(&state.pool))
         .await
         .unwrap()
         .unwrap();
-    tx.rollback().await.unwrap();
     worker.await.unwrap().unwrap();
     assert_eq!(
         sqlx::query_scalar::<_, i64>("SELECT count(*) FROM online_cycle_metrics")
@@ -670,11 +697,10 @@ async fn final_fk_preparation_does_not_hold_the_global_write_lock() {
         tokio::spawn(async move { crate::node_cleanup::prepare_final_delete(&pool, "n1").await });
     tokio::time::sleep(Duration::from_millis(100)).await;
     assert!(!preparation.is_finished());
-    let writer = tokio::time::timeout(Duration::from_millis(500), db::begin_write(&state.pool))
+    tokio::time::timeout(Duration::from_millis(500), write_probe(&state.pool))
         .await
         .unwrap()
         .unwrap();
-    writer.rollback().await.unwrap();
     blocker.rollback().await.unwrap();
     preparation.await.unwrap().unwrap();
     succeed(&state, &job, output).await.unwrap();

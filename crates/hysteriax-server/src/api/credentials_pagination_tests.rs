@@ -34,7 +34,9 @@ async fn clean_credential_reads_do_not_wait_for_the_global_write_lock() {
     crate::credentials::reference_index::initialize(&state.pool, &state.secrets)
         .await
         .unwrap();
-    let mut writer = crate::db::begin_write(&state.pool).await.unwrap();
+    let mut writer = crate::db::hold_retired_global_write_lock(&state.pool)
+        .await
+        .unwrap();
     // An uncommitted configuration is invisible together with its dirty marker.
     sqlx::query("UPDATE nodes SET name='Uncommitted' WHERE id='node'")
         .execute(&mut *writer)

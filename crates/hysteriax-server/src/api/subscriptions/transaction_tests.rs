@@ -86,7 +86,9 @@ async fn retry_returns_the_committed_token_and_revokes_only_the_old_url() {
 async fn concurrent_rotations_preserve_one_active_token_and_one_revision() {
     let state = fixture().await;
     sqlx::raw_sql("DO $$ DECLARE entry record; BEGIN FOR entry IN SELECT c.relname,tr.tgname FROM pg_trigger tr JOIN pg_class c ON c.oid=tr.tgrelid JOIN pg_proc p ON p.oid=tr.tgfoid WHERE c.relnamespace=current_schema()::regnamespace AND p.proname='hysteriax_serialize_writes' LOOP EXECUTE format('ALTER TABLE %I DISABLE TRIGGER %I',entry.relname,entry.tgname); END LOOP; END $$").execute(&state.pool).await.unwrap();
-    let holder = db::begin_write(&state.pool).await.unwrap();
+    let holder = db::hold_retired_global_write_lock(&state.pool)
+        .await
+        .unwrap();
     let (a, b) = tokio::time::timeout(std::time::Duration::from_secs(2), async {
         tokio::join!(rotate_once(&state), rotate_once(&state))
     })

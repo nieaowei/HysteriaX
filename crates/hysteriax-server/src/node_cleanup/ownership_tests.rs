@@ -50,7 +50,7 @@ async fn snapshot(pool: &PgPool) -> Value {
 #[tokio::test]
 async fn batch_checkpoint_is_bounded_and_commits_without_the_old_global_lock() {
     let (pool, job, leases) = fixture().await;
-    let legacy = db::begin_write(&pool).await.unwrap();
+    let legacy = db::hold_retired_global_write_lock(&pool).await.unwrap();
     let (removed, cursor) =
         tokio::time::timeout(std::time::Duration::from_secs(2), page(&pool, &job, leases))
             .await

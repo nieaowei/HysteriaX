@@ -79,7 +79,9 @@ async fn publication_receipt_batch_and_audit_are_atomic_and_replay_is_readonly_w
  {
     let f = fixture().await;
     let s = source(&f).await;
-    let legacy = crate::db::begin_write(&f.state.pool).await.unwrap();
+    let legacy = crate::db::hold_retired_global_write_lock(&f.state.pool)
+        .await
+        .unwrap();
     let receipt = save(&f, &s).await.unwrap().unwrap();
     assert_eq!(receipt["credential_version"], 2);
     assert_eq!(count(&f,"SELECT count(*) FROM dns_connections WHERE credential_version=2 AND revision=2 AND status='verified'").await,1);

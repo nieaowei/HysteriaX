@@ -95,7 +95,9 @@ async fn due_user_scans_are_bounded_skip_locked_rows_and_do_not_duplicate_admiss
         .fetch_one(&mut *held)
         .await
         .unwrap();
-    let legacy = db::begin_write(&state.pool).await.unwrap();
+    let legacy = db::hold_retired_global_write_lock(&state.pool)
+        .await
+        .unwrap();
     for expected in [128, 256, 300] {
         let work = scan_claim(&state).await;
         scan_work(&state.pool, &work).await.unwrap();

@@ -267,7 +267,7 @@ async fn convert_config(
 /// Consolidate legacy TLS material without deploying or changing business revisions.
 #[cfg(test)]
 pub async fn migrate_tls_pairs(pool: &PgPool, secrets: &SecretBox) -> Result<()> {
-    let mut tx = db::begin_write(pool).await?;
+    let mut tx = pool.begin().await?;
     migrate_tls_pairs_on(&mut tx, secrets).await?;
     tx.commit().await?;
     Ok(())

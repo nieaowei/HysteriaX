@@ -1258,7 +1258,7 @@ mod tests {
         sqlx::query("INSERT INTO nodes (id, name, ssh_host, ssh_port, ssh_username, ssh_auth_type, ssh_secret_enc, public_host, public_port, listen_addr, node_token_hash, node_token_enc, traffic_stats_secret_enc, desired_config_enc, created_at, updated_at) VALUES ('snapshot-node', 'Original node', '127.0.0.1', 22, 'root', 'private_key', 'ssh-secret', 'node.example.test', 443, ':443', 'node-hash', 'node-token', 'stats-secret', '{}', now(), now())")
             .execute(&pool).await.unwrap();
 
-        let mut tx = crate::db::begin_write(&pool).await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
         let id = enqueue_job_in_tx(&mut tx, "sync", Some("snapshot-node"), Some(1))
             .await
             .unwrap();

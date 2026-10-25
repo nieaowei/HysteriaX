@@ -276,7 +276,7 @@ async fn activation_blocks_user_and_subscription_but_only_bound_live_job_probe_b
     assert!(!auth(&state, id, &token, "probe").await);
     activation::verified(&state.pool, &job).await.unwrap();
     assert!(!auth(&state, id, &token, "password").await);
-    let mut tx = db::begin_write(&state.pool).await.unwrap();
+    let mut tx = state.pool.begin().await.unwrap();
     activation::commit(&mut tx, &job, "new-config")
         .await
         .unwrap();
@@ -457,7 +457,7 @@ async fn expired_historical_probe_rejects_rollback_and_internal_probe_cannot_be_
     .await
     .unwrap();
     activation::verified(&state.pool, &job).await.unwrap();
-    let mut tx = db::begin_write(&state.pool).await.unwrap();
+    let mut tx = state.pool.begin().await.unwrap();
     activation::commit(&mut tx, &job, "target").await.unwrap();
     tx.commit().await.unwrap();
     assert!(

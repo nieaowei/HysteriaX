@@ -407,7 +407,7 @@ mod tests {
         );
         let mut ids = Vec::new();
         for name in ["First", "Second"] {
-            let mut tx = db::begin_write(&state.pool).await.unwrap();
+            let mut tx = state.pool.begin().await.unwrap();
             let id = super::super::insert(
                 &mut tx,
                 &state.secrets,

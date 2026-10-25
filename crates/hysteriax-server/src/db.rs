@@ -14,7 +14,7 @@ use sqlx::{Connection, PgConnection};
 #[cfg(test)]
 mod legacy_lock_fixture;
 #[cfg(test)]
-pub use legacy_lock_fixture::begin_write;
+pub use legacy_lock_fixture::hold_retired_global_write_lock;
 
 // A stopped client can leave one active statement, then an idle transaction.
 // Together their server-side limits must fit inside a fresh execution lease.
@@ -271,7 +271,10 @@ pub async fn test_pool_through_version(max_connections: u32, through_version: i6
 
 #[cfg(test)]
 mod tests {
-    use super::{MIGRATOR, begin_write, serializable, test_pool, test_pool_with_max_connections};
+    use super::{
+        MIGRATOR, hold_retired_global_write_lock, serializable, test_pool,
+        test_pool_with_max_connections,
+    };
     use std::time::Duration;
 
     #[tokio::test]
@@ -405,7 +408,7 @@ mod tests {
     #[tokio::test]
     async fn legacy_fixture_waiters_leave_connections_available_for_reads() {
         let pool = test_pool_with_max_connections(3).await;
-        let holder = begin_write(&pool).await.unwrap();
+        let holder = hold_retired_global_write_lock(&pool).await.unwrap();
         let mut writers = tokio::task::JoinSet::new();
         let barrier = std::sync::Arc::new(tokio::sync::Barrier::new(13));
         for _ in 0..12 {
@@ -413,7 +416,12 @@ mod tests {
             let barrier = barrier.clone();
             writers.spawn(async move {
                 barrier.wait().await;
-                begin_write(&pool).await.unwrap().commit().await.unwrap();
+                hold_retired_global_write_lock(&pool)
+                    .await
+                    .unwrap()
+                    .commit()
+                    .await
+                    .unwrap();
             });
         }
         barrier.wait().await;
@@ -478,7 +486,7 @@ mod tests {
             .await
             .unwrap();
 
-        let mut first = begin_write(&pool).await.unwrap();
+        let mut first = hold_retired_global_write_lock(&pool).await.unwrap();
         let first_id: i64 = sqlx::query_scalar("INSERT INTO job_events (job_id, event_type, payload_json, created_at) VALUES ('serialized-job', 'first', $1, $2) RETURNING id")
             .bind(serde_json::json!({}))
             .bind(timestamp)
@@ -490,7 +498,7 @@ mod tests {
         let worker_pool = pool.clone();
         let second = tokio::spawn(async move {
             let _ = started_tx.send(());
-            let mut transaction = begin_write(&worker_pool).await.unwrap();
+            let mut transaction = hold_retired_global_write_lock(&worker_pool).await.unwrap();
             let id: i64 = sqlx::query_scalar("INSERT INTO job_events (job_id, event_type, payload_json, created_at) VALUES ('serialized-job', 'second', $1, $2) RETURNING id")
                 .bind(serde_json::json!({}))
                 .bind(timestamp)

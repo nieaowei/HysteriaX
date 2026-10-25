@@ -47,7 +47,7 @@ async fn cutover_removes_only_global_triggers_and_preserves_every_business_table
 #[tokio::test]
 async fn runtime_writes_do_not_take_retired_locks_even_when_the_old_key_is_held() {
     let pool = test_pool_with_max_connections(4).await;
-    let held = begin_write(&pool).await.unwrap();
+    let held = hold_retired_global_write_lock(&pool).await.unwrap();
     for (id, serial) in [("committed", false), ("serializable", true)] {
         let held_count = if serial {
             serializable(&pool, |tx| Box::pin(insert_and_count(tx, id)))

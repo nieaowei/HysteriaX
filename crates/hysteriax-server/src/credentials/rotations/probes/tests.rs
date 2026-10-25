@@ -57,7 +57,9 @@ async fn real_probe_switch_and_completion_are_fenced_and_do_not_use_the_old_glob
     let (state, _, r, node) = fixture().await;
     assert_eq!(active(&state, &node).await, 1);
     let w = parent(&state).await;
-    let held = db::begin_write(&state.pool).await.unwrap();
+    let held = db::hold_retired_global_write_lock(&state.pool)
+        .await
+        .unwrap();
     page(&state.pool, &w, "not-complete").await.unwrap();
     assert_eq!(phase(&state, &r).await, "probes");
     let child = claim(&state, CHILD, "switch").await;

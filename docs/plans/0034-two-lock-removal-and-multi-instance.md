@@ -1110,7 +1110,7 @@
 - 索引专项已由 c1dc0c7 修正并通过。连续 CA 测试原来假设两次立即 advance 必然完成，而元数据和 probe 切换已经是独立领取／按持久时间重试的页面；现以最多 10s 推进并等待实际 complete，保留原有后续发布、旧信任删除和新信任保留的所有断言。修改后专项 1 项通过，7.53s。
 - DNS 失败处理专项未改代码，单独运行通过（143.55s）；节点清理专项保持原 2s 并发写检查及 30s 完成门槛，单独通过（8.66s）。这些不能单独证明全量失败只是环境原因，仍要求新全量终态。
 - 只读检查本地共享基础库已有 6378 个测试 schema，旧测试池 helper 不自动删除它们；不擅自删除共享库既有对象。后续全量新建本轮独占数据库，结束后 finally 删除。旧全量未设置 TEST_REDIS_URL，原生 Redis 专项可能提前返回；新全量增加独占、带随机密码的真实 Redis，明确启用 TEST_REDIS_URL，结束后只清理本轮容器。现有三进程 Redis 专项证据另行保留，不混作本次测试结果。
-- 新全量仍为 cargo test --workspace、8 个测试线程，已启动并保持原句柄；日志 /tmp/hx0034-phase112-full.log，最终报告 /tmp/hx0034-phase112-full.json 尚待生成。证据 docs/verification/0034-async-rotation-regression.json；不放宽运行时连接池／事务期限，不提前宣告新全量通过。生产预算和本地镜像／维护发布回退门槛继续保持。
+- 新全量仍为 cargo test --workspace、8 个测试线程，原句柄最终退出失败：1048 passed／1 failed／7 ignored，1207.81s；原生 Redis 专项本次已启用。唯一失败仍为节点清理的并发写检查，说明不能只归为共享基础库积累；第一百一十五阶段继续定位其事务入口。日志 /tmp/hx0034-phase112-full.log，最终报告 /tmp/hx0034-phase112-full.json，证据 docs/verification/0034-async-rotation-regression.json。不放宽运行时连接池／事务期限，也不把专项通过代替全量。生产预算和本地镜像／维护发布回退门槛继续保持。
 
 ### 第一百一十三阶段：本地 x86_64 发布镜像构建准备
 
@@ -1126,5 +1126,14 @@
 - 实际四个隔离容器验证退出 0：安装前两个允许地址和另一个相同 5432 端口地址均可访问；安装后前两者继续可达，第三者不可达。目标 UID 65534、CapEff=0，IPv6 已禁用，所有目标与网络归属检查通过。自有容器／网络清理，共享容器未停止。
 - 4 项拒绝路径单元测试通过，验证无效 owner、非自有容器、宿主／共享命名空间／特权目标和非自有网络均在特权派发前停止。Python 编译和 diff 检查通过。证据 docs/verification/0034-fixture-egress-isolation.json，原始报告 /tmp/hx0034-phase114-egress.json；保留本地测试镜像 hysteriax-egress-guard:0034-local-arm64（sha256:b8b115a442244090aae44f1395e6b2e2293bd1c06622ebe8ce786453d9b6c0fb）。
 - 这只证明隔离基础设施，不是容量验收通过，也未启动生产快照的普通工作进程或改变线上服务。下一步在该约束下运行真实快照受限内存／连接数／请求负载，再决定生产副本预算；本地发布镜像与全量仍沿原句柄执行，整体 0034 未完成。
+
+### 第一百一十五阶段：普通夹具与真实旧锁持有器分离
+
+- 继续审查剩余失败后确认：db::begin_write 是 cfg(test) 的对抗性旧锁持有器，内部 pg_try_advisory_xact_lock 的键跨同库 schema 共享；它不是生产写事务入口。并发写检查错用了它，而其他正常 fixture／批量历史准备也在申请这把假锁。旧辅助函数等待其私有期限后还会返回 PoolTimedOut，不能据此断言连接池已耗尽。独占数据库无法消除同一次全量中这种跨 schema 干扰。
+- 检查 102 个旧调用点：普通测试准备改为 pool.begin()；有意持有真实旧键的退役验证保留原键及期限，并显式改名为 hold_retired_global_write_lock，移除含糊的 begin_write 别名。仅对抗辅助函数的私有期限错误改为明确 Protocol 文本；生产池、事务重试和租约政策不变。改动均为 cfg(test) 代码／调用，未把测试锁带回运行时。
+- 节点清理的并发写／统计刷新／最终 FK 准备检查改为生产 db::write，向无关 probe 表实际 INSERT 并提交，不再仅开启／回滚假锁事务。大清理用例另建一个独立 schema 的池，明确持有真实旧全局键，原三连接应用池仍须在每次 2s 内完成 10 次写入，且计数精确为 10；专项通过（12.09s）。DNS 失败处理专项通过（21.05s）；新增同库另一 schema 持旧键期间运行真实 DNS fixture 准备的 2s 反例验证，通过（总计含准备 4.67s）。
+- 真实生产快照也重新运行，写入通过生产 db::write 的提交边界：165.412s 完成，1480 次读取／实际写提交全部成功，最大读取 41.724ms、写入 119.092ms；保留原 180s 门槛。其他节点历史／原事件摘要、6 名用户全字段及预期授权 revision／时间戳变化均通过，1 项有归属依据的 DNS 清理仅 queued／attempts=0，外部执行操作前后仍为 0。副本数据库已清理，线上未改动。
+- all-target cargo check 和沿用三项复杂度允许的 Clippy 通过，格式／diff 检查通过。对两个同时有用户旧改动的文件（api/mod.rs、node_limits.rs）以 HEAD 加本次变换构造暂存对象，其他用户既有改动继续留在工作区；剔除 blob 索引行后，原始未暂存补丁逐字节一致，未混入本次提交。
+- 证据 docs/verification/0034-retired-lock-fixture-isolation.json 和 docs/verification/0034-production-snapshot-node-cleanup-native-writers.json。最终全量重新使用本轮独占数据库／带认证 Redis、8 测试线程，当前已启动，日志 /tmp/hx0034-phase115-full.log；未有终态前不记为通过。受限资源真实快照容量、最终镜像重建／推送、维护切换及完整回退仍需完成，0034 目标继续。
 
 工作区原有 macOS、OpenAPI、生成脚本与任务展示测试改动需持续保留；不得整体覆盖或混入第一阶段服务端提交。

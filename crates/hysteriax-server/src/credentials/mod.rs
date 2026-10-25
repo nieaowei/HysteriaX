@@ -515,7 +515,7 @@ pub async fn test_node_request(
         "ssh_private_key"
     };
     let payload = json!({"secret":input["ssh_secret"].take()});
-    let mut tx = crate::db::begin_write(&state.pool).await.unwrap();
+    let mut tx = state.pool.begin().await.unwrap();
     let id = insert(
         &mut tx,
         &state.secrets,

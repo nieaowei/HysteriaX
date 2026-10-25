@@ -984,7 +984,9 @@ mod tests {
         let mut tx = state.pool.begin().await.unwrap();
         job.release(&mut tx).await.unwrap();
         tx.commit().await.unwrap();
-        let legacy = crate::db::begin_write(&state.pool).await.unwrap();
+        let legacy = crate::db::hold_retired_global_write_lock(&state.pool)
+            .await
+            .unwrap();
         let (a, b) = tokio::join!(
             crate::background::claim(&state.pool, "proxy", "a"),
             crate::background::claim(&state.pool, "proxy", "b")
@@ -1017,7 +1019,9 @@ mod tests {
     async fn proxy_result_commit_is_idempotent_and_preserves_another_attempts_token() {
         let (state, node) = fixture().await;
         let work = proxy_work(&state, &node).await;
-        let legacy = crate::db::begin_write(&state.pool).await.unwrap();
+        let legacy = crate::db::hold_retired_global_write_lock(&state.pool)
+            .await
+            .unwrap();
         crate::execution::supervise(state.pool.clone(), work.leases.clone(), async {
             install_token(&state, &work, "new-token").await.unwrap();
             save_result(&state, &work, success(), "old-token")

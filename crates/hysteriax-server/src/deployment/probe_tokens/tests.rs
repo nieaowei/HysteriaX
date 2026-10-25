@@ -62,7 +62,9 @@ async fn leased_token_uses_database_time_and_authenticates_a_unique_identity_wit
 {
     let (state, job, leases) = fixture().await;
     let hash = token_digest("first");
-    let legacy = db::begin_write(&state.pool).await.unwrap();
+    let legacy = db::hold_retired_global_write_lock(&state.pool)
+        .await
+        .unwrap();
     let mut held = state.pool.begin().await.unwrap();
     sqlx::query("SELECT id FROM nodes WHERE id='b' FOR UPDATE")
         .fetch_one(&mut *held)

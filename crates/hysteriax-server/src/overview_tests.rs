@@ -629,7 +629,7 @@ async fn rolling_windows_have_exact_bounds_across_midnight_and_dst() {
 }
 
 async fn failed_job(state: &AppState, node: &str, kind: &str, message: &str) -> String {
-    let mut tx = crate::db::begin_write(&state.pool).await.unwrap();
+    let mut tx = state.pool.begin().await.unwrap();
     let id = crate::api::enqueue_job_in_tx(&mut tx, kind, Some(node), Some(1))
         .await
         .unwrap();

@@ -32,7 +32,7 @@ async fn failure_and_retry_deadline_share_database_time_without_the_global_or_un
     enqueue(&pool, "one", Some("node-a"), None).await;
     let one = claim(&pool, "a").await;
     enqueue(&pool, "two", Some("node-b"), None).await;
-    let legacy = db::begin_write(&pool).await.unwrap();
+    let legacy = db::hold_retired_global_write_lock(&pool).await.unwrap();
     let mut held = pool.begin().await.unwrap();
     sqlx::query("SELECT id FROM jobs WHERE id='two' FOR UPDATE")
         .fetch_one(&mut *held)

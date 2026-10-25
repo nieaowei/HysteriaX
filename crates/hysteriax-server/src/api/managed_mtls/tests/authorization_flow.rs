@@ -267,7 +267,9 @@ async fn signatures_are_prepared_while_another_transaction_holds_the_global_writ
     let node = managed_node(&state, &ca).await;
     let n = node["id"].as_str().unwrap();
     let p = preview(&state, "Outside lock", &["alice"], &[n]).await;
-    let tx = db::begin_write(&state.pool).await.unwrap();
+    let tx = db::hold_retired_global_write_lock(&state.pool)
+        .await
+        .unwrap();
     let candidate = tokio::time::timeout(
         std::time::Duration::from_secs(5),
         credentials::authorization::prepare_preview(
@@ -380,7 +382,7 @@ async fn grant_covers_desired_deployed_and_inflight_activation_ca_identities() {
     );
 
     activation::verified(&state.pool, &job).await.unwrap();
-    let mut tx = db::begin_write(&state.pool).await.unwrap();
+    let mut tx = state.pool.begin().await.unwrap();
     activation::commit(&mut tx, &job, "inflight-config")
         .await
         .unwrap();

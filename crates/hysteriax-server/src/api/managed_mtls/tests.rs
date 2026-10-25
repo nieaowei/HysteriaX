@@ -294,7 +294,7 @@ async fn issue(state: &AppState, user: &str, ca: &str, force: bool) -> (String, 
         credentials::identities::prepare_user(&state.pool, &state.secrets, user, ca, 1, force)
             .await
             .unwrap();
-    let mut tx = db::begin_write(&state.pool).await.unwrap();
+    let mut tx = state.pool.begin().await.unwrap();
     let result = credentials::identities::commit_user(&mut tx, &state.secrets, candidate)
         .await
         .unwrap();
@@ -444,12 +444,12 @@ async fn concurrent_preparations_discard_losing_candidates_and_policy_changes_re
         credentials::identities::prepare_user(&state.pool, &state.secrets, "alice", &ca, 1, false),
         credentials::identities::prepare_user(&state.pool, &state.secrets, "alice", &ca, 1, false)
     );
-    let mut tx = db::begin_write(&state.pool).await.unwrap();
+    let mut tx = state.pool.begin().await.unwrap();
     credentials::identities::commit_user(&mut tx, &state.secrets, a.unwrap())
         .await
         .unwrap();
     tx.commit().await.unwrap();
-    let mut tx = db::begin_write(&state.pool).await.unwrap();
+    let mut tx = state.pool.begin().await.unwrap();
     assert!(
         credentials::identities::commit_user(&mut tx, &state.secrets, b.unwrap())
             .await
@@ -480,7 +480,7 @@ async fn concurrent_preparations_discard_losing_candidates_and_policy_changes_re
     )
     .await
     .unwrap();
-    let mut tx = db::begin_write(&state.pool).await.unwrap();
+    let mut tx = state.pool.begin().await.unwrap();
     assert!(
         credentials::identities::commit_user(&mut tx, &state.secrets, candidate)
             .await
@@ -495,7 +495,7 @@ async fn concurrent_preparations_discard_losing_candidates_and_policy_changes_re
 }
 
 async fn node(state: &AppState, id: &str) {
-    let mut tx = db::begin_write(&state.pool).await.unwrap();
+    let mut tx = state.pool.begin().await.unwrap();
     let ssh = credentials::insert(
         &mut tx,
         &state.secrets,

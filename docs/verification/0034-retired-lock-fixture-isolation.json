@@ -1,0 +1,43 @@
+{
+  "scope": "retired-lock-fixture-vs-production-writer-isolation",
+  "runtime_changed": false,
+  "test_only": true,
+  "original_ambiguous_begin_write_call_sites": 102,
+  "source_files_changed": 60,
+  "retained_global_key": 62177345902811,
+  "adversarial_helper": "db::hold_retired_global_write_lock",
+  "normal_fixture_path": "pool.begin()",
+  "concurrent_writer_probe_path": "db::write; committed INSERTs to unrelated probe table",
+  "targeted": [
+    {
+      "test": "large_record_removal_is_queued_idempotent_and_completes_without_ssh",
+      "passed": true,
+      "seconds": 12.09,
+      "other_schema_holds_retired_key": true,
+      "committed_probe_rows": 10,
+      "original_writer_deadline_seconds": 2
+    },
+    {
+      "test": "dns_failure_only_changes_the_same_unapplied_operation_and_desired_document",
+      "passed": true,
+      "seconds": 21.05
+    },
+    {
+      "test": "fixture_preparation_does_not_acquire_the_retired_global_write_lock",
+      "passed": true,
+      "seconds": 4.67,
+      "other_schema_holds_retired_key": true,
+      "fixture_deadline_seconds": 2
+    }
+  ],
+  "all_target_check_exit": 0,
+  "all_target_clippy_exit": 0,
+  "original_unstaged_user_patch_preserved": true,
+  "protected_index_merges": [
+    "crates/hysteriax-server/src/api/mod.rs",
+    "crates/hysteriax-server/src/node_limits.rs"
+  ],
+  "real_snapshot_native_writer_report": "0034-production-snapshot-node-cleanup-native-writers.json",
+  "final_full_status": "running",
+  "final_full_log": "/tmp/hx0034-phase115-full.log"
+}

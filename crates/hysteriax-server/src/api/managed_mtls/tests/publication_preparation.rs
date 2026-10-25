@@ -70,7 +70,9 @@ async fn commit_work(
 async fn preparation_has_no_writes_and_does_not_wait_for_the_old_global_lock() {
     let state = state().await;
     let ca = generated(&state).await;
-    let legacy = db::begin_write(&state.pool).await.unwrap();
+    let legacy = db::hold_retired_global_write_lock(&state.pool)
+        .await
+        .unwrap();
     let p = tokio::time::timeout(
         std::time::Duration::from_secs(5),
         prepare(&state, &ca, "prepare-only"),

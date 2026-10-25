@@ -1554,7 +1554,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(request, "waiting_recovery");
-        let mut tx = crate::db::begin_write(&state.pool).await.unwrap();
+        let mut tx = state.pool.begin().await.unwrap();
         let ssh = crate::api::enqueue_job_in_tx(&mut tx, "ssh-test", Some("node"), None)
             .await
             .unwrap();
@@ -1618,7 +1618,7 @@ mod tests {
     async fn fair_queue_orders_by_availability_instead_of_old_creation_time() {
         let state = crate::kick_requests::tests::fixture().await;
         let id = crate::kick_requests::tests::enqueue(&state, "user_deleted").await;
-        let mut tx = crate::db::begin_write(&state.pool).await.unwrap();
+        let mut tx = state.pool.begin().await.unwrap();
         let ssh = crate::api::enqueue_job_in_tx(&mut tx, "ssh-test", Some("node"), None)
             .await
             .unwrap();
@@ -1765,7 +1765,7 @@ mod tests {
             .await
             .unwrap();
 
-        let mut tx = crate::db::begin_write(&pool).await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
         crate::credentials::insert(
             &mut tx,
             &secrets,
@@ -1821,7 +1821,7 @@ mod dns_job_tests {
     async fn dns_jobs_serialize_by_zone_and_deployments_wait_for_dns_dependencies() {
         let (state, ssh, connection, zone) = crate::dns::tests::fixture().await;
         let node = crate::dns::tests::node(&state, &ssh).await;
-        let mut tx = crate::db::begin_write(&state.pool).await.unwrap();
+        let mut tx = state.pool.begin().await.unwrap();
         let deploy = crate::api::enqueue_job_in_tx(&mut tx, "deploy", Some(&node), Some(1))
             .await
             .unwrap();
@@ -1872,7 +1872,7 @@ mod dns_job_tests {
      {
         let (state, ssh, _, _) = crate::dns::tests::fixture().await;
         let node = crate::dns::tests::node(&state, &ssh).await;
-        let mut tx = crate::db::begin_write(&state.pool).await.unwrap();
+        let mut tx = state.pool.begin().await.unwrap();
         crate::api::enqueue_job_in_tx(&mut tx, "deploy", Some(&node), Some(1))
             .await
             .unwrap();
@@ -1929,7 +1929,7 @@ mod dns_job_tests {
             .execute(&state.pool)
             .await
             .unwrap();
-        let mut tx = crate::db::begin_write(&state.pool).await.unwrap();
+        let mut tx = state.pool.begin().await.unwrap();
         crate::api::enqueue_job_in_tx(&mut tx, "uninstall", Some(&node), Some(1))
             .await
             .unwrap();

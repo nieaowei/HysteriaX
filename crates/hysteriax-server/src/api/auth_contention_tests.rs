@@ -24,7 +24,7 @@ async fn authenticated_reads_remain_available_while_writer_lock_is_held() {
         .timeout(std::time::Duration::from_secs(2))
         .build()
         .unwrap();
-    let holder = db::begin_write(&pool).await.unwrap();
+    let holder = db::hold_retired_global_write_lock(&pool).await.unwrap();
     for path in ["/readyz", "/api/v2/version", "/api/v2/nodes?page_size=1"] {
         let response = client
             .get(format!("{base}{path}"))

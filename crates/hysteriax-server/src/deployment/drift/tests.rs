@@ -45,7 +45,9 @@ async fn snapshot(f: &Fixture) -> Value {
 #[tokio::test]
 async fn drift_state_progress_and_event_commit_once_without_the_old_lock() {
     let f = fixture().await;
-    let legacy = db::begin_write(&f.state.pool).await.unwrap();
+    let legacy = db::hold_retired_global_write_lock(&f.state.pool)
+        .await
+        .unwrap();
     save(&f, &f.job).await.unwrap().unwrap();
     assert_eq!(
         sqlx::query_scalar::<_, i64>("SELECT count(*) FROM nodes WHERE state='drift'")

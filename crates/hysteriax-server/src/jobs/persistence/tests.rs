@@ -247,7 +247,7 @@ async fn verified_remote_rejection_preserves_node_and_atomically_blocks_its_whol
     enqueue(&pool, "two", Some("node-b"), None).await;
     let two = claim(&pool, "other").await;
     let other:Value=sqlx::query_scalar("SELECT jsonb_agg(to_jsonb(l) ORDER BY resource_key) FROM resource_leases l WHERE work_id='two'").fetch_one(&pool).await.unwrap();
-    let legacy = db::begin_write(&pool).await.unwrap();
+    let legacy = db::hold_retired_global_write_lock(&pool).await.unwrap();
     let result = tokio::time::timeout(Duration::from_secs(2), reject(&pool, &one))
         .await
         .unwrap();

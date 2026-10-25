@@ -72,7 +72,9 @@ async fn snapshot(f: &Fixture) -> Value {
 #[tokio::test]
 async fn preparation_and_final_source_check_do_not_wait_for_the_old_global_lock() {
     let f = fixture().await;
-    let legacy = db::begin_write(&f.state.pool).await.unwrap();
+    let legacy = db::hold_retired_global_write_lock(&f.state.pool)
+        .await
+        .unwrap();
     let before = snapshot(&f).await;
     let s = source(&f).await;
     save(&f, &s).await.unwrap();
@@ -209,7 +211,9 @@ async fn signed_candidates_roll_back_together_and_native_retry_reuses_the_prepar
     assert_eq!(snapshot(&f).await, before);
     sqlx::raw_sql("DROP TRIGGER reject_deployment_identity ON credentials; ALTER SEQUENCE deployment_identity_attempt RESTART WITH 1; CREATE FUNCTION retry_deployment_identity() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.owner_user_id IS NOT NULL AND nextval('deployment_identity_attempt')=2 THEN RAISE EXCEPTION 'retry' USING ERRCODE='40001'; END IF; RETURN NEW; END $$; CREATE TRIGGER retry_deployment_identity BEFORE INSERT ON credentials FOR EACH ROW EXECUTE FUNCTION retry_deployment_identity()")
         .execute(&f.state.pool).await.unwrap();
-    let legacy = db::begin_write(&f.state.pool).await.unwrap();
+    let legacy = db::hold_retired_global_write_lock(&f.state.pool)
+        .await
+        .unwrap();
     save_candidates(&f, &s, candidates).await.unwrap();
     legacy.rollback().await.unwrap();
     assert_eq!(

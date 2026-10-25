@@ -113,7 +113,9 @@ async fn claims_share_node_leases_with_jobs_and_skip_unrelated_busy_nodes() {
         .unwrap()
         .unwrap();
     tx.commit().await.unwrap();
-    let legacy = db::begin_write(&state.pool).await.unwrap();
+    let legacy = db::hold_retired_global_write_lock(&state.pool)
+        .await
+        .unwrap();
     let work = claim(&state.pool, "traffic", "one").await.unwrap().unwrap();
     assert_eq!(work.node, second);
     assert!(

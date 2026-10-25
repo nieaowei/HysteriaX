@@ -79,7 +79,7 @@ async fn finish(
     .await
     .unwrap();
     activation::verified(&state.pool, job).await.unwrap();
-    let mut tx = db::begin_write(&state.pool).await.unwrap();
+    let mut tx = state.pool.begin().await.unwrap();
     activation::commit(&mut tx, job, &digest).await.unwrap();
     sqlx::query("UPDATE nodes SET deployed_revision=$2,deployed_config_enc=$3,deployed_content_sha256=$4,state='deployed' WHERE id=$1").bind(node).bind(revision).bind(state.secrets.encrypt(&snapshot["server_config"].to_string()).unwrap()).bind(digest).execute(&mut *tx).await.unwrap();
     sqlx::query(

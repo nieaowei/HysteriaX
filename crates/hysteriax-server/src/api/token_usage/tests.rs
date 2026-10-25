@@ -19,7 +19,7 @@ async fn used(pool: &PgPool, id: &str) -> Option<DateTime<Utc>> {
 #[tokio::test]
 async fn token_usage_is_independent_of_the_legacy_lock_and_throttles_with_database_time() {
     let pool = fixture().await;
-    let legacy = db::begin_write(&pool).await.unwrap();
+    let legacy = db::hold_retired_global_write_lock(&pool).await.unwrap();
     touch(&pool, "one", &token_digest("one")).await.unwrap();
     let first = used(&pool, "one").await.unwrap();
     touch(&pool, "one", &token_digest("one")).await.unwrap();

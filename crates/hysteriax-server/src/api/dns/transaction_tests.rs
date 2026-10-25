@@ -99,7 +99,9 @@ async fn concurrent_connection_edits_only_commit_one_revision_without_the_old_lo
     let (_, Json(created)) = connection(&state, &credential).await.unwrap();
     let id = created["id"].as_str().unwrap();
     disable_legacy_lock(&state).await;
-    let holder = db::begin_write(&state.pool).await.unwrap();
+    let holder = db::hold_retired_global_write_lock(&state.pool)
+        .await
+        .unwrap();
     let edit = || {
         Json(ConnectionPatch {
             expected_revision: 1,

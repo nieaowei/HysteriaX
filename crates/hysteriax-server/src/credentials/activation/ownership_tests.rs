@@ -90,7 +90,7 @@ async fn native_begin_retry_reuses_the_exact_prepared_id_cipher_and_single_datab
 #[tokio::test]
 async fn begin_and_transition_do_not_wait_for_the_old_global_lock_or_an_unrelated_node() {
     let (pool, secrets, leases) = fixture().await;
-    let legacy = db::begin_write(&pool).await.unwrap();
+    let legacy = db::hold_retired_global_write_lock(&pool).await.unwrap();
     let mut held = pool.begin().await.unwrap();
     sqlx::query("SELECT id FROM nodes WHERE id='b' FOR UPDATE")
         .fetch_one(&mut *held)

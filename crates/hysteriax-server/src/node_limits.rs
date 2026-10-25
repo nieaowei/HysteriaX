@@ -656,7 +656,7 @@ mod tests {
         )
     }
     async fn set_package(state: &AppState, id: &str, package: &Package) {
-        let mut tx = db::begin_write(&state.pool).await.unwrap();
+        let mut tx = state.pool.begin().await.unwrap();
         save(&mut tx, id, package).await.unwrap();
         tx.commit().await.unwrap();
     }
@@ -917,7 +917,7 @@ mod tests {
             ..Package::default()
         };
         set_package(&state, &id, &package).await;
-        let mut tx = db::begin_write(&state.pool).await.unwrap();
+        let mut tx = state.pool.begin().await.unwrap();
         sqlx::query("UPDATE node_packages SET usage_bytes=799 WHERE node_id=$1")
             .bind(&id)
             .execute(&mut *tx)

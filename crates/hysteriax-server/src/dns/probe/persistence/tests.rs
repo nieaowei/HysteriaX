@@ -96,7 +96,9 @@ async fn verified_observation_receipt_and_audit_commit_once_without_the_old_glob
     let f = fixture(false, false).await;
     let w = work(&f).await;
     assert_eq!(w.expected["payload"]["source_revision"], 1);
-    let legacy = db::begin_write(&f.state.pool).await.unwrap();
+    let legacy = db::hold_retired_global_write_lock(&f.state.pool)
+        .await
+        .unwrap();
     save(&f, &w, "verified").await.unwrap().unwrap();
     assert_eq!(count(&f,"SELECT count(*) FROM dns_records WHERE id='record' AND revision=1 AND resolution_status='verified' AND checked_at IS NOT NULL").await,1);
     assert_eq!(

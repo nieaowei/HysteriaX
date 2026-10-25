@@ -280,7 +280,7 @@ pub(crate) mod tests {
     }
 
     pub async fn enqueue(state: &AppState, reason: &str) -> String {
-        let mut tx = db::begin_write(&state.pool).await.unwrap();
+        let mut tx = state.pool.begin().await.unwrap();
         let id = enqueue_job_with_payload_in_tx(
             &mut tx,
             "kick",
@@ -351,7 +351,7 @@ pub(crate) mod tests {
                 .await
                 .unwrap()
         );
-        let mut tx = db::begin_write(&state.pool).await.unwrap();
+        let mut tx = state.pool.begin().await.unwrap();
         clear_reason(&mut tx, None, Some("user"), "access_restricted")
             .await
             .unwrap();
@@ -364,7 +364,7 @@ pub(crate) mod tests {
         assert_eq!(status, "cancelled");
         let id = enqueue(&state, "node_limit").await;
         assert_eq!(id, enqueue(&state, "credentials_revoked").await);
-        let mut tx = db::begin_write(&state.pool).await.unwrap();
+        let mut tx = state.pool.begin().await.unwrap();
         clear_reason(&mut tx, Some("node"), None, "node_limit")
             .await
             .unwrap();
@@ -393,7 +393,7 @@ pub(crate) mod tests {
             .unwrap();
         let old = job(&state, &id).await;
         assert_eq!(id, enqueue(&state, "user_deleted").await);
-        let mut tx = db::begin_write(&state.pool).await.unwrap();
+        let mut tx = state.pool.begin().await.unwrap();
         finish(&mut tx, &old, "completed").await.unwrap();
         sqlx::query("UPDATE jobs SET status='succeeded' WHERE id=$1")
             .bind(&id)
@@ -429,7 +429,7 @@ pub(crate) mod tests {
             .execute(&state.pool)
             .await
             .unwrap();
-        let mut tx = db::begin_write(&state.pool).await.unwrap();
+        let mut tx = state.pool.begin().await.unwrap();
         schedule(&mut tx, None, false).await.unwrap();
         tx.commit().await.unwrap();
         let count: i64 = sqlx::query_scalar("SELECT count(*) FROM jobs")
@@ -505,7 +505,7 @@ pub(crate) mod tests {
             sqlx::query("INSERT INTO jobs(id,kind,node_id,payload_json,status,stage,attempts,error_message,available_at,created_at,updated_at) VALUES($1,'kick','node',$2,'queued','retry_wait',115,'SSH connection failed: SSH connection timed out',now(),now(),now())")
                 .bind(id).bind(json!({"user_id":"user"})).execute(&state.pool).await.unwrap();
         }
-        let mut tx = db::begin_write(&state.pool).await.unwrap();
+        let mut tx = state.pool.begin().await.unwrap();
         sqlx::raw_sql(include_str!("../migrations/0008_kick_requests.sql"))
             .execute(&mut *tx)
             .await

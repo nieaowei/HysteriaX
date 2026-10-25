@@ -38,7 +38,7 @@ pub(super) async fn operation(pool: &PgPool, claimed: &ClaimedJob) -> String {
 async fn claim_and_release_use_database_time_and_continue_while_the_old_global_lock_is_held() {
     let pool = fixture().await;
     enqueue(&pool, "one", Some("node-a"), Some("dns-zone:zone")).await;
-    let legacy = db::begin_write(&pool).await.unwrap();
+    let legacy = db::hold_retired_global_write_lock(&pool).await.unwrap();
     let claimed = tokio::time::timeout(Duration::from_secs(2), claim(&pool, "instance-a"))
         .await
         .unwrap();

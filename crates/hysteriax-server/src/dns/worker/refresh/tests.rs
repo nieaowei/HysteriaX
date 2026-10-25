@@ -206,7 +206,9 @@ async fn connection_refresh_is_atomic_idempotent_and_does_not_overwrite_another_
             .fetch_one(&w.state.pool)
             .await
             .unwrap();
-    let legacy = db::begin_write(&w.state.pool).await.unwrap();
+    let legacy = db::hold_retired_global_write_lock(&w.state.pool)
+        .await
+        .unwrap();
     let zones = vec![
         json!({"id":"remote-zone","name":"renamed.test"}),
         json!({"id":"new-zone","name":"new.test"}),
@@ -265,7 +267,9 @@ async fn zone_refresh_publishes_records_missing_markers_receipt_and_audit_togeth
     assert_eq!(snapshot(&w).await, before);
     sqlx::raw_sql("DROP TRIGGER reject_refresh_audit ON audit_records; CREATE SEQUENCE refresh_attempt; CREATE FUNCTION retry_refresh_receipt() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.applied_at IS NOT NULL AND OLD.applied_at IS NULL AND nextval('refresh_attempt')=1 THEN RAISE EXCEPTION 'retry' USING ERRCODE='40P01'; END IF; RETURN NEW; END $$; CREATE TRIGGER retry_refresh_receipt BEFORE UPDATE ON dns_operations FOR EACH ROW EXECUTE FUNCTION retry_refresh_receipt()")
         .execute(&w.state.pool).await.unwrap();
-    let legacy = db::begin_write(&w.state.pool).await.unwrap();
+    let legacy = db::hold_retired_global_write_lock(&w.state.pool)
+        .await
+        .unwrap();
     save(&w, &s, &[record("new")]).await.unwrap().unwrap();
     assert_eq!(count(&w, "SELECT last_value FROM refresh_attempt").await, 2);
     assert_eq!(

@@ -49,7 +49,9 @@ async fn count(state: &AppState, sql: &str) -> i64 {
 #[tokio::test]
 async fn concurrent_retries_share_one_child_and_audit_without_legacy_lock() {
     let (state, _, job) = fixture().await;
-    let legacy = db::begin_write(&state.pool).await.unwrap();
+    let legacy = db::hold_retired_global_write_lock(&state.pool)
+        .await
+        .unwrap();
     let (a, b) = tokio::join!(submit(&state, &job), submit(&state, &job));
     legacy.rollback().await.unwrap();
     let (_, Json(a)) = a.unwrap();

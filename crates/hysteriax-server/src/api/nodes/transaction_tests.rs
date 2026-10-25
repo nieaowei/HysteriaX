@@ -69,7 +69,9 @@ async fn retried_action_commits_one_job_event_and_actual_actor() {
     let (state, node) = fixture().await;
     sqlx::raw_sql("CREATE SEQUENCE action_attempts; CREATE FUNCTION retry_action_audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.action='node.deploy' AND nextval('action_attempts')=1 THEN RAISE EXCEPTION 'injected conflict' USING ERRCODE='40001'; END IF; RETURN NEW; END $$; CREATE TRIGGER retry_action_audit BEFORE INSERT ON audit_records FOR EACH ROW EXECUTE FUNCTION retry_action_audit();").execute(&state.pool).await.unwrap();
     // A converted entry point must not wait on the legacy application lock.
-    let legacy = db::begin_write(&state.pool).await.unwrap();
+    let legacy = db::hold_retired_global_write_lock(&state.pool)
+        .await
+        .unwrap();
     let (_, Json(receipt)) = super::super::AUDIT_ACTOR_ID
         .scope("node-operator".into(), action(&state, &node, 1, "deploy"))
         .await
@@ -219,7 +221,9 @@ async fn retried_deletion_notifies_only_after_the_one_committed_removal() {
     let (state, node) = fixture().await;
     let mut notifications = state.removed_nodes.subscribe();
     sqlx::raw_sql("CREATE SEQUENCE deletion_attempts; CREATE FUNCTION retry_deletion_audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.action='node.deleted' AND nextval('deletion_attempts')=1 THEN RAISE EXCEPTION 'injected conflict' USING ERRCODE='40001'; END IF; RETURN NEW; END $$; CREATE TRIGGER retry_deletion_audit BEFORE INSERT ON audit_records FOR EACH ROW EXECUTE FUNCTION retry_deletion_audit();").execute(&state.pool).await.unwrap();
-    let legacy = db::begin_write(&state.pool).await.unwrap();
+    let legacy = db::hold_retired_global_write_lock(&state.pool)
+        .await
+        .unwrap();
     assert_eq!(
         delete_node(&state, &node).await.unwrap().0,
         StatusCode::NO_CONTENT
@@ -348,7 +352,9 @@ async fn editing_audit_failure_rolls_back_revision_history_jobs_and_references()
 #[tokio::test]
 async fn concurrent_edits_of_one_revision_commit_one_history_and_sync() {
     let (state, node) = fixture().await;
-    let legacy = db::begin_write(&state.pool).await.unwrap();
+    let legacy = db::hold_retired_global_write_lock(&state.pool)
+        .await
+        .unwrap();
     let input = json!({"expected_revision":1,"traffic_stats_port":12000});
     let (a, b) = tokio::join!(
         edit(&state, &node, input.clone()),

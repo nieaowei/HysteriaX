@@ -648,7 +648,7 @@ async fn legacy_pair_fixture(bad_key: bool) -> (AppState, String, Value) {
         .await
         .unwrap();
     sqlx::query("ALTER TABLE credentials ADD CONSTRAINT credentials_kind_check CHECK (kind IN ('ssh_private_key','ssh_password','tls_identity','ca_certificate','certificate','private_key','ech_key','dns','api_token'))").execute(&state.pool).await.unwrap();
-    let mut tx = crate::db::begin_write(&state.pool).await.unwrap();
+    let mut tx = state.pool.begin().await.unwrap();
     let cert = insert(
         &mut tx,
         &state.secrets,

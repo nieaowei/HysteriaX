@@ -26,7 +26,9 @@ async fn count(state: &AppState, sql: &str) -> i64 {
 async fn concurrent_previews_are_independent_and_do_not_change_authorization() {
     let state = fixture().await;
     let assignments = count(&state, "SELECT count(*) FROM node_assignments").await;
-    let legacy = db::begin_write(&state.pool).await.unwrap();
+    let legacy = db::hold_retired_global_write_lock(&state.pool)
+        .await
+        .unwrap();
     let (a, b) = tokio::join!(preview(&state), preview(&state));
     let Json(a) = a.unwrap();
     let Json(b) = b.unwrap();
@@ -211,7 +213,9 @@ async fn retried_grant_returns_the_final_assignment_secret_and_one_audit() {
     let state = clean_fixture().await;
     let input = grant_input(&state).await;
     sqlx::raw_sql("CREATE SEQUENCE grant_attempts; CREATE FUNCTION retry_grant_audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.action='authorization_group.created' AND nextval('grant_attempts')=1 THEN RAISE EXCEPTION 'injected conflict' USING ERRCODE='40001'; END IF; RETURN NEW; END $$; CREATE TRIGGER retry_grant_audit BEFORE INSERT ON audit_records FOR EACH ROW EXECUTE FUNCTION retry_grant_audit();").execute(&state.pool).await.unwrap();
-    let legacy = db::begin_write(&state.pool).await.unwrap();
+    let legacy = db::hold_retired_global_write_lock(&state.pool)
+        .await
+        .unwrap();
     let receipt = super::super::AUDIT_ACTOR_ID
         .scope("group-operator".into(), grant(&state, input))
         .await

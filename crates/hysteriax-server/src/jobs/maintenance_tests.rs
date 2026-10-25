@@ -59,7 +59,9 @@ async fn expired_execution_recovery_is_bounded_skips_locked_jobs_and_keeps_live_
         .fetch_one(&mut *held)
         .await
         .unwrap();
-    let legacy = db::begin_write(&state.pool).await.unwrap();
+    let legacy = db::hold_retired_global_write_lock(&state.pool)
+        .await
+        .unwrap();
     let old = claim(&state, "recovery", "one").await;
     maintenance_work(&state, &old).await.unwrap();
     assert_eq!(
@@ -320,7 +322,9 @@ async fn trusted_node_recovery_uses_a_pure_retry_transaction_without_the_old_loc
     let state = fixture().await;
     sqlx::query("INSERT INTO kick_requests(node_id,user_id,reasons,state) VALUES('a','deleted','{\"user_deleted\":true}','waiting_recovery'),('a','permanent','{\"user_deleted\":true}','needs_attention')").execute(&state.pool).await.unwrap();
     sqlx::raw_sql("CREATE SEQUENCE node_recovery_attempt; CREATE FUNCTION retry_node_recovery() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.kind='kick' AND nextval('node_recovery_attempt')=1 THEN RAISE EXCEPTION 'retry recovery' USING ERRCODE='40001'; END IF; RETURN NEW; END $$; CREATE TRIGGER retry_node_recovery BEFORE INSERT ON jobs FOR EACH ROW EXECUTE FUNCTION retry_node_recovery();").execute(&state.pool).await.unwrap();
-    let legacy = db::begin_write(&state.pool).await.unwrap();
+    let legacy = db::hold_retired_global_write_lock(&state.pool)
+        .await
+        .unwrap();
     crate::kick_requests::resume_node(&state.pool, "a")
         .await
         .unwrap();
@@ -337,7 +341,9 @@ async fn trusted_node_recovery_uses_a_pure_retry_transaction_without_the_old_loc
 async fn concurrent_trusted_recovery_schedules_one_active_child_without_legacy_serialization() {
     let state = fixture().await;
     sqlx::query("INSERT INTO kick_requests(node_id,user_id,reasons,state) VALUES('a','deleted','{\"user_deleted\":true}','waiting_recovery')").execute(&state.pool).await.unwrap();
-    let legacy = db::begin_write(&state.pool).await.unwrap();
+    let legacy = db::hold_retired_global_write_lock(&state.pool)
+        .await
+        .unwrap();
     let (a, b) = tokio::join!(
         crate::kick_requests::resume_node(&state.pool, "a"),
         crate::kick_requests::resume_node(&state.pool, "a")

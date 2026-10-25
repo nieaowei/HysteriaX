@@ -117,7 +117,9 @@ async fn callback_requires_both_live_incarnations_and_exact_current_work_and_nod
 #[tokio::test]
 async fn token_is_database_timed_and_independent_of_legacy_and_other_node_locks() {
     let state = fixture().await;
-    let legacy = crate::db::begin_write(&state.pool).await.unwrap();
+    let legacy = crate::db::hold_retired_global_write_lock(&state.pool)
+        .await
+        .unwrap();
     let mut other = state.pool.begin().await.unwrap();
     sqlx::query("SELECT id FROM nodes WHERE id='b' FOR UPDATE")
         .fetch_one(&mut *other)

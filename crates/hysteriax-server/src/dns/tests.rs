@@ -17,10 +17,14 @@ pub(crate) async fn fixture() -> (AppState, String, String, String) {
         db::test_pool_with_max_connections(4).await,
         SecretBox::from_base64("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA").unwrap(),
     );
+    fixture_from_state(state).await
+}
+
+async fn fixture_from_state(state: AppState) -> (AppState, String, String, String) {
     credentials::migration::migrate(&state.pool, &state.secrets)
         .await
         .unwrap();
-    let mut tx = db::begin_write(&state.pool).await.unwrap();
+    let mut tx = state.pool.begin().await.unwrap();
     let ssh = credentials::insert(
         &mut tx,
         &state.secrets,
@@ -68,6 +72,22 @@ pub(crate) async fn fixture() -> (AppState, String, String, String) {
     sqlx::query("INSERT INTO dns_zones(id,connection_id,provider_zone_id,name,enabled) VALUES('zone',$1,'remote-zone','example.test',true)").bind(&connection).execute(&state.pool).await.unwrap();
     (state, ssh, connection, "zone".into())
 }
+
+#[tokio::test]
+async fn fixture_preparation_does_not_acquire_the_retired_global_write_lock() {
+    let state = AppState::new(
+        db::test_pool_with_max_connections(4).await,
+        SecretBox::from_base64("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA").unwrap(),
+    );
+    let other = db::test_pool().await;
+    let held = db::hold_retired_global_write_lock(&other).await.unwrap();
+    let (_, _, _, zone) =
+        tokio::time::timeout(std::time::Duration::from_secs(2), fixture_from_state(state))
+            .await
+            .expect("normal fixture preparation must not depend on the retired key");
+    assert_eq!(zone, "zone");
+    held.rollback().await.unwrap();
+}
 pub(crate) fn node_request(ssh: &str, allocation: Option<Value>) -> api::nodes::CreateNode {
     serde_json::from_value(json!({"name":"DNS node","ssh_host":"127.0.0.1","ssh_port":22,"ssh_username":"root","ssh_credential_id":ssh,"ssh_credential_version":1,"public_host":"old.example.test","public_port":443,"listen_addr":":443","config":{},"dns_allocation":allocation})).unwrap()
 }
@@ -98,7 +118,7 @@ pub(crate) async fn allocated_node(state: &AppState, ssh: &str) -> (String, Vec<
             .collect(),
         existing: vec![],
     };
-    let mut tx = db::begin_write(&state.pool).await.unwrap();
+    let mut tx = state.pool.begin().await.unwrap();
     let receipt = super::binding::bind_in_tx(
         &mut tx,
         &node,
@@ -194,7 +214,7 @@ async fn node_dns_cleanup_preserves_external_selected_and_shared_records() {
         .execute(&state.pool)
         .await
         .unwrap();
-    let mut tx = db::begin_write(&state.pool).await.unwrap();
+    let mut tx = state.pool.begin().await.unwrap();
     super::binding::before_node_delete(&mut tx, &node)
         .await
         .unwrap();
@@ -213,7 +233,7 @@ async fn node_dns_cleanup_preserves_external_selected_and_shared_records() {
         .await
         .unwrap();
     sqlx::query("UPDATE nodes SET published_connection=jsonb_build_object('public_host',(SELECT public_host FROM nodes WHERE id=$1)) WHERE id=$2").bind(&owned).bind(other["node"]["id"].as_str()).execute(&state.pool).await.unwrap();
-    let mut tx = db::begin_write(&state.pool).await.unwrap();
+    let mut tx = state.pool.begin().await.unwrap();
     super::binding::before_node_delete(&mut tx, &owned)
         .await
         .unwrap();

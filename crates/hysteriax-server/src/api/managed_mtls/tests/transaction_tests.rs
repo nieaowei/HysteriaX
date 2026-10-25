@@ -46,7 +46,9 @@ async fn ca_creation_native_conflict_commits_one_material_and_receipt() {
     let state = state().await;
     unlock(&state).await;
     sqlx::raw_sql("CREATE SEQUENCE create_ca_attempts; CREATE FUNCTION retry_ca_audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.action='ca.created' AND nextval('create_ca_attempts')=1 THEN RAISE EXCEPTION 'injected conflict' USING ERRCODE='40001'; END IF; RETURN NEW; END $$; CREATE TRIGGER retry_ca_audit BEFORE INSERT ON audit_records FOR EACH ROW EXECUTE FUNCTION retry_ca_audit();").execute(&state.pool).await.unwrap();
-    let legacy = db::begin_write(&state.pool).await.unwrap();
+    let legacy = db::hold_retired_global_write_lock(&state.pool)
+        .await
+        .unwrap();
     let (_, Json(receipt)) = create(State(state.clone()), actor(), Json(request("retry-ca")))
         .await
         .unwrap();
@@ -174,7 +176,9 @@ async fn policy_conflict_changes_one_revision_without_old_locks() {
         },
         idempotency_key: "policy-b".into(),
     };
-    let legacy = db::begin_write(&state.pool).await.unwrap();
+    let legacy = db::hold_retired_global_write_lock(&state.pool)
+        .await
+        .unwrap();
     let (a, b) = tokio::join!(
         update_policy(State(state.clone()), actor(), Path(ca.clone()), Json(a)),
         update_policy(State(state.clone()), actor(), Path(ca.clone()), Json(b))

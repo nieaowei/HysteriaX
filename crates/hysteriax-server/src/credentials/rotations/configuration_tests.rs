@@ -65,7 +65,9 @@ async fn configuration_binds_only_its_operation_without_waiting_for_the_old_glob
  {
     let (state, ca, _) = fixture(2).await;
     let job = input(&state, "old-member-0001").await;
-    let legacy = db::begin_write(&state.pool).await.unwrap();
+    let legacy = db::hold_retired_global_write_lock(&state.pool)
+        .await
+        .unwrap();
     let mut held = state.pool.begin().await.unwrap();
     sqlx::query("SELECT id FROM nodes WHERE id='member-0002' FOR UPDATE")
         .fetch_one(&mut *held)
