@@ -1,0 +1,64 @@
+{
+  "scope": "locally-built-amd64-image-staged-on-target",
+  "passed": true,
+  "image": "hysteriax-server:0034-amd64-2feade3-20261025",
+  "source_commit": "2feade3",
+  "includes_preexisting_user_worktree_changes": true,
+  "platform": "linux/amd64",
+  "local_image_id": "sha256:180e946309dd2b3fad470822d605b2a1fcddb1ac5877aeb4e6bcb1ac46f373ed",
+  "remote_image_id": "sha256:72ae3bce51b16c63bcdbcba164541712a3e449a6a350948299d71db8bb2edbb1",
+  "image_ids_match": false,
+  "content_verification": {
+    "rootfs_layers_exact": true,
+    "runtime_config_exact": true
+  },
+  "runtime_config_sha256": "2aff95efc9272fad96251667c46b656ac7d04b05e4e26982aae373d4cb4c10d3",
+  "rootfs_layers": [
+    "sha256:9b35de7893378218e365c34c2c735fb0032a859112fb7345ca8ea73f9aa1db70",
+    "sha256:b4876ba76c7faf0bd98320a8ddf066fef27600cd5a76c009147111c8c1bd6e84",
+    "sha256:550782daa49f5084ca7083f79c9e835bb0d9e6d7e6c87885fd02a161d12f3681",
+    "sha256:20cfd9fa59b497c06991d72a1e1990793c22e7fe566132ec99e84797c986d4df",
+    "sha256:cd5f6081779520a86440dfa0d437e585d73be8102555bc422af6a14c1972ea89",
+    "sha256:7aa4d3ec14c3af1ed37e47fac819274c6fc011e95733a0b342d27980d891d728"
+  ],
+  "server_binary_sha256": "3b2f4361c9bf03e38d745fe9b77342b5028b5234a34de33936238cf28d7a906c",
+  "template_runtime_check_exit": 0,
+  "active_api_image": "hysteriax-server:node-cleanup-fk-20261021",
+  "active_api_unchanged": true,
+  "database_migrated": false,
+  "new_api_started": false,
+  "built_locally": true,
+  "built_on_server": false,
+  "note": "Initial inspect-ID equality check failed. Exact ordered filesystem layers, selected runtime configuration and server binary SHA256 subsequently matched. No service or database cutover performed.",
+  "template_runtime_check": {
+    "after": {
+      "peak_rss_kib": 54408,
+      "rss_kib": 54408,
+      "swap_kib": 0
+    },
+    "before": {
+      "peak_rss_kib": 11052,
+      "rss_kib": 11052,
+      "swap_kib": 0
+    },
+    "compiled": {
+      "peak_rss_kib": 32812,
+      "rss_kib": 32812,
+      "swap_kib": 0
+    },
+    "concurrent_workers": 4,
+    "formats": [
+      "mihomo",
+      "singbox"
+    ],
+    "invalid_configurations_rejected": true,
+    "repeat_passes": 16,
+    "status": "ok",
+    "warmed": {
+      "peak_rss_kib": 54208,
+      "rss_kib": 54208,
+      "swap_kib": 0
+    }
+  },
+  "build_log": "/tmp/hx0034-phase116-final-build.log"
+}
