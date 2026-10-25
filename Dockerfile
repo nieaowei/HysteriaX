@@ -7,6 +7,7 @@ RUN mkdir -p /artifacts && for arch in amd64 arm64; do CGO_ENABLED=0 GOOS=linux 
 
 FROM rust:1.97-bookworm AS build
 ARG TARGETARCH
+ARG CARGO_BUILD_JOBS=2
 WORKDIR /src
 COPY Cargo.toml Cargo.lock* ./
 COPY crates/hysteriax-template-validator crates/hysteriax-template-validator
