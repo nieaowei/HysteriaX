@@ -50,6 +50,7 @@ jobs:
       - run: scripts/verify-restart-recovery.py
       - run: scripts/verify-sampling-failure.py
       - run: scripts/verify-auth-isolation.py
+      - run: python3 -m unittest discover -s tests -p 'test_management_test_http.py'
       - run: python3 -m unittest discover -s tests -p 'test_backup_restore.py'
       - run: scripts/verify-backup-restore-compose.py
 

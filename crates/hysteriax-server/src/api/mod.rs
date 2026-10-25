@@ -289,222 +289,7 @@ pub fn router(state: AppState) -> Router {
             "/api/v2/users/{id}/quota/reset",
             post(users::reset_quota_v2),
         )
-        .route(
-            "/api/v1/subscription-templates",
-            get(st::list).post(st::create),
-        )
-        .route("/api/v1/subscription-templates/fields", get(st::fields))
-        .route("/api/v1/subscription-templates/source", post(st::source))
-        .route("/api/v1/subscription-templates/import", post(st::import))
-        .route(
-            "/api/v1/subscription-templates/{id}",
-            get(st::get).patch(st::patch),
-        )
-        .route(
-            "/api/v1/subscription-templates/{id}/draft",
-            get(st::draft).put(st::save),
-        )
-        .route(
-            "/api/v1/subscription-templates/{id}/validate",
-            post(st::validate_draft),
-        )
-        .route(
-            "/api/v1/subscription-templates/{id}/refactor",
-            post(st::refactor),
-        )
-        .route(
-            "/api/v1/subscription-templates/{id}/preview",
-            post(st::preview),
-        )
-        .route(
-            "/api/v1/subscription-templates/{id}/publish",
-            post(st::publish),
-        )
-        .route(
-            "/api/v1/subscription-templates/{id}/versions",
-            get(st::versions),
-        )
-        .route(
-            "/api/v1/subscription-templates/{id}/rollback",
-            post(st::rollback),
-        )
-        .route(
-            "/api/v1/subscription-templates/{id}/versions/{version}",
-            get(st::version),
-        )
-        .route(
-            "/api/v1/subscription-templates/{id}/export",
-            get(st::export),
-        )
-        .route(
-            "/api/v1/users/{id}/managed-certificates/reissue",
-            post(managed_mtls::reissue_user),
-        )
-        .route(
-            "/api/v1/credentials/ca-identities",
-            post(managed_mtls::create),
-        )
-        .route(
-            "/api/v1/credentials/{id}/ca-versions",
-            post(managed_mtls::publish),
-        )
-        .route(
-            "/api/v1/credentials/{id}/ca-policy",
-            axum::routing::patch(managed_mtls::update_policy),
-        )
-        .route(
-            "/api/v1/jobs/{id}/confirm-fingerprint",
-            post(ssh_fingerprint::confirm),
-        )
-        .route(
-            "/api/v1/dns/connections",
-            get(dns::list_connections).post(dns::create_connection),
-        )
-        .route(
-            "/api/v1/dns/connections/{id}",
-            get(dns::get_connection)
-                .patch(dns::patch_connection)
-                .delete(dns::delete_connection),
-        )
-        .route(
-            "/api/v1/dns/connections/{id}/verify",
-            post(dns::verify_connection),
-        )
-        .route(
-            "/api/v1/dns/connections/{id}/refresh",
-            post(dns::refresh_connection),
-        )
-        .route("/api/v1/dns/zones", get(dns::list_zones))
-        .route(
-            "/api/v1/dns/zones/{id}",
-            axum::routing::patch(dns::patch_zone),
-        )
-        .route("/api/v1/dns/zones/{id}/refresh", post(dns::refresh_zone))
-        .route(
-            "/api/v1/dns/records",
-            get(dns::list_records).post(dns::create_record),
-        )
-        .route(
-            "/api/v1/dns/records/{id}",
-            get(dns::get_record)
-                .patch(dns::update_record)
-                .delete(dns::delete_record),
-        )
-        .route("/api/v1/dns/records/{id}/check", post(dns::check_record))
-        .route(
-            "/api/v1/nodes/{id}/dns-binding",
-            get(dns::get_binding)
-                .put(dns::set_binding)
-                .delete(dns::unbind),
-        )
-        .route("/api/v1/nodes", get(nodes::list).post(nodes::create))
-        .route(
-            "/api/v1/nodes/{id}/record",
-            axum::routing::delete(nodes::remove_record),
-        )
-        .route(
-            "/api/v1/nodes/{id}",
-            get(nodes::get).patch(nodes::patch).delete(nodes::delete),
-        )
-        .route(
-            "/api/v1/nodes/{id}/usage",
-            axum::routing::put(crate::node_limits::update_usage),
-        )
-        .route("/api/v1/nodes/{id}/deploy", post(nodes::deploy))
-        .route("/api/v1/nodes/{id}/ssh-test", post(nodes::ssh_test))
-        .route("/api/v1/nodes/{id}/sync", post(nodes::sync))
-        .route("/api/v1/nodes/{id}/rollback", post(nodes::rollback))
-        .route(
-            "/api/v1/nodes/{id}/resources",
-            get(resources::list).post(resources::create),
-        )
-        .route(
-            "/api/v1/nodes/{id}/resources/{resource_id}",
-            delete(resources::delete),
-        )
-        .route("/api/v1/users", get(users::list).post(users::create))
-        .route(
-            "/api/v1/users/{id}",
-            get(users::get).patch(users::patch).delete(users::delete),
-        )
-        .route(
-            "/api/v1/authorization-groups",
-            get(authorization_groups::list).post(authorization_groups::create),
-        )
-        .route(
-            "/api/v1/authorization-groups/preview",
-            post(authorization_groups::preview_create),
-        )
-        .route(
-            "/api/v1/authorization-groups/{id}",
-            get(authorization_groups::get)
-                .put(authorization_groups::update)
-                .delete(authorization_groups::delete),
-        )
-        .route(
-            "/api/v1/authorization-groups/{id}/preview",
-            post(authorization_groups::preview_group),
-        )
-        .route(
-            "/api/v1/users/{id}/authorization-groups/preview",
-            post(authorization_groups::preview_memberships),
-        )
-        .route(
-            "/api/v1/users/{id}/authorization-groups",
-            axum::routing::put(authorization_groups::update_memberships),
-        )
-        .route(
-            "/api/v1/users/{id}/credentials/rotate",
-            post(users::rotate_credentials),
-        )
-        .route(
-            "/api/v1/users/{id}/subscription",
-            get(subscriptions::get_user).post(subscriptions::rotate),
-        )
-        .route("/api/v1/users/{id}/usage", get(users::usage))
-        .route("/api/v1/users/{id}/quota/reset", post(users::reset_quota))
-        .route("/api/v1/jobs", get(list_jobs))
-        .route("/api/v1/version", get(api_version))
-        .route("/api/v1/client/summary", get(client_summary::get))
-        .route("/api/v1/overview", get(crate::overview::get))
-        .route("/api/v1/overview/nodes", get(crate::overview::list_nodes))
-        .route("/api/v1/overview/history", get(crate::overview::history))
-        .route("/api/v1/server/monitoring", get(crate::monitoring::get))
-        .route("/api/v1/jobs/{id}", get(get_job))
-        .route("/api/v1/jobs/{id}/retry", post(job_retries::retry))
-        .route("/api/v1/jobs/{id}/events", get(job_events))
-        .route("/api/v1/events", get(events))
-        .route("/api/v1/audit", get(list_audit_records))
-        .route(
-            "/api/v1/admin/tokens",
-            get(list_admin_tokens).post(create_admin_token),
-        )
-        .route("/api/v1/admin/tokens/{id}", delete(revoke_admin_token))
-        .route(
-            "/api/v1/credentials",
-            get(credentials::list).post(credentials::create),
-        )
-        .route(
-            "/api/v1/credentials/{id}",
-            get(credentials::get)
-                .patch(credentials::patch)
-                .delete(credentials::delete),
-        )
-        .route(
-            "/api/v1/credentials/{id}/versions",
-            post(credentials::publish),
-        )
-        .route(
-            "/api/v1/credentials/{id}/references",
-            get(credentials::references),
-        )
-        .route("/api/v1/credential-batches/{id}", get(credentials::batch))
-        .route(
-            "/api/v1/credential-batches/{id}/retry",
-            post(credentials::retry),
-        )
         .layer(DefaultBodyLimit::max(30 * 1024 * 1024))
-        .route("/api/v1/cache", get(cache_stats))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             crate::cache::middleware,
@@ -522,7 +307,6 @@ pub fn router(state: AppState) -> Router {
             post(subscriptions::hy2_auth),
         )
         .with_state(state)
-        .layer(middleware::from_fn(reject_old_management))
         .layer(
             tower_http::trace::TraceLayer::new_for_http().make_span_with(
                 |request: &axum::http::Request<_>| {
@@ -538,19 +322,6 @@ pub fn router(state: AppState) -> Router {
                 },
             ),
         )
-}
-
-async fn reject_old_management(request: axum::extract::Request, next: Next) -> Response {
-    let path = request.uri().path();
-    if path == "/api/v1" || path.starts_with("/api/v1/") {
-        return ApiError::new(
-            StatusCode::UPGRADE_REQUIRED,
-            "management_protocol_upgrade_required",
-            "management protocol 2 and an updated client are required; use /api/v2",
-        )
-        .into_response();
-    }
-    next.run(request).await
 }
 
 async fn require_admin(
@@ -693,110 +464,6 @@ async fn openapi(headers: HeaderMap) -> Response {
         "application/yaml; charset=utf-8".parse().unwrap(),
     );
     response
-}
-
-#[derive(Deserialize, Default)]
-struct EventsQuery {
-    after: Option<i64>,
-    job_id: Option<String>,
-}
-
-async fn events(
-    State(state): State<AppState>,
-    Extension(actor): Extension<AdminActor>,
-    Query(query): Query<EventsQuery>,
-    headers: HeaderMap,
-) -> Sse<impl futures_core::Stream<Item = Result<Event, Infallible>>> {
-    stream_events(
-        state,
-        event_cursor(query.after, &headers),
-        query.job_id,
-        actor.id,
-    )
-}
-
-async fn job_events(
-    State(state): State<AppState>,
-    Extension(actor): Extension<AdminActor>,
-    Path(id): Path<String>,
-    Query(query): Query<EventsQuery>,
-    headers: HeaderMap,
-) -> Result<Sse<impl futures_core::Stream<Item = Result<Event, Infallible>>>, ApiError> {
-    let exists: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM jobs WHERE id = $1")
-        .bind(&id)
-        .fetch_one(&state.pool)
-        .await?;
-    if exists == 0 {
-        return Err(ApiError::not_found("job"));
-    }
-    Ok(stream_events(
-        state,
-        event_cursor(query.after, &headers),
-        Some(id),
-        actor.id,
-    ))
-}
-
-fn event_cursor(after: Option<i64>, headers: &HeaderMap) -> i64 {
-    after
-        .or_else(|| {
-            headers
-                .get("last-event-id")
-                .and_then(|value| value.to_str().ok())
-                .and_then(|value| value.parse::<i64>().ok())
-        })
-        .filter(|cursor| *cursor >= 0)
-        .unwrap_or(0)
-}
-
-fn stream_events(
-    state: AppState,
-    mut cursor: i64,
-    job_id: Option<String>,
-    admin_id: String,
-) -> Sse<impl futures_core::Stream<Item = Result<Event, Infallible>>> {
-    let output = stream! {
-        let mut shutdown = state.shutdown.subscribe();
-        let mut authorization = state.admin_tokens_changed.subscribe();
-        let mut updates=state.events.subscribe(state.pool.clone());
-        loop {
-            if *shutdown.borrow() { break; }
-            authorization.borrow_and_update();
-            // Fail closed on database errors. Recheck before each replay/live batch
-            // as well as on idle connections, including changes made outside the API.
-            let active = tokio::time::timeout(Duration::from_secs(2), sqlx::query_scalar::<_, bool>(
-                "SELECT EXISTS(SELECT 1 FROM admin_tokens WHERE id=$1 AND revoked_at IS NULL)"
-            ).bind(&admin_id).fetch_one(&state.pool)).await;
-            if !matches!(active, Ok(Ok(true))) { break; }
-            updates.borrow_and_update();
-            match state.events.read(cursor,job_id.as_deref()) {
-                crate::events::Read::Live(events,watermark)=>{
-                    for event in events {if *shutdown.borrow() {return;} cursor=event.id;yield Ok(Event::default().id(event.id.to_string()).event(event.kind.clone()).data(event.wire_data()));}
-                    cursor=cursor.max(watermark);
-                }
-                crate::events::Read::Replay(until)=>{
-                    match crate::events::read_database(&state.pool,cursor,until,job_id.as_deref()).await {
-                        Ok(events)=>{
-                            let full=events.len()==256;
-                            for event in events {if *shutdown.borrow() {return;} cursor=event.id;yield Ok(Event::default().id(event.id.to_string()).event(event.kind.clone()).data(event.wire_data()));}
-                            if !full {cursor=cursor.max(until);}
-                            continue;
-                        }
-                        Err(error)=>{tracing::warn!(%error,"event replay failed");tokio::time::sleep(Duration::from_secs(1)).await;continue;}
-                    }
-                }
-                crate::events::Read::Waiting=>{}
-            }
-            tokio::select! {
-                biased;
-                _ = shutdown.wait_for(|stopping| *stopping) => break,
-                _ = authorization.changed() => {},
-                changed = updates.changed() => { if changed.is_err() {break;} },
-                _ = tokio::time::sleep(Duration::from_secs(5)) => {},
-            }
-        }
-    };
-    Sse::new(output).keep_alive(axum::response::sse::KeepAlive::default())
 }
 
 #[derive(Serialize)]
@@ -1069,20 +736,6 @@ struct CreateAdminToken {
     label: String,
 }
 
-async fn create_admin_token(
-    State(state): State<AppState>,
-    Json(input): Json<CreateAdminToken>,
-) -> Result<(StatusCode, Json<Value>), ApiError> {
-    let prepared = admin_tokens::PreparedToken::new(&input.label)?;
-    let actor = audit_actor();
-    let response = db::serializable::<_, ApiError, _>(&state.pool, move |tx| {
-        let (prepared, actor) = (prepared.clone(), actor.clone());
-        Box::pin(async move { prepared.commit_on(tx, &actor).await })
-    })
-    .await?;
-    Ok((StatusCode::CREATED, Json(response)))
-}
-
 fn validate_admin_token_label(label: &str) -> Result<&str, ApiError> {
     let label = label.trim();
     if label.is_empty() || label.chars().count() > 100 {
@@ -1091,27 +744,6 @@ fn validate_admin_token_label(label: &str) -> Result<&str, ApiError> {
         ));
     }
     Ok(label)
-}
-
-async fn revoke_admin_token(
-    State(state): State<AppState>,
-    Extension(actor): Extension<AdminActor>,
-    Path(id): Path<String>,
-) -> Result<StatusCode, ApiError> {
-    if actor.id == id {
-        return Err(ApiError::conflict(
-            "cannot revoke the token used by this request",
-        ));
-    }
-    db::serializable::<_, ApiError, _>(&state.pool, move |tx| {
-        let (id, actor) = (id.clone(), actor.clone());
-        Box::pin(async move { admin_tokens::revoke_on(tx, &actor.id, &id).await })
-    })
-    .await?;
-    state
-        .admin_tokens_changed
-        .send_modify(|version| *version = version.wrapping_add(1));
-    Ok(StatusCode::NO_CONTENT)
 }
 
 pub(crate) async fn audit_on(
@@ -1247,10 +879,9 @@ pub(crate) fn generate_token() -> String {
 
 #[cfg(test)]
 mod tests {
-    use axum::http::{HeaderMap, HeaderValue};
     use sqlx::Row;
 
-    use super::{enqueue_job_in_tx, event_cursor, job_summary, validate_admin_token_label};
+    use super::{enqueue_job_in_tx, job_summary, validate_admin_token_label};
 
     #[tokio::test]
     async fn job_node_snapshot_survives_node_rename_and_deletion() {
@@ -1430,18 +1061,6 @@ mod tests {
         assert!(validate_admin_token_label(&format!("{hundred_characters}令牌")).is_err());
         assert!(validate_admin_token_label("   ").is_err());
     }
-
-    #[test]
-    fn sse_reconnect_uses_last_event_id_and_query_cursor_takes_precedence() {
-        let mut headers = HeaderMap::new();
-        headers.insert("last-event-id", HeaderValue::from_static("42"));
-        assert_eq!(event_cursor(None, &headers), 42);
-        assert_eq!(event_cursor(Some(7), &headers), 7);
-
-        headers.insert("last-event-id", HeaderValue::from_static("invalid"));
-        assert_eq!(event_cursor(None, &headers), 0);
-        assert_eq!(event_cursor(Some(-1), &headers), 0);
-    }
 }
 
 #[cfg(test)]
@@ -1458,3 +1077,10 @@ mod auth_contention_tests;
 
 #[cfg(test)]
 mod management_transaction_tests;
+
+// Direct domain fixtures are test-only; production writes use protocol-2 handlers.
+#[cfg(test)]
+#[path = "test_support.rs"]
+mod test_support;
+#[cfg(test)]
+use test_support::*;

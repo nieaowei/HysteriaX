@@ -498,15 +498,6 @@ async fn http_contract_authentication_and_current_token_protection() {
     let client = reqwest::Client::new();
     assert_eq!(
         client
-            .get(format!("{base}/api/v1/version"))
-            .send()
-            .await
-            .unwrap()
-            .status(),
-        reqwest::StatusCode::UPGRADE_REQUIRED
-    );
-    assert_eq!(
-        client
             .get(format!("{base}/api/v2/credentials"))
             .send()
             .await

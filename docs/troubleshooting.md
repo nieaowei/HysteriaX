@@ -4,9 +4,9 @@
 
 Run `docker compose logs --tail=100 api`. Check database connectivity, that `HYSTERIAX_MASTER_KEY` decodes to 32 bytes, and that the asset-cache directory is writable. Missing schema or initialization requires stopping all API replicas and running the selected image's `--migrate-only` before restart. First maintenance initialization needs a 256-bit administrator token in `HYSTERIAX_ADMIN_TOKEN`. Do not regenerate the master key for an existing database.
 
-## The management client receives 426 or the event stream returns 410
+## The API route is missing or the event stream returns 410
 
-HTTP 426 means the client is using the retired management protocol. Install the matching protocol 2 client; `/api/v2` uses stable idempotency keys for writes. HTTP 410 on SSE means the saved cursor is no longer valid; fetch the new stream head and reload state before resuming. See [installation](installation.md#management-protocol-2-upgrade-0034).
+For HTTP 404, check the configured service address and request path. The service exposes management API `/api/v2`; use the matching client and stable idempotency keys for writes. HTTP 410 on SSE means the saved cursor is no longer valid; fetch the new stream head and reload state before resuming. See [installation](installation.md#management-protocol-2-upgrade-0034).
 
 ## HTTPS certificate issuance fails
 

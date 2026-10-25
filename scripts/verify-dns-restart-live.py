@@ -28,7 +28,7 @@ def main():
     parser.add_argument("--compose-dir", default="/home/nieaowei/HysteriaX")
     args = parser.parse_args()
     api = live.API(args.base_url, live.environment()["HYSTERIAX_ADMIN_TOKEN"])
-    zone = next(entry for entry in api.get("/api/v1/dns/zones") if entry["name"] == args.zone and entry["enabled"])
+    zone = next(entry for entry in api.get("/api/v2/dns/zones") if entry["name"] == args.zone and entry["enabled"])
     name = "hysteriax-dns-test-restart-" + uuid.uuid4().hex[:8] + "." + args.zone
     ssh = ["ssh","-i",str(args.ssh_key.expanduser()),"-o","BatchMode=yes","-o","ConnectTimeout=10",args.ssh_host]
     suffix = uuid.uuid4().hex[:8]
@@ -48,7 +48,7 @@ def main():
         return subprocess.run(ssh+["docker exec hysteriax-postgres-1 psql -v ON_ERROR_STOP=1 -U postgres -d hysteriax -At -c "+shlex.quote(sql)],capture_output=True,text=True,check=True)
     database(delay_sql)
     try:
-        receipt = api.write("POST", "/api/v1/dns/records", {"zone_id":zone["id"], "idempotency_key":str(uuid.uuid4()),
+        receipt = api.write("POST", "/api/v2/dns/records", {"zone_id":zone["id"], "idempotency_key":str(uuid.uuid4()),
             "record":{"name":name,"record_type":"A","content":"35.212.233.15","ttl":1,"proxied":False}})
     finally:
         database(f"DROP TRIGGER {fixture_name} ON jobs; DROP FUNCTION {fixture_name}();")
@@ -87,13 +87,13 @@ p.chmod(0o600)
         time.sleep(1)
     else:raise RuntimeError("service did not become ready after restart")
     api.job(identifier)
-    record=api.get("/api/v1/dns/records/"+receipt["resource_id"])
+    record=api.get("/api/v2/dns/records/"+receipt["resource_id"])
     assert record["state"]=="synced"
-    matches=[entry for entry in api.get("/api/v1/dns/records") if entry["name"]==name]
+    matches=[entry for entry in api.get("/api/v2/dns/records") if entry["name"]==name]
     assert len(matches)==1 and matches[0]["provider_record_id"]
-    deletion=api.write("DELETE","/api/v1/dns/records/"+record["id"],live.action(record["revision"]))
+    deletion=api.write("DELETE","/api/v2/dns/records/"+record["id"],live.action(record["revision"]))
     api.job(deletion["job_id"])
-    assert api.get("/api/v1/dns/records/"+record["id"])["state"]=="deleted"
+    assert api.get("/api/v2/dns/records/"+record["id"])["state"]=="deleted"
     manifest.update({"verification_complete":True,"cleanup_complete":True})
     args.manifest.write_text(json.dumps(manifest,indent=2));args.manifest.chmod(0o600)
     print("PASS: queued DNS write survived service restart, produced one record, and was cleaned up",flush=True)

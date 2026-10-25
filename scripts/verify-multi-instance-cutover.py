@@ -198,12 +198,6 @@ def main():
             assert version["api_version"] == "2.0.0" and version["management_protocol"] == 2
             assert version["directory_version"].startswith("b3:")
             assert request(origin, "/readyz")[1]["management_protocol"] == 2
-            legacy = urllib.request.Request(origin + "/api/v1/users", data=b"invalid-json", method="POST")
-            try:
-                urllib.request.urlopen(legacy, timeout=5)
-                raise AssertionError("retired management accepted a write")
-            except urllib.error.HTTPError as error:
-                assert error.code == 426
         users = create_users(12, "all-three")
         # The same logical request reaches every independent process. All three
         # must recover the exact original response, without another audit or user.

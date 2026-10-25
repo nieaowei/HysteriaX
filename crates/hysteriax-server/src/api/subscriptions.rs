@@ -1,4 +1,3 @@
-use crate::db;
 use axum::{
     Json,
     extract::{Path, RawQuery, State},
@@ -119,24 +118,6 @@ pub async fn get_user(
 
 mod rotation;
 pub(super) use rotation::rotate_v2;
-pub async fn rotate(
-    State(state): State<AppState>,
-    Path(user_id): Path<String>,
-    Json(input): Json<RotateSubscription>,
-) -> Result<Json<Value>, ApiError> {
-    let prepared = rotation::Prepared::new(&state.secrets)?;
-    let actor = super::audit_actor();
-    let response = db::serializable(&state.pool, move |tx| {
-        let (prepared, user_id, actor) = (prepared.clone(), user_id.clone(), actor.clone());
-        Box::pin(async move {
-            prepared
-                .commit_on(tx, &user_id, input.expected_revision, &actor)
-                .await
-        })
-    })
-    .await?;
-    Ok(Json(response))
-}
 
 pub async fn download_auto(
     State(state): State<AppState>,
@@ -896,3 +877,13 @@ mod tests {
 
 #[cfg(test)]
 mod transaction_tests;
+
+// Direct domain fixtures are test-only; production writes use protocol-2 handlers.
+#[cfg(test)]
+#[path = "subscriptions_test_support.rs"]
+mod test_support;
+#[cfg(test)]
+pub(crate) use test_support::*;
+
+#[cfg(test)]
+use crate::db;

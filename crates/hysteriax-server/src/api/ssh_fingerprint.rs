@@ -1,15 +1,10 @@
 //! Explicit trust resumes the suspended operation without creating a retry job.
-use axum::{
-    Json,
-    extract::{Path, State},
-    http::StatusCode,
-};
+use axum::{Json, http::StatusCode};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use sqlx::{Postgres, Row, Transaction};
-use uuid::Uuid;
 
-use crate::{db, error::ApiError, state::AppState};
+use crate::{error::ApiError, state::AppState};
 
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -20,22 +15,6 @@ pub struct Confirmation {
 
 pub(crate) fn supports_confirmation(kind: &str) -> bool {
     matches!(kind, "ssh-test" | "deploy" | "sync" | "rollback")
-}
-
-pub async fn confirm(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-    Json(input): Json<Confirmation>,
-) -> Result<(StatusCode, Json<Value>), ApiError> {
-    let pool = state.pool.clone();
-    let actor = super::audit_actor();
-    let history_id = Uuid::new_v4().to_string();
-    db::serializable(&pool, move |tx| {
-        let (state, id, input, actor) = (state.clone(), id.clone(), input.clone(), actor.clone());
-        let history_id = history_id.clone();
-        Box::pin(async move { confirm_on(tx, &state, id, input, actor, history_id).await })
-    })
-    .await
 }
 
 pub(super) async fn confirm_on(
@@ -175,3 +154,19 @@ pub(crate) async fn cancel_waiting(
     }
     Ok(())
 }
+
+// Direct domain fixtures are test-only; production writes use protocol-2 handlers.
+#[cfg(test)]
+#[path = "ssh_fingerprint_test_support.rs"]
+mod test_support;
+#[cfg(test)]
+pub(crate) use test_support::*;
+
+#[cfg(test)]
+use crate::db;
+#[cfg(test)]
+use axum::extract::Path;
+#[cfg(test)]
+use axum::extract::State;
+#[cfg(test)]
+use uuid::Uuid;

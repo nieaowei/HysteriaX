@@ -103,7 +103,7 @@ final class SubscriptionTemplateUITests: XCTestCase {
         try click(app.buttons["templates.import.analyze"].firstMatch)
         try click(app.buttons["确认映射并写入本地草稿"].firstMatch)
         app.typeKey("s", modifierFlags: .command)
-        let restored = try await api("/api/v1/subscription-templates/\(exportTemplateID)/export")
+        let restored = try await api("/api/v2/subscription-templates/\(exportTemplateID)/export")
         XCTAssertTrue(NSDictionary(dictionary: restored["document"] as? [String:Any] ?? [:]).isEqual(to: package["document"] as? [String:Any] ?? [:]))
         app.windows["template.\(exportTemplateID)"].buttons["_XCUI:CloseWindow"].click()
         try click(app.descendants(matching: .any)["sidebar.users"].firstMatch)
@@ -193,7 +193,7 @@ final class SubscriptionTemplateUITests: XCTestCase {
         try replace(port, "0"); app.typeKey(.tab, modifierFlags: [])
         app.typeKey("s", modifierFlags: .command)
         check(try await eventually {
-            let draft = try await self.api("/api/v1/subscription-templates/\(self.templateID)/draft")
+            let draft = try await self.api("/api/v2/subscription-templates/\(self.templateID)/draft")
             return ((draft["document"] as? [String:Any])?["common"] as? [String:Any])?["mixed-port"] as? Int == 0
         })
         try revealField(app, "tproxy-port")
@@ -215,7 +215,7 @@ final class SubscriptionTemplateUITests: XCTestCase {
         try replace(port, "9001"); app.typeKey(.tab, modifierFlags: [])
         app.typeKey("s", modifierFlags: .command)
         check(try await eventually {
-            let value = try await self.api("/api/v1/subscription-templates/\(self.templateID)/draft")
+            let value = try await self.api("/api/v2/subscription-templates/\(self.templateID)/draft")
             return ((value["document"] as? [String:Any])?["common"] as? [String:Any])?["mixed-port"] as? Int == 9001
         })
         check(try await download().contains("mixed-port: 0"), "Saving a draft must not change the subscription")
@@ -237,12 +237,12 @@ final class SubscriptionTemplateUITests: XCTestCase {
         try click(app.buttons["确认映射并写入本地草稿"].firstMatch)
         app.typeKey("s", modifierFlags: .command)
         try await waitForCommonPort(8200)
-        let draft = try await api("/api/v1/subscription-templates/\(templateID)/draft")
+        let draft = try await api("/api/v2/subscription-templates/\(templateID)/draft")
         let document = try XCTUnwrap(draft["document"] as? [String:Any])
         XCTAssertEqual((document["injections"] as? [[String:Any]])?.first?["contains"] as? String, "edge")
         XCTAssertNotNil((document["common"] as? [String:Any])?["future-field"])
         check(try await download().contains("mixed-port: 0"))
-        let package = try await api("/api/v1/subscription-templates/\(templateID)/export")
+        let package = try await api("/api/v2/subscription-templates/\(templateID)/export")
         XCTAssertEqual(package["package_version"] as? Int, 1)
         XCTAssertTrue(NSDictionary(dictionary: package["document"] as? [String:Any] ?? [:]).isEqual(to: document))
     }
@@ -319,8 +319,8 @@ final class SubscriptionTemplateUITests: XCTestCase {
         app.typeKey("q", modifierFlags: .command)
         try click(app.buttons["保存并退出"].firstMatch)
         XCTAssertTrue(app.wait(for: .notRunning, timeout: 20))
-        let first = try await api("/api/v1/subscription-templates/\(quitTemplateID)/draft")
-        let second = try await api("/api/v1/subscription-templates/\(quitSecondTemplateID)/draft")
+        let first = try await api("/api/v2/subscription-templates/\(quitTemplateID)/draft")
+        let second = try await api("/api/v2/subscription-templates/\(quitSecondTemplateID)/draft")
         XCTAssertEqual(((first["document"] as? [String:Any])?["common"] as? [String:Any])?["mixed-port"] as? Int, 8122)
         XCTAssertEqual(((second["document"] as? [String:Any])?["common"] as? [String:Any])?["mixed-port"] as? Int, 8123)
     }
@@ -399,6 +399,6 @@ final class SubscriptionTemplateUITests: XCTestCase {
     }
     @MainActor private func download() async throws -> String { let (data, response) = try await URLSession.shared.data(from: URL(string: base + "/sub/\(subscriptionToken)?template=\(templateID)&format=mihomo&platform=windows")!); XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 200); return String(decoding: data, as: UTF8.self) }
     @MainActor private func eventually(_ test: @MainActor () async throws -> Bool) async throws -> Bool { let deadline = Date().addingTimeInterval(20); repeat { if try await test() { return true }; try await Task.sleep(for: .milliseconds(100)) } while Date() < deadline; return false }
-    @MainActor private func waitForCommonPort(_ port: Int) async throws { check(try await eventually { let value = try await self.api("/api/v1/subscription-templates/\(self.templateID)/draft"); return ((value["document"] as? [String:Any])?["common"] as? [String:Any])?["mixed-port"] as? Int == port }) }
-    @MainActor private func waitForVersion(_ version: Int) async throws { check(try await eventually { try await self.api("/api/v1/subscription-templates/\(self.templateID)")["published_version"] as? Int == version }) }
+    @MainActor private func waitForCommonPort(_ port: Int) async throws { check(try await eventually { let value = try await self.api("/api/v2/subscription-templates/\(self.templateID)/draft"); return ((value["document"] as? [String:Any])?["common"] as? [String:Any])?["mixed-port"] as? Int == port }) }
+    @MainActor private func waitForVersion(_ version: Int) async throws { check(try await eventually { try await self.api("/api/v2/subscription-templates/\(self.templateID)")["published_version"] as? Int == version }) }
 }

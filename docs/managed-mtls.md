@@ -36,7 +36,7 @@ CA 身份可以生成或导入。导入需要匹配私钥和完整证书链；�
 
 ## 破坏性升级
 
-服务端和 macOS 客户端必须配套升级。当前管理 API 使用 `/api/v2`，旧 `/api/v1` 请求返回 426；写请求需携带稳定的 `Idempotency-Key`。以下记录托管 mTLS 的一次性破坏性转换，不保留旧用户证书绑定和个人节点分配接口。完整切换顺序见 [安装指南](installation.md#management-protocol-2-upgrade-0034)。
+服务端和 macOS 客户端必须配套升级。当前管理 API 使用 `/api/v2`；写请求需携带稳定的 `Idempotency-Key`。以下记录托管 mTLS 的一次性破坏性转换，不保留旧用户证书绑定和个人节点分配接口。完整切换顺序见 [安装指南](installation.md#management-protocol-2-upgrade-0034)。
 
 升级前按照 [备份与恢复](backup-restore.md) 创建已验证数据库备份，并单独保存主密钥及旧镜像。先在恢复副本上运行新镜像的 `--migrate-only`，核查结果后再切换服务。迁移在 workers/API 启动之前运行：
 

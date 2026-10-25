@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Verify a remote traffic-sampling outage records a gap without charging usage."""
+from management_test_http import management_request, start_test_server
 
 import base64
 import json
@@ -15,7 +16,7 @@ import urllib.error
 import urllib.request
 
 from postgres_test import PostgresTestSchema
-from credential_test_fixtures import request_group
+from credential_test_fixtures import request_group, mark_fixture_nodes_deployed
 
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -40,7 +41,7 @@ def raw_request(base, path, token=None, method="GET", payload=None):
         headers["Authorization"] = f"Bearer {token}"
     if body is not None:
         headers["Content-Type"] = "application/json"
-    req = urllib.request.Request(base + path, data=body, headers=headers, method=method)
+    req = management_request(base + path, data=body, headers=headers, method=method)
     try:
         with urllib.request.urlopen(req, timeout=3) as response:
             return response.status, response.read()
@@ -70,7 +71,7 @@ def main():
             }
         )
         log = open(temp / "service.log", "wb")
-        process = subprocess.Popen(
+        process = start_test_server(
             [str(SERVER)], cwd=ROOT, env=environment, stdout=log, stderr=log
         )
         try:
@@ -91,7 +92,7 @@ def main():
 
             status, body = request(
                 base,
-                "/api/v1/nodes",
+                "/api/v2/nodes",
                 admin,
                 "POST",
                 {
@@ -111,7 +112,7 @@ def main():
             node_id = json.loads(body)["node"]["id"]
 
             status, body = request(
-                base, "/api/v1/users", admin, "POST", {"name": "Sampling outage user"}
+                base, "/api/v2/users", admin, "POST", {"name": "Sampling outage user"}
             )
             if status != 201:
                 raise RuntimeError(f"user fixture creation failed: HTTP {status}")
@@ -122,13 +123,9 @@ def main():
 
             # Mark the fixture deployed so the real background sampler attempts SSH.
             with database.connect() as connection:
-                connection.execute(
-                    "UPDATE nodes SET deployed_revision = desired_revision, "
-                    "deployed_config_enc = desired_config_enc, state = 'deployed' WHERE id = %s",
-                    (node_id,),
-                )
+                mark_fixture_nodes_deployed(connection, [node_id])
 
-            usage_path = f"/api/v1/users/{user_id}/usage"
+            usage_path = f"/api/v2/users/{user_id}/usage"
             deadline = time.time() + 12
             response = None
             while time.time() < deadline:

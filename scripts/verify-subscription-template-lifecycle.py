@@ -4,6 +4,7 @@
 Requires a disposable PostgreSQL container, TEST_DATABASE_URL, and a role allowed
   to create/drop databases. Only randomly named test databases are touched.
 """
+from management_test_http import management_request, start_test_server
 import argparse
 import base64
 import json
@@ -62,7 +63,7 @@ def main():
 
         def start(db):
             nonlocal server
-            server = subprocess.Popen([str(ROOT / "target/debug/hysteriax-server")], env=environment | {"DATABASE_URL": database_url(db)}, stdout=log, stderr=subprocess.STDOUT)
+            server = start_test_server([str(ROOT / "target/debug/hysteriax-server")], env=environment | {"DATABASE_URL": database_url(db)}, stdout=log, stderr=subprocess.STDOUT)
             for _ in range(150):
                 if server.poll() is not None: raise RuntimeError("template lifecycle server exited during startup")
                 try:
@@ -73,7 +74,7 @@ def main():
 
         def api(path, payload=None, method=None, expected=200):
             body = None if payload is None else json.dumps(payload).encode()
-            request = urllib.request.Request(base + "/api/v1" + path, data=body, method=method or ("GET" if body is None else "POST"), headers={"Authorization": "Bearer " + admin, "Content-Type": "application/json", "Cache-Control": "no-store"})
+            request = management_request(base + "/api/v2" + path, data=body, method=method or ("GET" if body is None else "POST"), headers={"Authorization": "Bearer " + admin, "Content-Type": "application/json", "Cache-Control": "no-store"})
             try:
                 with urllib.request.urlopen(request, timeout=10) as response: status, data = response.status, response.read()
             except urllib.error.HTTPError as error: status, data = error.code, error.read()

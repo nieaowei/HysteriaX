@@ -26,7 +26,7 @@ Cache validity comes from committed entity versions and per-domain vectors of 64
 
 ## API and event contract
 
-Management API 2.0.0 uses `/api/v2` with Bearer administrator authentication and stable `Idempotency-Key` headers for writes. Old `/api/v1` management requests return 426. Subscription and node authentication URLs retain their contracts. The source contract is [OpenAPI](../openapi/openapi.yaml); JSON timestamps use UTC RFC 3339.
+Management API 2.0.0 uses `/api/v2` with Bearer administrator authentication and stable `Idempotency-Key` headers for writes. Subscription and node authentication URLs retain their contracts. The source contract is [OpenAPI](../openapi/openapi.yaml); JSON timestamps use UTC RFC 3339.
 
 Transactional source events are published with a separate publication sequence in batches of at most 256. SSE cursors use `v2:<epoch>:<publication_seq>`. Clients fetch the stream head before loading state, reconnect to any replica, deduplicate events, and save the cursor only after handling an event. An expired cursor returns 410 and triggers full resynchronization.
 

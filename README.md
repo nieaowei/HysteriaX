@@ -138,7 +138,7 @@ curl --fail https://manage.example.com/readyz
 - **查看运行状态**：在概览查看流量和连接趋势，在节点与用户详情确认采样时间；任务失败时先查看「任务」中的具体错误，操作历史可在「审计」中查询。
 - **查看服务日志**：在服务目录运行 `docker compose logs --tail=100 api`；证书或 HTTPS 连接异常时同时检查 `caddy` 日志。
 - **备份与恢复**：按 [备份指南](docs/backup-restore.md) 备份数据库、匹配的主密钥和必要的 Caddy 状态。备份脚本会短暂停止 API 以生成一致快照。
-- **升级**：先备份并停止全部旧实例，完成迁移后更新管理服务与配套 Mac 客户端。管理接口使用 `/api/v2`，旧管理协议返回 426；升级前查阅 [安装指南](docs/installation.md) 和对应版本说明。
+- **升级**：先备份并停止全部旧实例，完成迁移后更新管理服务与配套 Mac 客户端。管理接口使用 `/api/v2`；升级前查阅 [安装指南](docs/installation.md) 和对应版本说明。
 
 节点套餐统计所选网卡的整机流量，用户额度统计用户的 Hysteria 用量，两者口径不同。采集和撤权存在延迟，SSH 不可达时可能无法立即断开已有连接，具体边界见 [节点套餐](docs/node-packages.md)。
 
@@ -146,7 +146,7 @@ curl --fail https://manage.example.com/readyz
 
 服务端为 Rust + Axum，使用 PostgreSQL 18 保存数据、Redis 提供缓存；Mac 客户端使用 SwiftUI。Rust 最低版本声明为 1.89，客户端构建使用 Xcode；SwiftPM 构建要求见 [Package.swift](apps/macos/Package.swift)。
 
-管理 API 位于 `/api/v2`，请求使用 `Authorization: Bearer <管理员令牌>`，写请求还需携带稳定的 `Idempotency-Key`；旧 `/api/v1` 返回 426。服务提供 `/openapi.yaml`，契约源文件为 [openapi/openapi.yaml](openapi/openapi.yaml)。列表接口使用分页响应，批量读取需遍历各页。
+管理 API 位于 `/api/v2`，请求使用 `Authorization: Bearer <管理员令牌>`，写请求还需携带稳定的 `Idempotency-Key`。服务提供 `/openapi.yaml`，契约源文件为 [openapi/openapi.yaml](openapi/openapi.yaml)。列表接口使用分页响应，批量读取需遍历各页。
 
 本地数据库配置与测试环境准备见 [安装指南](docs/installation.md#local-development-and-tests)。配置好测试数据库后，可运行以下常用检查：
 

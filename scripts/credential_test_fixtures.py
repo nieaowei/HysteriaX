@@ -15,19 +15,19 @@ import json
 
 
 def request_with_credentials(raw_request, base, path, token=None, method="GET", payload=None):
-    if payload is None or method not in ("POST", "PATCH", "PUT"):
+    if not path.startswith("/api/v2/") or payload is None or method not in ("POST", "PATCH", "PUT"):
         return raw_request(base, path, token, method, payload)
     payload = copy.deepcopy(payload)
 
     def create(name, kind, material):
         body = {"name": name, "kind": kind, "payload": material}
-        prefix = "/api/v2" if path.startswith("/api/v2/") else "/api/v1"
+        prefix = "/api/v2"
         status, result = raw_request(base, prefix + "/credentials", token, "POST", body)
         if status != 201:
             return None, (status, result)
         return json.loads(result), None
 
-    if path in ("/api/v1/nodes", "/api/v2/nodes") or (path.startswith(("/api/v1/nodes/", "/api/v2/nodes/")) and method == "PATCH"):
+    if path == "/api/v2/nodes" or (path.startswith("/api/v2/nodes/") and method == "PATCH"):
         if "ssh_secret" in payload:
             kind = "ssh_password" if payload.pop("ssh_auth_type", "private_key") == "password" else "ssh_private_key"
             material = {"secret": payload.pop("ssh_secret")}
@@ -80,7 +80,7 @@ def request_with_credentials(raw_request, base, path, token=None, method="GET", 
     return raw_request(base, path, token, method, payload)
 
 
-def grant_group(expect, user_id, node_ids, name=None, *, api_prefix="/api/v1"):
+def grant_group(expect, user_id, node_ids, name=None, *, api_prefix="/api/v2"):
     """Exercise the actual group preview/commit protocol; no retired assignment route."""
     draft = {"action": "create", "name": name or "Live grant " + uuid.uuid4().hex[:12],
              "user_ids": [user_id], "node_ids": list(node_ids)}
@@ -94,8 +94,56 @@ def request_group(raw_request, base, token, user_ids, node_ids, name=None):
     """Return the actual group receipt, preserving real HTTP failure statuses."""
     draft = {"action":"create", "name":name or "Live grant " + uuid.uuid4().hex[:12],
              "user_ids":list(user_ids), "node_ids":list(node_ids)}
-    status,body = raw_request(base,"/api/v1/authorization-groups/preview",token,"POST",draft)
+    status,body = raw_request(base,"/api/v2/authorization-groups/preview",token,"POST",draft)
     if status!=200:return status,body
     draft.pop("action")
     draft["preview_token"]=json.loads(body)["preview_token"]
-    return raw_request(base,"/api/v1/authorization-groups",token,"POST",draft)
+    return raw_request(base,"/api/v2/authorization-groups",token,"POST",draft)
+
+
+def mark_fixture_nodes_deployed(connection, node_ids):
+    """Clone already indexed desired snapshots in the caller's isolated fixture.
+
+    This simulates a deployed snapshot for renderer/sampler tests, not successful
+    SSH installation. Both reference projections commit with the source update;
+    no trigger or constraint is disabled and no maintenance bypass is enabled.
+    """
+    node_ids = sorted(set(node_ids))
+    rows = connection.execute(
+        "SELECT id FROM nodes WHERE id=ANY(%s) ORDER BY id FOR UPDATE", (node_ids,)
+    ).fetchall()
+    if len(rows) != len(node_ids):
+        raise ValueError("fixture node is missing")
+    if connection.execute(
+        "SELECT EXISTS(SELECT 1 FROM credential_reference_dirty WHERE kind='node' AND source_id=ANY(%s))",
+        (node_ids,),
+    ).fetchone()[0]:
+        raise ValueError("fixture desired references must already be indexed")
+    connection.execute(
+        "UPDATE nodes SET deployed_revision=desired_revision, deployed_config_enc=desired_config_enc, "
+        "state='deployed' WHERE id=ANY(%s)", (node_ids,)
+    )
+    projections = (
+        ("credential_reference_edges", "field,credential_id,version"),
+        ("config_resource_references", "resource_id"),
+    )
+    for table, fields in projections:
+        connection.execute(
+            f"DELETE FROM {table} WHERE kind='node' AND source_id=ANY(%s) AND source='deployed'",
+            (node_ids,),
+        )
+        connection.execute(
+            f"INSERT INTO {table}(kind,source_id,node_id,config_version_id,config_revision,source,{fields}) "
+            f"SELECT kind,source_id,node_id,config_version_id,config_revision,'deployed',{fields} "
+            f"FROM {table} WHERE kind='node' AND source_id=ANY(%s) AND source='desired'",
+            (node_ids,),
+        )
+    pending = connection.execute(
+        "SELECT source_id,generation FROM credential_reference_dirty WHERE kind='node' AND source_id=ANY(%s)",
+        (node_ids,),
+    ).fetchall()
+    for node, generation in pending:
+        connection.execute(
+            "DELETE FROM credential_reference_dirty WHERE kind='node' AND source_id=%s AND generation=%s",
+            (node, generation),
+        )

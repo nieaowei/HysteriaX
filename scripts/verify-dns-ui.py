@@ -25,7 +25,10 @@ with tempfile.TemporaryDirectory(prefix="hysteriax-dns-ui-") as folder:
     node = {"id":"node-1","name":"Hong Kong","revision":1,"state":"new","ssh":ssh,"dns_binding":binding}
     credential = {"id":"credential-1","name":"Cloudflare","kind":"dns","revision":1,"latest_version":1,"archived":False,"status":"active","metadata":{"provider":"cloudflare","fields":["cloudflare_api_token"]},"created_at":stamp,"updated_at":stamp}
     detail = node | {"config":{},"yaml_preview":"listen: :443","public":{"host":"hk.example.test","port":443,"listen_addr":":443","skip_cert_verify":False},"created_at":stamp,"updated_at":stamp}
-    responses = {"version":{"api_version":"1.0.0","directory_generation":1,"features":["dns_management"],"current_admin_token_id":"fixture","service_version":"fixture","hysteria_version":"app/v2.12.3","mihomo_version":"v1.19.31"},"connections":[connection],"zones":[zone],"records":[record],"record":record,"nodes":[node],"node":detail,"credentials":[credential],"empty":[]}
+    responses = {"version":{"api_version":"2.0.0","management_protocol":2,"directory_version":"fixture-directory-v2","features":["dns_management"],"current_admin_token_id":"fixture","service_version":"fixture","hysteria_version":"app/v2.12.3","mihomo_version":"v1.19.31"},"connections":[connection],"zones":[zone],"records":[record],"record":record,"nodes":[node],"node":detail,"credentials":[credential],"empty":[]}
+    responses.update(ready={"status":"ready","database":"ok","management_protocol":2},
+                     event_head={"cursor":"v2:00000000-0000-0000-0000-000000000001:0",
+                                 "epoch":"00000000-0000-0000-0000-000000000001","publication_seq":0})
     for name, value in responses.items():
         (fixtures / (name + ".json")).write_text(json.dumps(value))
     support = '''import Foundation
@@ -33,17 +36,17 @@ final class DNSFixtureProtocol: URLProtocol, @unchecked Sendable {
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {
-        let paths = ["/api/v1/version":"version", "/api/v1/dns/connections":"connections", "/api/v1/dns/zones":"zones", "/api/v1/dns/records":"records", "/api/v1/dns/records/record-1":"record", "/api/v1/nodes":"nodes", "/api/v1/nodes/node-1":"node", "/api/v1/nodes/node-1/resources":"empty", "/api/v1/credentials":"credentials", "/api/v1/users":"empty", "/api/v1/jobs":"empty", "/api/v1/audit":"empty", "/api/v1/admin/tokens":"empty"]
+        let paths = ["/readyz":"ready", "/api/v2/events/head":"event_head", "/api/v2/events":"empty", "/api/v2/version":"version", "/api/v2/dns/connections":"connections", "/api/v2/dns/zones":"zones", "/api/v2/dns/records":"records", "/api/v2/dns/records/record-1":"record", "/api/v2/nodes":"nodes", "/api/v2/nodes/node-1":"node", "/api/v2/nodes/node-1/resources":"empty", "/api/v2/credentials":"credentials", "/api/v2/users":"empty", "/api/v2/jobs":"empty", "/api/v2/audit":"empty", "/api/v2/admin/tokens":"empty"]
         let name = paths[request.url!.path]
         let folder = ProcessInfo.processInfo.environment["HYSTERIAX_DNS_FIXTURE_DIRECTORY"]!
         var data = name.map { try! Data(contentsOf: URL(fileURLWithPath: folder + "/" + $0 + ".json")) } ?? Data(#"{"code":"fixture","message":"not available"}"#.utf8)
-        if ["/api/v1/jobs", "/api/v1/audit"].contains(request.url!.path) {
+        if ["/api/v2/jobs", "/api/v2/audit"].contains(request.url!.path) {
             data = Data(#"{"items":[],"total":0,"page":1,"page_size":200}"#.utf8)
         }
-        if request.url!.path == "/api/v1/users" {
+        if request.url!.path == "/api/v2/users" {
             data = Data(#"{"items":[],"total":0,"page":1,"page_size":50}"#.utf8)
         }
-        if request.url!.path == "/api/v1/dns/records" {
+        if request.url!.path == "/api/v2/dns/records" {
             let records = try! JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: folder + "/records.json"))) as! [[String: Any]]
             let zones = try! JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: folder + "/zones.json"))) as! [[String: Any]]
             let queryItems = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!.queryItems ?? []
@@ -66,7 +69,7 @@ final class DNSFixtureProtocol: URLProtocol, @unchecked Sendable {
             let page = min(Int(parameters["page"] ?? "1")!, max(1, (filtered.count + size - 1) / size))
             data = try! JSONSerialization.data(withJSONObject: ["items": Array(filtered.dropFirst((page - 1) * size).prefix(size)), "total": filtered.count, "page": page, "page_size": size])
         }
-        if request.url!.path == "/api/v1/credentials" {
+        if request.url!.path == "/api/v2/credentials" {
             let entries = try! JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: folder + "/credentials.json"))) as! [[String: Any]]
             let queryItems = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!.queryItems ?? []
             let parameters = Dictionary(uniqueKeysWithValues: queryItems.map { ($0.name, $0.value ?? "") })
@@ -88,7 +91,7 @@ final class DNSFixtureProtocol: URLProtocol, @unchecked Sendable {
             let page = min(Int(parameters["page"] ?? "1")!, max(1, (filtered.count + size - 1) / size))
             data = try! JSONSerialization.data(withJSONObject: ["items": Array(filtered.dropFirst((page - 1) * size).prefix(size)), "total": filtered.count, "page": page, "page_size": size])
         }
-        if request.url!.path == "/api/v1/nodes" {
+        if request.url!.path == "/api/v2/nodes" {
             let nodes = try! JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: folder + "/nodes.json"))) as! [[String: Any]]
             let queryItems = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!.queryItems ?? []
             let parameters = Dictionary(uniqueKeysWithValues: queryItems.map { ($0.name, $0.value ?? "") })
@@ -112,7 +115,8 @@ final class DNSFixtureProtocol: URLProtocol, @unchecked Sendable {
             let page = min(Int(parameters["page"] ?? "1")!, max(1, (filtered.count + size - 1) / size))
             data = try! JSONSerialization.data(withJSONObject: ["items": Array(filtered.dropFirst((page - 1) * size).prefix(size)), "total": filtered.count, "page": page, "page_size": size])
         }
-        let response = HTTPURLResponse(url: request.url!, statusCode: name == nil && !["/api/v1/users", "/api/v1/dns/records", "/api/v1/credentials", "/api/v1/nodes"].contains(request.url!.path) ? 404 : 200, httpVersion: "HTTP/1.1", headerFields: ["Content-Type":"application/json"])!
+        if request.url!.path == "/api/v2/events" { data = Data() }
+        let response = HTTPURLResponse(url: request.url!, statusCode: name == nil && !["/api/v2/users", "/api/v2/dns/records", "/api/v2/credentials", "/api/v2/nodes"].contains(request.url!.path) ? 404 : 200, httpVersion: "HTTP/1.1", headerFields: ["Content-Type":request.url!.path == "/api/v2/events" ? "text/event-stream" : "application/json"])!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: data)
         client?.urlProtocolDidFinishLoading(self)

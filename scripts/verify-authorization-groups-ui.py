@@ -33,7 +33,7 @@ with tempfile.TemporaryDirectory(prefix="hx-group-ui-") as folder:
     nodes = [dict(id="node-1", name="香港", revision=1, state="new", mtls_required=True),
              dict(id="node-2", name="日本 mTLS", revision=1, state="new", mtls_required=True)]
     user["managed_certificates"] = [dict(identity_id="identity-1", ca_credential_id="ca-1", ca_name="Shared CA", revision=1, authorization_revision=1, credential_id="client-1", archived=False, published_ca_version=1, ca_expires_at="2030-10-07T00:00:00Z", policy_revision=1, versions=[dict(version=1, ca_version=1, not_before=stamp, expires_at="2027-04-07T00:00:00Z", released=True, discarded=False)], node_ids=["node-1"])]
-    responses = dict(version=dict(api_version="1.0.0", directory_generation=1, features=["authorization_groups", "managed_mtls"], current_admin_token_id="fixture", service_version="fixture", hysteria_version="app/v2.12.3", mihomo_version="v1.19.31"),
+    responses = dict(version=dict(api_version="2.0.0", management_protocol=2, directory_version="fixture-directory-v2", features=["authorization_groups", "managed_mtls"], current_admin_token_id="fixture", service_version="fixture", hysteria_version="app/v2.12.3", mihomo_version="v1.19.31"),
                      groups=[group], group=group, users=users, user=user, nodes=nodes, empty=[])
     ca = dict(id="ca-1", name="Shared CA", kind="ca_identity", revision=3, latest_version=3, archived=False, status="active", metadata={"expires_at":"2036-10-07T00:00:00Z"}, expires_at="2036-10-07T00:00:00Z", created_at=stamp, updated_at=stamp)
     probe = dict(ca,id="probe-1",name="Internal probe",kind="tls_identity",metadata={"managed":True,"internal_probe":True})
@@ -46,6 +46,9 @@ with tempfile.TemporaryDirectory(prefix="hx-group-ui-") as folder:
     node_detail["public"] = node_detail.pop("connection")
     nodes[0].update(state="deployed",deployed_revision=1,mtls_state="recovery_required",mtls_error=node_detail["mtls_error"],mtls_generation=2)
     responses.update(credentials=[ca,probe,tls], ca=ca_detail,node_detail=node_detail,ca_receipt=dict(id="ca-1",revision=1,version=1,published=True), policy_receipt=dict(id="ca-1",policy_revision=2,policy=dict(client_validity_days=90,renew_before_hours=168)))
+    responses.update(ready={"status":"ready","database":"ok","management_protocol":2},
+                     event_head={"cursor":"v2:00000000-0000-0000-0000-000000000001:0",
+                                 "epoch":"00000000-0000-0000-0000-000000000001","publication_seq":0})
     for name, value in responses.items():
         (fixtures / (name + ".json")).write_text(json.dumps(value))
     support = '''import Foundation
@@ -53,14 +56,14 @@ final class AuthorizationFixtureProtocol: URLProtocol, @unchecked Sendable {
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {
-        let paths = ["/api/v1/version":"version", "/api/v1/authorization-groups":"groups", "/api/v1/authorization-groups/group-1":"group", "/api/v1/users":"users", "/api/v1/users/user-1":"user", "/api/v1/nodes":"nodes", "/api/v1/nodes/node-1":"node_detail", "/api/v1/nodes/node-1/resources":"empty", "/api/v1/credentials":"credentials", "/api/v1/credentials/ca-1":"ca", "/api/v1/credentials/ca-identities":"ca_receipt", "/api/v1/credentials/ca-1/ca-policy":"policy_receipt", "/api/v1/credentials/ca-1/ca-versions":"ca_receipt", "/api/v1/jobs":"empty", "/api/v1/audit":"empty", "/api/v1/admin/tokens":"empty"]
+        let paths = ["/readyz":"ready", "/api/v2/events/head":"event_head", "/api/v2/events":"empty", "/api/v2/version":"version", "/api/v2/authorization-groups":"groups", "/api/v2/authorization-groups/group-1":"group", "/api/v2/users":"users", "/api/v2/users/user-1":"user", "/api/v2/nodes":"nodes", "/api/v2/nodes/node-1":"node_detail", "/api/v2/nodes/node-1/resources":"empty", "/api/v2/credentials":"credentials", "/api/v2/credentials/ca-1":"ca", "/api/v2/credentials/ca-identities":"ca_receipt", "/api/v2/credentials/ca-1/ca-policy":"policy_receipt", "/api/v2/credentials/ca-1/ca-versions":"ca_receipt", "/api/v2/jobs":"empty", "/api/v2/audit":"empty", "/api/v2/admin/tokens":"empty"]
         let path = request.url!.path
         let folder = ProcessInfo.processInfo.environment["HYSTERIAX_AUTHORIZATION_FIXTURE_DIRECTORY"]!
         var data = paths[path].map { try! Data(contentsOf: URL(fileURLWithPath: folder + "/" + $0 + ".json")) } ?? Data(#"{"code":"fixture","message":"not available"}"#.utf8)
-        if ["/api/v1/jobs", "/api/v1/audit"].contains(path) {
+        if ["/api/v2/jobs", "/api/v2/audit"].contains(path) {
             data = Data(#"{"items":[],"total":0,"page":1,"page_size":200}"#.utf8)
         }
-        if path == "/api/v1/users" {
+        if path == "/api/v2/users" {
             let users = try! JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: folder + "/users.json"))) as! [[String: Any]]
             let queryItems = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!.queryItems ?? []
             let parameters = Dictionary(uniqueKeysWithValues: queryItems.map { ($0.name, $0.value ?? "") })
@@ -80,7 +83,7 @@ final class AuthorizationFixtureProtocol: URLProtocol, @unchecked Sendable {
             let items = Array(filtered.dropFirst((page - 1) * size).prefix(size))
             data = try! JSONSerialization.data(withJSONObject: ["items": items, "total": filtered.count, "page": page, "page_size": size])
         }
-        if path == "/api/v1/credentials" {
+        if path == "/api/v2/credentials" {
             var items = try! JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: folder + "/credentials.json"))) as! [[String: Any]]
             let extraCount = Int(ProcessInfo.processInfo.environment["HYSTERIAX_TEST_EXTRA_CA_COUNT"] ?? "0") ?? 0
             if extraCount > 0, let ca = items.first(where: { $0["id"] as? String == "ca-1" }) {
@@ -107,7 +110,7 @@ final class AuthorizationFixtureProtocol: URLProtocol, @unchecked Sendable {
             let page = min(Int(parameters["page"] ?? "1")!,max(1,(filtered.count+size-1)/size))
             data = try! JSONSerialization.data(withJSONObject: ["items":Array(filtered.dropFirst((page-1)*size).prefix(size)),"total":filtered.count,"page":page,"page_size":size])
         }
-        if request.url!.path == "/api/v1/nodes" {
+        if request.url!.path == "/api/v2/nodes" {
             let nodes = (try! JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: folder + "/nodes.json"))) as! [[String: Any]]).map { value in
                 var node = value
                 if node["id"] as? String == "node-1", let state = ProcessInfo.processInfo.environment["HYSTERIAX_TEST_NODE_MTLS_STATE"] {
@@ -137,20 +140,20 @@ final class AuthorizationFixtureProtocol: URLProtocol, @unchecked Sendable {
             let page = min(Int(parameters["page"] ?? "1")!, max(1, (filtered.count + size - 1) / size))
             data = try! JSONSerialization.data(withJSONObject: ["items": Array(filtered.dropFirst((page - 1) * size).prefix(size)), "total": filtered.count, "page": page, "page_size": size])
         }
-        if path == "/api/v1/nodes/node-1", request.httpMethod == "GET", let state = ProcessInfo.processInfo.environment["HYSTERIAX_TEST_NODE_MTLS_STATE"] {
+        if path == "/api/v2/nodes/node-1", request.httpMethod == "GET", let state = ProcessInfo.processInfo.environment["HYSTERIAX_TEST_NODE_MTLS_STATE"] {
             var node = try! JSONSerialization.jsonObject(with:data) as! [String:Any]
             node["mtls_state"] = state; node["mtls_recovery_configured"] = false
             data = try! JSONSerialization.data(withJSONObject:node)
         }
-        var status = paths[path] == nil && !["/api/v1/users", "/api/v1/credentials", "/api/v1/nodes"].contains(path) ? 404 : 200
-        if path == "/api/v1/nodes/node-1" && request.httpMethod == "PATCH" {
+        var status = paths[path] == nil && !["/api/v2/users", "/api/v2/credentials", "/api/v2/nodes"].contains(path) ? 404 : 200
+        if path == "/api/v2/nodes/node-1" && request.httpMethod == "PATCH" {
             let stream = request.httpBodyStream
             var body = request.httpBody ?? Data()
             if let stream { stream.open(); defer { stream.close() }; var buffer = [UInt8](repeating:0,count:4096); while stream.hasBytesAvailable { let n=stream.read(&buffer,maxLength:buffer.count); if n<=0 { break }; body.append(contentsOf:buffer.prefix(n)) } }
             try! body.write(to:URL(fileURLWithPath:folder+"/node-patch.json"))
             data = Data(#"{"id":"node-1","name":"香港","revision":2,"state":"syncing","sync_job_queued":true}"#.utf8)
         }
-        if path == "/api/v1/authorization-groups" && request.httpMethod == "POST" {
+        if path == "/api/v2/authorization-groups" && request.httpMethod == "POST" {
             let groupData = try! Data(contentsOf: URL(fileURLWithPath: folder + "/group.json"))
             var group = try! JSONSerialization.jsonObject(with: groupData) as! [String:Any]
             group["id"] = "group-created"
@@ -167,7 +170,7 @@ final class AuthorizationFixtureProtocol: URLProtocol, @unchecked Sendable {
             let pairs = users.flatMap { user in nodes.map { ["user_id":user,"node_id":$0] } }
             let existingGroup = try! JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: folder + "/group.json"))) as! [String:Any]
             let existing = (existingGroup["user_ids"] as! [String]).map { ["user_id":$0, "node_id":"node-1"] }
-            let isUpdate = path == "/api/v1/authorization-groups/group-1/preview"
+            let isUpdate = path == "/api/v2/authorization-groups/group-1/preview"
             let additions = pairs.filter { !existing.contains($0) }
             let removals = isUpdate ? existing.filter { !pairs.contains($0) } : []
             let managedUsers = Array(Set(additions.compactMap { $0["user_id"] })).sorted()
@@ -177,7 +180,8 @@ final class AuthorizationFixtureProtocol: URLProtocol, @unchecked Sendable {
             data = try! JSONSerialization.data(withJSONObject: ["action":input["action"] ?? "update_memberships", "preview_token":"fixture-preview", "additions_count":additions.count, "removals_count":removals.count, "additions":additions, "removals":removals, "automatic_issue_count":issueCount,"pending_issue_count":0,"managed_identities":managed])
             status = 200
         }
-        let response = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: "HTTP/1.1", headerFields: ["Content-Type":"application/json"])!
+        if request.url!.path == "/api/v2/events" { data = Data() }
+        let response = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: "HTTP/1.1", headerFields: ["Content-Type":request.url!.path == "/api/v2/events" ? "text/event-stream" : "application/json"])!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: data)
         client?.urlProtocolDidFinishLoading(self)

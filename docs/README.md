@@ -26,4 +26,4 @@
 
 ## 版本与维护
 
-当前管理协议为 2，管理 API 使用 `/api/v2`，旧 `/api/v1` 返回 426。所有普通 API 停止后，单独运行 `--migrate-only`，校验完成再启动。数据库、主密钥及节点 ACME 私钥的保存与恢复方式见 [备份与恢复](backup-restore.md)。
+当前管理协议为 2，管理 API 使用 `/api/v2`。所有普通 API 停止后，单独运行 `--migrate-only`，校验完成再启动。数据库、主密钥及节点 ACME 私钥的保存与恢复方式见 [备份与恢复](backup-restore.md)。

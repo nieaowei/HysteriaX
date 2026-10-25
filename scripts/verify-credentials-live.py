@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Exercise shared credential application on two disposable real systemd nodes."""
+from management_test_http import start_test_server
 import base64
 import importlib.util
 import json
@@ -61,7 +62,7 @@ def main():
             admin = "hx_" + secrets.token_urlsafe(36)
             environment = os.environ | {"DATABASE_URL": database.url, "HYSTERIAX_LISTEN_ADDR": f"0.0.0.0:{port}", "HYSTERIAX_PUBLIC_URL": f"http://host.docker.internal:{port}", "HYSTERIAX_ADMIN_TOKEN": admin, "HYSTERIAX_MASTER_KEY": base64.b64encode(secrets.token_bytes(32)).decode().rstrip("="), "RUST_LOG": "warn"}
             with open(temp / "server.log", "wb") as log:
-                service = subprocess.Popen([str(ROOT / "target/debug/hysteriax-server")], env=environment, stdout=log, stderr=log)
+                service = start_test_server([str(ROOT / "target/debug/hysteriax-server")], env=environment, stdout=log, stderr=log)
 
                 def api(path, method="GET", payload=None):
                     status, body = matrix.raw_request(base, path, admin, method, payload)
@@ -79,7 +80,7 @@ def main():
                 wait_for(ready, "API readiness", 30)
 
                 def create(name, kind, payload):
-                    return api("/api/v1/credentials", "POST", {"name": name, "kind": kind, "payload": payload})["id"]
+                    return api("/api/v2/credentials", "POST", {"name": name, "kind": kind, "payload": payload})["id"]
 
                 def tls_payload(index):
                     certificate, key = temp / f"tls-{index}.crt", temp / f"tls-{index}.key"
@@ -87,12 +88,12 @@ def main():
                     return {"certificate": certificate.read_text(), "private_key": key.read_text()}
 
                 def publish(identity, payload):
-                    current = api(f"/api/v1/credentials/{identity}")
-                    return api(f"/api/v1/credentials/{identity}/versions", "POST", {"expected_revision": current["revision"], "payload": payload})
+                    current = api(f"/api/v2/credentials/{identity}")
+                    return api(f"/api/v2/credentials/{identity}/versions", "POST", {"expected_revision": current["revision"], "payload": payload})
 
                 def batch_finished(identity, allow_failure=False):
                     def finished():
-                        value = api(f"/api/v1/credential-batches/{identity}")
+                        value = api(f"/api/v2/credential-batches/{identity}")
                         return value if all(i["status"] in ("succeeded", "failed", "rolled_back", "cancelled") for i in value["items"]) else None
                     result = wait_for(finished, "credential batch completion")
                     if not allow_failure and any(i["status"] != "succeeded" for i in result["items"]):
@@ -101,7 +102,7 @@ def main():
 
                 def job_done(identity, allow_confirmation=False):
                     def finished():
-                        value = api(f"/api/v1/jobs/{identity}")
+                        value = api(f"/api/v2/jobs/{identity}")
                         return value if (value["job"]["status"] in ("succeeded", "failed", "rolled_back") or (allow_confirmation and value["job"]["status"] == "waiting_confirmation")) else None
                     result = wait_for(finished, "node job completion")
                     if result["job"]["status"] != "succeeded" and not (allow_confirmation and result["job"]["status"] == "waiting_confirmation"):
@@ -109,10 +110,10 @@ def main():
                     return result
 
                 def detail(node):
-                    return api(f"/api/v1/nodes/{node}")
+                    return api(f"/api/v2/nodes/{node}")
 
                 def deployed_version(node):
-                    refs = api(f"/api/v1/credentials/{tls}/references")
+                    refs = api(f"/api/v2/credentials/{tls}/references")
                     return {r["version"] for r in refs if r["entity_id"] == node and r["source"] == "deployed"}
 
                 ssh = create("Shared SSH", "ssh_private_key", {"secret": old_key.read_text()})
@@ -120,13 +121,13 @@ def main():
                 tls = create("Shared TLS", "tls_identity", first_tls)
                 nodes = []
                 for index, (_, ssh_port, udp_port) in enumerate(endpoints):
-                    created = api("/api/v1/nodes", "POST", {"name": f"Credential node {index}", "ssh_host": "127.0.0.1", "ssh_port": ssh_port, "ssh_username": "root", "ssh_credential_id": ssh, "ssh_credential_version": 1, "public_host": "127.0.0.1", "public_port": udp_port, "listen_addr": ":443", "tls_sni": "credentials.example.test", "tls_skip_verify": True, "config": {"tls": {"cert": f"credential://{tls}/1/certificate", "key": f"credential://{tls}/1/private_key", "sniGuard": "disable"}}})
+                    created = api("/api/v2/nodes", "POST", {"name": f"Credential node {index}", "ssh_host": "127.0.0.1", "ssh_port": ssh_port, "ssh_username": "root", "ssh_credential_id": ssh, "ssh_credential_version": 1, "public_host": "127.0.0.1", "public_port": udp_port, "listen_addr": ":443", "tls_sni": "credentials.example.test", "tls_skip_verify": True, "config": {"tls": {"cert": f"credential://{tls}/1/certificate", "key": f"credential://{tls}/1/private_key", "sniGuard": "disable"}}})
                     node = created["node"]["id"]
-                    ssh_job = api(f"/api/v1/nodes/{node}/ssh-test", "POST", {"expected_revision": 1})["job_id"]
+                    ssh_job = api(f"/api/v2/nodes/{node}/ssh-test", "POST", {"expected_revision": 1})["job_id"]
                     fingerprint = job_done(ssh_job, allow_confirmation=True)["result"]["result"]["fingerprint"]
-                    api(f"/api/v1/jobs/{ssh_job}/confirm-fingerprint", "POST", {"expected_revision": 1, "fingerprint": fingerprint})
+                    api(f"/api/v2/jobs/{ssh_job}/confirm-fingerprint", "POST", {"expected_revision": 1, "fingerprint": fingerprint})
                     job_done(ssh_job)
-                    job_done(api(f"/api/v1/nodes/{node}/deploy", "POST", {"expected_revision": detail(node)["revision"]})["job_id"])
+                    job_done(api(f"/api/v2/nodes/{node}/deploy", "POST", {"expected_revision": detail(node)["revision"]})["job_id"])
                     nodes.append(node)
                 print("Two real nodes deployed with one shared TLS identity and SSH credential.", flush=True)
 
@@ -134,7 +135,7 @@ def main():
                 assert published["affected_count"] == 2
                 batch_finished(published["batch_id"])
                 assert all(deployed_version(n) == {2} for n in nodes)
-                job_done(api(f"/api/v1/nodes/{nodes[0]}/rollback", "POST", {"expected_revision": detail(nodes[0])["revision"]})["job_id"])
+                job_done(api(f"/api/v2/nodes/{nodes[0]}/rollback", "POST", {"expected_revision": detail(nodes[0])["revision"]})["job_id"])
                 assert deployed_version(nodes[0]) == {1}, "rollback did not resolve the historical credential version"
                 print("Automatic TLS version application and pinned-version rollback passed.", flush=True)
 
@@ -144,7 +145,7 @@ def main():
                 assert sorted(i["status"] for i in partial["items"]) == ["failed", "succeeded"]
                 assert deployed_version(nodes[0]) == {3} and deployed_version(nodes[1]) == {2}
                 matrix.run(["docker", "exec", endpoints[1][0], "systemctl", "start", "ssh.service"])
-                retried = api(f"/api/v1/credential-batches/{published['batch_id']}/retry", "POST")
+                retried = api(f"/api/v2/credential-batches/{published['batch_id']}/retry", "POST")
                 assert retried["affected_count"] == 1
                 batch_finished(published["batch_id"])
                 assert all(deployed_version(n) == {3} for n in nodes)
@@ -164,7 +165,7 @@ def main():
                 # manager never adds or removes remote SSH authorization.
                 for container, _, _ in endpoints:
                     matrix.run_input(["docker", "exec", "-i", container, "sh", "-c", "cat >> /root/.ssh/authorized_keys"], new_key.with_suffix(".pub").read_text())
-                api(f"/api/v1/credential-batches/{published['batch_id']}/retry", "POST")
+                api(f"/api/v2/credential-batches/{published['batch_id']}/retry", "POST")
                 batch_finished(published["batch_id"])
                 assert all(detail(n)["ssh"]["credential_version"] == 2 for n in nodes)
                 print("Unauthorized SSH keys left the old binding active; operator authorization and retry applied the encrypted key with its passphrase.", flush=True)
@@ -175,7 +176,7 @@ def main():
                     matrix.run_input(["docker", "exec", "-i", container, "chpasswd"], f"root:{old_password}\n")
                 password = create("Shared SSH password", "ssh_password", {"secret": old_password})
                 for node in nodes:
-                    api(f"/api/v1/nodes/{node}", "PATCH", {"expected_revision": detail(node)["revision"], "ssh_credential_id": password, "ssh_credential_version": 1})
+                    api(f"/api/v2/nodes/{node}", "PATCH", {"expected_revision": detail(node)["revision"], "ssh_credential_id": password, "ssh_credential_version": 1})
                 for container, _, _ in endpoints:
                     matrix.run_input(["docker", "exec", "-i", container, "chpasswd"], f"root:{new_password}\n")
                 published = publish(password, {"secret": new_password})

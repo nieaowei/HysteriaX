@@ -31,7 +31,7 @@ Rust 数据库测试需要可丢弃 PostgreSQL 的 `TEST_DATABASE_URL`；Redis �
 | `scripts/verify-snapshot-capacity.py` | 最终 Linux 镜像、Caddy 三副本及 Redis 停止／空重启；可选完整旧版恢复。 |
 | `scripts/verify-backup-restore-compose.py` | 备份恢复及外部操作时间线不一致时的拒绝行为。 |
 
-先查看各脚本的参数和环境要求；提供命令行参数解析的 Python 专项可用 `--help` 查阅。部分旧验证脚本仍针对历史 v1，不应直接用于当前线上服务。镜像、内核下载、Docker 权限和 fixture 参数以各脚本为准；不将旧脚本的历史通过当作本次重新执行。
+先查看各脚本的参数和环境要求；提供命令行参数解析的 Python 专项可用 `--help` 查阅。常规脚本使用 v2；跨版本恢复或历史基线对照只有在显式连接旧镜像／旧二进制时才使用 v1。镜像、内核下载、Docker 权限和 fixture 参数以各脚本为准；不将旧脚本的历史通过当作本次重新执行。
 
 容量记录只描述具体数据、并发和限制下的实验。本机 Docker 可完成多实例功能验收，不要求额外原生 x86_64 服务器。生产 PostgreSQL、Redis 与 API 可分机部署，按实际主机角色核算资源。详见 [当前架构](architecture.md)。
 

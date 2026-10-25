@@ -5,6 +5,7 @@ Requires TEST_DATABASE_URL, psycopg, Docker, and the systemd-node test image.
 Build it with scripts/fixtures/systemd-node.Dockerfile, tagged
 hysteriax-package-test:local. Never uses existing management nodes.
 """
+from management_test_http import start_test_server
 import argparse
 import base64
 import importlib.util
@@ -71,7 +72,7 @@ def main():
                 "RUST_LOG": "warn",
             }
             with open(temp / "server.log", "wb") as log:
-                service = subprocess.Popen([str(ROOT / "target/debug/hysteriax-server")], env=environment, stdout=log, stderr=log)
+                service = start_test_server([str(ROOT / "target/debug/hysteriax-server")], env=environment, stdout=log, stderr=log)
 
                 def api(path, method="GET", payload=None, expected=(200, 201, 202), token=admin):
                     status, body = matrix.request(base, path, token, method, payload)
@@ -87,24 +88,24 @@ def main():
                 package = {"expires_at": None, "quota_bytes": 1_000_000_000, "cycle": "fixed", "reset_day": 1,
                            "timezone": "Asia/Shanghai", "interface": None, "direction": "both",
                            "expiry_warning_days": 7, "traffic_warning_percent": 80}
-                created = api("/api/v1/nodes", "POST", {
+                created = api("/api/v2/nodes", "POST", {
                     "name": "Package live node", "ssh_host": "127.0.0.1", "ssh_port": ssh_port,
                     "ssh_username": "root", "ssh_auth_type": "private_key", "ssh_secret": key.read_text(),
                     "public_host": "127.0.0.1", "public_port": hy2_port, "listen_addr": ":443",
                     "package": package, "initial_usage_bytes": 123,
                 })
                 node_id = created["node"]["id"]
-                path = f"/api/v1/nodes/{node_id}"
+                path = f"/api/v2/nodes/{node_id}"
                 node_token = created["node_auth_token"]
 
                 def detail(): return api(path)
                 def wait_job(job_id, allow_confirmation=False):
-                    result = wait_for(lambda: (value if (value := api(f"/api/v1/jobs/{job_id}"))["job"]["status"] in ("succeeded", "failed", "rolled_back") + (("waiting_confirmation",) if allow_confirmation else ()) else None), "job completion", 240)
+                    result = wait_for(lambda: (value if (value := api(f"/api/v2/jobs/{job_id}"))["job"]["status"] in ("succeeded", "failed", "rolled_back") + (("waiting_confirmation",) if allow_confirmation else ()) else None), "job completion", 240)
                     if result["job"]["status"] != "succeeded" and not (allow_confirmation and result["job"]["status"] == "waiting_confirmation"): raise RuntimeError(f"job failed: {result['job']['kind']}: {result['job'].get('error_message')}")
                     return result
                 ssh_job = api(path + "/ssh-test", "POST", {"expected_revision": 1})["job_id"]
                 fingerprint = wait_job(ssh_job, allow_confirmation=True)["result"]["result"]["fingerprint"]
-                api(f"/api/v1/jobs/{ssh_job}/confirm-fingerprint", "POST", {"expected_revision": 1, "fingerprint": fingerprint})
+                api(f"/api/v2/jobs/{ssh_job}/confirm-fingerprint", "POST", {"expected_revision": 1, "fingerprint": fingerprint})
                 wait_job(ssh_job)
                 observed = wait_for(lambda: (value if (value := detail())["package_usage"]["freshness"] == "fresh" else None), "first network sample", 45)
                 assert observed["package_usage"]["interface"] == "eth0"
@@ -129,9 +130,9 @@ def main():
                         if attempt == 2 or not any(message in str(error) for message in ("TLS close_notify", "response body", "connection reset")): raise
                         print("Retrying transient release-download failure", flush=True)
                 print("Disposable Hysteria node deployed", flush=True)
-                user = api("/api/v1/users", "POST", {"name": "Package live user"})["id"]
+                user = api("/api/v2/users", "POST", {"name": "Package live user"})["id"]
                 credential = grant_group(api,user,[node_id])["created_credentials"][0]["hy2_credential"]
-                sub = api(f"/api/v1/users/{user}/subscription", "POST", {"expected_revision": 2})["token"]
+                sub = api(f"/api/v2/users/{user}/subscription", "POST", {"expected_revision": 2})["token"]
 
                 def auth():
                     return api(f"/hy2/auth/{node_id}/{node_token}", "POST", {"addr": "", "auth": credential, "tx": 0}, token=None)["ok"]

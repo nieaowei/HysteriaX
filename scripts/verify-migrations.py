@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify a fresh PostgreSQL startup, schema, and single-instance guard."""
+"""Verify maintenance initialization, native schema, and concurrent protocol-2 instances."""
 
 import base64
 import os
@@ -13,6 +13,7 @@ import urllib.error
 import urllib.request
 
 from postgres_test import PostgresTestSchema
+from management_test_http import start_test_server
 
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -70,7 +71,7 @@ def main():
         address = environment["HYSTERIAX_LISTEN_ADDR"].rsplit(":", 1)[1]
         base = f"http://127.0.0.1:{address}"
         log = open(pathlib.Path(folder) / "server.log", "wb")
-        server = subprocess.Popen(
+        server = start_test_server(
             [str(SERVER)], cwd=ROOT, env=environment, stdout=log, stderr=log
         )
         duplicate = None
@@ -117,9 +118,19 @@ def main():
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
-            if duplicate.wait(timeout=10) == 0:
-                raise RuntimeError("a second server instance unexpectedly acquired the database lock")
-            print("Fresh PostgreSQL migration and native schema passed; the second server instance was rejected.")
+            wait_ready("http://" + duplicate_environment["HYSTERIAX_LISTEN_ADDR"], duplicate)
+            if server.poll() is not None:
+                raise RuntimeError("starting the second replica stopped the first")
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                with database.connect() as connection:
+                    fresh = connection.execute("SELECT count(*) FROM service_instances WHERE heartbeat_at > clock_timestamp()-interval '25 seconds'").fetchone()[0]
+                if fresh == 2:
+                    break
+                time.sleep(0.2)
+            else:
+                raise RuntimeError("both protocol-2 replicas must register fresh independent heartbeats")
+            print("Maintenance initialization and native schema passed; two independent protocol-2 instances are ready.")
         finally:
             stop(duplicate)
             stop(server)

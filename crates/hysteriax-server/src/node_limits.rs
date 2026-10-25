@@ -2,10 +2,6 @@
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
-use axum::{
-    Json,
-    extract::{Path, State},
-};
 use chrono::{DateTime, Datelike, NaiveDate, TimeZone, Utc};
 use chrono_tz::Tz;
 use serde::{Deserialize, Serialize};
@@ -377,20 +373,6 @@ pub struct UsageUpdate {
     usage_bytes: i64,
     #[serde(default)]
     reset: bool,
-}
-pub async fn update_usage(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-    Json(input): Json<UsageUpdate>,
-) -> Result<Json<Value>, ApiError> {
-    let (secrets, actor) = (state.secrets.clone(), crate::api::audit_actor());
-    let response = db::serializable(&state.pool, move |tx| {
-        let (id, input, secrets, actor) =
-            (id.clone(), input.clone(), secrets.clone(), actor.clone());
-        Box::pin(async move { update_usage_on(tx, id, input, secrets, actor).await })
-    })
-    .await?;
-    Ok(Json(response))
 }
 
 pub(crate) async fn update_usage_on(
@@ -1472,3 +1454,17 @@ mod tests {
         );
     }
 }
+
+// Direct domain fixtures are test-only; production writes use protocol-2 handlers.
+#[cfg(test)]
+#[path = "node_limits_test_support.rs"]
+mod test_support;
+#[cfg(test)]
+pub(crate) use test_support::*;
+
+#[cfg(test)]
+use axum::Json;
+#[cfg(test)]
+use axum::extract::Path;
+#[cfg(test)]
+use axum::extract::State;

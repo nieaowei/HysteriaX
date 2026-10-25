@@ -4,6 +4,7 @@
 The credential stays in the service vault. Only this run's node/user/SSH key and
 prefixed DNS records are removed. A useful DNS connection/zone remains enabled.
 """
+from management_test_http import management_request
 import argparse
 import ast
 import hashlib
@@ -37,7 +38,7 @@ class API:
 
     def request(self, method, path, body=None, missing=False, raw=False):
         data = None if body is None else json.dumps(body).encode()
-        request = urllib.request.Request(self.base + path, data=data, method=method,
+        request = management_request(self.base + path, data=data, method=method,
             headers={"Authorization": "Bearer " + self.token, "Content-Type": "application/json"})
         try:
             with urllib.request.urlopen(request, timeout=30) as response:
@@ -56,7 +57,7 @@ class API:
 
     def get(self, path, **kwargs):
         parsed = urllib.parse.urlsplit(path)
-        if parsed.path in {"/api/v1/jobs", "/api/v1/nodes", "/api/v1/users", "/api/v1/credentials", "/api/v1/dns/records"}:
+        if parsed.path in {"/api/v2/jobs", "/api/v2/nodes", "/api/v2/users", "/api/v2/credentials", "/api/v2/dns/records"}:
             parameters = dict(urllib.parse.parse_qsl(parsed.query))
             items, page = [], 1
             while True:
@@ -79,7 +80,7 @@ class API:
         print("Waiting for job", identifier, flush=True)
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            detail = self.get("/api/v1/jobs/" + identifier)
+            detail = self.get("/api/v2/jobs/" + identifier)
             job = detail["job"]
             if job["status"] in ("succeeded", "failed", "rolled_back", "cancelled"):
                 if job["status"] != "succeeded" and not allow_failure:
@@ -150,26 +151,26 @@ def main():
     def write_record(name, kind, content):
         request = {"zone_id": zone["id"], "idempotency_key": str(uuid.uuid4()),
                    "record": {"name": name, "record_type": kind, "content": content, "ttl": 1, "proxied": False}}
-        receipt = api.write("POST", "/api/v1/dns/records", request)
+        receipt = api.write("POST", "/api/v2/dns/records", request)
         manifest["record_ids"].append(receipt["resource_id"])
         save()
-        duplicate = api.write("POST", "/api/v1/dns/records", request)
+        duplicate = api.write("POST", "/api/v2/dns/records", request)
         assert duplicate["resource_id"] == receipt["resource_id"]
         api.job(receipt["job_id"])
-        record = api.get("/api/v1/dns/records/" + receipt["resource_id"])
+        record = api.get("/api/v2/dns/records/" + receipt["resource_id"])
         return record
 
     def check(record):
-        receipt = api.write("POST", "/api/v1/dns/records/" + record["id"] + "/check", action(record["revision"]))
+        receipt = api.write("POST", "/api/v2/dns/records/" + record["id"] + "/check", action(record["revision"]))
         api.job(receipt["job_id"], timeout=660)
-        current = api.get("/api/v1/dns/records/" + record["id"])
+        current = api.get("/api/v2/dns/records/" + record["id"])
         assert current["resolution_status"] == "verified", current["resolution_status"]
         return current
 
     def wait_node(node, revision, failure=False):
         deadline = time.monotonic() + 450
         while time.monotonic() < deadline:
-            jobs = [job for job in api.get("/api/v1/jobs") if job.get("node_id") == node and job.get("target_revision") == revision and job["kind"] in ("deploy", "sync", "rollback")]
+            jobs = [job for job in api.get("/api/v2/jobs") if job.get("node_id") == node and job.get("target_revision") == revision and job["kind"] in ("deploy", "sync", "rollback")]
             if jobs:
                 return api.job(jobs[0]["id"], allow_failure=failure)
             time.sleep(1)
@@ -204,20 +205,20 @@ def main():
 
     save()
     if not args.resume:
-        credentials = api.get("/api/v1/credentials")
+        credentials = api.get("/api/v2/credentials")
         credential = next(entry for entry in credentials if entry.get("name") == args.credential and entry.get("kind") == "dns" and entry.get("metadata", {}).get("provider") == "cloudflare")
-        connections = api.get("/api/v1/dns/connections")
+        connections = api.get("/api/v2/dns/connections")
         connection = next((entry for entry in connections if entry["credential_id"] == credential["id"]), None)
         if connection is None:
-            connection = api.write("POST", "/api/v1/dns/connections", {"name": args.credential, "credential_id": credential["id"], "credential_version": credential["latest_version"]})
+            connection = api.write("POST", "/api/v2/dns/connections", {"name": args.credential, "credential_id": credential["id"], "credential_version": credential["latest_version"]})
         manifest["connection_id"] = connection["id"]
         save()
-        receipt = api.write("POST", "/api/v1/dns/connections/" + connection["id"] + "/verify", action(connection["revision"]))
+        receipt = api.write("POST", "/api/v2/dns/connections/" + connection["id"] + "/verify", action(connection["revision"]))
         api.job(receipt["job_id"])
-        zone = next(entry for entry in api.get("/api/v1/dns/zones") if entry["connection_id"] == connection["id"] and entry["name"] == args.zone)
+        zone = next(entry for entry in api.get("/api/v2/dns/zones") if entry["connection_id"] == connection["id"] and entry["name"] == args.zone)
         if not zone["enabled"]:
-            zone = api.write("PATCH", "/api/v1/dns/zones/" + zone["id"], {"expected_revision": zone["revision"], "enabled": True})
-        receipt = api.write("POST", "/api/v1/dns/zones/" + zone["id"] + "/refresh", action(zone["revision"]))
+            zone = api.write("PATCH", "/api/v2/dns/zones/" + zone["id"], {"expected_revision": zone["revision"], "enabled": True})
+        receipt = api.write("POST", "/api/v2/dns/zones/" + zone["id"] + "/refresh", action(zone["revision"]))
         api.job(receipt["job_id"])
         passed("Cloudflare credential/zone discovery and record refresh")
     
@@ -228,28 +229,28 @@ def main():
         passed("real A/AAAA/CNAME creation, idempotency and authoritative/recursive DNS checks")
         request = {"expected_revision": record["revision"], "idempotency_key": str(uuid.uuid4()),
                    "record": {"name": record["name"], "record_type": "A", "content": args.public_ip, "ttl": 300, "proxied": False}}
-        receipt = api.write("PATCH", "/api/v1/dns/records/" + record["id"], request)
+        receipt = api.write("PATCH", "/api/v2/dns/records/" + record["id"], request)
         api.job(receipt["job_id"])
-        record = api.get("/api/v1/dns/records/" + record["id"])
+        record = api.get("/api/v2/dns/records/" + record["id"])
         assert record["ttl"] == 300
         passed("real Cloudflare record update")
     
-        ssh = api.write("POST", "/api/v1/credentials", {"name": f"DNS test SSH {run}", "kind": "ssh_private_key", "payload": {"secret": args.ssh_key.read_text()}})
+        ssh = api.write("POST", "/api/v2/credentials", {"name": f"DNS test SSH {run}", "kind": "ssh_private_key", "payload": {"secret": args.ssh_key.read_text()}})
         manifest["credential_ids"].append(ssh["id"])
         save()
         allocation = {"idempotency_key": str(uuid.uuid4()), "zone_id": zone["id"], "mode": "auto", "prefix": prefix, "ipv4": args.public_ip}
         request = {"name": f"DNS live {run}", "ssh_host": args.ssh_host, "ssh_port": args.ssh_port, "ssh_username": "root", "ssh_credential_id": ssh["id"], "ssh_credential_version": ssh.get("version", 1), "ssh_host_fingerprint": args.ssh_fingerprint,
                    "public_port": args.public_port, "listen_addr": ":443", "config": {}, "dns_allocation": allocation}
-        created = api.write("POST", "/api/v1/nodes", request)
+        created = api.write("POST", "/api/v2/nodes", request)
         node_id = created["node"]["id"]
         manifest["node_ids"].append(node_id)
         manifest["record_ids"].extend(created["dns_allocation"]["record_ids"])
         save()
-        duplicate = api.write("POST", "/api/v1/nodes", request)
+        duplicate = api.write("POST", "/api/v2/nodes", request)
         assert duplicate["node"]["id"] == node_id and "node_auth_token" not in duplicate
         for job in created["dns_allocation"]["job_ids"]:
             api.job(job)
-        node = api.get("/api/v1/nodes/" + node_id)
+        node = api.get("/api/v2/nodes/" + node_id)
         auto_host = node["public"]["host"]
         assert node["config"].get("acme") is None
         for item in node["dns_binding"]["records"]:
@@ -257,30 +258,30 @@ def main():
         passed("automatic node allocation is idempotent and does not enable ACME")
     
         config = {"acme": {"domains": [auto_host, manual], "ca": "letsencrypt", "type": "dns", "dns": {"name": "cloudflare", "config": {"cloudflare_api_token": f"credential://{credential['id']}/{credential['latest_version']}/cloudflare_api_token"}}}}
-        updated = api.write("PATCH", "/api/v1/nodes/" + node_id, {"expected_revision": node["revision"], "config": config})
+        updated = api.write("PATCH", "/api/v2/nodes/" + node_id, {"expected_revision": node["revision"], "config": config})
         wait_node(node_id, updated["revision"])
-        node = api.get("/api/v1/nodes/" + node_id)
+        node = api.get("/api/v2/nodes/" + node_id)
         assert node["published_connection"]["public_host"] == auto_host
         passed("separate ACME proxy configuration, first deployment and endpoint publication")
     
-        user = api.write("POST", "/api/v1/users", {"name": f"DNS live user {run}"})
+        user = api.write("POST", "/api/v2/users", {"name": f"DNS live user {run}"})
         manifest["user_ids"].append(user["id"])
         save()
         draft = {"action":"create","name":f"DNS live authorization {run}","user_ids":[user["id"]],"node_ids":[node_id]}
-        preview = api.write("POST","/api/v1/authorization-groups/preview",draft)
+        preview = api.write("POST","/api/v2/authorization-groups/preview",draft)
         draft.pop("action"); draft["preview_token"]=preview["preview_token"]
-        api.write("POST","/api/v1/authorization-groups",draft)
-        current_user = api.get("/api/v1/users/" + user["id"])
-        subscription = api.write("POST", "/api/v1/users/" + user["id"] + "/subscription", {"expected_revision": current_user["revision"]})
+        api.write("POST","/api/v2/authorization-groups",draft)
+        current_user = api.get("/api/v2/users/" + user["id"])
+        subscription = api.write("POST", "/api/v2/users/" + user["id"] + "/subscription", {"expected_revision": current_user["revision"]})
         token = subscription["token"]
     else:
         node_id = manifest["node_ids"][0]
-        node = api.get("/api/v1/nodes/" + node_id)
+        node = api.get("/api/v2/nodes/" + node_id)
         auto_host = node["dns_binding"]["hostname"]
-        record = api.get("/api/v1/dns/records/" + manifest["record_ids"][0])
-        cname = api.get("/api/v1/dns/records/" + manifest["record_ids"][2])
-        zone = next(entry for entry in api.get("/api/v1/dns/zones") if entry["name"] == args.zone)
-        current = api.get("/api/v1/users/" + manifest["user_ids"][0] + "/subscription")
+        record = api.get("/api/v2/dns/records/" + manifest["record_ids"][0])
+        cname = api.get("/api/v2/dns/records/" + manifest["record_ids"][2])
+        zone = next(entry for entry in api.get("/api/v2/dns/zones") if entry["name"] == args.zone)
+        current = api.get("/api/v2/users/" + manifest["user_ids"][0] + "/subscription")
         token = current["active"]["token"]
 
     def proxy():
@@ -294,34 +295,34 @@ def main():
         assert proxy()["server"] == auto_host
         transfer(proxy(), directory, binary)
         passed("subscription and real public UDP/TLS proxy transfer on allocated hostname")
-        api.write("PUT", "/api/v1/nodes/" + node_id + "/dns-binding", {"expected_revision": node["revision"], "allocation": {"idempotency_key": str(uuid.uuid4()), "zone_id": zone["id"], "mode": "existing", "record_ids": [record["id"]]}})
-        changed = api.get("/api/v1/nodes/" + node_id)
+        api.write("PUT", "/api/v2/nodes/" + node_id + "/dns-binding", {"expected_revision": node["revision"], "allocation": {"idempotency_key": str(uuid.uuid4()), "zone_id": zone["id"], "mode": "existing", "record_ids": [record["id"]]}})
+        changed = api.get("/api/v2/nodes/" + node_id)
         wait_node(node_id, changed["revision"])
         assert proxy()["server"] == manual
         transfer(proxy(), directory, binary)
         passed("manual existing-record reassignment and published subscription transfer")
-        historical = api.get("/api/v1/nodes/" + node_id)
-        receipt = api.write("POST", "/api/v1/nodes/" + node_id + "/rollback", {"expected_revision": historical["revision"]})
+        historical = api.get("/api/v2/nodes/" + node_id)
+        receipt = api.write("POST", "/api/v2/nodes/" + node_id + "/rollback", {"expected_revision": historical["revision"]})
         api.job(receipt["job_id"])
         assert proxy()["server"] == auto_host
         transfer(proxy(), directory, binary)
         passed("explicit rollback publishes the historical hostname and remains reachable")
-        historical = api.get("/api/v1/nodes/" + node_id)
-        receipt = api.write("POST", "/api/v1/nodes/" + node_id + "/sync", {"expected_revision": historical["revision"]})
+        historical = api.get("/api/v2/nodes/" + node_id)
+        receipt = api.write("POST", "/api/v2/nodes/" + node_id + "/sync", {"expected_revision": historical["revision"]})
         api.job(receipt["job_id"])
         assert proxy()["server"] == manual
         passed("sync restores the desired domain after rollback")
-        changed = api.get("/api/v1/nodes/" + node_id)
-        api.write("PUT", "/api/v1/nodes/" + node_id + "/dns-binding", {"expected_revision": changed["revision"], "allocation": {"idempotency_key": str(uuid.uuid4()), "zone_id": zone["id"], "mode": "existing", "record_ids": [cname["id"]]}})
-        failed_target = api.get("/api/v1/nodes/" + node_id)
+        changed = api.get("/api/v2/nodes/" + node_id)
+        api.write("PUT", "/api/v2/nodes/" + node_id + "/dns-binding", {"expected_revision": changed["revision"], "allocation": {"idempotency_key": str(uuid.uuid4()), "zone_id": zone["id"], "mode": "existing", "record_ids": [cname["id"]]}})
+        failed_target = api.get("/api/v2/nodes/" + node_id)
         failure = wait_node(node_id, failed_target["revision"], failure=True)
         assert failure["status"] in ("failed", "rolled_back")
         assert proxy()["server"] == manual
         transfer(proxy(), directory, binary)
         passed("certificate-mismatched domain switch retains working published subscription")
-        failed_target = api.get("/api/v1/nodes/" + node_id)
-        api.write("PUT", "/api/v1/nodes/" + node_id + "/dns-binding", {"expected_revision": failed_target["revision"], "allocation": {"idempotency_key": str(uuid.uuid4()), "zone_id": zone["id"], "mode": "existing", "record_ids": [record["id"]]}})
-        restored = api.get("/api/v1/nodes/" + node_id)
+        failed_target = api.get("/api/v2/nodes/" + node_id)
+        api.write("PUT", "/api/v2/nodes/" + node_id + "/dns-binding", {"expected_revision": failed_target["revision"], "allocation": {"idempotency_key": str(uuid.uuid4()), "zone_id": zone["id"], "mode": "existing", "record_ids": [record["id"]]}})
+        restored = api.get("/api/v2/nodes/" + node_id)
         wait_node(node_id, restored["revision"])
         passed("domain recovery after failed switch")
 
@@ -333,27 +334,27 @@ def main():
 
 def cleanup(api, manifest, path):
     for identifier in manifest["user_ids"]:
-        user = api.get("/api/v1/users/" + identifier, missing=True)
+        user = api.get("/api/v2/users/" + identifier, missing=True)
         if user:
-            api.request("DELETE", f"/api/v1/users/{identifier}?expected_revision={user['revision']}")
+            api.request("DELETE", f"/api/v2/users/{identifier}?expected_revision={user['revision']}")
     for identifier in manifest["node_ids"]:
-        node = api.get("/api/v1/nodes/" + identifier, missing=True)
+        node = api.get("/api/v2/nodes/" + identifier, missing=True)
         if node:
-            receipt = api.request("DELETE", f"/api/v1/nodes/{identifier}?expected_revision={node['revision']}")
+            receipt = api.request("DELETE", f"/api/v2/nodes/{identifier}?expected_revision={node['revision']}")
             if receipt:
                 api.job(receipt["job_id"])
-        assert api.get("/api/v1/nodes/" + identifier, missing=True) is None
+        assert api.get("/api/v2/nodes/" + identifier, missing=True) is None
     for identifier in manifest["record_ids"]:
-        record = api.get("/api/v1/dns/records/" + identifier, missing=True)
+        record = api.get("/api/v2/dns/records/" + identifier, missing=True)
         if record and record["state"] != "deleted":
-            receipt = api.write("DELETE", "/api/v1/dns/records/" + identifier, action(record["revision"]))
+            receipt = api.write("DELETE", "/api/v2/dns/records/" + identifier, action(record["revision"]))
             api.job(receipt["job_id"])
-        current = api.get("/api/v1/dns/records/" + identifier, missing=True)
+        current = api.get("/api/v2/dns/records/" + identifier, missing=True)
         assert current is None or current["state"] == "deleted"
     for identifier in manifest["credential_ids"]:
-        credential = api.get("/api/v1/credentials/" + identifier, missing=True)
+        credential = api.get("/api/v2/credentials/" + identifier, missing=True)
         if credential:
-            api.request("DELETE", f"/api/v1/credentials/{identifier}?expected_revision={credential['revision']}")
+            api.request("DELETE", f"/api/v2/credentials/{identifier}?expected_revision={credential['revision']}")
     manifest["cleanup_complete"] = True
     path.write_text(json.dumps(manifest, indent=2))
     path.chmod(0o600)

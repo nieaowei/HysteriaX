@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Deploy one disposable Debian node and verify real Hysteria mTLS plus ECH traffic."""
+from management_test_http import management_request, start_test_server
 
 import base64
 from datetime import datetime, timezone
@@ -74,7 +75,7 @@ def raw_request(base, path, token=None, method="GET", payload=None):
         headers["Authorization"] = f"Bearer {token}"
     if body is not None:
         headers["Content-Type"] = "application/json"
-    req = urllib.request.Request(base + path, data=body, headers=headers, method=method)
+    req = management_request(base + path, data=body, headers=headers, method=method)
     try:
         with urllib.request.urlopen(req, timeout=20) as response:
             return response.status, response.read()
@@ -254,13 +255,13 @@ def main():
                 }
             )
             with open(temp / "management.log", "wb") as management_log:
-                api = subprocess.Popen(
+                api = start_test_server(
                     [str(SERVER)], cwd=ROOT, env=environment,
                     stdout=management_log, stderr=management_log,
                 )
 
                 def expect(path, method="GET", payload=None, statuses=(200, 201, 202), auth=True):
-                    if path == "/api/v1/jobs" and method == "GET":
+                    if path == "/api/v2/jobs" and method == "GET":
                         items, page = [], 1
                         while True:
                             result = expect(f"{path}?page={page}&page_size=200", auth=auth)
@@ -279,7 +280,7 @@ def main():
                     deadline = time.time() + timeout
                     last_detail = None
                     while time.time() < deadline:
-                        detail = expect(f"/api/v1/jobs/{job_id}")
+                        detail = expect(f"/api/v2/jobs/{job_id}")
                         last_detail = detail
                         if detail["job"]["status"] in ("succeeded", "failed", "cancelled", "rolled_back", "waiting_confirmation"):
                             return detail
@@ -289,7 +290,7 @@ def main():
                 def wait_retry_wait(job_id, timeout=20):
                     deadline = time.time() + timeout
                     while time.time() < deadline:
-                        job = expect(f"/api/v1/jobs/{job_id}")["job"]
+                        job = expect(f"/api/v2/jobs/{job_id}")["job"]
                         if job["status"] == "queued" and job["stage"] == "retry_wait":
                             return job
                         if job["status"] in ("failed", "rolled_back", "cancelled"):
@@ -358,7 +359,7 @@ def main():
                 )
 
                 node = expect(
-                    "/api/v1/nodes", "POST",
+                    "/api/v2/nodes", "POST",
                     {
                         "name": "Debian 13 mTLS acceptance",
                         "ssh_host": "127.0.0.1", "ssh_port": ssh_port,
@@ -378,21 +379,21 @@ def main():
                 node_token = node["node_auth_token"]
                 secrets_to_scrub.append(node_token)
                 ssh_job = expect(
-                    f"/api/v1/nodes/{node_id}/ssh-test", "POST", {"expected_revision": 1}
+                    f"/api/v2/nodes/{node_id}/ssh-test", "POST", {"expected_revision": 1}
                 )["job_id"]
                 ssh_result = wait_job(ssh_job, timeout=90)
                 fingerprint = ((ssh_result.get("result") or {}).get("result") or {}).get("fingerprint")
                 if ssh_result["job"]["status"] != "waiting_confirmation" or not fingerprint:
                     raise RuntimeError("SSH fingerprint discovery failed")
                 expect(
-                    f"/api/v1/jobs/{ssh_job}/confirm-fingerprint", "POST",
+                    f"/api/v2/jobs/{ssh_job}/confirm-fingerprint", "POST",
                     {"expected_revision": 1, "fingerprint": fingerprint},
                 )
                 if wait_job(ssh_job)["job"]["status"] != "succeeded":
                     raise RuntimeError("SSH test did not continue successfully on its original job")
 
                 wrong_fingerprint_node = expect(
-                    "/api/v1/nodes",
+                    "/api/v2/nodes",
                     "POST",
                     {
                         "name": "Wrong fingerprint failure probe",
@@ -407,7 +408,7 @@ def main():
                 )
                 wrong_fingerprint_id = wrong_fingerprint_node["node"]["id"]
                 wrong_fingerprint_job = expect(
-                    f"/api/v1/nodes/{wrong_fingerprint_id}/deploy",
+                    f"/api/v2/nodes/{wrong_fingerprint_id}/deploy",
                     "POST",
                     {"expected_revision": 1},
                 )["job_id"]
@@ -415,13 +416,13 @@ def main():
                 if (
                     wrong_fingerprint_result["job"]["status"] != "failed"
                     or "SSH host key changed" not in (wrong_fingerprint_result["job"].get("error_message") or "")
-                    or expect(f"/api/v1/nodes/{wrong_fingerprint_id}")["state"] != "fingerprint_changed"
+                    or expect(f"/api/v2/nodes/{wrong_fingerprint_id}")["state"] != "fingerprint_changed"
                 ):
                     raise RuntimeError("wrong SSH fingerprint was not rejected and marked on the node")
 
                 run(["docker", "exec", container, "mkdir", "-p", "/opt/hysteriax"])
                 unmanaged_node = expect(
-                    "/api/v1/nodes",
+                    "/api/v2/nodes",
                     "POST",
                     {
                         "name": "Unmanaged installation failure probe",
@@ -436,7 +437,7 @@ def main():
                 )
                 unmanaged_id = unmanaged_node["node"]["id"]
                 unmanaged_job = expect(
-                    f"/api/v1/nodes/{unmanaged_id}/deploy",
+                    f"/api/v2/nodes/{unmanaged_id}/deploy",
                     "POST",
                     {"expected_revision": 1},
                 )["job_id"]
@@ -450,7 +451,7 @@ def main():
                 run(["docker", "exec", container, "rmdir", "/opt/hysteriax"])
 
                 port_probe_node = expect(
-                    "/api/v1/nodes",
+                    "/api/v2/nodes",
                     "POST",
                     {
                         "name": "Occupied UDP port preflight probe",
@@ -473,7 +474,7 @@ def main():
                 port_probe_token = port_probe_node["node_auth_token"]
                 secrets_to_scrub.append(port_probe_token)
                 port_probe_cert = expect(
-                    f"/api/v1/nodes/{port_probe_id}/resources", "POST",
+                    f"/api/v2/nodes/{port_probe_id}/resources", "POST",
                     {
                         "name": "port-probe-cert.pem", "resource_kind": "certificate",
                         "content_base64": base64.b64encode(server_cert.read_bytes()).decode(),
@@ -481,7 +482,7 @@ def main():
                     (201,),
                 )["reference"]
                 port_probe_key = expect(
-                    f"/api/v1/nodes/{port_probe_id}/resources", "POST",
+                    f"/api/v2/nodes/{port_probe_id}/resources", "POST",
                     {
                         "name": "port-probe-key.pem", "resource_kind": "private_key",
                         "content_base64": base64.b64encode(server_key.read_bytes()).decode(),
@@ -514,7 +515,7 @@ def main():
                 if not blocker_ready:
                     raise RuntimeError("UDP blocker service did not bind the probe port")
                 port_probe_update = expect(
-                    f"/api/v1/nodes/{port_probe_id}",
+                    f"/api/v2/nodes/{port_probe_id}",
                     "PATCH",
                     {
                         "expected_revision": 1,
@@ -529,7 +530,7 @@ def main():
                 )
                 port_probe_revision = port_probe_update["revision"]
                 port_probe_job = next(
-                    job for job in expect("/api/v1/jobs")
+                    job for job in expect("/api/v2/jobs")
                     if job.get("node_id") == port_probe_id
                     and job.get("kind") == "sync"
                     and job.get("target_revision") == port_probe_revision
@@ -571,7 +572,7 @@ def main():
                     )
                 run(["docker", "exec", container, "systemctl", "reset-failed", blocker_unit], check=False)
                 retry_port_job = expect(
-                    f"/api/v1/nodes/{port_probe_id}/sync",
+                    f"/api/v2/nodes/{port_probe_id}/sync",
                     "POST",
                     {"expected_revision": port_probe_revision},
                 )["job_id"]
@@ -585,7 +586,7 @@ def main():
                 if not port_proxy_probe or port_proxy_probe.get("route_check") != "custom_tcp_forwarding":
                     raise RuntimeError("configured HTTP probe URL did not pass the direct ACL/outbound TCP probe")
                 restricted_update = expect(
-                    f"/api/v1/nodes/{port_probe_id}",
+                    f"/api/v2/nodes/{port_probe_id}",
                     "PATCH",
                     {
                         "expected_revision": port_probe_revision,
@@ -603,7 +604,7 @@ def main():
                 )
                 restricted_revision = restricted_update["revision"]
                 restricted_job = next(
-                    job for job in expect("/api/v1/jobs")
+                    job for job in expect("/api/v2/jobs")
                     if job.get("node_id") == port_probe_id
                     and job.get("kind") == "sync"
                     and job.get("target_revision") == restricted_revision
@@ -618,7 +619,7 @@ def main():
                     raise RuntimeError("restricted ACL/outbound route did not report its authenticated client-session probe")
                 port_probe_revision = restricted_revision
                 port_probe_deletion = expect(
-                    f"/api/v1/nodes/{port_probe_id}?expected_revision={port_probe_revision}",
+                    f"/api/v2/nodes/{port_probe_id}?expected_revision={port_probe_revision}",
                     "DELETE",
                     statuses=(202,),
                 )
@@ -628,7 +629,7 @@ def main():
                 print("UDP port occupancy was rejected before installation; sync succeeded after releasing the port.")
 
                 retry_node = expect(
-                    "/api/v1/nodes",
+                    "/api/v2/nodes",
                     "POST",
                     {
                         "name": "SSH interruption retry probe",
@@ -644,7 +645,7 @@ def main():
                 retry_node_id = retry_node["node"]["id"]
                 run(["docker", "exec", container, "systemctl", "stop", "ssh.service"])
                 interrupted_job = expect(
-                    f"/api/v1/nodes/{retry_node_id}/deploy",
+                    f"/api/v2/nodes/{retry_node_id}/deploy",
                     "POST",
                     {"expected_revision": 1},
                 )["job_id"]
@@ -653,17 +654,17 @@ def main():
                     raise RuntimeError("SSH connection interruption was not retried")
                 run(["docker", "exec", container, "systemctl", "start", "ssh.service"])
                 expect(
-                    f"/api/v1/nodes/{retry_node_id}?expected_revision=1",
+                    f"/api/v2/nodes/{retry_node_id}?expected_revision=1",
                     "DELETE",
                     statuses=(204,),
                 )
-                cancelled_retry = expect(f"/api/v1/jobs/{interrupted_job}")["job"]
+                cancelled_retry = expect(f"/api/v2/jobs/{interrupted_job}")["job"]
                 if cancelled_retry["status"] != "cancelled":
                     raise RuntimeError("queued SSH retry did not cancel when its node was deleted")
 
                 def upload_resource(name, kind, content):
                     return expect(
-                        f"/api/v1/nodes/{node_id}/resources", "POST",
+                        f"/api/v2/nodes/{node_id}/resources", "POST",
                         {
                             "name": name,
                             "resource_kind": kind,
@@ -674,7 +675,7 @@ def main():
 
                 server_cert_ref = upload_resource("server-cert.pem", "certificate", server_cert.read_bytes())
                 server_key_ref = upload_resource("server-key.pem", "private_key", server_key.read_bytes())
-                authority = expect("/api/v1/credentials/ca-identities", "POST", {
+                authority = expect("/api/v2/credentials/ca-identities", "POST", {
                     "name": "Imported managed live CA", "source": "imported",
                     "certificate": ca_cert.read_text(), "private_key": ca_key.read_text(),
                     "idempotency_key": "live-ca-" + suffix,
@@ -702,7 +703,7 @@ def main():
                 # Queue the deployment while SSH is interrupted. The job must retry and resume.
                 run(["docker", "exec", container, "systemctl", "stop", "ssh.service"])
                 node_update = expect(
-                    f"/api/v1/nodes/{node_id}", "PATCH",
+                    f"/api/v2/nodes/{node_id}", "PATCH",
                     {
                         "expected_revision": 2,
                         "config": server_options,
@@ -710,7 +711,7 @@ def main():
                 )
                 node_revision = node_update["revision"]
                 deploy_job = next(
-                    job for job in expect("/api/v1/jobs")
+                    job for job in expect("/api/v2/jobs")
                     if job.get("node_id") == node_id
                     and job.get("kind") == "sync"
                     and job.get("target_revision") == node_revision
@@ -743,14 +744,14 @@ def main():
                 with database.connect() as connection:
                     if connection.execute("SELECT count(*) FROM users").fetchone()[0] != 0:
                         raise RuntimeError("zero-user managed deployment was not exercised")
-                user = expect("/api/v1/users", "POST", {"name": "mTLS acceptance user"}, (201,))
+                user = expect("/api/v2/users", "POST", {"name": "mTLS acceptance user"}, (201,))
                 user_id = user["id"]
                 grant = grant_group(expect, user_id, [node_id])
                 credential = next(item["hy2_credential"] for item in grant["created_credentials"] if item["node_id"] == node_id)
                 secrets_to_scrub.append(credential)
 
                 subscription = expect(
-                    f"/api/v1/users/{user_id}/subscription", "POST", {"expected_revision": 2}
+                    f"/api/v2/users/{user_id}/subscription", "POST", {"expected_revision": 2}
                 )
                 sub_token = subscription["token"]
                 secrets_to_scrub.append(sub_token)
@@ -907,16 +908,16 @@ def main():
                 mihomo = None
 
                 install_systemctl_restart_failpoint(temp, container, fail_on=1)
-                start_failure_config = expect(f"/api/v1/nodes/{node_id}")["config"]
+                start_failure_config = expect(f"/api/v2/nodes/{node_id}")["config"]
                 start_failure_config["speedTest"] = True
                 start_failure_update = expect(
-                    f"/api/v1/nodes/{node_id}",
+                    f"/api/v2/nodes/{node_id}",
                     "PATCH",
                     {"expected_revision": node_revision, "config": start_failure_config},
                 )
                 node_revision = start_failure_update["revision"]
                 start_failure_job = next(
-                    job for job in expect("/api/v1/jobs")
+                    job for job in expect("/api/v2/jobs")
                     if job.get("node_id") == node_id
                     and job.get("kind") == "sync"
                     and job.get("target_revision") == node_revision
@@ -932,13 +933,13 @@ def main():
                         "service-start failure did not restore the previous configuration: "
                         + str(start_failure_result)
                         + "; node state: "
-                        + str(expect(f"/api/v1/nodes/{node_id}").get("state"))
+                        + str(expect(f"/api/v2/nodes/{node_id}").get("state"))
                     )
-                if expect(f"/api/v1/nodes/{node_id}")["state"] != "rolled_back":
+                if expect(f"/api/v2/nodes/{node_id}")["state"] != "rolled_back":
                     raise RuntimeError("node state did not record the successful automatic rollback")
                 restore_systemctl(container)
                 retry_start_sync_job = expect(
-                    f"/api/v1/nodes/{node_id}/sync",
+                    f"/api/v2/nodes/{node_id}/sync",
                     "POST",
                     {"expected_revision": node_revision},
                 )["job_id"]
@@ -955,16 +956,16 @@ def main():
                     "--reject-with", "tcp-reset",
                 ])
                 install_systemctl_restart_failpoint(temp, container)
-                changed_config = expect(f"/api/v1/nodes/{node_id}")["config"]
+                changed_config = expect(f"/api/v2/nodes/{node_id}")["config"]
                 changed_config["ignoreClientBandwidth"] = True
                 failed_update = expect(
-                    f"/api/v1/nodes/{node_id}",
+                    f"/api/v2/nodes/{node_id}",
                     "PATCH",
                     {"expected_revision": node_revision, "config": changed_config},
                 )
                 node_revision = failed_update["revision"]
                 rollback_job = next(
-                    job for job in expect("/api/v1/jobs")
+                    job for job in expect("/api/v2/jobs")
                     if job.get("node_id") == node_id
                     and job.get("kind") == "sync"
                     and job.get("target_revision") == node_revision
@@ -980,9 +981,9 @@ def main():
                         "forced service failure did not produce rollback_failed: "
                         + str(rollback_failure)
                         + "; node state: "
-                        + str(expect(f"/api/v1/nodes/{node_id}").get("state"))
+                        + str(expect(f"/api/v2/nodes/{node_id}").get("state"))
                     )
-                rollback_state = expect(f"/api/v1/nodes/{node_id}")
+                rollback_state = expect(f"/api/v2/nodes/{node_id}")
                 if rollback_state["state"] != "rollback_failed":
                     raise RuntimeError("node state did not record the failed rollback")
 
@@ -995,7 +996,7 @@ def main():
                 run(["docker", "exec", container, "systemctl", "reset-failed", "hysteriax.service"], check=False)
                 run(["docker", "exec", container, "systemctl", "restart", "hysteriax.service"])
                 retry_sync_job = expect(
-                    f"/api/v1/nodes/{node_id}/sync",
+                    f"/api/v2/nodes/{node_id}/sync",
                     "POST",
                     {"expected_revision": node_revision},
                 )["job_id"]
@@ -1005,11 +1006,11 @@ def main():
                         "explicit sync did not recover after rollback failure: "
                         + str(retry_sync)
                         + "; node state: "
-                        + str(expect(f"/api/v1/nodes/{node_id}").get("state"))
+                        + str(expect(f"/api/v2/nodes/{node_id}").get("state"))
                     )
                 print("Forced health-check and rollback-restart failure was recorded; sync recovered after removing the injected failure.")
 
-                usage_path = f"/api/v1/users/{user_id}/usage"
+                usage_path = f"/api/v2/users/{user_id}/usage"
                 usage_before = None
                 for _ in range(40):
                     usage_before = expect(usage_path)["usage_bytes"]
@@ -1023,7 +1024,7 @@ def main():
                 outage_observed = False
                 for _ in range(40):
                     usage_status = expect(usage_path)
-                    node_status = expect(f"/api/v1/nodes/{node_id}")
+                    node_status = expect(f"/api/v2/nodes/{node_id}")
                     if (
                         usage_status["data_freshness"]["open_gaps"] > 0
                         and node_status["state"] == "unreachable"
@@ -1075,7 +1076,7 @@ def main():
                 usage_recovered = None
                 for _ in range(60):
                     usage_recovered = expect(usage_path)
-                    node_status = expect(f"/api/v1/nodes/{node_id}")
+                    node_status = expect(f"/api/v2/nodes/{node_id}")
                     if (
                         usage_recovered["usage_bytes"] > usage_before
                         and usage_recovered["data_freshness"]["open_gaps"] == 0
@@ -1217,9 +1218,9 @@ def main():
                 else:
                     raise RuntimeError("continuous proxy traffic was not sampled from both online clients")
 
-                current_user = expect(f"/api/v1/users/{user_id}")
+                current_user = expect(f"/api/v2/users/{user_id}")
                 disabled_user = expect(
-                    f"/api/v1/users/{user_id}",
+                    f"/api/v2/users/{user_id}",
                     "PATCH",
                     {"expected_revision": current_user["revision"], "enabled": False},
                 )
@@ -1234,7 +1235,7 @@ def main():
                 if auth_status != 200 or json.loads(auth_body).get("ok") is not False:
                     raise RuntimeError("disabled-user authentication was not denied before kick")
                 kick_job = next(
-                    job for job in expect("/api/v1/jobs")
+                    job for job in expect("/api/v2/jobs")
                     if job.get("kind") == "kick" and job.get("node_id") == node_id
                 )
                 kicked = wait_job(kick_job["id"], timeout=90)
@@ -1275,10 +1276,10 @@ def main():
                 peer_client = None
                 peer_client_log_file = None
 
-                current_user = expect(f"/api/v1/users/{user_id}")
+                current_user = expect(f"/api/v2/users/{user_id}")
                 expires_at = datetime.fromtimestamp(time.time() + 45, timezone.utc)
                 reenabled_user = expect(
-                    f"/api/v1/users/{user_id}",
+                    f"/api/v2/users/{user_id}",
                     "PATCH",
                     {
                         "expected_revision": current_user["revision"],
@@ -1357,7 +1358,7 @@ def main():
                 else:
                     raise RuntimeError("continuous traffic did not start for both expiry-probe clients")
 
-                prior_expiry_jobs = {job["id"] for job in expect("/api/v1/jobs")}
+                prior_expiry_jobs = {job["id"] for job in expect("/api/v2/jobs")}
                 expiry_deadline = expires_at.timestamp() + 35
                 expiry_kick_job = None
                 while time.time() < expiry_deadline:
@@ -1371,7 +1372,7 @@ def main():
                     if auth_denied:
                         expiry_kick_job = next(
                             (
-                                job for job in expect("/api/v1/jobs")
+                                job for job in expect("/api/v2/jobs")
                                 if job.get("id") not in prior_expiry_jobs
                                 and job.get("kind") == "kick"
                                 and job.get("node_id") == node_id
@@ -1422,14 +1423,14 @@ def main():
                 peer_client_log_file = None
 
                 quota_user = expect(
-                    "/api/v1/users", "POST", {"name": "Active over-quota revocation probe"}, (201,)
+                    "/api/v2/users", "POST", {"name": "Active over-quota revocation probe"}, (201,)
                 )
                 quota_user_id = quota_user["id"]
                 grant = grant_group(expect, quota_user_id, [node_id])
                 quota_credential = next(item["hy2_credential"] for item in grant["created_credentials"] if item["node_id"] == node_id)
                 secrets_to_scrub.append(quota_credential)
                 quota_subscription = expect(
-                    f"/api/v1/users/{quota_user_id}/subscription",
+                    f"/api/v2/users/{quota_user_id}/subscription",
                     "POST",
                     {"expected_revision": 2},
                 )
@@ -1513,10 +1514,10 @@ def main():
                 else:
                     raise RuntimeError("continuous traffic did not start for both over-quota clients")
 
-                prior_jobs = {job["id"] for job in expect("/api/v1/jobs")}
-                quota_user_state = expect(f"/api/v1/users/{quota_user_id}")
+                prior_jobs = {job["id"] for job in expect("/api/v2/jobs")}
+                quota_user_state = expect(f"/api/v2/users/{quota_user_id}")
                 limited_user = expect(
-                    f"/api/v1/users/{quota_user_id}",
+                    f"/api/v2/users/{quota_user_id}",
                     "PATCH",
                     {
                         "expected_revision": quota_user_state["revision"],
@@ -1534,7 +1535,7 @@ def main():
                 if auth_status != 200 or json.loads(auth_body).get("ok") is not False:
                     raise RuntimeError("over-quota authentication was not denied before kick")
                 quota_kick_job = next(
-                    job for job in expect("/api/v1/jobs")
+                    job for job in expect("/api/v2/jobs")
                     if job.get("id") not in prior_jobs
                     and job.get("kind") == "kick"
                     and job.get("node_id") == node_id
@@ -1577,14 +1578,14 @@ def main():
                 peer_client = None
                 peer_client_log_file = None
 
-                quota_state = expect(f"/api/v1/users/{quota_user_id}")
+                quota_state = expect(f"/api/v2/users/{quota_user_id}")
                 quota_cleared = expect(
-                    f"/api/v1/users/{quota_user_id}",
+                    f"/api/v2/users/{quota_user_id}",
                     "PATCH",
                     {"expected_revision": quota_state["revision"], "quota_bytes": None},
                 )
                 quota_reset = expect(
-                    f"/api/v1/users/{quota_user_id}/quota/reset",
+                    f"/api/v2/users/{quota_user_id}/quota/reset",
                     "POST",
                     {"expected_revision": quota_cleared["revision"]},
                 )
@@ -1649,10 +1650,10 @@ def main():
                 else:
                     raise RuntimeError("continuous proxy traffic did not start for both rotation clients")
 
-                prior_rotation_jobs = {job["id"] for job in expect("/api/v1/jobs")}
-                credentials_revision = expect(f"/api/v1/users/{quota_user_id}")["revision"]
+                prior_rotation_jobs = {job["id"] for job in expect("/api/v2/jobs")}
+                credentials_revision = expect(f"/api/v2/users/{quota_user_id}")["revision"]
                 rotated = expect(
-                    f"/api/v1/users/{quota_user_id}/credentials/rotate",
+                    f"/api/v2/users/{quota_user_id}/credentials/rotate",
                     "POST",
                     {"expected_revision": credentials_revision},
                 )
@@ -1682,7 +1683,7 @@ def main():
                 ):
                     raise RuntimeError("credential rotation did not reject the old password and accept the replacement")
                 rotation_kick_job = next(
-                    job for job in expect("/api/v1/jobs")
+                    job for job in expect("/api/v2/jobs")
                     if job.get("id") not in prior_rotation_jobs
                     and job.get("kind") == "kick"
                     and job.get("node_id") == node_id
@@ -1731,12 +1732,12 @@ def main():
 
                 # Exercise managed maintenance and consecutive CA generations through
                 # real workers/SSH and fixed Hysteria traffic, independently of SQL fixtures.
-                fresh = expect("/api/v1/users", "POST", {"name":"Managed CA rotation traffic"}, (201,))
+                fresh = expect("/api/v2/users", "POST", {"name":"Managed CA rotation traffic"}, (201,))
                 fresh_id = fresh["id"]
                 fresh_grant = grant_group(expect, fresh_id, [node_id])
                 fresh_auth = next(item["hy2_credential"] for item in fresh_grant["created_credentials"] if item["node_id"] == node_id)
                 secrets_to_scrub.append(fresh_auth)
-                fresh_sub = expect(f"/api/v1/users/{fresh_id}/subscription", "POST", {"expected_revision":2})["token"]
+                fresh_sub = expect(f"/api/v2/users/{fresh_id}/subscription", "POST", {"expected_revision":2})["token"]
                 secrets_to_scrub.append(fresh_sub)
                 def fresh_material(label):
                     status, body = request(base, f"/sub/{fresh_sub}?format=mihomo&platform=linux")
@@ -1766,14 +1767,14 @@ def main():
                         if client.poll() is None: client.terminate(); client.wait(timeout=5)
                         client_log_file.close(); client=None; client_log_file=None
                 old_cert, old_key, old_material = fresh_material("before-renewal")
-                fresh_detail = expect(f"/api/v1/users/{fresh_id}")
+                fresh_detail = expect(f"/api/v2/users/{fresh_id}")
                 fresh_revision = fresh_detail["revision"]
                 identity = next(i for i in fresh_detail["managed_certificates"] if i["ca_credential_id"]==ca_id)
-                expect(f"/api/v1/users/{fresh_id}/managed-certificates/reissue","POST",{"ca_credential_id":ca_id,"expected_revisions":{ca_id:identity["revision"]},"idempotency_key":"live-reissue-"+suffix})
+                expect(f"/api/v2/users/{fresh_id}/managed-certificates/reissue","POST",{"ca_credential_id":ca_id,"expected_revisions":{ca_id:identity["revision"]},"idempotency_key":"live-reissue-"+suffix})
                 renewed_cert, renewed_key, renewed = fresh_material("after-renewal")
                 if old_material==renewed or old_material[1]==renewed[1]: raise RuntimeError("managed reissue reused the old private key")
-                if expect(f"/api/v1/users/{fresh_id}")["revision"]!=fresh_revision: raise RuntimeError("ordinary reissue changed business user revision")
-                if any(j["kind"]=="kick" and (j.get("payload") or {}).get("user_id")==fresh_id for j in expect("/api/v1/jobs")):
+                if expect(f"/api/v2/users/{fresh_id}")["revision"]!=fresh_revision: raise RuntimeError("ordinary reissue changed business user revision")
+                if any(j["kind"]=="kick" and (j.get("payload") or {}).get("user_id")==fresh_id for j in expect("/api/v2/jobs")):
                     raise RuntimeError("ordinary reissue queued a disconnect")
                 transfer_managed(old_cert,old_key,"renewal-old-still-valid")
                 transfer_managed(renewed_cert,renewed_key,"renewal-current")
@@ -1781,11 +1782,11 @@ def main():
                     next_cert, next_key = temp / f"ca-{generation}.pem", temp / f"ca-{generation}-key.pem"
                     run(["openssl","req","-x509","-newkey","ec","-pkeyopt","ec_paramgen_curve:P-256","-nodes","-keyout",str(next_key),"-out",str(next_cert),"-days","365","-subj",f"/CN=Live managed issuer {generation}","-addext","basicConstraints=critical,CA:TRUE","-addext","keyUsage=critical,keyCertSign,cRLSign"])
                     secrets_to_scrub.append(next_key.read_text())
-                    receipt = expect(f"/api/v1/credentials/{ca_id}/ca-versions","POST",{"expected_revision":generation-1,"certificate":next_cert.read_text(),"private_key":next_key.read_text(),"idempotency_key":f"live-ca-{suffix}-{generation}"},(202,))
+                    receipt = expect(f"/api/v2/credentials/{ca_id}/ca-versions","POST",{"expected_revision":generation-1,"certificate":next_cert.read_text(),"private_key":next_key.read_text(),"idempotency_key":f"live-ca-{suffix}-{generation}"},(202,))
                     deadline = time.monotonic()+300
                     previous_phase = None
                     while time.monotonic()<deadline:
-                        batch = expect(f"/api/v1/credential-batches/{receipt['batch_id']}")
+                        batch = expect(f"/api/v2/credential-batches/{receipt['batch_id']}")
                         phase = batch["ca_rotation"]["phase"]
                         if phase != previous_phase:
                             print(f"CA generation {generation}: {phase}",flush=True)
@@ -1814,13 +1815,13 @@ def main():
                 transfer_managed(old_cert,old_key,"old-generation-after-two-publications")
                 # Explicit off/on round-trip changes subscriptions only after a successful deployment.
                 for mode in ("off","managed"):
-                    latest = expect(f"/api/v1/nodes/{node_id}")
+                    latest = expect(f"/api/v2/nodes/{node_id}")
                     options = latest["config"]
                     if "clientCA" in options.get("tls",{}): raise RuntimeError("public config exposed generated clientCA")
                     options["mtls"] = {"mode":"off"} if mode=="off" else {"mode":"managed","ca_credential_id":ca_id,"ca_credential_version":3}
-                    update = expect(f"/api/v1/nodes/{node_id}","PATCH",{"expected_revision":latest["revision"],"config":options})
+                    update = expect(f"/api/v2/nodes/{node_id}","PATCH",{"expected_revision":latest["revision"],"config":options})
                     node_revision = update["revision"]
-                    job = next(j for j in expect("/api/v1/jobs") if j.get("node_id")==node_id and j.get("target_revision")==node_revision and j["kind"]=="sync")
+                    job = next(j for j in expect("/api/v2/jobs") if j.get("node_id")==node_id and j.get("target_revision")==node_revision and j["kind"]=="sync")
                     if wait_job(job["id"])["job"]["status"]!="succeeded": raise RuntimeError("managed off/on deployment failed")
                     status, body = request(base,f"/sub/{fresh_sub}?format=mihomo&platform=linux")
                     proxy = yaml.safe_load(body)["proxies"][0]
@@ -1829,7 +1830,7 @@ def main():
                 print("Managed CA maintenance passed: zero-user deployment, per-user subscription PEM, ordinary reissue without kicks, two consecutive publications, delayed trust retention and explicit off/on.",flush=True)
 
                 deletion = expect(
-                    f"/api/v1/nodes/{node_id}?expected_revision={node_revision}",
+                    f"/api/v2/nodes/{node_id}?expected_revision={node_revision}",
                     "DELETE",
                     statuses=(202,),
                 )

@@ -4,6 +4,7 @@
 Requires TEST_DATABASE_URL, scripts/requirements-test.txt, Docker and the
 hysteriax-package-test:local systemd image. Existing nodes are never modified.
 """
+from management_test_http import start_test_server
 import base64
 import argparse
 import http.server
@@ -77,25 +78,25 @@ def main():
             base = f"http://127.0.0.1:{api_port}"
             environment = os.environ | {"DATABASE_URL": database.url, "HYSTERIAX_LISTEN_ADDR": f"0.0.0.0:{api_port}", "HYSTERIAX_PUBLIC_URL": f"http://{callback}:{api_port}", "HYSTERIAX_ADMIN_TOKEN": admin, "HYSTERIAX_MASTER_KEY": base64.b64encode(secrets.token_bytes(32)).decode().rstrip("="), "HYSTERIAX_PROBE_BINARY": str(binary), "RUST_LOG": "warn"}
             with open(temp / "server.log", "wb") as log:
-                service = subprocess.Popen([str(ROOT / "target/debug/hysteriax-server")], env=environment, stdout=log, stderr=log)
+                service = start_test_server([str(ROOT / "target/debug/hysteriax-server")], env=environment, stdout=log, stderr=log)
                 def api(path, method="GET", payload=None, expected=(200, 201, 202)):
                     status, body = matrix.request(base, path, admin, method, payload)
                     if status not in expected:
                         raise RuntimeError(f"{method} {path}: HTTP {status}: {body[:200]!r}")
                     return json.loads(body) if body else None
                 wait_for(lambda: matrix.request(base, "/readyz")[0] == 200, "service readiness", 30)
-                assert matrix.request(base, "/api/v1/overview")[0] == 401
-                created = api("/api/v1/nodes", "POST", {"name": "Overview live node", "ssh_host": "127.0.0.1", "ssh_port": ssh_port, "ssh_username": "root", "ssh_auth_type": "private_key", "ssh_secret": key.read_text(), "public_host": "127.0.0.1", "public_port": udp_port, "listen_addr": ":443", "tls_skip_verify": True, "proxy_probe_url": "" if args.restart_only else target_url})
+                assert matrix.request(base, "/api/v2/overview")[0] == 401
+                created = api("/api/v2/nodes", "POST", {"name": "Overview live node", "ssh_host": "127.0.0.1", "ssh_port": ssh_port, "ssh_username": "root", "ssh_auth_type": "private_key", "ssh_secret": key.read_text(), "public_host": "127.0.0.1", "public_port": udp_port, "listen_addr": ":443", "tls_skip_verify": True, "proxy_probe_url": "" if args.restart_only else target_url})
                 node = created["node"]["id"]
-                path = f"/api/v1/nodes/{node}"
+                path = f"/api/v2/nodes/{node}"
                 def detail(): return api(path)
                 def job(job_id, allow_confirmation=False):
-                    result = wait_for(lambda: (v if (v := api(f"/api/v1/jobs/{job_id}"))["job"]["status"] in ("succeeded", "failed", "rolled_back") + (("waiting_confirmation",) if allow_confirmation else ()) else None), "job completion", 300)
+                    result = wait_for(lambda: (v if (v := api(f"/api/v2/jobs/{job_id}"))["job"]["status"] in ("succeeded", "failed", "rolled_back") + (("waiting_confirmation",) if allow_confirmation else ()) else None), "job completion", 300)
                     if result["job"]["status"] != "succeeded" and not (allow_confirmation and result["job"]["status"] == "waiting_confirmation"): raise RuntimeError(result["job"].get("error_message"))
                     return result
                 ssh_job = api(path + "/ssh-test", "POST", {"expected_revision": 1})["job_id"]
                 fingerprint = job(ssh_job, allow_confirmation=True)["result"]["result"]["fingerprint"]
-                api(f"/api/v1/jobs/{ssh_job}/confirm-fingerprint", "POST", {"expected_revision": 1, "fingerprint": fingerprint})
+                api(f"/api/v2/jobs/{ssh_job}/confirm-fingerprint", "POST", {"expected_revision": 1, "fingerprint": fingerprint})
                 job(ssh_job)
                 cert, cert_key = temp / "cert.pem", temp / "key.pem"
                 matrix.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", str(cert_key), "-out", str(cert), "-days", "2", "-subj", "/CN=overview.test"])
@@ -103,34 +104,34 @@ def main():
                 api(path, "PATCH", {"expected_revision": detail()["revision"], "config": {"tls": {"cert": refs[0], "key": refs[1]}}})
                 configured = wait_for(lambda: (value if (value := detail())["deployed_revision"] == value["revision"] and value["state"] == "deployed" else None), "automatic configuration deployment", 300)
                 print("Disposable real Hysteria node deployed", flush=True)
-                def monitor(): return api("/api/v1/overview/nodes")["items"][0]
+                def monitor(): return api("/api/v2/overview/nodes")["items"][0]
                 healthy = wait_for(lambda: (v if (v := monitor())["probe_status"] == "healthy" else None), "two successful public probes", 160)
                 assert healthy["inlet_status"] == "ok"
                 assert healthy["external_status"] == (None if args.restart_only else "ok")
                 print("Initial public proxy probes healthy", flush=True)
                 assert healthy["latency_ms"] is not None
-                user = api("/api/v1/users", "POST", {"name": "Overview real user", "enabled": True})["id"]
+                user = api("/api/v2/users", "POST", {"name": "Overview real user", "enabled": True})["id"]
                 credential = grant_group(api,user,[node])["created_credentials"][0]["hy2_credential"]
                 client_port = matrix.free_port()
                 client_config = temp / "user.yaml"
                 client_config.write_text(f"server: 127.0.0.1:{udp_port}\nauth: {credential}\ntls:\n  insecure: true\nsocks5:\n  listen: 127.0.0.1:{client_port}\n")
                 with open(temp / "client.log", "wb") as client_log:
                     client = subprocess.Popen([str(binary), "--disable-update-check", "client", "-c", str(client_config)], stdout=client_log, stderr=client_log)
-                    wait_for(lambda: api("/api/v1/overview")["online_users"] == 1, "real user online count", 45)
+                    wait_for(lambda: api("/api/v2/overview")["online_users"] == 1, "real user online count", 45)
                     matrix.run(["curl", "--noproxy", "", "--fail", "--silent", "--socks5-hostname", f"127.0.0.1:{client_port}", target_url])
-                    assert api("/api/v1/overview")["connections"] == 1
-                    wait_for(lambda: api(f"/api/v1/users/{user}")["usage_bytes"] > 0, "real user traffic accounting", 45)
+                    assert api("/api/v2/overview")["connections"] == 1
+                    wait_for(lambda: api(f"/api/v2/users/{user}")["usage_bytes"] > 0, "real user traffic accounting", 45)
                     if not args.restart_only:
                         Target.healthy = False
                         failed = wait_for(lambda: (v if (v := monitor())["probe_status"] == "failed" else None), "three failed external probes", 210)
                         assert failed["inlet_status"] == "ok" and failed["external_status"] == "failed"
-                        assert any(i["kind"] == "proxy_probe" for i in api("/api/v1/overview")["issues"])
+                        assert any(i["kind"] == "proxy_probe" for i in api("/api/v2/overview")["issues"])
                         Target.healthy = True
                         wait_for(lambda: monitor()["probe_status"] == "healthy", "two successful recovery probes", 150)
                         print("Public entrypoint, external target outage, hysteresis and recovery passed", flush=True)
                     for source in ["users", "network"]:
                         for span in ["24h", "7d", "30d"]:
-                            history = api(f"/api/v1/overview/history?range={span}&timezone=Asia%2FShanghai&source={source}")
+                            history = api(f"/api/v2/overview/history?range={span}&timezone=Asia%2FShanghai&source={source}")
                             assert history["buckets"] and any(b["probe_attempts"] for b in history["buckets"])
                     with database.connect() as connection:
                         assert connection.execute("SELECT count(*) FROM traffic_records WHERE user_id LIKE 'monitor-%'").fetchone()[0] == 0

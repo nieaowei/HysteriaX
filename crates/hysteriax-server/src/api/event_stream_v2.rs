@@ -136,7 +136,6 @@ async fn batch(
             events.push(PersistedEvent {
                 id: sequence,
                 source_id: source_id.expect("checked source event"),
-                job_id,
                 kind: row.get("event_type"),
                 data: row.get::<Value, _>("payload_json").to_string(),
             });

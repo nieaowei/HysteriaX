@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Check two-node authentication isolation and per-node credential rotation."""
+from management_test_http import management_request, start_test_server
 
 import base64
 from concurrent.futures import ThreadPoolExecutor
@@ -38,7 +39,7 @@ def raw_request(base, path, token=None, method="GET", payload=None):
         headers["Authorization"] = f"Bearer {token}"
     if body is not None:
         headers["Content-Type"] = "application/json"
-    req = urllib.request.Request(base + path, data=body, headers=headers, method=method)
+    req = management_request(base + path, data=body, headers=headers, method=method)
     try:
         with urllib.request.urlopen(req, timeout=10) as response:
             return response.status, response.read()
@@ -71,7 +72,7 @@ def main():
         )
 
         with open(temp / "server.log", "wb") as log:
-            server = subprocess.Popen(
+            server = start_test_server(
                 [str(SERVER)], cwd=ROOT, env=environment, stdout=log, stderr=log
             )
 
@@ -83,7 +84,7 @@ def main():
 
             def create_node(name, config=None):
                 result = expect(
-                    "/api/v1/nodes",
+                    "/api/v2/nodes",
                     "POST",
                     {
                         "name": name,
@@ -103,7 +104,7 @@ def main():
 
             def upload_resource(node_id, name, resource_kind, content):
                 return expect(
-                    f"/api/v1/nodes/{node_id}/resources",
+                    f"/api/v2/nodes/{node_id}/resources",
                     "POST",
                     {
                         "name": name,
@@ -117,10 +118,10 @@ def main():
                 payload = {"name": name}
                 if quota_bytes is not None:
                     payload["quota_bytes"] = quota_bytes
-                return expect("/api/v1/users", "POST", payload, 201)["id"]
+                return expect("/api/v2/users", "POST", payload, 201)["id"]
 
             def authorize(user_id,node_id,revision):
-                if expect(f"/api/v1/users/{user_id}")["revision"]!=revision:
+                if expect(f"/api/v2/users/{user_id}")["revision"]!=revision:
                     raise RuntimeError("authorization fixture user revision changed")
                 def group_api(path,method="GET",payload=None,statuses=(200,)):
                     return expect(path,method,payload,statuses[0])
@@ -156,7 +157,7 @@ def main():
 
                 token_label = "令牌" * 50
                 admin_token = expect(
-                    "/api/v1/admin/tokens",
+                    "/api/v2/admin/tokens",
                     "POST",
                     {"label": token_label},
                     201,
@@ -164,7 +165,7 @@ def main():
                 if admin_token["label"] != token_label or not admin_token["token"]:
                     raise RuntimeError("administrator token creation lost its Unicode label or one-time value")
                 token_list_status, token_list_body = request(
-                    base, "/api/v1/admin/tokens", admin_token["token"]
+                    base, "/api/v2/admin/tokens", admin_token["token"]
                 )
                 token_list = json.loads(token_list_body)
                 if (
@@ -175,12 +176,12 @@ def main():
                     raise RuntimeError("new administrator token could not list metadata without exposing token values")
                 revoke_status, _ = request(
                     base,
-                    f"/api/v1/admin/tokens/{admin_token['id']}",
+                    f"/api/v2/admin/tokens/{admin_token['id']}",
                     admin,
                     "DELETE",
                 )
                 revoked_status, _ = request(
-                    base, "/api/v1/version", admin_token["token"]
+                    base, "/api/v2/version", admin_token["token"]
                 )
                 if revoke_status != 204 or revoked_status != 401:
                     raise RuntimeError("administrator token revocation did not reject the revoked token")
@@ -248,7 +249,7 @@ def main():
                 }
                 valid_tls_status, _ = request(
                     base,
-                    f"/api/v1/nodes/{resource_node}",
+                    f"/api/v2/nodes/{resource_node}",
                     admin,
                     "PATCH",
                     {"expected_revision": 1, "config": valid_tls_config},
@@ -263,7 +264,7 @@ def main():
                 }
                 mismatched_tls_status, _ = request(
                     base,
-                    f"/api/v1/nodes/{resource_node}",
+                    f"/api/v2/nodes/{resource_node}",
                     admin,
                     "PATCH",
                     {"expected_revision": 2, "config": mismatched_tls_config},
@@ -271,7 +272,7 @@ def main():
                 if mismatched_tls_status != 400:
                     raise RuntimeError("a mismatched uploaded server certificate/key pair was accepted")
 
-                authority = expect("/api/v1/credentials/ca-identities","POST",{"name":"Auth isolation CA","source":"generated","idempotency_key":"auth-isolation-ca"},201)
+                authority = expect("/api/v2/credentials/ca-identities","POST",{"name":"Auth isolation CA","source":"generated","idempotency_key":"auth-isolation-ca"},201)
                 mtls_config = {
                     "tls":{"cert":f"credential://{certificate_id}/1/content","key":f"credential://{private_key_id}/1/content"},
                     "mtls":{"mode":"managed","ca_credential_id":authority["id"],"ca_credential_version":1},
@@ -281,24 +282,24 @@ def main():
                 user1=create_user("Only node one")
                 user2=create_user("Only node two",quota_bytes=250_000)
                 shared=create_user("Assigned to both nodes")
-                old_status,_=raw_request(base,f"/api/v1/users/{user1}/assignments",admin,"POST",{"expected_revision":1,"node_id":node1})
+                old_status,_=raw_request(base,f"/api/v2/users/{user1}/assignments",admin,"POST",{"expected_revision":1,"node_id":node1})
                 if old_status!=404: raise RuntimeError("retired assignment endpoint still exists")
                 credential1=authorize(user1,node1,1)
                 credential2=authorize(user2,node2,1)
                 shared1=authorize(shared,node1,1)
                 shared2=authorize(shared,node2,2)
-                before=expect(f"/api/v1/users/{shared}")
+                before=expect(f"/api/v2/users/{shared}")
                 shared_identity=before["managed_certificates"][0]["identity_id"]
-                invalid=expect(f"/api/v1/nodes/{node1}")["config"]
+                invalid=expect(f"/api/v2/nodes/{node1}")["config"]
                 invalid["tls"]["clientCA"]="/tmp/forbidden-client-ca.pem"
-                rejected,_=raw_request(base,f"/api/v1/nodes/{node1}",admin,"PATCH",{"expected_revision":1,"config":invalid})
+                rejected,_=raw_request(base,f"/api/v2/nodes/{node1}",admin,"PATCH",{"expected_revision":1,"config":invalid})
                 if rejected!=400: raise RuntimeError("public node write accepted generated clientCA")
-                enabled=expect(f"/api/v1/nodes/{node2}","PATCH",{"expected_revision":1,"config":mtls_config})
+                enabled=expect(f"/api/v2/nodes/{node2}","PATCH",{"expected_revision":1,"config":mtls_config})
                 if enabled["revision"]!=2: raise RuntimeError("managed CA binding did not save")
-                after=expect(f"/api/v1/users/{shared}")
+                after=expect(f"/api/v2/users/{shared}")
                 if after["revision"]!=3 or after["managed_certificates"][0]["identity_id"]!=shared_identity:
                     raise RuntimeError("binding another node duplicated shared identity or changed user revision")
-                if expect(f"/api/v1/users/{user2}")["revision"]!=2: raise RuntimeError("automatic client issuance changed user revision")
+                if expect(f"/api/v2/users/{user2}")["revision"]!=2: raise RuntimeError("automatic client issuance changed user revision")
                 deadline=time.monotonic()+20
                 while time.monotonic()<deadline:
                     with database.connect() as connection:
@@ -308,7 +309,7 @@ def main():
                     time.sleep(.2)
                 if count!=3 or kicks!=0: raise RuntimeError(f"automatic shared issuance has {count} versions and {kicks} kick jobs; expected 3 and 0")
 
-                usage = expect(f"/api/v1/users/{user2}/usage")
+                usage = expect(f"/api/v2/users/{user2}/usage")
                 if usage["data_freshness"]["status"] != "not_collected":
                     raise RuntimeError("un-deployed test node should report traffic as not collected")
                 pending_job_id = str(uuid.uuid4())
@@ -336,7 +337,7 @@ def main():
                             datetime.fromisoformat(future_time.replace("Z", "+00:00")),
                         ),
                     )
-                usage = expect(f"/api/v1/users/{user2}/usage")
+                usage = expect(f"/api/v2/users/{user2}/usage")
                 pending = next(
                     (item for item in usage["pending_revocations"] if item["job_id"] == pending_job_id),
                     None,
@@ -366,7 +367,7 @@ def main():
                         "UPDATE users SET usage_bytes = usage_bytes + 30 WHERE id = %s",
                         (shared,),
                     )
-                zero_usage = expect(f"/api/v1/users/{user1}/usage")
+                zero_usage = expect(f"/api/v2/users/{user1}/usage")
                 zero_node = next(
                     (item for item in zero_usage["by_node"] if item["node_id"] == node1),
                     None,
@@ -382,7 +383,7 @@ def main():
                     or zero_node["rx_bytes"] != 0
                 ):
                     raise RuntimeError("a traffic baseline with zero usage was not shown as a fresh sample")
-                shared_usage = expect(f"/api/v1/users/{shared}/usage")
+                shared_usage = expect(f"/api/v2/users/{shared}/usage")
                 node_samples = {item["node_id"]: item for item in shared_usage["by_node"]}
                 if (
                     shared_usage["data_freshness"]["status"] != "stale"
@@ -408,7 +409,7 @@ def main():
                         raise RuntimeError("authenticated identity changed across nodes")
 
                 expect(
-                    f"/api/v1/users/{user1}",
+                    f"/api/v2/users/{user1}",
                     "PATCH",
                     {"expected_revision": 2, "name": "Renamed node one user"},
                 )
@@ -418,7 +419,7 @@ def main():
                 def update_as_concurrent_client(name):
                     return request(
                         base,
-                        f"/api/v1/users/{user1}",
+                        f"/api/v2/users/{user1}",
                         admin,
                         "PATCH",
                         {"expected_revision": 3, "name": name},
@@ -433,13 +434,13 @@ def main():
                     raise RuntimeError(
                         f"simultaneous edits at one user revision returned {concurrent_statuses}, expected one 200 and one 409"
                     )
-                current_user = expect(f"/api/v1/users/{user1}")
+                current_user = expect(f"/api/v2/users/{user1}")
                 if current_user["revision"] != 4 or current_user["name"] not in ("Mac A edit", "Mac B edit"):
                     raise RuntimeError("concurrent edits did not preserve exactly one current revision")
 
                 stale_revision_status, _ = request(
                     base,
-                    f"/api/v1/users/{user1}",
+                    f"/api/v2/users/{user1}",
                     admin,
                     "PATCH",
                     {"expected_revision": 2, "name": "Stale client update"},
@@ -448,7 +449,7 @@ def main():
                     raise RuntimeError("stale user revision was not rejected with HTTP 409")
 
                 rotation = expect(
-                    f"/api/v1/users/{user1}/credentials/rotate",
+                    f"/api/v2/users/{user1}/credentials/rotate",
                     "POST",
                     {"expected_revision": 4},
                 )
@@ -459,14 +460,14 @@ def main():
                     raise RuntimeError("replacement Hysteria credential was not accepted")
 
                 user2_subscription = expect(
-                    f"/api/v1/users/{user2}/subscription",
+                    f"/api/v2/users/{user2}/subscription",
                     "POST",
                     {"expected_revision": 2},
                 )
                 future_expiry = "2099-01-01T00:00:00Z"
                 past_expiry = "2000-01-01T00:00:00Z"
                 cleared_quota = expect(
-                    f"/api/v1/users/{user2}",
+                    f"/api/v2/users/{user2}",
                     "PATCH",
                     {
                         "expected_revision": 3,
@@ -477,7 +478,7 @@ def main():
                 if cleared_quota["quota_bytes"] is not None:
                     raise RuntimeError("user edit did not clear the previous quota")
                 expect(
-                    f"/api/v1/users/{user2}",
+                    f"/api/v2/users/{user2}",
                     "PATCH",
                     {"expected_revision": 4, "expires_at": past_expiry},
                 )
@@ -492,7 +493,7 @@ def main():
                     raise RuntimeError("expired user subscription did not return HTTP 403")
 
                 expect(
-                    f"/api/v1/users/{user2}",
+                    f"/api/v2/users/{user2}",
                     "PATCH",
                     {
                         "expected_revision": 5,

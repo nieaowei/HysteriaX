@@ -4,14 +4,9 @@ use sqlx::{PgPool, Row};
 use std::time::Duration;
 /// Version-independent policy path; cache keys retain the complete wire URI.
 pub fn management_path(path: &str) -> &str {
-    for prefix in ["/api/v1", "/api/v2"] {
-        if let Some(suffix) = path.strip_prefix(prefix)
-            && (suffix.is_empty() || suffix.starts_with('/'))
-        {
-            return suffix;
-        }
-    }
-    path
+    path.strip_prefix("/api/v2")
+        .filter(|suffix| suffix.is_empty() || suffix.starts_with('/'))
+        .unwrap_or(path)
 }
 
 pub async fn version(pool: &PgPool, domains: &[&str]) -> Result<String, ApiError> {

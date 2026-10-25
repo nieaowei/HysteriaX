@@ -179,7 +179,7 @@ mod tests {
             (entered.clone(), release.clone(), calls.clone());
         let app = Router::new()
             .route(
-                "/api/v1/users/{id}",
+                "/api/v2/users/{id}",
                 get(
                     move |State(state): State<crate::state::AppState>, Path(id): Path<String>| {
                         let (entered, release, calls) = (
@@ -207,7 +207,7 @@ mod tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        let url = format!("http://{address}/api/v1/users/user");
+        let url = format!("http://{address}/api/v2/users/user");
         let first_url = url.clone();
         let first = tokio::spawn(async move {
             reqwest::get(first_url)
@@ -268,7 +268,7 @@ mod tests {
         if let Some(redis) = backend {
             let (revision, _) = crate::cache_domains::policy(
                 &state,
-                "/api/v1/users/user",
+                "/api/v2/users/user",
                 &[],
                 std::time::Duration::from_secs(5),
             )
@@ -276,7 +276,7 @@ mod tests {
             .unwrap();
             let key = redis.key(
                 "responses",
-                &format!("test|{revision}|/api/v1/users/user|[]"),
+                &format!("test|{revision}|/api/v2/users/user|[]"),
             );
             let exists: Option<i64> = redis
                 .command(redis::cmd("EXISTS").arg(key).to_owned())

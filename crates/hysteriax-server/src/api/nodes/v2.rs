@@ -219,7 +219,11 @@ pub(crate) async fn create(
         Box::pin(async move {
             match super::insert_node_on(tx,&app,&creation).await? {
                 super::NodeCreation::Created(value)=>Ok(StoredResponse::json(StatusCode::CREATED,value)),
-                super::NodeCreation::Existing(_)=>Err(ApiError::conflict("DNS allocation has an existing operation without this management receipt; inspect its outcome before retrying")),
+                super::NodeCreation::Existing(previous)=>{
+                    // A DNS receipt alone cannot authorize a management replay.
+                    drop(previous);
+                    Err(ApiError::conflict("DNS allocation has an existing operation without this management receipt; inspect its outcome before retrying"))
+                },
             }
         })
     }).await?.into_http()

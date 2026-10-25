@@ -1,7 +1,6 @@
 use axum::{
     Json,
-    extract::{Extension, Path, Query, State},
-    http::StatusCode,
+    extract::{Path, Query, State},
 };
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
@@ -12,7 +11,7 @@ use uuid::Uuid;
 use super::AdminActor;
 #[cfg(test)]
 use crate::credentials as vault;
-use crate::{db, error::ApiError, state::AppState};
+use crate::{error::ApiError, state::AppState};
 
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -331,51 +330,6 @@ pub(super) use v2::{
     retry as retry_v2,
 };
 
-pub async fn create(
-    State(state): State<AppState>,
-    Extension(actor): Extension<AdminActor>,
-    Json(input): Json<CreateCredential>,
-) -> Result<(StatusCode, Json<Value>), ApiError> {
-    let prepared = preparation::Creation::new(&state.secrets, input)?;
-    let response = db::serializable(&state.pool, move |tx| {
-        let (prepared, actor) = (prepared.clone(), actor.clone());
-        Box::pin(async move { prepared.commit_on(tx, &actor).await })
-    })
-    .await?;
-    Ok((StatusCode::CREATED, Json(response)))
-}
-
-pub async fn patch(
-    State(state): State<AppState>,
-    Extension(actor): Extension<AdminActor>,
-    Path(id): Path<String>,
-    Json(input): Json<PatchCredential>,
-) -> Result<Json<Value>, ApiError> {
-    let response = db::serializable(&state.pool, move |tx| {
-        let (id, input, actor) = (id.clone(), input.clone(), actor.clone());
-        Box::pin(async move { mutations::patch_on(tx, id, input, actor).await })
-    })
-    .await?;
-    Ok(Json(response))
-}
-
-pub async fn publish(
-    State(state): State<AppState>,
-    Extension(actor): Extension<AdminActor>,
-    Path(id): Path<String>,
-    Json(input): Json<PublishVersion>,
-) -> Result<(StatusCode, Json<Value>), ApiError> {
-    let prepared = preparation::Publication::new(&state, &id, &input).await?;
-    let response = db::serializable(&state.pool, move |tx| {
-        let (id, prepared, actor) = (id.clone(), prepared.clone(), actor.clone());
-        Box::pin(async move {
-            mutations::publish_on(tx, id, input.expected_revision, prepared, actor).await
-        })
-    })
-    .await?;
-    Ok((StatusCode::ACCEPTED, Json(response)))
-}
-
 pub async fn references(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -472,23 +426,6 @@ async fn read_references_on(
     Ok(out)
 }
 
-pub async fn delete(
-    State(state): State<AppState>,
-    Extension(actor): Extension<AdminActor>,
-    Path(id): Path<String>,
-    Query(query): Query<super::nodes::RevisionQuery>,
-) -> Result<StatusCode, ApiError> {
-    let expected = query
-        .expected_revision
-        .ok_or_else(|| ApiError::bad_request("expected_revision is required"))?;
-    let secrets = state.secrets.clone();
-    db::serializable(&state.pool, move |tx| {
-        let (id, actor, secrets) = (id.clone(), actor.clone(), secrets.clone());
-        Box::pin(async move { mutations::delete_on(tx, id, expected, secrets, actor).await })
-    })
-    .await
-}
-
 async fn batch_values_on(
     connection: &mut sqlx::PgConnection,
     ids: &[String],
@@ -553,19 +490,6 @@ pub async fn batch(
     Ok(Json(value))
 }
 
-pub async fn retry(
-    State(state): State<AppState>,
-    Extension(actor): Extension<AdminActor>,
-    Path(id): Path<String>,
-) -> Result<(StatusCode, Json<Value>), ApiError> {
-    let response = db::serializable(&state.pool, move |tx| {
-        let (id, actor) = (id.clone(), actor.clone());
-        Box::pin(async move { mutations::retry_on(tx, id, actor).await })
-    })
-    .await?;
-    Ok((StatusCode::ACCEPTED, Json(response)))
-}
-
 pub(super) async fn record(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     actor: &AdminActor,
@@ -579,3 +503,17 @@ pub(super) async fn record(
 
 #[cfg(test)]
 mod transaction_tests;
+
+// Direct domain fixtures are test-only; production writes use protocol-2 handlers.
+#[cfg(test)]
+#[path = "credentials_test_support.rs"]
+mod test_support;
+#[cfg(test)]
+pub(crate) use test_support::*;
+
+#[cfg(test)]
+use crate::db;
+#[cfg(test)]
+use axum::Extension;
+#[cfg(test)]
+use axum::http::StatusCode;

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Run the macOS UI workflow against the management service in the local .env."""
+from management_test_http import management_request
 
 import json
 import os
@@ -28,7 +29,7 @@ def read_env():
 
 
 def request(base, token, path, method="GET"):
-    req = urllib.request.Request(
+    req = management_request(
         base + path,
         headers={"Authorization": f"Bearer {token}"},
         method=method,
@@ -63,7 +64,7 @@ def request_collection(base, token, path):
 
 
 def cleanup_test_user(base, token, name):
-    status, payload = request_collection(base, token, "/api/v1/users")
+    status, payload = request_collection(base, token, "/api/v2/users")
     if status != 200:
         print(f"UI_TEST_CLEANUP=unable to list users; HTTP {status}")
         return False
@@ -73,7 +74,7 @@ def cleanup_test_user(base, token, name):
         status, _ = request(
             base,
             token,
-            f"/api/v1/users/{user['id']}?expected_revision={user['revision']}",
+            f"/api/v2/users/{user['id']}?expected_revision={user['revision']}",
             method="DELETE",
         )
         if status != 204:
@@ -97,7 +98,7 @@ def main():
     if status != 200:
         raise SystemExit(f"Management service readiness failed: HTTP {status}")
 
-    status, nodes = request_collection(base, token, "/api/v1/nodes")
+    status, nodes = request_collection(base, token, "/api/v2/nodes")
     if status != 200:
         raise SystemExit(f"Could not read nodes: HTTP {status}")
     allowed_hosts = set(filter(None, os.environ.get("HYSTERIAX_UI_NODE_HOSTS", "").split(",")))
@@ -238,11 +239,11 @@ schemes:
                 print(line.replace(token, "[redacted]"))
 
         cleanup_ok = cleanup_test_user(base, token, user_name)
-        status, entries = request_collection(base, token, "/api/v1/credentials")
+        status, entries = request_collection(base, token, "/api/v2/credentials")
         if status == 200:
             for entry in entries:
                 if entry.get("name") in {"HX UI Credential " + user_name, "HX UI Credential Inline " + user_name}:
-                    status, _ = request(base, token, f"/api/v1/credentials/{entry['id']}?expected_revision={entry['revision']}", method="DELETE")
+                    status, _ = request(base, token, f"/api/v2/credentials/{entry['id']}?expected_revision={entry['revision']}", method="DELETE")
                     cleanup_ok = cleanup_ok and status == 204
             print("UI_CREDENTIAL_CLEANUP=" + ("passed" if cleanup_ok else "failed"))
         if result.returncode:

@@ -4,7 +4,7 @@
 
 The Xcode release project builds a Universal app with `arm64` and `x86_64` slices and a macOS 26.0 deployment target. The separate [SwiftPM manifest](../apps/macos/Package.swift) declares Swift tools 6.4 and macOS 27; use the Xcode release workflow for the Universal distribution. [Release verification](release.md) checks executable slices and deployment versions.
 
-The current server and client use management protocol 2 and API 2.0.0 at `/api/v2`. Earlier management clients receive 426 and must upgrade. Existing subscription and node-authentication URLs retain their contracts. See [upgrade instructions](installation.md#management-protocol-2-upgrade-0034).
+The current server and client use management protocol 2 and API 2.0.0 at `/api/v2`. Use the matching protocol 2 client. Existing subscription and node-authentication URLs retain their contracts. See [upgrade instructions](installation.md#management-protocol-2-upgrade-0034).
 
 ## Pinned node and subscription runtimes
 

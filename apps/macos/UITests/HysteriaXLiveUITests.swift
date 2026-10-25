@@ -175,7 +175,7 @@ final class HysteriaXLiveUITests: XCTestCase {
         identified(app, "credential.editor.save").click()
         XCTAssertTrue(identified(app, "credential.editor.save").waitForNonExistence(timeout: 30), "Credential editor should close after its write and refresh complete.")
         try await Task.sleep(for: .seconds(2))
-        let (credentialStatus, credentialData) = try await request(base: credentials.serviceAddress, token: credentials.adminToken, path: "/api/v1/credentials")
+        let (credentialStatus, credentialData) = try await request(base: credentials.serviceAddress, token: credentials.adminToken, path: "/api/v2/credentials")
         XCTAssertEqual(credentialStatus, 200)
         let credentialList = try XCTUnwrap(JSONSerialization.jsonObject(with: credentialData) as? [[String: Any]])
         let createdCredential = try XCTUnwrap(credentialList.first { $0["name"] as? String == credentialName })
@@ -252,7 +252,7 @@ final class HysteriaXLiveUITests: XCTestCase {
         let (deletedUserStatus, _) = try await request(
             base: credentials.serviceAddress,
             token: credentials.adminToken,
-            path: "/api/v1/users/\(userID)"
+            path: "/api/v2/users/\(userID)"
         )
         XCTAssertEqual(deletedUserStatus, 404)
 
@@ -346,7 +346,7 @@ final class HysteriaXLiveUITests: XCTestCase {
         let (status, data) = try await request(
             base: credentials.serviceAddress,
             token: credentials.adminToken,
-            path: "/api/v1/users"
+            path: "/api/v2/users"
         )
         XCTAssertEqual(status, 200)
         let json = try JSONSerialization.jsonObject(with: data)
@@ -362,7 +362,7 @@ final class HysteriaXLiveUITests: XCTestCase {
         let (status, data) = try await request(
             base: credentials.serviceAddress,
             token: credentials.adminToken,
-            path: "/api/v1/users/\(id)"
+            path: "/api/v2/users/\(id)"
         )
         XCTAssertEqual(status, 200)
         return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
@@ -372,7 +372,7 @@ final class HysteriaXLiveUITests: XCTestCase {
         let (status, data) = try await request(
             base: credentials.serviceAddress,
             token: credentials.adminToken,
-            path: "/api/v1/users/\(id)/subscription"
+            path: "/api/v2/users/\(id)/subscription"
         )
         XCTAssertEqual(status, 200)
         let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])

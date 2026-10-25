@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Exercise the API subscription generator and parse its output with pinned Mihomo."""
+from management_test_http import management_request, start_test_server
 
 import base64
 import json
@@ -14,7 +15,7 @@ import urllib.error
 import urllib.request
 
 from postgres_test import PostgresTestSchema
-from credential_test_fixtures import request_group
+from credential_test_fixtures import request_group, mark_fixture_nodes_deployed
 from subscription_formats_test import run as verify_formats
 
 
@@ -32,7 +33,7 @@ def raw_request(base, path, token, method="GET", payload=None):
     headers = {"Authorization": f"Bearer {token}"}
     if body is not None:
         headers["Content-Type"] = "application/json"
-    req = urllib.request.Request(base + path, data=body, headers=headers, method=method)
+    req = management_request(base + path, data=body, headers=headers, method=method)
     try:
         with urllib.request.urlopen(req, timeout=5) as response:
             return response.status, response.read()
@@ -67,7 +68,7 @@ def main():
                 "RUST_LOG": "warn",
             }
         )
-        server = subprocess.Popen(
+        server = start_test_server(
             [str(SERVER)], cwd=ROOT, env=environment,
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
@@ -85,13 +86,13 @@ def main():
             if not ready:
                 raise RuntimeError("temporary HysteriaX service did not become ready")
 
-            fixture_identity = json.loads(request(base, "/api/v1/credentials", admin, "POST", {"name":"Parser TLS","kind":"tls_identity","payload":{"certificate":(ROOT / "tests/fixtures/credentials-test.crt").read_text(),"private_key":(ROOT / "tests/fixtures/credentials-test.key").read_text()}})[1])["id"]
-            status,body=request(base,"/api/v1/credentials/ca-identities",admin,"POST",{"name":"Parser managed CA","source":"generated","idempotency_key":"parser-ca"})
+            fixture_identity = json.loads(request(base, "/api/v2/credentials", admin, "POST", {"name":"Parser TLS","kind":"tls_identity","payload":{"certificate":(ROOT / "tests/fixtures/credentials-test.crt").read_text(),"private_key":(ROOT / "tests/fixtures/credentials-test.key").read_text()}})[1])["id"]
+            status,body=request(base,"/api/v2/credentials/ca-identities",admin,"POST",{"name":"Parser managed CA","source":"generated","idempotency_key":"parser-ca"})
             if status!=201:raise RuntimeError("managed CA fixture creation failed")
             fixture_ca=json.loads(body)["id"]
             status, body = request(
                 base,
-                "/api/v1/nodes",
+                "/api/v2/nodes",
                 admin,
                 "POST",
                 {
@@ -137,7 +138,7 @@ def main():
             )
             status, body = request(
                 base,
-                f"/api/v1/nodes/{node_id}/resources",
+                f"/api/v2/nodes/{node_id}/resources",
                 admin,
                 "POST",
                 {
@@ -149,14 +150,14 @@ def main():
             if status != 201:
                 raise RuntimeError("could not upload the ECH fixture resource")
             ech_reference = json.loads(body)["reference"]
-            status, body = request(base, f"/api/v1/nodes/{node_id}", admin)
+            status, body = request(base, f"/api/v2/nodes/{node_id}", admin)
             if status != 200:
                 raise RuntimeError("could not read the node fixture before enabling ECH")
             node_config = json.loads(body)["config"]
             node_config["ech"] = {"keyPath": ech_reference}
             status, _ = request(
                 base,
-                f"/api/v1/nodes/{node_id}",
+                f"/api/v2/nodes/{node_id}",
                 admin,
                 "PATCH",
                 {"expected_revision": 1, "config": node_config},
@@ -167,7 +168,7 @@ def main():
             realm_token = "parser-realm-token_123"
             status, body = request(
                 base,
-                "/api/v1/nodes",
+                "/api/v2/nodes",
                 admin,
                 "POST",
                 {
@@ -202,7 +203,7 @@ def main():
             realm_node_id = json.loads(body)["node"]["id"]
 
             status, body = request(
-                base, "/api/v1/users", admin, "POST", {"name": "Mihomo parser user"}
+                base, "/api/v2/users", admin, "POST", {"name": "Mihomo parser user"}
             )
             if status != 201:
                 raise RuntimeError("could not create user fixture")
@@ -212,7 +213,7 @@ def main():
                 if status!=201:raise RuntimeError("group authorization of parser fixture failed")
             status, body = request(
                 base,
-                f"/api/v1/users/{user_id}/subscription",
+                f"/api/v2/users/{user_id}/subscription",
                 admin,
                 "POST",
                 {"expected_revision": 3},
@@ -222,7 +223,7 @@ def main():
             first_subscription = json.loads(body)["token"]
             status, body = request(
                 base,
-                f"/api/v1/users/{user_id}/subscription",
+                f"/api/v2/users/{user_id}/subscription",
                 admin,
                 "POST",
                 {"expected_revision": 4},
@@ -235,7 +236,7 @@ def main():
                 raise RuntimeError("rotated subscription token remained valid")
             status, body = request(
                 base,
-                f"/api/v1/users/{user_id}/subscription",
+                f"/api/v2/users/{user_id}/subscription",
                 admin,
                 method="GET",
             )
@@ -244,14 +245,14 @@ def main():
                 raise RuntimeError("active subscription lookup did not return the current token")
 
             status, body = request(
-                base, "/api/v1/users", admin, "POST", {"name": "No assigned nodes"}
+                base, "/api/v2/users", admin, "POST", {"name": "No assigned nodes"}
             )
             if status != 201:
                 raise RuntimeError("could not create empty-subscription user fixture")
             empty_user_id = json.loads(body)["id"]
             status, body = request(
                 base,
-                f"/api/v1/users/{empty_user_id}/subscription",
+                f"/api/v2/users/{empty_user_id}/subscription",
                 admin,
                 "POST",
                 {"expected_revision": 1},
@@ -262,12 +263,7 @@ def main():
 
             # This test isolates the subscription renderer from SSH deployment.
             with database.connect() as connection:
-                connection.execute(
-                    "UPDATE nodes SET deployed_revision = desired_revision, "
-                    "deployed_config_enc = desired_config_enc, state = 'deployed' "
-                    "WHERE id IN (%s, %s)",
-                    (node_id, realm_node_id),
-                )
+                mark_fixture_nodes_deployed(connection, [node_id, realm_node_id])
                 connection.execute("UPDATE mtls_node_trust SET deployed=TRUE WHERE node_id=%s AND ca_id=%s AND ca_version=1",(node_id,fixture_ca))
 
             status, config = request(

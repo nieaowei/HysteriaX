@@ -7,14 +7,13 @@ use std::{
 use axum::{
     Json,
     extract::{Path as AxumPath, State},
-    http::StatusCode,
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use sqlx::Row;
 
-use crate::{db, error::ApiError, state::AppState};
+use crate::{error::ApiError, state::AppState};
 
 const MAX_RESOURCE_BYTES: usize = 20 * 1024 * 1024;
 
@@ -214,34 +213,6 @@ pub async fn list(
 
 mod mutations;
 pub(super) use mutations::{create_v2, delete_v2};
-
-pub async fn create(
-    State(state): State<AppState>,
-    AxumPath(node): AxumPath<String>,
-    Json(input): Json<CreateResource>,
-) -> Result<(StatusCode, Json<Value>), ApiError> {
-    let prepared = mutations::Prepared::new(&state.secrets, input)?;
-    let actor = super::audit_actor();
-    let response = db::serializable(&state.pool, move |tx| {
-        let (prepared, node, actor) = (prepared.clone(), node.clone(), actor.clone());
-        Box::pin(async move { prepared.commit_on(tx, &node, &actor).await })
-    })
-    .await?;
-    Ok((StatusCode::CREATED, Json(response)))
-}
-
-pub async fn delete(
-    State(state): State<AppState>,
-    AxumPath((node, resource)): AxumPath<(String, String)>,
-) -> Result<StatusCode, ApiError> {
-    let actor = super::audit_actor();
-    db::serializable(&state.pool, move |tx| {
-        let (node, resource, actor) = (node.clone(), resource.clone(), actor.clone());
-        Box::pin(async move { mutations::delete_on(tx, &node, &resource, &actor).await })
-    })
-    .await?;
-    Ok(StatusCode::NO_CONTENT)
-}
 
 async fn editable_node_on(connection: &mut sqlx::PgConnection, node: &str) -> Result<(), ApiError> {
     let state: String = sqlx::query_scalar("SELECT state FROM nodes WHERE id=$1 FOR NO KEY UPDATE")
@@ -471,3 +442,15 @@ mod tests {
 
 #[cfg(test)]
 mod transaction_tests;
+
+// Direct domain fixtures are test-only; production writes use protocol-2 handlers.
+#[cfg(test)]
+#[path = "resources_test_support.rs"]
+mod test_support;
+#[cfg(test)]
+pub(crate) use test_support::*;
+
+#[cfg(test)]
+use crate::db;
+#[cfg(test)]
+use axum::http::StatusCode;

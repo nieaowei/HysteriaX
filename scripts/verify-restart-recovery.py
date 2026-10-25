@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Restart the service with an interrupted job and verify persisted recovery."""
+from management_test_http import management_request, start_test_server
 
 import base64
 from datetime import datetime, timezone
@@ -53,8 +54,8 @@ def stop(process):
 
 
 def job_detail(base, job_id, admin_token):
-    request = urllib.request.Request(
-        base + f"/api/v1/jobs/{job_id}",
+    request = management_request(
+        base + f"/api/v2/jobs/{job_id}",
         headers={"Authorization": f"Bearer {admin_token}"},
     )
     with urllib.request.urlopen(request, timeout=3) as response:
@@ -81,19 +82,19 @@ def main():
             }
         )
         api_log = open(temp / "service.log", "wb")
-        process = subprocess.Popen(
+        process = start_test_server(
             [str(SERVER)], cwd=ROOT, env=environment, stdout=api_log, stderr=api_log
         )
         try:
             wait_ready(base, process)
-            credential_request = urllib.request.Request(base + "/api/v1/credentials", method="POST",
+            credential_request = management_request(base + "/api/v2/credentials", method="POST",
                 headers={"Authorization": f"Bearer {admin_token}", "Content-Type": "application/json"},
                 data=json.dumps({"name":"Recovery fixture SSH","kind":"ssh_password","payload":{"secret":"unused-password"}}).encode())
             with urllib.request.urlopen(credential_request) as response:
                 credential_id = json.loads(response.read())["id"]
             # Create the node through the API so its encrypted configuration,
             # deployment snapshot and credential references remain valid at restart.
-            node_request = urllib.request.Request(base + "/api/v1/nodes", method="POST",
+            node_request = management_request(base + "/api/v2/nodes", method="POST",
                 headers={"Authorization": f"Bearer {admin_token}", "Content-Type": "application/json"},
                 data=json.dumps({"name":"Recovery node","ssh_host":"127.0.0.1","ssh_port":22,
                     "ssh_username":"root","ssh_credential_id":credential_id,"ssh_credential_version":1,
@@ -112,8 +113,16 @@ def main():
                     "VALUES (%s, 'sync', %s, 1, 'running', 'interrupted', '{}', 4, %s, %s, %s, %s)",
                     (job_id, node_id, timestamp, timestamp, timestamp, timestamp),
                 )
+                # Interrupted before dispatch: its two owned leases expired and
+                # there is no external operation intent that could be replayed.
+                for resource in ("job:" + job_id, "node:" + node_id):
+                    connection.execute(
+                        "INSERT INTO resource_leases(resource_key,owner,generation,expires_at,work_id) "
+                        "VALUES(%s,'interrupted-fixture',1,clock_timestamp()-interval '1 second',%s)",
+                        (resource, job_id),
+                    )
 
-            process = subprocess.Popen(
+            process = start_test_server(
                 [str(SERVER)], cwd=ROOT, env=environment, stdout=api_log, stderr=api_log
             )
             wait_ready(base, process)
@@ -142,6 +151,10 @@ def main():
                 raise RuntimeError("restart did not persist a job.recovered event")
             if recovered_event.get("status") != "queued" or recovered_event.get("stage") != "recovered":
                 raise RuntimeError(f"recovery event payload is invalid: {recovered_event}")
+            with database.connect() as connection:
+                generation = connection.execute("SELECT generation FROM resource_leases WHERE resource_key=%s", ("job:" + job_id,)).fetchone()[0]
+            if generation <= 1:
+                raise RuntimeError("recovered job did not acquire a new fencing generation")
             if not job or job[2] < 5:
                 raise RuntimeError(f"recovered job was not claimed by the restarted worker: {job}")
             detail = None

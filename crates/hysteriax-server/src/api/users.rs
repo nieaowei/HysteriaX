@@ -1,5 +1,3 @@
-use crate::db;
-
 use axum::{
     Json,
     extract::{Path, Query, State},
@@ -129,20 +127,6 @@ pub async fn get(
     Ok(Json(result))
 }
 
-pub async fn create(
-    State(state): State<AppState>,
-    Json(input): Json<CreateUser>,
-) -> Result<(StatusCode, Json<Value>), ApiError> {
-    let prepared = PreparedUser::new(input)?;
-    let actor = super::audit_actor();
-    let response = db::serializable::<_, ApiError, _>(&state.pool, move |tx| {
-        let (prepared, actor) = (prepared.clone(), actor.clone());
-        Box::pin(async move { prepared.commit_on(tx, &actor).await })
-    })
-    .await?;
-    Ok((StatusCode::CREATED, Json(response)))
-}
-
 mod v2;
 pub(super) use v2::{
     create as create_v2, delete as delete_v2, patch as patch_v2, reset_quota as reset_quota_v2,
@@ -188,20 +172,6 @@ impl PreparedUser {
         .await?;
         Ok(json!({"id":self.id,"name":self.name,"enabled":self.enabled,"revision":1}))
     }
-}
-
-pub async fn patch(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-    Json(input): Json<PatchUser>,
-) -> Result<Json<Value>, ApiError> {
-    let actor = super::audit_actor();
-    let value = db::serializable(&state.pool, move |tx| {
-        let (id, input, actor) = (id.clone(), input.clone(), actor.clone());
-        Box::pin(async move { patch_on(tx, id, input, actor).await })
-    })
-    .await?;
-    Ok(Json(value))
 }
 
 async fn patch_on(
@@ -293,22 +263,6 @@ async fn patch_on(
     )
 }
 
-pub async fn delete(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-    Query(query): Query<super::nodes::RevisionQuery>,
-) -> Result<StatusCode, ApiError> {
-    let expected = query
-        .expected_revision
-        .ok_or_else(|| ApiError::bad_request("expected_revision query parameter is required"))?;
-    let actor = super::audit_actor();
-    db::serializable(&state.pool, move |tx| {
-        let (id, actor) = (id.clone(), actor.clone());
-        Box::pin(async move { delete_on(tx, id, expected, actor).await })
-    })
-    .await
-}
-
 async fn delete_on(
     tx: &mut sqlx::Transaction<'static, sqlx::Postgres>,
     id: String,
@@ -370,22 +324,6 @@ async fn delete_on(
 }
 
 mod rotation;
-pub async fn rotate_credentials(
-    State(state): State<AppState>,
-    Path(user_id): Path<String>,
-    Json(input): Json<RevisionRequest>,
-) -> Result<Json<Value>, ApiError> {
-    let prepared = rotation::prepare(&state, &user_id).await?;
-    let actor = super::audit_actor();
-    let response = db::serializable(&state.pool, move |tx| {
-        let (user_id, prepared, actor) = (user_id.clone(), prepared.clone(), actor.clone());
-        Box::pin(async move {
-            rotation::commit_on(tx, user_id, input.expected_revision, prepared, actor).await
-        })
-    })
-    .await?;
-    Ok(Json(response))
-}
 
 /// Match billing's node-before-user order. Deletion additionally owns the
 /// affected authorization groups before touching their membership cascades.
@@ -493,20 +431,6 @@ pub async fn usage(
         "data_freshness": {"status": freshness_status, "last_sample_at": freshness, "open_gaps": gap_count},
         "pending_revocations": pending_revocations
     })))
-}
-
-pub async fn reset_quota(
-    State(state): State<AppState>,
-    Path(user_id): Path<String>,
-    Json(input): Json<RevisionRequest>,
-) -> Result<Json<Value>, ApiError> {
-    let actor = super::audit_actor();
-    let response = db::serializable(&state.pool, move |tx| {
-        let (user_id, actor) = (user_id.clone(), actor.clone());
-        Box::pin(async move { reset_quota_on(tx, user_id, input.expected_revision, actor).await })
-    })
-    .await?;
-    Ok(Json(response))
 }
 
 async fn reset_quota_on(
@@ -713,3 +637,13 @@ mod tests {
 
 #[cfg(test)]
 mod transaction_tests;
+
+// Direct domain fixtures are test-only; production writes use protocol-2 handlers.
+#[cfg(test)]
+#[path = "users_test_support.rs"]
+mod test_support;
+#[cfg(test)]
+pub(crate) use test_support::*;
+
+#[cfg(test)]
+use crate::db;

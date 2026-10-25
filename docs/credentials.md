@@ -73,7 +73,7 @@ notifications enabled, running connected clients notify at 30/14/7 days and
 after expiry, deduplicating by service, credential version and threshold. The
 center supplies DNS credentials to the node-local `hysteriax-acme` service. The node handles issuance and renewal independently, while management collects its status over SSH.
 
-Management API 2.0.0 uses `/api/v2`; retired `/api/v1` requests return 426. Upgrade clients and server together. Administrative writes require a stable `Idempotency-Key`. Credential CRUD and publication
+Management API 2.0.0 uses `/api/v2`. Upgrade clients and server together. Administrative writes require a stable `Idempotency-Key`. Credential CRUD and publication
 are under `/credentials`; references are under `/credentials/{id}/references`;
 batch state and retry are under `/credential-batches/{id}`. Node writes accept
 SSH credential IDs/versions and mtls off/managed settings with an exact currently

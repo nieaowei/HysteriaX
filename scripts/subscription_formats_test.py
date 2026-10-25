@@ -1,4 +1,5 @@
 """Additional acceptance coverage used by verify-subscription.sh (isolated test schema)."""
+from management_test_http import management_request
 import base64
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
@@ -19,7 +20,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 def fetch(base, path, ua=None):
     headers = {} if ua is None else {"User-Agent": ua}
-    req = urllib.request.Request(base + path, headers=headers)
+    req = management_request(base + path, headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=10) as response:
             return response.status, response.read(), response.headers
@@ -32,7 +33,7 @@ def run(base, admin, database, temp, advanced_token, revoked_token, advanced_use
 
         def raw_request(base, path, token, method, payload):
             data = None if payload is None else json.dumps(payload).encode()
-            req = urllib.request.Request(base + path, data=data, method=method,
+            req = management_request(base + path, data=data, method=method,
                                          headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"})
             try:
                 with urllib.request.urlopen(req, timeout=10) as response:
@@ -60,7 +61,7 @@ def run(base, admin, database, temp, advanced_token, revoked_token, advanced_use
             raise RuntimeError("subscription MIME type mismatch")
         return body, headers
 
-    active = api(f"/api/v1/users/{advanced_user_id}/subscription")["active"]
+    active = api(f"/api/v2/users/{advanced_user_id}/subscription")["active"]
     if "auto_url" in active or not active["url"].endswith(f"/sub/{advanced_token}"):
         raise RuntimeError("management subscription URL compatibility failed")
     for ua in [None, "", "curl/8.0", "Mozilla/5.0", "Clash/1.0", "unrecognized/1.0"]:
@@ -100,26 +101,26 @@ def run(base, admin, database, temp, advanced_token, revoked_token, advanced_use
     subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", str(key),
                     "-out", str(cert), "-days", "2", "-subj", "/CN=localhost"], check=True,
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    ssh = api("/api/v1/credentials", {"name":"Basic subscription SSH","kind":"ssh_password","payload":{"secret":"fixture-only"}}, expected=201)
-    identity = api("/api/v1/credentials", {"name":"Basic subscription TLS","kind":"tls_identity","payload":{"certificate":cert.read_text(),"private_key":key.read_text()}}, expected=201)
-    node = api("/api/v1/nodes", {
+    ssh = api("/api/v2/credentials", {"name":"Basic subscription SSH","kind":"ssh_password","payload":{"secret":"fixture-only"}}, expected=201)
+    identity = api("/api/v2/credentials", {"name":"Basic subscription TLS","kind":"tls_identity","payload":{"certificate":cert.read_text(),"private_key":key.read_text()}}, expected=201)
+    node = api("/api/v2/nodes", {
         "name": "東京: edge #&", "ssh_host": "127.0.0.1", "ssh_port": 22, "ssh_username": "root",
         "ssh_credential_id": ssh["id"], "ssh_credential_version": 1, "public_host": "127.0.0.1",
         "public_port": node_port, "listen_addr": f":{node_port}", "tls_sni": "localhost", "tls_skip_verify": True,
         "config": {"tls": {"cert": f"credential://{identity['id']}/1/certificate", "key": f"credential://{identity['id']}/1/private_key"}},
     }, expected=201)["node"]["id"]
-    user = api("/api/v1/users", {"name": "Basic subscription fixture"}, expected=201)["id"]
-    from credential_test_fixtures import grant_group
+    user = api("/api/v2/users", {"name": "Basic subscription fixture"}, expected=201)["id"]
+    from credential_test_fixtures import grant_group, mark_fixture_nodes_deployed
     def group_request(path,method="GET",body=None,statuses=(200,)):
         return api(path,body,method,statuses[0])
     credential = grant_group(group_request,user,[node])["created_credentials"][0]["hy2_credential"]
-    receipt = api(f"/api/v1/users/{user}/subscription", {"expected_revision": 2})
+    receipt = api(f"/api/v2/users/{user}/subscription", {"expected_revision": 2})
     token = receipt["token"]
     if "auto_url" in receipt or not receipt["url"].endswith(f"/sub/{token}"):
         raise RuntimeError("rotation response did not expose the canonical URL")
     with database.connect() as connection:
-        connection.execute("UPDATE nodes SET deployed_revision = desired_revision, deployed_config_enc = desired_config_enc, state = 'deployed' WHERE id = %s", (node,))
-    assert api(f"/api/v1/users/{advanced_user_id}")["revision"]==5
+        mark_fixture_nodes_deployed(connection, [node])
+    assert api(f"/api/v2/users/{advanced_user_id}")["revision"]==5
     grant_group(group_request,advanced_user_id,[node])
     filtered, headers = expect(advanced_token, "?format=uri", mime="text/plain")
     if headers.get("X-HysteriaX-Filtered-Nodes") != "2" or filtered.count(b"hysteria2://") != 1:

@@ -4,7 +4,7 @@ info:
   version: 2.0.0
   description: >-
     Management protocol 2. All management writes require Idempotency-Key and atomically
-    retain their successful response. The former /api/v1 management endpoints return 426.
+    retain their successful response.
     Node authentication callbacks and user subscription download URLs remain unchanged.
   license:
     name: MIT

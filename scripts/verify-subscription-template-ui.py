@@ -5,6 +5,7 @@ Requires TEST_DATABASE_URL, Xcode, and scripts/requirements-test.txt.
 xcodegen is required for UI and manual modes; --client runs without screen capture.
 App sources and preferences are isolated in a temporary, uniquely identified test application.
 """
+from management_test_http import management_request, start_test_server
 import argparse
 import base64
 import json
@@ -27,7 +28,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def request(base, token, path, payload=None, method=None):
     data = None if payload is None else json.dumps(payload).encode()
-    call = urllib.request.Request(base + path, data=data, headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"}, method=method)
+    call = management_request(base + path, data=data, headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"}, method=method)
     with urllib.request.urlopen(call, timeout=20) as response:
         return json.load(response)
 
@@ -52,7 +53,7 @@ def main():
         results = ROOT / "apps/macos/.build" / f"subscription-template-ui-{int(time.time())}.xcresult"
         results.parent.mkdir(parents=True, exist_ok=True)
         with results.with_suffix(".server.log").open("w") as server_log:
-            server = subprocess.Popen([str(ROOT / "target/debug/hysteriax-server")], env=environment, stdout=server_log, stderr=subprocess.STDOUT)
+            server = start_test_server([str(ROOT / "target/debug/hysteriax-server")], env=environment, stdout=server_log, stderr=subprocess.STDOUT)
             try:
                 for _ in range(150):
                     if server.poll() is not None: raise RuntimeError("isolated UI service exited before readiness")
@@ -61,18 +62,18 @@ def main():
                             if response.status == 200: break
                     except (OSError, urllib.error.URLError): time.sleep(0.2)
                 else: raise TimeoutError("isolated UI service did not become ready")
-                layout_draft = request(base, token, "/api/v1/subscription-templates/default-singbox/draft")
-                request(base, token, "/api/v1/subscription-templates/default-singbox", {"expected_revision": layout_draft["template"]["revision"], "name": "0008 Layout - " + "Long template name " * 5}, method="PATCH")
-                user = request(base, token, "/api/v1/users", {"name": "0005 UI User"})
-                subscription = request(base, token, f"/api/v1/users/{user['id']}/subscription", {"expected_revision": 1})
+                layout_draft = request(base, token, "/api/v2/subscription-templates/default-singbox/draft")
+                request(base, token, "/api/v2/subscription-templates/default-singbox", {"expected_revision": layout_draft["template"]["revision"], "name": "0008 Layout - " + "Long template name " * 5}, method="PATCH")
+                user = request(base, token, "/api/v2/users", {"name": "0005 UI User"})
+                subscription = request(base, token, f"/api/v2/users/{user['id']}/subscription", {"expected_revision": 1})
                 document = {"schema_version": 2, "common": {"tproxy-port": 7893, "mixed-port": 7888, "log-level": "silent", "proxies": [], "proxy-groups": [{"name": "Select", "type": "select", "proxies": []}], "rules": ["MATCH,Select"]}, "platforms": {}, "injections": [{"group": "Select"}]}
-                template = request(base, token, "/api/v1/subscription-templates", {"expected_revision": 0, "name": "0005 UI Template", "format": "mihomo", "document": document})
-                quit_first = request(base, token, "/api/v1/subscription-templates", {"expected_revision": 0, "name": "0008 Quit A", "format": "mihomo", "document": document})
-                quit_second = request(base, token, "/api/v1/subscription-templates", {"expected_revision": 0, "name": "0008 Quit B", "format": "mihomo", "document": document})
+                template = request(base, token, "/api/v2/subscription-templates", {"expected_revision": 0, "name": "0005 UI Template", "format": "mihomo", "document": document})
+                quit_first = request(base, token, "/api/v2/subscription-templates", {"expected_revision": 0, "name": "0008 Quit A", "format": "mihomo", "document": document})
+                quit_second = request(base, token, "/api/v2/subscription-templates", {"expected_revision": 0, "name": "0008 Quit B", "format": "mihomo", "document": document})
                 exports = work / "Exports"; exports.mkdir()
                 export_document = json.loads(json.dumps(document)); export_document["common"]["future-field"] = {"counter": 18446744073709551615}
-                export_template = request(base, token, "/api/v1/subscription-templates", {"expected_revision": 0, "name": "0005 UI Export Template", "format": "mihomo", "document": export_document})
-                export_template = request(base, token, f"/api/v1/subscription-templates/{export_template['id']}/publish", {"expected_revision": export_template["revision"]})
+                export_template = request(base, token, "/api/v2/subscription-templates", {"expected_revision": 0, "name": "0005 UI Export Template", "format": "mihomo", "document": export_document})
+                export_template = request(base, token, f"/api/v2/subscription-templates/{export_template['id']}/publish", {"expected_revision": export_template["revision"]})
                 if args.client:
                     fixture = work / "ClientFixture.json"
                     fixture.write_text(json.dumps({"base": base, "token": token, "template_id": template["id"], "user_id": user["id"], "subscription_token": subscription["token"]}))

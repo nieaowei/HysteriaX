@@ -132,17 +132,6 @@ fn name(value: &str) -> Result<&str, ApiError> {
     }
     Ok(n)
 }
-async fn create_inner(
-    State(state): State<AppState>,
-    Json(input): Json<Create>,
-) -> Result<(StatusCode, Json<Value>), ApiError> {
-    let prepared = PreparedCreation::new(&state, input)?;
-    db::serializable(&state.pool, move |tx| {
-        let prepared = prepared.clone();
-        Box::pin(async move { prepared.commit_on(tx).await })
-    })
-    .await
-}
 
 pub async fn get(
     State(state): State<AppState>,
@@ -160,17 +149,7 @@ pub struct Patch {
     pub replacement_id: Option<String>,
     pub replacement_revision: Option<i64>,
 }
-async fn patch_inner(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-    Json(input): Json<Patch>,
-) -> Result<Json<Value>, ApiError> {
-    db::serializable(&state.pool, move |tx| {
-        let (id, input) = (id.clone(), input.clone());
-        Box::pin(async move { patch_on(tx, id, input).await })
-    })
-    .await
-}
+
 async fn lock_patch_parents_on(
     tx: &mut Transaction<'_, Postgres>,
     id: &str,
@@ -301,32 +280,11 @@ pub struct Save {
     pub expected_revision: i64,
     pub document: Document,
 }
-async fn save_inner(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-    Json(input): Json<Save>,
-) -> Result<Json<Value>, ApiError> {
-    let encrypted = prepare_save(&state, &input)?;
-    db::serializable(&state.pool, move |tx| {
-        let (id, encrypted) = (id.clone(), encrypted.clone());
-        Box::pin(async move { save_on(tx, id, input.expected_revision, encrypted).await })
-    })
-    .await
-}
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Validate {
     pub document: Option<Document>,
-}
-pub async fn validate_draft(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-    Json(input): Json<Validate>,
-) -> Result<Response, ApiError> {
-    Ok(no_store(
-        crate::read_snapshot::scope(&state.pool, validate_draft_value(&state, &id, input)).await?,
-    ))
 }
 
 #[derive(Deserialize)]
@@ -334,40 +292,14 @@ pub async fn validate_draft(
 pub struct Revision {
     pub expected_revision: i64,
 }
-async fn publish_document(
-    state: &AppState,
-    id: &str,
-    revision: i64,
-    version: Option<i64>,
-) -> Result<Json<Value>, ApiError> {
-    let prepared = PreparedPublication::new(state, id, revision, version).await?;
-    db::serializable(&state.pool, move |tx| {
-        let prepared = prepared.clone();
-        Box::pin(async move { prepared.commit_on(tx).await })
-    })
-    .await
-}
 
-async fn publish_inner(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-    Json(input): Json<Revision>,
-) -> Result<Json<Value>, ApiError> {
-    publish_document(&state, &id, input.expected_revision, None).await
-}
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Rollback {
     pub expected_revision: i64,
     pub version: i64,
 }
-async fn rollback_inner(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-    Json(input): Json<Rollback>,
-) -> Result<Json<Value>, ApiError> {
-    publish_document(&state, &id, input.expected_revision, Some(input.version)).await
-}
+
 pub async fn versions(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -406,9 +338,6 @@ pub struct Source {
     pub format: String,
     pub source: Option<String>,
     pub config: Option<Value>,
-}
-pub async fn source(Json(input): Json<Source>) -> Result<Response, ApiError> {
-    Ok(no_store(source_value(input)?))
 }
 
 pub async fn export(
@@ -451,15 +380,6 @@ pub struct Preview {
     #[serde(default)]
     pub reveal_secrets: bool,
     pub document: Option<Document>,
-}
-pub async fn preview(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-    Json(input): Json<Preview>,
-) -> Result<Response, ApiError> {
-    Ok(no_store(
-        crate::read_snapshot::scope(&state.pool, preview_value(&state, &id, input)).await?,
-    ))
 }
 
 fn redact(value: &mut Value) {
@@ -507,9 +427,6 @@ pub struct Import {
     pub source: Option<String>,
     pub package: Option<Value>,
 }
-pub async fn import(Json(input): Json<Import>) -> Result<Response, ApiError> {
-    Ok(no_store(import_value(input)?))
-}
 
 pub async fn version(
     State(state): State<AppState>,
@@ -534,15 +451,6 @@ pub struct Refactor {
     pub kind: String,
     pub old_name: String,
     pub new_name: String,
-}
-pub async fn refactor(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-    Json(input): Json<Refactor>,
-) -> Result<Response, ApiError> {
-    Ok(no_store(
-        crate::read_snapshot::scope(&state.pool, refactor_value(&state, &id, input)).await?,
-    ))
 }
 
 async fn report_failure<T>(
@@ -578,90 +486,6 @@ async fn report_failure<T>(
     }
     result
 }
-pub async fn create(
-    State(state): State<AppState>,
-    Json(input): Json<Create>,
-) -> Result<(StatusCode, Json<Value>), ApiError> {
-    let revision = input.expected_revision;
-    let result = create_inner(State(state.clone()), Json(input)).await;
-    report_failure(
-        &state,
-        "new",
-        "template.create_failed",
-        revision,
-        None,
-        result,
-    )
-    .await
-}
-pub async fn patch(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-    Json(input): Json<Patch>,
-) -> Result<Json<Value>, ApiError> {
-    let revision = input.expected_revision;
-    let action = if input.archived == Some(true) {
-        "template.archive_failed"
-    } else if input.is_default == Some(true) {
-        "template.default_change_failed"
-    } else {
-        "template.metadata_update_failed"
-    };
-    let result = patch_inner(State(state.clone()), Path(id.clone()), Json(input)).await;
-    report_failure(&state, &id, action, revision, None, result).await
-}
-pub async fn save(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-    Json(input): Json<Save>,
-) -> Result<Json<Value>, ApiError> {
-    let revision = input.expected_revision;
-    let result = save_inner(State(state.clone()), Path(id.clone()), Json(input)).await;
-    report_failure(
-        &state,
-        &id,
-        "template.draft_save_failed",
-        revision,
-        None,
-        result,
-    )
-    .await
-}
-pub async fn publish(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-    Json(input): Json<Revision>,
-) -> Result<Json<Value>, ApiError> {
-    let revision = input.expected_revision;
-    let result = publish_inner(State(state.clone()), Path(id.clone()), Json(input)).await;
-    report_failure(
-        &state,
-        &id,
-        "template.publish_failed",
-        revision,
-        None,
-        result,
-    )
-    .await
-}
-pub async fn rollback(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-    Json(input): Json<Rollback>,
-) -> Result<Json<Value>, ApiError> {
-    let revision = input.expected_revision;
-    let version = input.version;
-    let result = rollback_inner(State(state.clone()), Path(id.clone()), Json(input)).await;
-    report_failure(
-        &state,
-        &id,
-        "template.rollback_failed",
-        revision,
-        Some(version),
-        result,
-    )
-    .await
-}
 
 mod preparation;
 use preparation::*;
@@ -670,3 +494,10 @@ mod computation;
 use computation::*;
 
 pub(crate) mod v2;
+
+// Direct domain fixtures are test-only; production writes use protocol-2 handlers.
+#[cfg(test)]
+#[path = "store_test_support.rs"]
+mod test_support;
+#[cfg(test)]
+pub(crate) use test_support::*;

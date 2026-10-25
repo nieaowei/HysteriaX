@@ -74,31 +74,16 @@ async fn v2_reads_are_authenticated_and_remain_available_with_the_same_business_
 }
 
 #[tokio::test]
-async fn retired_namespace_never_fills_cache_and_v2_versions_track_committed_changes() {
+async fn v2_cache_versions_track_committed_changes() {
     let (state, base, server) = server().await;
     let client = client();
-    for prefix in ["v2"] {
-        assert_eq!(
-            get(&client, &base, &format!("/api/{prefix}/users")).await["items"][0]["name"],
-            "Before"
-        );
-    }
-    assert_eq!(state.caches.responses.stats()["entries"], 1);
     assert_eq!(
-        client
-            .get(format!("{base}/api/v1/users"))
-            .bearer_auth("cache-admin-v2")
-            .send()
-            .await
-            .unwrap()
-            .status(),
-        StatusCode::UPGRADE_REQUIRED
+        get(&client, &base, "/api/v2/users").await["items"][0]["name"],
+        "Before"
     );
     assert_eq!(state.caches.responses.stats()["entries"], 1);
     let before = state.caches.responses.stats()["hits"].as_u64().unwrap();
-    for prefix in ["v2"] {
-        get(&client, &base, &format!("/api/{prefix}/users")).await;
-    }
+    get(&client, &base, "/api/v2/users").await;
     assert_eq!(
         state.caches.responses.stats()["hits"].as_u64().unwrap(),
         before + 1
@@ -117,12 +102,10 @@ async fn retired_namespace_never_fills_cache_and_v2_versions_track_committed_cha
         .execute(&state.pool)
         .await
         .unwrap();
-    for prefix in ["v2"] {
-        assert_eq!(
-            get(&client, &base, &format!("/api/{prefix}/users")).await["items"][0]["name"],
-            "Committed"
-        );
-    }
+    assert_eq!(
+        get(&client, &base, "/api/v2/users").await["items"][0]["name"],
+        "Committed"
+    );
     sqlx::query("UPDATE admin_tokens SET revoked_at=clock_timestamp() WHERE id='cache-operator'")
         .execute(&state.pool)
         .await
@@ -210,69 +193,6 @@ async fn v2_terminal_job_cache_survives_unrelated_jobs_and_tracks_retry_links() 
     assert_eq!(
         get(&client, &base, path).await["job"]["retry_job_id"],
         "retry"
-    );
-    server.abort();
-}
-
-#[tokio::test]
-async fn retired_management_rejects_every_method_before_authentication_and_database_access() {
-    let (state, base, server) = server().await;
-    // Closing the pool proves the rejection doesn't depend on authentication,
-    // request decoding, a receipt reservation or any business transaction.
-    state.pool.close().await;
-    let client = client();
-    for method in [
-        reqwest::Method::GET,
-        reqwest::Method::POST,
-        reqwest::Method::PUT,
-        reqwest::Method::PATCH,
-        reqwest::Method::DELETE,
-        reqwest::Method::HEAD,
-        reqwest::Method::OPTIONS,
-    ] {
-        for path in [
-            "/api/v1",
-            "/api/v1/version",
-            "/api/v1/users",
-            "/api/v1/missing?after=123",
-        ] {
-            let response = client
-                .request(method.clone(), format!("{base}{path}"))
-                .header("Content-Type", "application/json")
-                .body("malformed-json")
-                .send()
-                .await
-                .unwrap();
-            assert_eq!(
-                response.status(),
-                StatusCode::UPGRADE_REQUIRED,
-                "{method} {path}"
-            );
-            if method != reqwest::Method::HEAD {
-                assert_eq!(
-                    response.json::<Value>().await.unwrap()["error"]["code"],
-                    "management_protocol_upgrade_required"
-                );
-            }
-        }
-    }
-    assert_eq!(
-        client
-            .get(format!("{base}/api/v10/version"))
-            .send()
-            .await
-            .unwrap()
-            .status(),
-        StatusCode::NOT_FOUND
-    );
-    assert_eq!(
-        client
-            .get(format!("{base}/healthz"))
-            .send()
-            .await
-            .unwrap()
-            .status(),
-        StatusCode::OK
     );
     server.abort();
 }

@@ -1,4 +1,4 @@
-use crate::{db, error::ApiError, state::AppState};
+use crate::{error::ApiError, state::AppState};
 use axum::{
     Json,
     extract::{Path, State},
@@ -13,19 +13,6 @@ pub(crate) mod v2;
 #[derive(Clone, Deserialize)]
 pub struct RetryRequest {
     pub expected_revision: i64,
-}
-
-pub async fn retry(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-    Json(input): Json<RetryRequest>,
-) -> Result<(StatusCode, Json<Value>), ApiError> {
-    let actor = super::audit_actor();
-    db::serializable(&state.pool, move |tx| {
-        let (id, input, actor) = (id.clone(), input.clone(), actor.clone());
-        Box::pin(async move { retry_on(tx, id, input, actor).await })
-    })
-    .await
 }
 
 async fn retry_on(
@@ -353,3 +340,13 @@ async fn lock_retry_parents_on(
 
 #[cfg(test)]
 mod transaction_tests;
+
+// Direct domain fixtures are test-only; production writes use protocol-2 handlers.
+#[cfg(test)]
+#[path = "job_retries_test_support.rs"]
+mod test_support;
+#[cfg(test)]
+pub(crate) use test_support::*;
+
+#[cfg(test)]
+use crate::db;

@@ -62,7 +62,14 @@ def main():
             result = live.run(["docker", "exec", db, "psql", "-U", "postgres", "-d", "hysteriax", "-At", "-v", "ON_ERROR_STOP=1", "-c", query])
             return result.stdout.strip()
 
+        api_prefix = "/api/v1"  # Only the pinned old image uses protocol 1.
+
         def start_api(tag):
+            nonlocal api_prefix
+            api_prefix = "/api/v1" if tag == OLD_IMAGE else "/api/v2"
+            if tag != OLD_IMAGE:
+                live.run(["docker", "run", "--rm", "--network", network,
+                          "--env-file", str(env_file), tag, "--migrate-only"])
             live.run(["docker", "run", "-d", "--name", api, "--network", network,
                       "--network-alias", "api", "--env-file", str(env_file),
                       "-p", f"127.0.0.1:{port}:8080", tag])
@@ -87,7 +94,7 @@ def main():
         def wait_job(job, timeout=180):
             until = time.monotonic() + timeout
             while time.monotonic() < until:
-                result = expect("/api/v1/jobs/" + job)
+                result = expect(api_prefix + "/jobs/" + job)
                 status = result["job"]["status"]
                 if status == "succeeded":
                     return result
@@ -178,15 +185,15 @@ def main():
             sql("ALTER TABLE credential_versions DISABLE TRIGGER USER; UPDATE credential_versions SET payload_enc='broken-discarded-client' WHERE credential_id='" + client_credential + "'; ALTER TABLE credential_versions ENABLE TRIGGER USER")
             live.run(["docker", "exec", node, "systemctl", "stop", "ssh.service"])
             start_api(image)
-            assert expect(f"/api/v1/nodes/{node_id}")["mtls_state"] == "needs_configuration"
+            assert expect(f"/api/v2/nodes/{node_id}")["mtls_state"] == "needs_configuration"
             assert sql("SELECT json_build_object('users',(SELECT count(*) FROM users),'groups',(SELECT count(*) FROM authorization_groups),'assignments',(SELECT count(*) FROM node_assignments),'password',(SELECT credential_hash FROM node_assignments LIMIT 1),'revision',(SELECT revision FROM users LIMIT 1))") == before
-            assert live.raw_request(base, f"/api/v1/users/{user}/assignments", token)[0] == 404
+            assert live.raw_request(base, f"/api/v2/users/{user}/assignments", token)[0] == 404
             assert not yaml.safe_load(live.raw_request(base, f"/sub/{subscription}?format=mihomo&platform=linux")[1]).get("proxies")
             traffic()
             assert sql("SELECT count(*) FROM kick_requests WHERE state<>'completed'") != "0"
             print("Actual v31 deployment upgraded with corrupt discarded material; business state preserved and offline legacy session pending", flush=True)
             live.run(["docker", "exec", node, "systemctl", "start", "ssh.service"])
-            wait_job(expect(f"/api/v1/nodes/{node_id}/ssh-test", "POST", {"expected_revision": 1})["job_id"])
+            wait_job(expect(f"/api/v2/nodes/{node_id}/ssh-test", "POST", {"expected_revision": 1})["job_id"])
             for _ in range(180):
                 live.run(["curl", "--noproxy", "", "--silent", "--max-time", "1", "--socks5-hostname", f"127.0.0.1:{socks}", "http://127.0.0.1:18081/payload"], check=False)
                 if sql("SELECT count(*) FROM kick_requests WHERE state NOT IN ('completed','cancelled')") == "0":
@@ -194,15 +201,15 @@ def main():
                 time.sleep(0.5)
             assert sql("SELECT count(*) FROM kick_requests WHERE state NOT IN ('completed','cancelled')") == "0", sql("SELECT json_agg(x) FROM (SELECT kind,status,stage FROM jobs ORDER BY created_at DESC LIMIT 8) x")
             traffic(False)
-            managed = expect("/api/v1/credentials/ca-identities", "POST", {"name": "Recovery CA", "source": "generated", "idempotency_key": suffix})["id"]
+            managed = expect("/api/v2/credentials/ca-identities", "POST", {"name": "Recovery CA", "source": "generated", "idempotency_key": suffix})["id"]
             options["tls"].pop("clientCA")
             options["mtls"] = {"mode": "managed", "ca_credential_id": managed, "ca_credential_version": 1}
-            expect(f"/api/v1/nodes/{node_id}", "PATCH", {"expected_revision": 1, "config": options})
+            expect(f"/api/v2/nodes/{node_id}", "PATCH", {"expected_revision": 1, "config": options})
             for _ in range(240):
-                if expect(f"/api/v1/nodes/{node_id}")["mtls_state"] == "ready":
+                if expect(f"/api/v2/nodes/{node_id}")["mtls_state"] == "ready":
                     break
                 time.sleep(0.5)
-            assert expect(f"/api/v1/nodes/{node_id}")["mtls_state"] == "ready"
+            assert expect(f"/api/v2/nodes/{node_id}")["mtls_state"] == "ready"
             exported = yaml.safe_load(live.raw_request(base, f"/sub/{subscription}?format=mihomo&platform=linux")[1])["proxies"][0]
             assert exported["certificate"] != old_cert and exported["private-key"] != old_key
             start_client(exported["certificate"], exported["private-key"], password_before)
