@@ -18,6 +18,7 @@ enum JobDisplayText {
         case "rollback": L10n.text("回滚")
         case "kick": L10n.text("断开客户端")
         case "uninstall": L10n.text("卸载")
+        case "record-remove": L10n.text("移除节点管理记录")
         default: value
         }
     }
@@ -83,6 +84,8 @@ enum JobDisplayText {
             "remote_uninstalled": L10n.text("远端卸载完成"),
             "node_deleting": L10n.text("删除节点中"),
             "node_removed": L10n.text("管理记录已移除"),
+            "record_removed": L10n.text("管理记录已移除"),
+            "removing_history": L10n.text("清理历史记录"),
             "superseded": L10n.text("已被新任务替代"),
             "dns_completed": L10n.text("DNS 操作完成"),
             "dns_propagation_wait": L10n.text("等待 DNS 解析更新"),
@@ -92,6 +95,9 @@ enum JobDisplayText {
     }
 
     static func logMessage(stage: String, message: String) -> String {
+        if let captures = captures(#"^Removing node history; (\d+) rows removed\.$"#, in: message) {
+            return L10n.text("正在清理历史记录，已清理 {0} 条。", captures[0])
+        }
         if stage == "checking_clients",
            let captures = captures(#"^(\d+) client device\(s\) remain online; requesting another kick\.$"#, in: message) {
             return L10n.text("还有 {0} 台设备在线，正在再次请求断开。", String(describing: (captures[0])))
@@ -321,6 +327,7 @@ enum AuditDisplayText {
             "node.deleted": L10n.text("删除节点"),
             "node.ssh_fingerprint_confirmed": L10n.text("信任 SSH 主机指纹"),
             "node.record_removed": L10n.text("移除节点管理记录"),
+            "node.record_removal_requested": L10n.text("请求移除节点管理记录"),
             "node.resource_uploaded": L10n.text("上传节点资源"),
             "node.resource_deleted": L10n.text("删除节点资源"),
             "node.uninstall_requested": L10n.text("请求卸载节点"),
@@ -432,8 +439,8 @@ enum NodeDisplayText {
             "rollback_failed": L10n.text("回滚失败"),
             "drift": L10n.text("远端配置已变更"),
             "unreachable": L10n.text("无法连接"),
-            "deleting": L10n.text("卸载中"),
-            "delete_failed": L10n.text("卸载失败"),
+            "deleting": L10n.text("删除节点中"),
+            "delete_failed": L10n.text("删除失败"),
         ]
     }
 

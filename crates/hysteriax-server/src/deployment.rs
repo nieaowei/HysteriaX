@@ -892,7 +892,7 @@ async fn deploy_with_probe(
     if already_installed && acme_component.is_some() {
         let resume = format!(
             "STAGE={}\n{}",
-            shell_quote(&remote_staging),
+            shell_quote(remote_staging),
             include_str!("../../../deploy/node-acme-resume.sh")
         );
         session
@@ -904,7 +904,7 @@ async fn deploy_with_probe(
     }
     if !already_installed
         && let Err(error) =
-            install_managed_node(&session, &environment, node_id, &remote_staging).await
+            install_managed_node(&session, &environment, node_id, remote_staging).await
     {
         if let Some(record) = &activation {
             // A completed remote script can report a confirmed local rollback.
@@ -1325,7 +1325,7 @@ rm -rf "$DIR"
 umask 077
 mkdir -p "$DIR"
 chmod 0700 "$DIR"
-"#,shell_quote(&remote_dir),shell_quote(&client_config_path))).await?;
+"#,shell_quote(remote_dir),shell_quote(&client_config_path))).await?;
 
     let mut client_pid = None;
     let probe_result = async {

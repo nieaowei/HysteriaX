@@ -1865,14 +1865,13 @@ mod tests {
             7
         );
         crate::db::run_migrations(&state.pool).await.unwrap();
-        assert_eq!(
+        assert!(
             sqlx::query_scalar::<_, bool>(
                 "SELECT to_regprocedure(current_schema()||'.hysteriax_serialize_writes()') IS NULL"
             )
             .fetch_one(&state.pool)
             .await
             .unwrap(),
-            true,
         );
         assert_eq!(
             sqlx::query_scalar::<_, i64>("SELECT count(*) FROM authorization_groups")

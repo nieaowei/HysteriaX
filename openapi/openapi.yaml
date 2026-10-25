@@ -3256,7 +3256,9 @@ components:
         fingerprint: { type: string }
         expected_fingerprint: { type: [string, 'null'] }
         distribution: { type: string }
-        version: { type: string }
+        version:
+          type: [string, integer, 'null']
+          description: OS version string for SSH tests, or numeric credential version for credential tasks.
         architecture: { type: string }
         privilege: { type: string }
         proxy_probe:

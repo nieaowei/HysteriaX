@@ -6,7 +6,39 @@ import Foundation
                    retryOfJobId: nil, retryJobId: nil, targetRevision: 3, status: status, stage: "queued", errorMessage: nil,
                    result: nil, attempts: 0, createdAt: created, updatedAt: created, finishedAt: nil)
     }
-    static func main() {
+    static func main() throws {
+        // Startup reads the whole jobs page. Credential tasks return a numeric
+        // version while SSH tests return an OS version string in the same field.
+        let decoder = JSONDecoder()
+        for (versionField, expected): (String, JSONValue?) in [
+            (#""version":2,"#, .integer(2)),
+            (#""version":"Ubuntu 24.04", "#, .string("Ubuntu 24.04")),
+            (#""version":null,"#, nil),
+            ("", nil),
+        ] {
+            let payload = Data("""
+            {"items":[{"id":"credential-job","kind":"credential-apply",
+              "status":"succeeded","stage":"completed","attempts":1,
+              "created_at":"2026-10-21T00:00:00Z","updated_at":"2026-10-21T00:00:00Z",
+              "result":{"stage":"completed","result":{\(versionField)
+                "fingerprint":"SHA256:fixture","proxy_probe":{"status":"passed"}}}}],
+             "page":1,"page_size":200,"total":1}
+            """.utf8)
+            let page = try decoder.decode(JobsPage.self, from: payload)
+            precondition(page.items.count == 1)
+            precondition(page.items[0].result?.result?.version == expected)
+            precondition(page.items[0].result?.result?.fingerprint == "SHA256:fixture")
+            precondition(page.items[0].result?.result?.proxyProbe?["status"] == .string("passed"))
+            let cached = try decoder.decode(JobsPage.self, from: JSONEncoder().encode(page))
+            precondition(cached.items[0].result?.result?.version == expected)
+            // Use the same job payload in the detail envelope as returned by getJob.
+            let envelope = try JSONSerialization.jsonObject(with: payload) as! [String: Any]
+            let detailData = try JSONSerialization.data(withJSONObject: [
+                "job": (envelope["items"] as! [Any])[0], "logs": []
+            ])
+            let decodedDetail = try decoder.decode(JobDetailResponse.self, from: detailData)
+            precondition(decodedDetail.job.result?.result?.version == expected)
+        }
         precondition(NodeTaskFeedback.allowsAction("ssh-test", state: "delete_failed"))
         precondition(!NodeTaskFeedback.allowsAction("rollback", state: "deployed", mtlsState: "recovery_required"))
         precondition(!NodeTaskFeedback.allowsAction("deploy", state: "deployed", mtlsState: "needs_configuration"))

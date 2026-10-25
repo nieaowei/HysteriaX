@@ -211,7 +211,7 @@ async fn record_failed_sample(
             if captured {return Ok(());}
             sqlx::query("UPDATE traffic_sample_batches SET state='discarded',completed_at=clock_timestamp() WHERE sample_id=$1 AND state='capturing'")
                 .bind(&id).execute(&mut **tx).await?;
-            crate::overview::record_online_on(&mut **tx,&node,cycle,started,expected,None).await?;
+            crate::overview::record_online_on(tx,&node,cycle,started,expected,None).await?;
             sqlx::query("UPDATE online_samples SET traffic_status='failed' WHERE node_id=$1 AND cycle_id=$2")
                 .bind(&node).bind(cycle).execute(&mut **tx).await?;
             record_gap_in_tx(tx,&node,reason,&now()).await?;

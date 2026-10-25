@@ -1226,7 +1226,7 @@ struct JobOutcome: Codable, Sendable {
     let fingerprint: String?
     let expectedFingerprint: String?
     let distribution: String?
-    let version: String?
+    let version: JSONValue?
     let architecture: String?
     let privilege: String?
     let proxyProbe: [String: JSONValue]?

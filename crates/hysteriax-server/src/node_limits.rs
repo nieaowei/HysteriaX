@@ -1264,7 +1264,7 @@ mod tests {
         let mut tx = pool.begin().await.unwrap();
         let row =
             sqlx::query("SELECT config,usage_bytes,restricted FROM node_packages WHERE node_id=$1")
-                .bind(&id)
+                .bind(id)
                 .fetch_one(&mut *tx)
                 .await
                 .unwrap();
@@ -1277,7 +1277,7 @@ mod tests {
         sqlx::query("INSERT INTO node_alerts(id,node_id,kind,scope,created_at) VALUES('legacy-alert',$1,'warning','package',now())")
             .bind(id).execute(&mut *tx).await.unwrap();
         sqlx::query("DELETE FROM nodes WHERE id=$1")
-            .bind(&id)
+            .bind(id)
             .execute(&mut *tx)
             .await
             .unwrap();

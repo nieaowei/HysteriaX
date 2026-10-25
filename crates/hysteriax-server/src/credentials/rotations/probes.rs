@@ -171,7 +171,7 @@ async fn page(pool: &PgPool, work: &Work, audit: &str) -> Result<()> {
 }
 async fn page_on(tx: &mut Transaction<'static, Postgres>, work: &Work, audit: &str) -> Result<()> {
     work.guard_on(tx).await?;
-    let (r, ca, v) = target(&work)?;
+    let (r, ca, v) = target(work)?;
     ensure!(
         work.id == format!("rotation-probes:{r}"),
         "wrong probe admission scope"
@@ -229,7 +229,7 @@ async fn page_on(tx: &mut Transaction<'static, Postgres>, work: &Work, audit: &s
         && !pending_children(tx, &r).await?;
     if ready {
         sqlx::query("UPDATE mtls_rotations SET phase='complete',error_message=NULL,updated_at=clock_timestamp() WHERE id=$1").bind(&r).execute(&mut **tx).await?;
-        sqlx::query("INSERT INTO audit_records(id,actor,action,entity_type,entity_id,detail_json,created_at) SELECT $1,actor_id,'ca.rotation_completed','ca_rotation',id,jsonb_build_object('ca_credential_id',ca_id,'ca_version',ca_version,'version',ca_version),clock_timestamp() FROM mtls_rotations WHERE id=$2").bind(&audit).bind(&r).execute(&mut **tx).await?;
+        sqlx::query("INSERT INTO audit_records(id,actor,action,entity_type,entity_id,detail_json,created_at) SELECT $1,actor_id,'ca.rotation_completed','ca_rotation',id,jsonb_build_object('ca_credential_id',ca_id,'ca_version',ca_version,'version',ca_version),clock_timestamp() FROM mtls_rotations WHERE id=$2").bind(audit).bind(&r).execute(&mut **tx).await?;
     } else {
         sqlx::query("UPDATE mtls_rotations SET error_message='Waiting for probe activation on live members',next_action_at=clock_timestamp()+interval '1 second',updated_at=clock_timestamp() WHERE id=$1").bind(&r).execute(&mut **tx).await?;
     }

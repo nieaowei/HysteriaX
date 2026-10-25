@@ -38,7 +38,7 @@ pub async fn record_online(
         let (node, body) = (node.clone(), body.clone());
         Box::pin(async move {
             record_online_on(
-                &mut **tx,
+                tx,
                 &node,
                 cycle,
                 cycle_started,

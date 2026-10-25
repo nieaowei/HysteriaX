@@ -2169,6 +2169,14 @@
 "查看完整变更" = "View all changes";
 "级联删除" = "Delete with dependencies";
 
+"清理历史记录" = "Removing history";
+
+"删除失败" = "Delete failed";
+
+"正在清理历史记录，已清理 {0} 条。" = "Removing history; {0} rows removed.";
+
+"请求移除节点管理记录" = "Request removal of node management record";
+
 "有过多结果待确认的请求，请先恢复并重试原请求。" = "Too many requests have unconfirmed results. Reconnect and retry the original requests first.";
 "事件游标已失效，需要重新同步。" = "The event cursor has expired. State must be synchronized again.";
 

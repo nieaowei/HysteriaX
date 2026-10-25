@@ -602,10 +602,10 @@ async fn require_admin(
             token_usage::touch(&state.pool, &id, &digest),
         )
         .await;
-        if let Ok(Err(error)) = touched {
-            if error.as_database_error().and_then(|e| e.code()).as_deref() != Some("55P03") {
-                tracing::warn!(error = %error, "administrator token usage timestamp not updated");
-            }
+        if let Ok(Err(error)) = touched
+            && error.as_database_error().and_then(|e| e.code()).as_deref() != Some("55P03")
+        {
+            tracing::warn!(error = %error, "administrator token usage timestamp not updated");
         }
     }
     request

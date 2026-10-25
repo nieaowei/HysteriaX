@@ -101,7 +101,9 @@ def swift_type(schema, schemas)
   end
   type = schema["type"]
   if type.is_a?(Array)
-    type = type.reject { |entry| entry == "null" }.first
+    variants = type.reject { |entry| entry == "null" }
+    return "JSONValue" if variants.length > 1
+    type = variants.first
   end
 
   case type

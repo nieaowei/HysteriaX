@@ -211,10 +211,10 @@ impl QuotaRank {
             "rebuild"
         };
         let mut command = Self::command(redis, &schema, mode, &version, now);
-        if let Some(basis) = basis {
-            if frontier.is_some() {
-                command.arg(basis);
-            }
+        if let Some(basis) = basis
+            && frontier.is_some()
+        {
+            command.arg(basis);
         }
         for (id, generation) in changes {
             if let Some(entry) = entries.get(id.as_str()) {

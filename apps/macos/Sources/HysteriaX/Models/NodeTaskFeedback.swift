@@ -18,7 +18,7 @@ enum NodeTaskFeedback {
     }
 
     static func blocksOperation(_ job: JobSummary) -> Bool {
-        job.status != "waiting_confirmation" && isActive(job) && ["ssh-test", "deploy", "sync", "rollback", "uninstall"].contains(job.kind)
+        job.status != "waiting_confirmation" && isActive(job) && ["ssh-test", "deploy", "sync", "rollback", "uninstall", "record-remove"].contains(job.kind)
     }
 
     static func tasks(for nodeID: String, in jobs: [JobSummary]) -> [JobSummary] {
