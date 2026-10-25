@@ -38,6 +38,7 @@
     "crates/hysteriax-server/src/node_limits.rs"
   ],
   "real_snapshot_native_writer_report": "0034-production-snapshot-node-cleanup-native-writers.json",
-  "final_full_status": "running",
-  "final_full_log": "/tmp/hx0034-phase115-full.log"
+  "final_full_status": "passed",
+  "final_full_log": "/tmp/hx0034-phase115-full.log",
+  "final_full_report": "0034-final-workspace-regression.json"
 }

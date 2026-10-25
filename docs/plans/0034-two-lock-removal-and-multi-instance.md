@@ -1136,4 +1136,15 @@
 - all-target cargo check 和沿用三项复杂度允许的 Clippy 通过，格式／diff 检查通过。对两个同时有用户旧改动的文件（api/mod.rs、node_limits.rs）以 HEAD 加本次变换构造暂存对象，其他用户既有改动继续留在工作区；剔除 blob 索引行后，原始未暂存补丁逐字节一致，未混入本次提交。
 - 证据 docs/verification/0034-retired-lock-fixture-isolation.json 和 docs/verification/0034-production-snapshot-node-cleanup-native-writers.json。最终全量重新使用本轮独占数据库／带认证 Redis、8 测试线程，当前已启动，日志 /tmp/hx0034-phase115-full.log；未有终态前不记为通过。受限资源真实快照容量、最终镜像重建／推送、维护切换及完整回退仍需完成，0034 目标继续。
 
+### 第一百一十六阶段：全量通过与真实快照受限内存容量反例
+
+- 第一百一十五阶段最终全量原句柄退出 0：服务端 1050 passed／0 failed／7 ignored（1110.76s），模板验证器另 1 passed；整体命令 1113.239s。8 测试线程，独占 PostgreSQL 数据库和带认证 Redis，TEST_REDIS_URL 已启用；自有资源在 finally 清理。未把忽略测试计作通过。证据 docs/verification/0034-final-workspace-regression.json，旧锁夹具报告同步改为全量通过。
+- 新增 verify-snapshot-capacity.py：从同一私有真实快照恢复到自有 PostgreSQL／Redis，迁移与两个普通 API 都经非 root／无 capability 检查及出站默认拒绝规则后才释放启动门槛；Caddy 使用生产动态发现配置，测试副本标识只在夹具添加。所有容器禁用额外 swap，预算为 PostgreSQL 384MiB、Redis 64MiB、每 API 128MiB、Caddy 48MiB，共 752MiB，CPU 上限合计 1.9。实际负载包括目录、任务、审计、总览和 30 天历史，4 并发／96 请求；另安排跨副本幂等写和 Redis 故障／空重启，前序失败时不把后续项目算通过。
+- 初期两项夹具问题保留为失败记录：重复连接 Caddy 数据网络、把启动中临时 PostgreSQL Unix socket 当作可恢复就绪；后者已改为等待正式 TCP listener。启动阶段 HTTP 断开只在 readiness 轮询重试，正式负载的错误仍直接失败。清理前逐一检查 owner 标签，避免删除其他测试资源。
+- 全套 linux/amd64 镜像、ARM 宿主模拟执行的第一轮正式容量未通过：76×200、17×500、3×503，PostgreSQL memory.peak 达到 384MiB、6 次 oom_kill。保持同一数据、请求数和内存上限，关闭 JIT 和查询并行的复验仍未通过：81×200、13×500、2×503，7 次 oom_kill。两轮均实际到达两个 API；API 本身未 OOM。日志定位到 online_history.sql 的 dirty_ids 历史回退查询，不是后台刷新。不能把这两轮记为可承载生产双实例。
+- 只读复核目标服务器：MemTotal 1011417088、MemAvailable 347443200 字节，SwapTotal－SwapFree=251637760 字节；四容器 cgroup memory.current 合计 404692992 字节，包含可回收文件页。该瞬时结果不是峰值或新增副本的预算承诺。生产双副本容量门槛继续关闭；独立环境增加 PostgreSQL 内存作为阳性对照，结果未终态前不记为通过。
+- 安装文档补充协议 2、稳定幂等键、全实例停机迁移、完整备份回退及外部操作时间线限制，修正仍宣称管理 v1 的旧说明。最终本地 amd64 镜像重建仍在执行，尚未推送或部署。0034 目标继续，保留现有生产及用户改动。
+- 阳性对照已退出 0（98.323s）：相同 linux/amd64 镜像、JIT off／查询并行 0，仅把 PostgreSQL 上限增至 768MiB。三轮各 96 请求全部 200，均实际覆盖两个 API，P95 分别 2017.525／139.564／108.141ms；12 次跨副本相同幂等键得到逐字节相同响应，只新增 1 个夹具用户。Redis 空重启后重建 17 个键；数据库连接含后台共 30，迁移后运行阶段观察到的已授予 advisory lock 为 0。所有服务无 OOM／重启，自有容器、卷和网络清理完整；执行时 verifier 源码 SHA256 与交付脚本一致。
+- 该阳性对照容器上限合计 1136MiB，超过目标机总物理内存，不能用于放行生产双实例。旁路只读采样看到 PostgreSQL anon 最大 504246272 字节；file 最大值来自其他采样时刻，不能将各时刻最大值相加当同一时刻峰值。所有正式容量反例／阳性对照与目标机观察保存在 docs/verification/0034-snapshot-capacity-budget.json，capacity_gate_passed 仍为 false。下一步区分在线历史查询的规划／执行内存，再决定目标机发布策略，不以放宽测试门槛消除反例。
+
 工作区原有 macOS、OpenAPI、生成脚本与任务展示测试改动需持续保留；不得整体覆盖或混入第一阶段服务端提交。
