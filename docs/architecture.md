@@ -1,51 +1,49 @@
 # Architecture
 
-## Components
+## Components and storage
 
-- `crates/hysteriax-server` is the authoritative management service. It exposes the HTTPS API, validates writes, stores versioned configuration and credentials, performs Hysteria HTTP authentication, renders Mihomo subscriptions, and persists jobs and events.
-- `apps/macos` is the SwiftUI management client. It stores the service URL and administrator token in the macOS Keychain and treats server state as authoritative.
-- PostgreSQL 18 is the service's only database. Compose stores it and Caddy state in separate persistent volumes.
-- Managed nodes run the pinned Hysteria 2 binary and request user authorization from `/hy2/auth/{node_id}/{node_token}`.
+- `crates/hysteriax-server` is the authoritative Rust management service. It validates configuration, encrypts credentials, serves subscriptions and node authentication, samples usage over SSH, and executes durable jobs.
+- `apps/macos` is the SwiftUI management client. It stores the administrator token in Keychain and reads authoritative server state; the service continues working while the client is closed.
+- PostgreSQL 18 stores business state, jobs, execution journals, events, resource leases and cache versions. Redis accelerates caches and rankings; Redis failure permits database fallback.
+- Managed Linux nodes run the pinned Hysteria binary and call `/hy2/auth/{node_id}/{node_token}`. The separate node-local ACME component maintains server certificates.
+- Caddy terminates management HTTPS and discovers API replicas through Docker DNS. The bundled Compose topology can run on one host; production may place PostgreSQL, Redis and APIs on separate hosts.
 
-## Storage and security
+## Maintenance and security
 
-PostgreSQL migrations are embedded in the service binary and run at startup. The schema uses `BOOLEAN`, `TIMESTAMPTZ`, `JSONB`, and `BIGINT`; encrypted secrets remain ciphertext text. Each configuration edit carries an `expected_revision`; stale writes return HTTP 409. A node configuration update and its queued sync job are committed in the same transaction. Transactional advisory locks preserve serialized write and event-cursor ordering. A session advisory lock rejects a second service instance using the same database.
+Embedded SQLx migrations and one-time initialization run only through `--migrate-only`, with all ordinary API replicas stopped. Ordinary startup checks migration state, management protocol and the shared master-key fingerprint before starting workers. SQLx migration mutual exclusion remains; there is no application-wide write lock or single-instance runtime lock.
 
-Management API contract 1.0.0 uses `/api/v1`; The v1 contract is changed in place; clients and server must upgrade together. The canonical subscription route is `/sub/{token}`; legacy `/clash.yaml` links are retired by the template upgrade. Health endpoints and Hysteria authentication callbacks keep their public URLs.
+`HYSTERIAX_MASTER_KEY` is a base64-encoded 32-byte key held outside PostgreSQL. XChaCha20-Poly1305 protects stored secrets and snapshots; high-entropy bearer credentials are stored as SHA-256 digests. Secret-bearing write receipts are returned once or replayed through encrypted idempotency records. Credential versions are immutable and configuration snapshots pin exact versions. See [credentials](credentials.md) and [backup and recovery](backup-restore.md).
 
-The service requires a 32-byte base64 master key. XChaCha20-Poly1305 encrypts SSH authentication material, node and user credentials, subscription tokens, configuration snapshots, and node resources. SHA-256 digests are used to validate high entropy bearer credentials. The master key is read from the process environment and is not written into PostgreSQL.
+## Transactions, workers and caches
 
-Administrator tokens are random, rotatable, and stored as digests. Newly created administrator tokens, node tokens, user credentials, and subscription URLs are returned once by their corresponding write operations. Request bodies and API errors do not log credential fields.
+Cross-entity management changes use serializable database transactions. Pure database transactions retry serialization failures and deadlocks at most five times; SSH and DNS side effects stay outside retry closures. Stale revisions return 409 and exhausted transient retries return 503. Resource row locks, constraints and a consistent lock order coordinate related changes.
 
-Credential objects have immutable encrypted versions. Node configuration and deployment snapshots reference exact versions; SSH uses the currently verified binding. Publication creates durable per-node batches and queues automatic application. Credential application commits its completion marker with the binding or follow-up job, so restart recovery cannot apply the same change twice. User mTLS identities remain user-owned. Public certificate metadata is readable; secret material is not returned after import. See [credentials](credentials.md).
+Each process has a unique instance ID and a database heartbeat. Workers claim resource-scoped work with database-time leases and owner/generation fencing. Leases last 60 seconds and renew every 10 seconds. Startup does not reset other instances' running work. Database-only work resumes after lease expiry; external steps persist an operation intent before dispatch. Uncertain external outcomes enter `reconciling` or `needs_attention` and keep the resource blocked until verification succeeds.
 
-## Long running work
+Traffic sampling uses stable captured batches, applies at most 500 user items per transaction, and atomically records progress with billing. Versioned dirty queues retain refresh work until its result and acknowledgement commit together. Durable node removal uses bounded history deletion and a persisted cursor. Revocations remain owed until confirmed rather than relying on process-local notifications.
 
-Jobs, ordered events, and redacted phase logs are stored in PostgreSQL. The job worker serializes work per node, recovers jobs left running after a process restart, and applies new desired revisions after a running operation finishes. Deployment, sync, rollback, uninstall, SSH test, and credential revocation execute outside the macOS client. Deploy, sync, and rollback validate the installed service and run the pinned Hysteria client probe before reporting success. Clients read persisted job state and reconnect to the SSE stream using the last event id (`?after=<id>`).
+Cache validity comes from committed entity versions and per-domain vectors of 64 bucket versions. Fill operations read one consistent snapshot and respect time-dependent expiry. Notifications accelerate invalidation; they are not authoritative. Redis ranking versions and deletion tombstones reject stale updates. Authorization and quota decisions read authoritative state.
 
-The traffic worker samples each deployed node over SSH every ten seconds, updates node freshness even when no user traffic is present, and transactionally records traffic baselines, deltas, and sampling gaps. It schedules expiry and quota revocations across assigned nodes. Durable `kick_requests` merge reasons per node/user and survive user deletion. Each execution is limited to five attempts with 30/60/120/300-second retry delays. Exhausted SSH transport failures wait for an observed trusted SSH connection before a linked execution is queued; permanent or other exhausted errors require explicit retry. Renewals and quota resets clear conditional reasons while credential revocations, unassignments and deletions remain owed until the node confirms the user is offline. Request generations prevent a running job from acknowledging a newer revocation, and jobs are ordered by availability time to release the queue for SSH tests and repairs.
+## API and event contract
 
-## Code layout
+Management API 2.0.0 uses `/api/v2` with Bearer administrator authentication and stable `Idempotency-Key` headers for writes. Old `/api/v1` management requests return 426. Subscription and node authentication URLs retain their contracts. The source contract is [OpenAPI](../openapi/openapi.yaml); JSON timestamps use UTC RFC 3339.
 
-- `api/` contains versioned HTTP routes for nodes, users, subscriptions, resources, jobs, audit, and health.
-- `config.rs` validates fixed-version Hysteria server options and renders managed node configuration.
-- `jobs.rs` claims and recovers queued work and persists job transitions; `deployment.rs` performs remote install, sync, rollback, health checks, and the client probe.
-- `ssh.rs` implements host-key-verified SSH/SFTP operations.
-- `traffic.rs` samples usage, records per-node baselines and data gaps, and queues access revocations.
-- `security/` contains secret encryption and token hashing; `state.rs` owns the service database pool and runtime settings.
-- `db.rs` owns PostgreSQL connection settings, advisory locks, test-schema setup, and embedded migrations; `migrations/` defines the fresh PostgreSQL schema.
+Transactional source events are published with a separate publication sequence in batches of at most 256. SSE cursors use `v2:<epoch>:<publication_seq>`. Clients fetch the stream head before loading state, reconnect to any replica, deduplicate events, and save the cursor only after handling an event. An expired cursor returns 410 and triggers full resynchronization.
 
-## API contract
+`DELETE /api/v2/nodes/{id}` performs managed remote uninstall. `DELETE /api/v2/nodes/{id}/record` removes the management record without SSH and checks revisions and conflicting work. Small removals return 204; more than 1,000 history rows queue a durable `record-remove` job and return 202. The node remains `deleting` while progress commits in short transactions. Shared users and credentials remain, as do historical task identifiers and audit evidence. Record-only removal does not stop the remote service and cannot bypass unresolved managed-trust obligations.
 
-`openapi/openapi.yaml` documents the versioned management API. The API returns JSON and UTC RFC 3339 timestamps. Public endpoints are restricted to health checks, subscription downloads, and the Hysteria HTTP auth callback. The subscription endpoint disables caching and returns 404 for an unknown or revoked token, and 403 for a disabled, expired, or over quota user.
+Subscription templates have encrypted drafts, immutable publications and explicit platform overlays. Maintenance seeds defaults once; built-in files are initialization resources. Public generation reads a published snapshot, resolves the platform, filters authorized nodes, applies overlays and injection rules, then validates and serializes the result. URI/Base64 remain direct node exports. Runtime never invokes proxy kernels; pinned kernels are verification tools. See [subscriptions](subscriptions.md).
 
+## Code layout and verification
 
-Node removal has two explicit operations. `DELETE /api/v1/nodes/{id}` performs managed remote uninstall before removing an installed node. `DELETE /api/v1/nodes/{id}/record` removes only the management record without SSH, after checking the optimistic revision and rejecting running remote deployment/uninstall/credential changes. It cancels other active jobs, signals their local workers, removes dependent assignments/configuration/monitoring/revocation requests, and retains historical job identifiers, names, events and an explicit `node.record_removed` audit. For more than 1,000 associated history rows, record-only removal returns HTTP 202 and queues a durable `record-remove` job. The node stays in `deleting` state while the job removes history in short transactions, records progress, and resumes committed work after a restart. Repeated requests reuse the active job; retrying a failed removal creates a linked attempt. Small removals still return HTTP 204. Remote uninstall also purges large histories in batches before the final metadata transaction. Shared credentials and users remain. The remote service may still be running; client capability `node_record_removal` gates the separate operation.
+| Area | Responsibility |
+| --- | --- |
+| `api/`, `openapi/openapi.yaml` | HTTP routes, contracts, templates and idempotent writes. |
+| `db.rs`, `bootstrap.rs`, `migrations/` | Transactions, maintenance, runtime compatibility and schema history. |
+| `execution.rs`, `background.rs`, `jobs.rs` | Leases, fencing, recovery and job execution. |
+| `deployment.rs`, `ssh.rs`, `credentials/` | Verified external operations and credential lifecycle. |
+| `traffic/`, `analytics/`, `node_limits.rs` | Captured billing, refresh queues and machine quotas. |
+| `cache.rs`, `cache_domains.rs`, `quota_rank.rs`, `events.rs` | Versioned caches, rankings and event publication. |
+| `apps/macos/Sources/HysteriaX/` | Client models, transport, stores and views. |
 
-## Versioned subscription templates
-
-`api/subscriptions/templates/` owns the lossless native document, versioned upstream field catalogs, overlay merge and validation, policy references/refactoring, dynamic node injection, encrypted persistence, and administrator endpoints. PostgreSQL migration 0037 separates templates/drafts from published history. Startup seeds once under the existing serialized write lock using the master key; built-in files are initialization resources only.
-
-Public native generation reads a published snapshot, resolves the explicit/UA target platform, merges its visible overlay, obtains currently authorized eligible nodes, applies client compatibility and injection selection, validates the final configuration, and serializes it. Cache keys carry template ID/version; the current publication pointer is read before accessing the response cache. URI/Base64 remain direct node exports. The retired `/clash.yaml` route has no compatibility layer.
-
-The Mac feature uses separate document/schema helpers, an observable feature Store, native field controls, injection editor, inspector, and template/platform subscription sheet. Schema catalogs feed both backend structural validation and typed controls. Unknown fields are preserved with unverified diagnostics. Publication and runtime never invoke proxy kernels; fixed kernels remain test tools only. See [subscription contract and upgrade](subscriptions.md).
+See the [verification guide](deployment-testing.md) for reproducible checks and their isolation requirements. Host capacity and replica counts are deployment decisions, separate from functional acceptance.

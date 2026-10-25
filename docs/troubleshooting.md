@@ -2,7 +2,11 @@
 
 ## The API does not become ready
 
-Run `docker compose logs api`. Check that `HYSTERIAX_MASTER_KEY` decodes to 32 bytes and that the data directory is writable by the service container. On first startup, provide a 256-bit administrator token in `HYSTERIAX_ADMIN_TOKEN`.
+Run `docker compose logs --tail=100 api`. Check database connectivity, that `HYSTERIAX_MASTER_KEY` decodes to 32 bytes, and that the asset-cache directory is writable. Missing schema or initialization requires stopping all API replicas and running the selected image's `--migrate-only` before restart. First maintenance initialization needs a 256-bit administrator token in `HYSTERIAX_ADMIN_TOKEN`. Do not regenerate the master key for an existing database.
+
+## The management client receives 426 or the event stream returns 410
+
+HTTP 426 means the client is using the retired management protocol. Install the matching protocol 2 client; `/api/v2` uses stable idempotency keys for writes. HTTP 410 on SSE means the saved cursor is no longer valid; fetch the new stream head and reload state before resuming. See [installation](installation.md#management-protocol-2-upgrade-0034).
 
 ## HTTPS certificate issuance fails
 
@@ -14,11 +18,11 @@ Administrator, node, assignment, and subscription tokens are independent. A revo
 
 ## A configuration write returns 409
 
-Another client saved a newer revision. Fetch the node or user again, merge the intended edit, and submit its current `revision` as `expected_revision`.
+A stale revision requires fetching the entity again, merging the intended edit, and submitting the current `revision` as `expected_revision`. Read the error code: an idempotency key reused for different content or conflicting resource work can also return 409. After a transport failure, retry the same intended request with its original key; do not mint a new key to force an uncertain operation through. Transient transaction retries exhausted with 503 can be retried with the same key.
 
 ## A node does not appear in a subscription
 
-The subscription includes only assignments on nodes with a successful deployed revision. The current API foundation persists deploy and sync jobs; until the SSH worker stage is complete, queued jobs do not install Hysteria on remote hosts.
+Check the user's enabled state, expiry, quota and authorization-group membership, then confirm the node has a successful deployed revision. Native template exports also apply the selected platform's compatibility and injection rules. Inspect queued, failed or uncertain deployment jobs and any mTLS configuration barrier. The SSH workers execute deployment independently of the Mac client. See [subscriptions](subscriptions.md) and [managed mTLS](managed-mtls.md).
 
 ## macOS client times out while curl succeeds
 

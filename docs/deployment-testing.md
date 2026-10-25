@@ -1,66 +1,42 @@
-# Deployment matrix verification
+# 部署与回归验证
 
-`scripts/verify-deployment-matrix.py` builds disposable systemd containers, connects to them over SSH, installs the pinned Hysteria release, waits for the stats APIs, and requests remote uninstall. The script removes its containers and tagged images when it exits. It requires Docker with privileged container support, Rust, OpenSSL, and outbound access to Debian/Ubuntu package repositories and the pinned Hysteria release.
+在独立数据库、Redis 和自有 Docker 容器中运行验证。不要将开发脚本指向线上数据库或直接复用线上 Compose 项目。带真实快照的测试必须先隔离外部出站，避免副本触发 SSH、DNS 或撤权。测试环境准备见 [安装指南](installation.md#local-development-and-tests)。
 
-On an arm64 development host, run the natively supported distro matrix with:
+## 常用检查
 
 ```sh
-scripts/verify-deployment-matrix.py \
-  --only debian12-arm64 \
-  --only debian13-arm64 \
-  --only ubuntu2204-arm64 \
-  --only ubuntu2404-arm64
+cargo fmt --all -- --check
+cargo test --workspace
+cargo clippy --workspace --all-targets -- -D warnings
+ruby scripts/generate-swift-api-models.rb --check
+bash scripts/verify-node-task-feedback.sh
+bash scripts/verify-management-display-text.sh
+bash scripts/verify-management-protocol.sh
+bash scripts/verify-localization.sh
+python3 -m unittest discover -s tests -p 'test_backup_restore.py'
 ```
 
-That run also checks root-key SSH and non-root `sudo -n` using both SSH key and password authentication on all four images. It deploys a shared service across two containers and exercises three-user isolation plus aggregate traffic and quota enforcement through live Hysteria clients. The container matrix does not replace acceptance on independent cloud VMs, especially for firewall behavior, public UDP reachability, disk pressure, and failure recovery.
+Rust 数据库测试需要可丢弃 PostgreSQL 的 `TEST_DATABASE_URL`；Redis 专项另需 `TEST_REDIS_URL`。保留测试输出中的忽略项和失败，不把部分完成记为全量通过。上述是运行入口，不代表本次已经执行或通过。
 
-The `Deployment Matrix` GitHub Actions workflow runs amd64 on an x86_64 GitHub-hosted Linux VM and arm64 on a native arm64 runner for public repositories. Both architecture jobs passed Debian 12/13 and Ubuntu 22.04/24.04, including deployment and uninstall checks ([run](https://github.com/nieaowei/HysteriaX/actions/runs/36804870498)). The local arm64 host's QEMU emulation remains unreliable for amd64 systemd service health.
+## 全进程与部署专项
 
-On an Apple Silicon Mac, `scripts/verify-mtls-live.py` additionally deploys a disposable Debian 13 arm64 node, creates a test CA and client certificate, validates the generated subscription with Mihomo v1.19.31, then transfers TCP data through both the Hysteria client and Mihomo using mTLS. It removes the test node, container, and image when it exits.
+| 入口 | 验证范围 |
+| --- | --- |
+| `scripts/verify-deployment-matrix.py` | 自有 systemd Linux 容器中的 SSH 部署、探测及卸载。 |
+| `scripts/verify-multi-instance-billing.py` | 多实例计费批次、崩溃／数据库断连、租约接管和串行参考。 |
+| `scripts/verify-multi-instance-cache.py` | 跨实例失效、版本与 Redis 故障。 |
+| `scripts/verify-multi-instance-events.py` | 发布顺序、进程故障和游标恢复。 |
+| `scripts/verify-multi-instance-cutover.py` | v2 多实例协议及幂等切换。 |
+| `scripts/verify-snapshot-migration.py` | 真实快照迁移、受保护原数据和独立聚合参考。 |
+| `scripts/verify-snapshot-capacity.py` | 最终 Linux 镜像、Caddy 三副本及 Redis 停止／空重启；可选完整旧版恢复。 |
+| `scripts/verify-backup-restore-compose.py` | 备份恢复及外部操作时间线不一致时的拒绝行为。 |
 
-On 2026-10-01, the full live script passed again against a newly created Debian 13 arm64 systemd container. It rejected an unmanaged remote directory and an occupied UDP port before installation, then completed clean deployment. The Hysteria client and Mihomo v1.19.31 each transferred 2 MiB over the configured UDP port range with mTLS, ECH, and Gecko enabled. SSH interruption/retry, service-start rollback, forced rollback failure/recovery, sampling-gap recovery, two-client expiry/disable/quota kicks, and active credential rotation also passed; the node, temporary users, container, and image were cleaned up. A matching pristine-install/unmanaged-refusal run has since also passed on Server1; its recovery evidence is below.
+先查看各脚本的参数和环境要求；提供命令行参数解析的 Python 专项可用 `--help` 查阅。部分旧验证脚本仍针对历史 v1，不应直接用于当前线上服务。镜像、内核下载、Docker 权限和 fixture 参数以各脚本为准；不将旧脚本的历史通过当作本次重新执行。
 
-`scripts/verify-realm-live.py` runs the pinned Hysteria v2.12.3 and Mihomo v1.19.31 binaries against a local self-hosted rendezvous. It delays client STUN responses to 5.6 seconds: the baseline outbound fails with the five-second context, while the generated Realm `handshake-timeout: 30` completes and transfers 2 MiB. The script runs on macOS arm64 and Linux amd64/arm64; CI includes it in the Linux job. `scripts/verify-subscription.sh` also checks the generated Realm subscription fields and parses them with pinned Mihomo.
+容量记录只描述具体数据、并发和限制下的实验。本机 Docker 可完成多实例功能验收，不要求额外原生 x86_64 服务器。生产 PostgreSQL、Redis 与 API 可分机部署，按实际主机角色核算资源。详见 [当前架构](architecture.md)。
 
+## 文档审计与发布边界
 
-The live acceptance script checks deployment failures: a wrong SSH fingerprint is rejected, an unmarked remote HysteriaX directory is not adopted, and a UDP port conflict is rejected before writing installation files. It removes the blocker and retries synchronization successfully. It interrupts SSH during deployment, verifies retry wait, restores SSH, and confirms deployment resumes. An injected service-start failure restores the previous configuration and then recovers through explicit sync. A separate health-check failure makes the automatic rollback restart fail; the job and node record `rollback_failed`, and explicit sync recovers after removing the injected failure. For quota recovery, the script stops SSH while proxy traffic continues, checks that sampling records an open gap without charging usage, restores SSH, and verifies the missed 2 MiB is charged once. Three live revocation cases keep two Hysteria clients streaming through natural user expiry, explicit disable, and over-quota; each verifies both devices are kicked, new authentication is denied, online count reaches zero, proxy traffic stops, and the subscription returns HTTP 403. A fourth live case rotates credentials during two active streams, confirms both old sessions are kicked, rejects the old credential, accepts the replacement, and checks that the current subscription carries the replacement. The auth-isolation verifier creates and uses a 100-character Unicode-labeled admin token, confirms its value is omitted from token-list responses, revokes it, and verifies further requests are denied. It also sends simultaneous edits from two clients at the same expected revision and confirms one commits while the other gets HTTP 409. The usage endpoint check verifies `not_collected` freshness, per-node assignment/sample values, and a queued node revocation; it also confirms a fresh sample on one node does not mask missing data on another. The macOS detail panel displays these states with per-node sample timestamps and open gap counts. The PostgreSQL migration verifier starts the service against an isolated schema, checks the native PostgreSQL column types and fresh schema version, and confirms a second server process is rejected while the first holds the database lock. Existing SQLite data is not imported by this release. The restart-recovery check also confirms that a progress log remains available through the job-detail API after worker recovery. Asset download retries transient transport and server failures up to three attempts; the SHA-256 mismatch guard has a Rust unit test, while network-level corruption has not been injected. Native amd64 and arm64 runner acceptance passed; the cloud occupied-port preflight guard, listener-start rollback, forced rollback-failure recovery, interrupted-SSH recovery, and mTLS acceptance pass. Server1 clean first-install, unmanaged-refusal, and first-install UDP-occupancy rejection/retry acceptance now pass in the cloud.
+模板文档审计结果可以按需重新生成：先用 `scripts/audit-template-documentation.py` 的 `--write` 模式生成固定版本字段基线，再运行 `scripts/audit-template-website.py` 比较在线文档。前者需要匹配的上游文档源码；后者依赖前者生成的清单并访问网络。脚本参数及版本以源码为准，生成结果不属于运行时资源。
 
-Each deploy, sync, or rollback job also runs the pinned Hysteria client against the newly started listener before reporting success. By default, it forwards a TCP request to the node's local statistics API. A node can set `proxy_probe_url` to an HTTP 200 endpoint reachable through its ACL/outbound policy. The task result labels the check as `tcp_forwarding`, `custom_tcp_forwarding`, or `authenticated_session`. The live probe fixture verifies a direct ACL/outbound route to a custom target and the session-only fallback when loopback is explicitly rejected.
-
-The live probe fixture covers both route outcomes: a custom `direct(all)` ACL/outbound completes TCP forwarding, and a `reject(127.0.0.1/32)` rule produces the explicitly labeled authenticated-session fallback.
-
-## Independent cloud VM acceptance
-
-On 2026-10-01, the service ran from the locally built Docker Hub image `nieaowei/hysteriax-server:dev` (linux/amd64, digest `sha256:041e1c3169f81cdadeea17756bb9eb40227843e86c1432916674e412cdf152db`). A Debian 13 x86_64 VM hosted the control plane, and a separate Debian 12 x86_64 VM ran as a managed node. Both nodes passed pinned-SSH deployment, health checks, UDP Hysteria reachability, and the deployment-time TCP forwarding probe. Temporary users produced two-node subscriptions that parsed with Mihomo v1.19.31; the pinned Hysteria client fetched HTTPS content through each VM, and the usage sampler recorded traffic from both nodes.
-
-Three temporary users exercised node-only assignments for each VM and one shared assignment. All six user/VM credential combinations were checked: assigned combinations forwarded HTTPS, unassigned combinations were rejected, and single-node/shared subscriptions contained one/two nodes as expected and parsed with Mihomo v1.19.31. With active traffic on both nodes, disabling the user, expiring it, and setting its quota to zero each queued successful kick jobs that reported zero remaining connections; subscription access was denied with HTTP 403 for disabled, expired, and over-quota states. Credential rotation kicked the old clients, the old credentials stopped forwarding, the subscription contained only replacement credentials, and new credentials connected through both nodes. A temporary node with an incorrect pinned SSH fingerprint failed its SSH test and entered `fingerprint_changed`. All temporary users and the wrong-fingerprint node were deleted after testing.
-
-The initial cloud deployment/isolation run did not exercise unmanaged-install refusal, UDP port-conflict recovery, SSH interruption, service-start failure, rollback failure, or mTLS. Those failure cases remain covered by disposable systemd-container acceptance. The Hysteria test nodes used self-signed certificates with client verification disabled for the initial run.
-
-On 2026-10-01, the cloud SSH-interruption recovery case was also run against Server2 while the control plane remained on Server1. With no management users present, a systemd timer restored `ssh.service` after the test stopped it. A sync job queued during the outage entered `retry_wait` on its first attempt, retried after SSH returned, and succeeded on attempt 3. The node remained at revision 3, returned to `deployed`, and both `ssh.service` and `hysteriax.service` were active. Temporary recovery timers were stopped after the check.
-
-On 2026-10-01, Server1 passed cloud first-install and unmanaged-install acceptance. The original `/opt/hysteriax`, `/etc/hysteriax`, `/var/lib/hysteriax`, systemd unit, and service-account IDs were archived under a root-only backup before the HysteriaX service was stopped. A test node connected through the API container's bridge gateway. Deployment refused a pre-existing unmanaged `/opt/hysteriax` directory before installation. On the clean host, a second preflight probe occupied UDP `:54443`; deployment rejected it before writing installation paths. After releasing the port, the same node installed and passed its real Hysteria TCP-forwarding probe. The temporary node was uninstalled; the original directories, UID/GID, enabled service, and running HysteriaX process were restored and verified. The control-plane API remained ready with the original two nodes and zero users, and the restore timer and snapshot were removed after verification.
-
-The same day, Server2 passed mTLS acceptance. A temporary client CA and user certificate were uploaded/assigned, `tls.clientCA` was enabled, and sync completed. The generated subscription contained the client certificate pair and parsed with Mihomo v1.19.31. Both the pinned Hysteria v2.12.3 client and Mihomo v1.19.31 transferred HTTPS through Server2 over public UDP. The original Server2 config was restored at revision 7; SSH and HysteriaX are active, no test users remain, and the test private keys were removed. The two public test CA certificates remain in the node resource store because saved config versions retain references for rollback.
-
-Cloud quota acceptance also passed across Server1 and Server2. The sampled aggregate reached 11,149 bytes; a limit one byte higher left access enabled, while a limit exactly equal to usage queued a successful kick on both nodes with zero remaining connections. In a separate Server2 SSH outage, the 2,097,152-byte HTTPS transfer did not change recorded usage while SSH was down; after recovery, sampling charged a 2,106,222-byte delta once, resolved the gap, and left the next sample unchanged. The temporary user was deleted.
-
-Server2 also passed a live listener-start rollback check. A temporary UDP socket occupied port 54443 while sync attempted to move HysteriaX to that port. The service start failed, the job recorded `rolled_back`, and revision 7 remained deployed. After releasing the socket, an explicit sync restored the original `:443` listener at revision 9. SSH and HysteriaX were active, the probe port was bindable again, and the node was deployed at its latest revision. A separate first-install UDP-occupancy rejection/retry check passed on Server1; see the cloud acceptance record below.
-
-A second Server2 test injected failure into the automatic rollback restart after stopping HysteriaX during the health/proxy check. The job and node recorded `rollback_failed`; the original `systemctl` binary was restored from a preserved copy, the service was started, and an explicit sync succeeded at revision 9. The recovery timer and failpoint files were removed, package verification found no modified systemd files, and both SSH and HysteriaX remained active.
-
-Server2 also exercised the occupied-port preflight branch: with the HysteriaX listener still bound to UDP `:443`, the test temporarily copied and removed only `/opt/hysteriax/.hysteriax-managed`, then queued a sync. The remote guard rejected the occupied listener before install checks; the marker was restored byte-for-byte and an explicit sync succeeded at revision 9. A 180-second systemd backstop was armed before the marker change, then cancelled after restoration. The node finished deployed with SSH and HysteriaX active, zero users, and no recovery timer or backup marker file. This verifies the guard branch on a live VM; the separate Server1 pristine-install and unmanaged-refusal check above completes the corresponding cloud branches.
-
-## Live macOS UI acceptance
-
-Run `scripts/verify-live-macos-ui.py` on the Mac with XcodeGen installed and a `.env` that points to a ready service containing two deployed nodes. The XCUITest connects through Settings, opens Nodes and checks the SSH, public endpoint, TLS, and probe fields in Add Node before cancelling without a write; it then opens Jobs/Audit/Users, creates a temporary user, assigns both nodes, creates a subscription, rotates credentials, disables the user, and deletes it. The script verifies the resulting subscription, disabled state, and deletion through the API and removes any leftover test user on failure.
-
-The generated test build sets `HYSTERIAX_UI_TESTING`, which uses in-memory token storage instead of macOS Keychain. The runner stores temporary credentials in a mode-0600 file outside the repository, passes the service address and token through the harness app launch environment to prefill Settings, and removes the file when the harness exits. The live UI flow does not call Security or access Keychain. Production builds keep Keychain storage.
-
-After a Mac restart on 2026-10-01, the live UI workflow passed again: one UI test, zero failures, and no leftover test user. XCTest recorded System Settings PID 4369 before app launch and after Verify; the PID stayed unchanged and HysteriaX remained foreground throughout verification. In the latest run, System Settings became frontmost only after the harness app terminated. The trace separates that transition from the Verify action, and it does not establish why the existing System Settings process resurfaced. The test build injects credentials through its launch environment, so it does not type into the secure field or access Keychain.
-
-## ACME startup readiness (2026-10-05)
-
-Deployment health checks use a monotonic deadline: 180 seconds for an ACME configuration and 30 seconds for an existing TLS identity. Both statistics APIs must return JSON objects before the existing Hysteria proxy probe runs. Failed checks retry after one second; each attempt is bounded to 12 seconds and the total deadline. A failed/inactive/deactivating systemd service, a nonzero main-process exit status, or three automatic restarts fails early. Timeout diagnostics retain elapsed time, the last check error, and up to 4,000 characters of remote service logs and listener information. Rollback messages distinguish restoring a previous configuration from cleaning up a failed first install.
-
-The `startup_` Rust tests use Tokio's paused clock to verify readiness after 30 seconds, early service failure, a full 180-second readiness timeout, and hung SSH checks bounded by the total deadline. These simulated checks do not replace a live ACME DNS-01 issuance test on AWS.
+验证通过不等于执行发布。实际部署须本机构建镜像后传输，停止全部旧 API，保留可恢复备份，单独迁移并核查后启动。不要对线上执行故障注入或容量压力测试。

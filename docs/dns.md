@@ -111,9 +111,9 @@ require a connected management service. Older services show an upgrade message.
 
 ## API and verification
 
-The `/api/v1/version` feature `dns_management` gates the client UI. Connections,
-zones and records are under `/api/v1/dns`; node bindings are under
-`/api/v1/nodes/{id}/dns-binding`. Remote operations return HTTP 202 and task
+The `/api/v2/version` feature `dns_management` gates the client UI. Connections,
+zones and records are under `/api/v2/dns`; node bindings are under
+`/api/v2/nodes/{id}/dns-binding`. Remote operations return HTTP 202 and task
 identifiers. Mutation requests use expected revisions and idempotency keys;
 reusing a key for a different request returns HTTP 409. DNS tasks appear in the
 normal task/event APIs with resource type, ID and name. See the OpenAPI contract

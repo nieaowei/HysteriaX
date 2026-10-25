@@ -10,7 +10,7 @@ From the repository directory, create a verified archive:
 scripts/backup-restore.py backup
 ```
 
-The command requires a ready API, stops it to make a consistent snapshot, creates a PostgreSQL custom-format dump, and then restarts the API. The mode-600 archive under `backups/` contains the dump, schema version, SHA-256 checksums, and a fingerprint of the master key. It never contains the key. An alternate destination can be passed as an argument.
+The command requires a ready API, stops all API replicas to make a consistent snapshot, creates a PostgreSQL custom-format dump, and then restarts the replicas. The mode-600 archive under `backups/` contains the dump, schema version, SHA-256 checksums, and a fingerprint of the master key. It never contains the key. An alternate destination can be passed as an argument.
 
 The archive is a database snapshot. Caddy's named certificate volumes are separate and require their own protected backup when their state matters. Retain the key needed to decrypt the records in each database archive.
 

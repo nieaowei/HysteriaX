@@ -11,3 +11,7 @@ apps/macos/GeneratedAPI/
 **/xcuserdata/
 *.xcuserstate
 temp.cloud.md
+/cache.db
+/hysteriax-server.tar.gz
+__pycache__/
+*.py[cod]

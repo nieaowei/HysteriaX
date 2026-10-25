@@ -6,12 +6,22 @@
 2. Install Docker Engine and the Docker Compose plugin.
 3. From the project directory, run `scripts/init-secrets.sh manage.example.com`. This creates a private `.env` with the administrator token, encryption key, and separate PostgreSQL administrator and application passwords.
 4. Save the administrator token and make a separate protected backup of `HYSTERIAX_MASTER_KEY`.
-5. Build the image with `docker compose build api`, start dependencies with `docker compose up -d postgres redis`, and initialize the database with `docker compose --profile maintenance run --rm --no-deps migrate`. Then start the service with `docker compose up -d api caddy`.
-6. Confirm `https://manage.example.com/readyz` returns `{"status":"ready","database":"ok"}`.
+5. Build the image on your development machine for the server's architecture and transfer it to the server using the commands below. Start dependencies with `docker compose up -d postgres redis`, then initialize the database with `docker compose --profile maintenance run --pull never --rm --no-deps migrate`. Start the service with `docker compose up -d --no-build api caddy`.
+6. Confirm `https://manage.example.com/readyz` returns `{"status":"ready","database":"ok","management_protocol":2}`.
+
+Build locally, using a fixed release tag in place of `dev` for a release:
+
+```sh
+docker buildx build --platform linux/amd64 --load -t hysteriax-server:dev .
+docker save hysteriax-server:dev | gzip > hysteriax-server.tar.gz
+scp hysteriax-server.tar.gz user@server:/tmp/hysteriax-server.tar.gz
+```
+
+Use `linux/arm64` for an arm64 server. On the server, load the image with `gzip -dc /tmp/hysteriax-server.tar.gz | docker load`. Keep `HYSTERIAX_IMAGE` and `HYSTERIAX_VERSION` in `.env` consistent with the loaded tag. Keep the Compose files and mounted deployment scripts from the same source revision on both machines. Do not build source on the deployment host.
 
 Compose starts PostgreSQL 18 with a persistent volume and a non-superuser application role. The database listens only on the Compose network and is not published to the host. Caddy obtains and renews the management HTTPS certificate; TCP 80 and 443 must reach the host. Node Hysteria traffic uses the configured UDP ports. This service does not alter cloud security groups or host firewalls.
 
-For a tagged release image, set `HYSTERIAX_IMAGE=ghcr.io/<owner>/hysteriax-server` and `HYSTERIAX_VERSION=vX.Y.Z` in `.env`, then run `docker compose pull`, stop all existing API instances, run `docker compose --profile maintenance run --rm --no-deps migrate`, and start the service with `docker compose up -d api caddy`. Caddy state and PostgreSQL data use separate named volumes. Keep `.env`, database backups, `HYSTERIAX_MASTER_KEY`, and Caddy state in protected backups. Never commit `.env` or production data.
+Tagged images published by the release workflow can also be selected with `HYSTERIAX_IMAGE=ghcr.io/<owner>/hysteriax-server` and `HYSTERIAX_VERSION=vX.Y.Z` in `.env`. Load or pull the selected image before maintenance; existing installations must follow the [protocol 2 upgrade sequence](#management-protocol-2-upgrade-0034), including a verified backup and data validation before startup. Caddy state and PostgreSQL data use separate named volumes. Keep `.env`, database backups, `HYSTERIAX_MASTER_KEY`, and Caddy state in protected backups. Never commit `.env` or production data.
 
 After checking the host's memory and PostgreSQL connection budget, multiple API replicas can share that database, Redis and master key. For example, `docker compose up -d --no-build --scale api=2 api caddy` starts two replicas without building on the deployment host. The Caddy configuration discovers the `api` Docker DNS addresses every five seconds and selects them with round-robin load balancing. Passive failure tracking and a one-second dial timeout leave room to try a healthy replica within the three-second retry window; Caddy's default retry rules still apply. No sticky session is required. See the [Caddy reverse proxy reference](https://caddyserver.com/docs/caddyfile/directives/reverse_proxy) and run `python3 scripts/verify-caddy-replicas.py --report /tmp/caddy-replicas.json` for the isolated proxy check. That check uses lightweight HTTP backends and does not replace the full HysteriaX business acceptance or host capacity measurements.
 
@@ -27,9 +37,9 @@ Rollback requires the complete database backup, old image and old client togethe
 
 ## Local development and tests
 
-Set `DATABASE_URL` to a PostgreSQL URL, `HYSTERIAX_ADMIN_TOKEN` to at least 256 bits of random token material, `HYSTERIAX_MASTER_KEY` to a base64-encoded 32-byte key, and `HYSTERIAX_PUBLIC_URL` to the public HTTPS origin. Start the API with `scripts/run.sh`.
+Set `DATABASE_URL` to a PostgreSQL URL, `HYSTERIAX_ADMIN_TOKEN` to at least 256 bits of random token material, `HYSTERIAX_MASTER_KEY` to a base64-encoded 32-byte key, and `HYSTERIAX_PUBLIC_URL` to the public HTTPS origin. With those variables exported, run `cargo run -p hysteriax-server -- --migrate-only` once, then start the API with `scripts/run.sh`. Set `HYSTERIAX_REDIS_URL` for Redis-backed caches; unavailable Redis permits database fallback.
 
-For local database tests, start the same PostgreSQL image with the loopback-only port override:
+For local database tests, use a separate checkout and a disposable Compose project, then start the same PostgreSQL image with the loopback-only port override. Do not use a production `.env` or project for these commands:
 
 ```sh
 set -a
@@ -41,7 +51,7 @@ python3 -m pip install -r scripts/requirements-test.txt
 cargo test --workspace
 ```
 
-The tests create isolated schemas inside the disposable test database. The live verification scripts use the same `TEST_DATABASE_URL` and also need Docker where their instructions require it. Stop the test database with the matching Compose command and `down` when finished.
+Rust database tests create isolated schemas. For Redis integration tests, also supply `TEST_REDIS_URL` for a disposable Redis service. Some live scripts accept `TEST_DATABASE_URL`; newer full-process verifiers have explicit command-line fixture arguments. Check each script's `--help` and the [verification guide](deployment-testing.md) before running it. Stop only the test project's resources when finished.
 
 ## Existing SQLite installations
 
@@ -60,8 +70,8 @@ To preflight a database copy, run `hysteriax-server --migrate-only` with that co
 ## TLS certificate-pair consolidation (0008)
 
 Upgrade macOS and the service together. TLS uses `tls_identity`; independent CA
-certificates use `ca_certificate`. v1 no longer supports standalone
-`certificate`/`private_key` creation. Back up the database before startup:
+certificates use `ca_certificate`. Current management APIs do not support standalone
+`certificate`/`private_key` creation. Back up the database before maintenance:
 split configured material is merged, old standalone objects are removed, and
 current/deployed/historical configuration retains its runtime content and file
-names. No node deployment is scheduled by this migration.
+names. Run conversion through `--migrate-only`; no node deployment is scheduled by this migration.

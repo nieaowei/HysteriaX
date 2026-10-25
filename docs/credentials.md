@@ -73,7 +73,7 @@ notifications enabled, running connected clients notify at 30/14/7 days and
 after expiry, deduplicating by service, credential version and threshold. The
 center supplies DNS credentials to the node-local `hysteriax-acme` service. The node handles issuance and renewal independently, while management collects its status over SSH.
 
-Management API 1.0.0 keeps `/api/v1` and changes its contract in place; upgrade clients and server together. Credential CRUD and publication
+Management API 2.0.0 uses `/api/v2`; retired `/api/v1` requests return 426. Upgrade clients and server together. Administrative writes require a stable `Idempotency-Key`. Credential CRUD and publication
 are under `/credentials`; references are under `/credentials/{id}/references`;
 batch state and retry are under `/credential-batches/{id}`. Node writes accept
 SSH credential IDs/versions and mtls off/managed settings with an exact currently
@@ -112,6 +112,6 @@ the upgraded API.
 See [managed mTLS and upgrade](managed-mtls.md) for signing policy, staged CA
 rotation, blocking-node recovery, historical rollback limits, the one-time old
 user-certificate reset and database/image rollback requirements. The reset runs
-inside the startup format-conversion transaction before workers or API access.
+inside the `--migrate-only` format-conversion transaction before workers or API access.
 
 ACME 节点现在由独立 `hysteriax-acme` 进程读取 DNS 凭据并维护一张覆盖全部域名的 SAN 证书，可同时选择托管 mTLS。公共配置及凭据目录继续保留原有引用方式；部署时解析的秘密只写入证书账号的私有配置，不会进入 Hy2 YAML 预览。节点续期与用户/CA 身份续期相互独立。节点账户与私钥的独立备份要求见 [备份恢复](backup-restore.md)，维护及验证命令见 [节点 ACME](node-acme.md)。

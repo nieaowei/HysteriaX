@@ -2,7 +2,7 @@
 
 HysteriaX is distributed directly as an unsigned downloadable DMG; it is not submitted to the Mac App Store. Release builds do not need an Apple Developer Program membership, Developer ID certificate, Keychain, or notarization credentials. Pushing a `vX.Y.Z` tag builds the universal app, packages it as a compressed UDZO DMG, verifies that the DMG mounts and contains `HysteriaX.app` plus an `Applications` link, then attaches it to the GitHub release.
 
-The Universal app contains `arm64` and `x86_64` slices and targets macOS 26.0. macOS 27 and later run the native Apple silicon slice; Intel Macs can run the Intel slice on macOS 26, Apple's final macOS release for Intel hardware.
+The Universal app contains `arm64` and `x86_64` slices and targets macOS 26.0. The Xcode release project sets the minimum macOS version to 26.0 for both slices; this is separate from the SwiftPM development manifest. See [compatibility](compatibility.md).
 
 Both CI and the release script run `scripts/verify-macos-app.sh` to check the two executable slices, bundle minimum, and Mach-O minimum versions before accepting the app.
 
@@ -16,4 +16,4 @@ The same `vX.Y.Z` tag also triggers `.github/workflows/release-container.yml`, w
 
 Upgrade the server and Mac client together. Back up PostgreSQL and the existing master key first. Migration 0037 initializes encrypted published defaults without rotating subscription tokens or changing node authorization. Replace saved `/sub/{token}/clash.yaml` links with `/sub/{token}?template={id}&platform={target}`; the old route now returns 404. Management responses expose only the canonical `url`, and the Mac client requires an explicit destination platform for native exports. Draft saves do not affect subscribers; publication/rollback do.
 
-Backups include `subscription_templates`, `subscription_template_versions`, and their initialization marker through the existing whole-database archive. Restoring them requires the same master key. This implementation does not deploy the server. For a later deployment, build the container image locally and push/transfer it to the target server according to the project deployment requirement.
+Backups include `subscription_templates`, `subscription_template_versions`, and their initialization marker through the existing whole-database archive. Restoring them requires the same master key. Build the container image locally and push/transfer it to the target server according to the project deployment requirement.

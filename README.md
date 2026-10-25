@@ -35,16 +35,26 @@ SSH、节点连接和订阅等敏感材料在服务端加密保存。管理员�
 
 ### 2. 部署管理服务
 
-在管理服务器上获取代码，并将示例域名替换为自己的管理域名：
+先在本机构建镜像，再传输到管理服务器。两端使用相同版本的项目文件；以下以 `hysteriax-server:dev` 为例，正式部署应使用固定版本标签。
+
+在本机项目目录执行：
+
+```sh
+docker build -t hysteriax-server:dev .
+docker save hysteriax-server:dev | gzip > hysteriax-server.tar.gz
+scp hysteriax-server.tar.gz user@server:/tmp/hysteriax-server.tar.gz
+```
+
+本机与服务器架构不同时，改用 `docker buildx build --platform linux/amd64 --load -t hysteriax-server:dev .`（arm64 服务器选择 `linux/arm64`）。随后在管理服务器执行，并替换管理域名：
 
 ```sh
 git clone https://github.com/nieaowei/HysteriaX.git
 cd HysteriaX
 scripts/init-secrets.sh manage.example.com
-docker compose build api
+gzip -dc /tmp/hysteriax-server.tar.gz | docker load
 docker compose up -d postgres redis
-docker compose --profile maintenance run --rm --no-deps migrate
-docker compose up -d api caddy
+docker compose --profile maintenance run --pull never --rm --no-deps migrate
+docker compose up -d --no-build api caddy
 ```
 
 数据库初始化和升级必须先运行 `migrate`。普通 API 启动只检查 schema、协议和主密钥，不执行初始化改写。已有安装升级前先备份并停止所有 API 实例，完成迁移后再启动。
@@ -65,7 +75,7 @@ curl --fail https://manage.example.com/readyz
 就绪接口应返回：
 
 ```json
-{"status":"ready","database":"ok"}
+{"status":"ready","database":"ok","management_protocol":2}
 ```
 
 安装、已有数据库升级和旧 SQLite 安装的处理方式见 [安装指南](docs/installation.md)。
@@ -136,7 +146,7 @@ curl --fail https://manage.example.com/readyz
 
 服务端为 Rust + Axum，使用 PostgreSQL 18 保存数据、Redis 提供缓存；Mac 客户端使用 SwiftUI。Rust 最低版本声明为 1.89，客户端构建使用 Xcode；SwiftPM 构建要求见 [Package.swift](apps/macos/Package.swift)。
 
-管理 API 位于 `/api/v1`，请求使用 `Authorization: Bearer <管理员令牌>`。服务提供 `/openapi.yaml`，契约源文件为 [openapi/openapi.yaml](openapi/openapi.yaml)。列表接口使用分页响应，批量读取需遍历各页。
+管理 API 位于 `/api/v2`，请求使用 `Authorization: Bearer <管理员令牌>`，写请求还需携带稳定的 `Idempotency-Key`；旧 `/api/v1` 返回 426。服务提供 `/openapi.yaml`，契约源文件为 [openapi/openapi.yaml](openapi/openapi.yaml)。列表接口使用分页响应，批量读取需遍历各页。
 
 本地数据库配置与测试环境准备见 [安装指南](docs/installation.md#local-development-and-tests)。配置好测试数据库后，可运行以下常用检查：
 
@@ -154,6 +164,8 @@ Mac 客户端的 API 模型由 OpenAPI 生成。构建并检查应用能否启�
 ```
 
 ## 详细文档
+
+完整使用与运维指南见 [文档索引](docs/README.md)。已提交的历史计划、审计及阶段记录可从 Git 历史查阅。
 
 | 文档 | 内容 |
 | --- | --- |
