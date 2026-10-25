@@ -1,0 +1,32 @@
+{
+  "scope": "local-linux-amd64-release-candidate",
+  "candidate_only": true,
+  "pushed": false,
+  "deployed": false,
+  "image": "hysteriax-server:0034-amd64-82db2af-20261025",
+  "image_id": "sha256:f3ac702600ed38bd38bde48fbec32187238baabe10fa43687286a0d4752ec723",
+  "architecture": "amd64",
+  "os": "linux",
+  "size_bytes": 186464296,
+  "user": "hysteriax",
+  "version_label": "0034-82db2af",
+  "build_exit": 0,
+  "final_image_template_runtime_check_exit": 0,
+  "server_binary_sha256": "5e2f44a57476d692579cec4e3f1f3712472ace4906acdc8ec51f6a2b4557bcc9",
+  "hysteria_version": "v2.12.3",
+  "runtime_source_commit": "82db2af",
+  "includes_preexisting_worktree_changes": true,
+  "local_builder": "hxamd64",
+  "cargo_build_jobs": 2,
+  "build_log": "/tmp/hx0034-phase113-amd64-build.log",
+  "runtime_check_log": "/tmp/hx0034-phase113-runtime-check.log",
+  "later_changes_are_test_fixture_changes": true,
+  "rebuild_before_final_release": true,
+  "remaining": [
+    "final successful workspace regression",
+    "guarded real-snapshot capacity profile",
+    "maintenance backup/cutover and coordinated rollback acceptance"
+  ],
+  "hysteria_toolchain": "go1.26.8 linux/amd64",
+  "hysteria_check_log": "/tmp/hx0034-phase113-hysteria-version.log"
+}
