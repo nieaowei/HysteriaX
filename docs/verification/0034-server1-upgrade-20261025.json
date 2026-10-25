@@ -1,0 +1,211 @@
+{
+  "scope": "actual-server1-0034-upgrade",
+  "passed": true,
+  "date": "2026-10-25",
+  "authorization": "User explicitly requested upgrading server1 and continuing the upgrade.",
+  "deployment": {
+    "scope": "server1-0034-maintenance-upgrade",
+    "passed": true,
+    "stage": "complete",
+    "new_image": "hysteriax-server:0034-amd64-2feade3-20261025",
+    "replicas_before": 1,
+    "replicas_after": 1,
+    "backup_directory": "/home/nieaowei/HysteriaX/backups/upgrade-0034-20261025T052733Z-53e7cc08",
+    "started_at": "2026-10-25T05:27:40Z",
+    "activated": true,
+    "old_image": "hysteriax-server:node-cleanup-fk-20261021",
+    "new_server_binary_sha256": "3b2f4361c9bf03e38d745fe9b77342b5028b5234a34de33936238cf28d7a906c",
+    "source_schema": 40,
+    "retained_old_image_tag": "hysteriax-server:pre-0034-53e7cc08",
+    "elapsed_seconds": 546.7569238152355,
+    "backup_bytes": 102043560,
+    "backup_sha256": "cdf68a84768c88029980f8a890eabfc0ad07b7f45d450732e1eb72cd82333799",
+    "backup_listing_verified": true,
+    "protected_original_tables": 72,
+    "canonical_image_updated": true,
+    "target_schema": 70,
+    "after_dump_bytes": 102297924,
+    "after_dump_sha256": "6c653cdd2a21241bc916514d90821c92d021dfd1d6c7b2d647bc829e1244d455",
+    "data_verification": {
+      "scope": "actual-server1-maintenance-exports-local-fidelity",
+      "passed": true,
+      "before_dump_sha256": "cdf68a84768c88029980f8a890eabfc0ad07b7f45d450732e1eb72cd82333799",
+      "after_dump_sha256": "6c653cdd2a21241bc916514d90821c92d021dfd1d6c7b2d647bc829e1244d455",
+      "protected_original_tables": 72,
+      "all_protected_table_fingerprints_equal": true,
+      "reviewed_metadata": {
+        "checks": {
+          "no_unclassified_table_changes": true,
+          "original_migration_records_unchanged": true,
+          "all_original_domains_have_exactly_64_buckets": true,
+          "retired_global_version_tables_removed": true,
+          "batch_compatibility_view_preserves_live_entities_and_versions": true,
+          "cycle_changes_confined_to_original_dirty_keys": true,
+          "refreshed_cycles_match_raw_sample_reference": true,
+          "minute_changes_confined_to_refreshed_cycle_minutes": true,
+          "hour_changes_confined_to_original_dirty_keys": true,
+          "traffic_hours_match_raw_sample_reference": true,
+          "original_pending_refresh_work_fully_acknowledged": true,
+          "all_historical_source_events_have_contiguous_publications": true,
+          "all_public_foreign_keys_validated": true,
+          "retired_write_lock_function_removed": true,
+          "no_retired_advisory_locks_held": true
+        },
+        "counts": {
+          "orphan_batch_cache_rows_removed": 1,
+          "original_dirty_cycles": 0,
+          "changed_cycle_rows": 0,
+          "changed_online_minutes": 0,
+          "original_dirty_hours": 1,
+          "changed_traffic_hours": 1,
+          "backfilled_historical_publications": 3990
+        }
+      },
+      "owned_local_databases_dropped": true
+    },
+    "migration_checks": {
+      "all_foreign_keys_validated": true,
+      "all_history_published": true,
+      "retired_cache_tables_removed": true,
+      "cache_buckets_64": true,
+      "old_write_function_removed": true
+    },
+    "all_protected_table_fingerprints_equal": true,
+    "readiness": {
+      "database": "ok",
+      "management_protocol": 2,
+      "status": "ready"
+    },
+    "public_checks": {
+      "/readyz": 200,
+      "/api/v2/version": 200,
+      "/api/v2/users?page_size=20": 200,
+      "/api/v2/nodes?page_size=20": 200,
+      "/api/v2/jobs?page_size=20": 200,
+      "/api/v2/credentials?page_size=20": 200
+    },
+    "management_protocol": 2,
+    "api_version": "2.0.0",
+    "retired_v1_status": 426,
+    "old_image_and_config_retained": true,
+    "rollback_policy": "Full pre-upgrade dump, old image and configuration. After activation retain external-operation evidence; no blind automatic database rollback.",
+    "controller_running": false,
+    "controller_source_sha256": "1ab21eb68b54b6c7bd60a6ca55179fbdaaebaab53de18dc5df6ef63994cd892b"
+  },
+  "first_attempt": {
+    "passed": false,
+    "stage": "failed",
+    "started_at": "2026-10-25T02:49:21Z",
+    "activated": false,
+    "source_schema": 40,
+    "target_schema": 70,
+    "backup_directory": "/home/nieaowei/HysteriaX/backups/upgrade-0034-20261025T024912Z-0c0cedeb",
+    "backup_bytes": 101442756,
+    "backup_sha256": "41c315ea52776fb228571d98d3928d9e0be563ac224e025b499af737f81ae974",
+    "rolled_back_before_activation": true,
+    "old_readiness_after_rollback": {
+      "database": "ok",
+      "status": "ready"
+    },
+    "elapsed_seconds": 2003.5254005370662
+  },
+  "first_attempt_failure": "Extra closing parenthesis in deployment verification SQL; maintenance migration had finished. No new ordinary worker was activated. Full pre-upgrade database, old image and configuration restored; schema 40 and old readiness independently verified before retry.",
+  "retry_correction": "Corrected SQL validated against local schema 70. Actual frozen before/after server database exports restored in owned local Docker databases for full protected-row fingerprinting and independent metadata reference checks. No omitted or relaxed fidelity checks.",
+  "post_upgrade": {
+    "scope": "server1-post-upgrade-readonly-verification",
+    "checked_at": "2026-10-25T05:37:20Z",
+    "public_checks": {
+      "/readyz": {
+        "status": 200,
+        "elapsed_seconds": 0.029
+      },
+      "/api/v2/version": {
+        "status": 200,
+        "elapsed_seconds": 0.014,
+        "version": {
+          "api_version": "2.0.0",
+          "management_protocol": 2
+        }
+      },
+      "/api/v2/users?page_size=20": {
+        "status": 200,
+        "elapsed_seconds": 0.069
+      },
+      "/api/v2/nodes?page_size=20": {
+        "status": 200,
+        "elapsed_seconds": 0.027
+      },
+      "/api/v2/jobs?page_size=20": {
+        "status": 200,
+        "elapsed_seconds": 0.07
+      },
+      "/api/v2/credentials?page_size=20": {
+        "status": 200,
+        "elapsed_seconds": 0.041
+      },
+      "/api/v1/version": {
+        "status": 426
+      }
+    },
+    "database_first": {
+      "schema": 70,
+      "users": 6,
+      "nodes": 6,
+      "jobs": 300,
+      "registered_instances": 1,
+      "fresh_instances": 1,
+      "latest_heartbeat": "2026-10-25 05:37:02.196948+00",
+      "retired_advisory_locks": 0
+    },
+    "database_second": {
+      "schema": 70,
+      "users": 6,
+      "nodes": 6,
+      "jobs": 300,
+      "registered_instances": 1,
+      "fresh_instances": 1,
+      "latest_heartbeat": "2026-10-25 05:37:12.197097+00",
+      "retired_advisory_locks": 0
+    },
+    "heartbeat_advanced": true,
+    "api_replicas": 1,
+    "image": "hysteriax-server:0034-amd64-2feade3-20261025",
+    "running": true,
+    "oom_killed": false,
+    "restarts": 0,
+    "passed": true
+  },
+  "offhost_backup": {
+    "passed": true,
+    "local_directory": "/Users/nekilc/.codex/backups/HysteriaX/server1/upgrade-0034-20261025T052733Z-53e7cc08",
+    "file_count": 6,
+    "total_bytes": 280462454,
+    "server_directory": "/home/nieaowei/HysteriaX/backups/upgrade-0034-20261025T052733Z-53e7cc08",
+    "all_six_files_sha256_verified": true,
+    "database_before": {
+      "bytes": 102043560,
+      "sha256": "cdf68a84768c88029980f8a890eabfc0ad07b7f45d450732e1eb72cd82333799"
+    },
+    "old_image_archive": {
+      "bytes": 178402816,
+      "sha256": "225af804b0061ebc3c4890a031aef13b170666fad21913be4c8f68262031fd7a"
+    },
+    "permissions": {
+      "directory": "0700",
+      "files": "0600"
+    }
+  },
+  "boundaries": {
+    "api_replica_count_changed": false,
+    "postgres_redis_caddy_recreated": false,
+    "compose_configuration_changed_except_api_image": false,
+    "built_locally_and_transferred_no_remote_build": true,
+    "macos_client_installed_or_replaced": false,
+    "requires_management_protocol_2_client": true,
+    "automatic_old_database_restore_after_worker_activation": false,
+    "post_activation_checks_are_readonly": true,
+    "production_capacity_claim": false,
+    "user_existing_16_file_patch_preserved": true,
+    "private_data_or_environment_contents_in_report": false
+  }
+}
