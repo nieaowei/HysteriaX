@@ -8,5 +8,17 @@
 {$HYSTERIAX_DOMAIN} {
     encode zstd gzip
     header Alt-Svc clear
-    reverse_proxy api:8080
+    reverse_proxy {
+        dynamic a api 8080 {
+            refresh 5s
+        }
+        lb_policy round_robin
+        lb_try_duration 3s
+        lb_try_interval 100ms
+        fail_duration 5s
+        max_fails 1
+        transport http {
+            dial_timeout 1s
+        }
+    }
 }

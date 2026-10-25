@@ -1,0 +1,31 @@
+{
+  "scope": "production-caddy-config-docker-dns",
+  "passed": true,
+  "real_api_backends": false,
+  "config_sha256": "2959a037158c1f05ba210e2c9a143486b6fa0ed2d8396ba4e7c4a6cd89ba2fd5",
+  "caddy_version": "v2.10.2 h1:g/gTYjGMD0dec+UgMw8SnfmJ3I9+M2TdvoRL/Ovu6U8=",
+  "initial_hits": {
+    "backend-1": 20,
+    "backend-3": 20,
+    "backend-2": 20
+  },
+  "distribution_seconds": 1.0125584589999974,
+  "after_stop_hits": {
+    "backend-3": 15,
+    "backend-2": 15
+  },
+  "lost_post_mutations": 1,
+  "sse_first_record_seconds": 0.005005542000006358,
+  "checks": [
+    "production-config-valid",
+    "Docker-DNS-all-replicas",
+    "persistent-client-round-robin",
+    "stopped-replica-failover",
+    "new-replica-discovery",
+    "sent-POST-not-replayed",
+    "SSE-first-record-forwarded"
+  ],
+  "limitations": [
+    "lightweight HTTP backends; full HysteriaX accounting/authentication is covered by separate acceptance"
+  ]
+}
