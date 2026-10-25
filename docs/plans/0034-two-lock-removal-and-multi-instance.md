@@ -1104,4 +1104,12 @@
 - 配置校验、Python 编译和 diff 检查通过。证据 docs/verification/0034-caddy-replica-discovery.json，原始最终报告 /tmp/hx0034-phase111-caddy-ready.json；明确是代理层轻量后端测试，不替代真实业务矩阵和完整服务的容量测试。安装指南补充镜像已准备后的副本启动方式和容量前提，引用 Caddy 官方配置文档。
 - 同时只读复核目标服务器：x86_64／2 核、约 964MiB 内存、327MiB available、244MiB swap 已使用，仍为 schema 40，数据库约 2.318GB，12 个客户端连接。现有 API／PostgreSQL／Redis／Caddy 约 45.3／245.8／4.5／21.8MiB。每 API 池上限 10；即使保留现有 12 连接再加两池 20，32 仍低于 97 个普通连接槽。64MiB 每实例缓存限制只是序列化权重，不是 RSS／堆上限，不能据此宣称内存容量达标。预算证据 docs/verification/0034-target-host-predeployment-budget.json 标记 capacity_gate_passed=false，代表性受限内存峰值与实际发布仍待验证。
 
+### 第一百一十二阶段：全量终态、异步轮换夹具与干净环境复验
+
+- 第一百零八阶段全量原句柄最终退出 101：1045 passed／4 failed／7 ignored，2061.51s，完整失败证据保留。四项分别为连续 CA 发布在 probes 尚未 complete、旧索引重新升级直接迁移触发 55P03、DNS fixture 在插入凭据前 PoolTimedOut，以及节点清理检查 2s 内未取得池连接。未把该全量算作通过。
+- 索引专项已由 c1dc0c7 修正并通过。连续 CA 测试原来假设两次立即 advance 必然完成，而元数据和 probe 切换已经是独立领取／按持久时间重试的页面；现以最多 10s 推进并等待实际 complete，保留原有后续发布、旧信任删除和新信任保留的所有断言。修改后专项 1 项通过，7.53s。
+- DNS 失败处理专项未改代码，单独运行通过（143.55s）；节点清理专项保持原 2s 并发写检查及 30s 完成门槛，单独通过（8.66s）。这些不能单独证明全量失败只是环境原因，仍要求新全量终态。
+- 只读检查本地共享基础库已有 6378 个测试 schema，旧测试池 helper 不自动删除它们；不擅自删除共享库既有对象。后续全量新建本轮独占数据库，结束后 finally 删除。旧全量未设置 TEST_REDIS_URL，原生 Redis 专项可能提前返回；新全量增加独占、带随机密码的真实 Redis，明确启用 TEST_REDIS_URL，结束后只清理本轮容器。现有三进程 Redis 专项证据另行保留，不混作本次测试结果。
+- 新全量仍为 cargo test --workspace、8 个测试线程，已启动并保持原句柄；日志 /tmp/hx0034-phase112-full.log，最终报告 /tmp/hx0034-phase112-full.json 尚待生成。证据 docs/verification/0034-async-rotation-regression.json；不放宽运行时连接池／事务期限，不提前宣告新全量通过。生产预算和本地镜像／维护发布回退门槛继续保持。
+
 工作区原有 macOS、OpenAPI、生成脚本与任务展示测试改动需持续保留；不得整体覆盖或混入第一阶段服务端提交。

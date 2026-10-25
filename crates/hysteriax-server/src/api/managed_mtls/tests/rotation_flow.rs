@@ -445,9 +445,19 @@ async fn continuous_publications_do_not_wait_for_old_certificates_and_cleanup_pr
         rotations::advance(&state, rotation).await.unwrap();
         let job = rotation_job(&state, rotation, n).await;
         complete_operation(&state, &job).await;
-        rotations::advance(&state, rotation).await.unwrap();
-        rotations::advance(&state, rotation).await.unwrap();
-        assert_eq!(phase(&state, rotation).await, "complete");
+        // Metadata and probe switches are separately claimed pages. Their
+        // durable retry time can require another pass even for one node.
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            loop {
+                rotations::advance(&state, rotation).await.unwrap();
+                if phase(&state, rotation).await == "complete" {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+            }
+        })
+        .await
+        .expect("published rotation must finish metadata and probe pages");
     }
     assert_eq!(published(&state, &ca).await, 3);
     let pending: i64 = sqlx::query_scalar(
