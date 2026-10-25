@@ -40,5 +40,21 @@ class FixtureNetworkGuardTests(unittest.TestCase):
                 guard.apply_guard('target','pg','redis',owner=OWNER,image='fixture')
             self.assertEqual([call.args[0] for call in docker.call_args_list],['inspect','network'])
 
+    def test_database_outage_or_restore_rejects_invalid_owner_before_docker(self):
+        for available in (False,True):
+            with self.subTest(available=available),patch.object(guard,'docker') as docker:
+                with self.assertRaisesRegex(RuntimeError,'fresh UUID'):
+                    guard.set_postgres_available('target','pg','redis',owner='shared',image='fixture',available=available)
+                docker.assert_not_called()
+
+    def test_database_outage_or_restore_cannot_mutate_an_unowned_container(self):
+        data={'Config':{'Labels':{guard.OWNER_LABEL:'another-owner'}}}
+        for available in (False,True):
+            with self.subTest(available=available),patch.object(guard,'docker',return_value=json.dumps([data])) as docker:
+                with self.assertRaisesRegex(RuntimeError,'not owned'):
+                    guard.set_postgres_available('target','pg','redis',owner=OWNER,image='fixture',available=available)
+                self.assertEqual(docker.call_args.args,('inspect','target'))
+                self.assertEqual(docker.call_count,1)
+
 
 if __name__=='__main__':unittest.main()

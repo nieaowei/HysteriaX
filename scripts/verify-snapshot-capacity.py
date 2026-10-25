@@ -41,8 +41,11 @@ def main():
     parser.add_argument('--postgres-memory-mib', type=int, default=384)
     parser.add_argument('--api-memory-mib', type=int, default=128)
     parser.add_argument('--replicas', type=int, choices=[1,2,3], default=2)
+    parser.add_argument('--database-disconnect-check', action='store_true')
     parser.add_argument('--report', type=Path, required=True)
     args = parser.parse_args()
+    if args.database_disconnect_check and args.replicas != 3:
+        parser.error('database disconnect acceptance requires three API replicas')
     if not 128 <= args.postgres_memory_mib <= 8192:
         parser.error('PostgreSQL memory must be between 128 and 8192 MiB')
     if not 64 <= args.api_memory_mib <= 4096:
@@ -201,7 +204,13 @@ def main():
                      '--entrypoint','/bin/sh','-v',str(gate)+':/gate:ro','-v',str(assets)+':/assets']
             for key in api_env:
                 extra += ['-e',key]
-            name = start(role,args.image,192 if migrate else args.api_memory_mib,.6 if migrate else .3,extra,['-c',command])
+            original_url = environment['DATABASE_URL']
+            if args.database_disconnect_check:
+                environment['DATABASE_URL'] = original_url+'?application_name='+owner+'-'+role
+            try:
+                name = start(role,args.image,192 if migrate else args.api_memory_mib,.6 if migrate else .3,extra,['-c',command])
+            finally:
+                environment['DATABASE_URL'] = original_url
             uid = int(docker('exec',name,'id','-u').stdout)
             capabilities = docker('exec',name,'sh','-ec',
                                   'sed -n "s/^CapEff:[[:space:]]*//p" /proc/self/status').stdout.strip()
@@ -301,6 +310,12 @@ def main():
             report['redis_keys_after_empty_restart'] = count
             return count > 0
         wait(redis_rebuilt,30,'Redis cache rebuild')
+        if args.database_disconnect_check:
+            from database_disconnect_fixture import verify
+            print('isolating one live billing executor from PostgreSQL',flush=True)
+            report['database_disconnect'] = verify(owner=owner,apis=apis,pg=pg,redis=redis,
+                guard_image=args.guard_image,docker=docker,sql=sql,wait=wait,private=private,
+                register_container=containers.append)
         report['redis_memory'] = metrics(redis)
         report['database_connections'] = int(sql('SELECT count(*) FROM pg_stat_activity'))
         report['granted_advisory_lock_count_after_migration'] = int(sql("SELECT count(*) FROM pg_locks WHERE locktype='advisory' AND granted"))
