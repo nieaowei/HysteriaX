@@ -40,6 +40,7 @@ def main():
     parser.add_argument('--postgres-parallel-workers', type=int, choices=range(0,9), default=2)
     parser.add_argument('--postgres-memory-mib', type=int, default=384)
     parser.add_argument('--api-memory-mib', type=int, default=128)
+    parser.add_argument('--replicas', type=int, choices=[1,2,3], default=2)
     parser.add_argument('--report', type=Path, required=True)
     args = parser.parse_args()
     if not 128 <= args.postgres_memory_mib <= 8192:
@@ -62,7 +63,7 @@ def main():
               'snapshot_sha256':digest.hexdigest(), 'private_logs':str(private),
               'target_host_capacity_proven':False, 'production_changed':False,
               'limits_mib':{'postgres':args.postgres_memory_mib, 'redis':64, 'api_each':args.api_memory_mib, 'caddy':48},
-              'runtime_limit_sum_mib':args.postgres_memory_mib+2*args.api_memory_mib+112, 'api_replicas':2, 'guards':[]}
+              'runtime_limit_sum_mib':args.postgres_memory_mib+args.replicas*args.api_memory_mib+112, 'api_replicas':args.replicas, 'guards':[]}
     began = time.monotonic()
     report['verifier_source_sha256'] = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
     report['postgres_settings'] = {'shared_buffers':'96MB','work_mem':'4MB',
@@ -226,7 +227,7 @@ def main():
         token_hash = base64.urlsafe_b64encode(hashlib.sha256(environment['HYSTERIAX_ADMIN_TOKEN'].encode()).digest()).decode().rstrip('=')
         sql("INSERT INTO admin_tokens(id,token_hash,label,created_at) VALUES ('capacity-fixture','"+token_hash+"','isolated capacity fixture',now())")
         before_users = int(sql('SELECT count(*) FROM users'))
-        apis = [gated('api'+str(index))[0] for index in range(2)]
+        apis = [gated('api'+str(index))[0] for index in range(args.replicas)]
         for name in apis:
             wait(lambda: docker('exec',name,'curl','--max-time','3','--fail','-s','http://127.0.0.1:8080/readyz',check=False).returncode==0,90,'API readiness')
         config = private/'Caddyfile'
@@ -274,8 +275,8 @@ def main():
                 result['statuses'][key] = result['statuses'].get(key,0)+1
             report.setdefault('workloads',{})[stage] = result
             report.setdefault('memory',{})[stage] = {role:metrics(name) for role,name in
-                [('postgres',pg),('api0',apis[0]),('api1',apis[1]),('caddy',caddy)]}
-            if result['statuses'] != {'200':96} or len(backends)!=2:
+                [('postgres',pg),*[(f'api{index}',name) for index,name in enumerate(apis)],('caddy',caddy)]}
+            if result['statuses'] != {'200':96} or len(backends)!=args.replicas:
                 raise RuntimeError('bounded workload failed or did not reach both replicas')
         workload('warm')
         identity, body = str(uuid.uuid4()), b'{"name":"Isolated capacity fixture"}'
@@ -284,7 +285,7 @@ def main():
                                  'exact_replay':len({r[1] for r in replies})==1,
                                  'user_count_delta':int(sql('SELECT count(*) FROM users'))-before_users}
         if any(r[0]['status'] not in (200,201) for r in replies) or report['idempotency'] != {
-                'requests':12,'backends_seen':2,'exact_replay':True,'user_count_delta':1}:
+                'requests':12,'backends_seen':args.replicas,'exact_replay':True,'user_count_delta':1}:
             raise RuntimeError('idempotency cross-replica check failed')
         docker('stop','-t','3',redis)
         workload('redis_outage')

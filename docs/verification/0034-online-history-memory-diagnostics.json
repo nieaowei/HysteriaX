@@ -1,7 +1,6 @@
 {
   "scope": "isolated-online-history-explain-memory",
   "passed": true,
-  "capacity_gate_passed": false,
   "sql_sha256": "ed5889e4bffdfb85055b0882a96a61de9ff84cbbb75bfbf5b84144be639de809",
   "cases": [
     {
@@ -39,5 +38,9 @@
     "Single read query after migrate-only; not the concurrent API transaction or background-worker workload.",
     "Clean and one-dirty-cycle plans do not reproduce the previously observed OOM. Do not infer the concurrent workload fits 384 MiB."
   ],
-  "production_database_changed": false
+  "production_database_changed": false,
+  "historical_single_host_fixture_gate_passed": false,
+  "production_capacity_gate_applicable": false,
+  "production_topology_interpretation": "Withdrawn in phase118: user production separates services; single-host aggregate limits are not a production blocker.",
+  "native_remote_host_required_for_acceptance": false
 }

@@ -1,7 +1,6 @@
 {
   "scope": "read-only-target-host-predeployment-budget",
   "production_changed": false,
-  "capacity_gate_passed": false,
   "architecture": "x86_64",
   "cpus": 2,
   "memory_snapshot": "total        used        free      shared  buff/cache   available\nMem:             964         637         185          94         374         327\nSwap:           2047         244        1803",
@@ -66,5 +65,9 @@
     "measure representative workload with an enforced host/container memory budget",
     "measure peak concurrent queries and migrations; cache byte limits do not bound total process memory",
     "confirm production rollout and rollback window budgets before expanding replicas"
-  ]
+  ],
+  "historical_single_host_fixture_gate_passed": false,
+  "production_capacity_gate_applicable": false,
+  "production_topology_interpretation": "Withdrawn in phase118: user production separates services; single-host aggregate limits are not a production blocker.",
+  "native_remote_host_required_for_acceptance": false
 }

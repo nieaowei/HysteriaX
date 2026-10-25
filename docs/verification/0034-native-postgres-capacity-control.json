@@ -1,6 +1,5 @@
 {
   "scope": "mixed-platform-real-snapshot-capacity",
-  "capacity_gate_passed": false,
   "production_changed": false,
   "api_128_mib": {
     "scope": "isolated-real-snapshot-constrained-capacity",
@@ -888,5 +887,9 @@
     "cleanup_complete": true,
     "elapsed_seconds": 77.341124041
   },
-  "limitation": "PostgreSQL runs natively on arm64; API/Redis/Caddy are emulated amd64. This does not prove native target x86_64 capacity. The API candidate also differs from the earlier phase116 candidate, so platform alone is not isolated."
+  "limitation": "PostgreSQL runs natively on arm64; API/Redis/Caddy are emulated amd64. This does not prove native target x86_64 capacity. The API candidate also differs from the earlier phase116 candidate, so platform alone is not isolated.",
+  "historical_single_host_fixture_gate_passed": false,
+  "production_capacity_gate_applicable": false,
+  "production_topology_interpretation": "Withdrawn in phase118: user production separates services; single-host aggregate limits are not a production blocker.",
+  "native_remote_host_required_for_acceptance": false
 }

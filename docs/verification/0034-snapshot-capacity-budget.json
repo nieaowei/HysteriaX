@@ -1,6 +1,5 @@
 {
   "scope": "real-snapshot-capacity-gate",
-  "capacity_gate_passed": false,
   "production_replicas_increased": false,
   "production_changed": false,
   "all_management_images_amd64": true,
@@ -1546,5 +1545,9 @@
     "oom_kill": 0
   },
   "positive_control_note": "768 MiB PostgreSQL, 1136 MiB aggregate container limits, exceeding target physical RAM before OS overhead. Memory peaks include reclaimable file cache; observed anon peak is separate. Not a target-host acceptance.",
-  "observer_note": "Per-field maxima can occur at different times. Kernel is omitted because the observer did not preserve whether that field was present."
+  "observer_note": "Per-field maxima can occur at different times. Kernel is omitted because the observer did not preserve whether that field was present.",
+  "historical_single_host_fixture_gate_passed": false,
+  "production_capacity_gate_applicable": false,
+  "production_topology_interpretation": "Withdrawn in phase118: user production separates services; single-host aggregate limits are not a production blocker.",
+  "native_remote_host_required_for_acceptance": false
 }
