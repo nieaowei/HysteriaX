@@ -1,0 +1,43 @@
+{
+  "scope": "isolated-online-history-explain-memory",
+  "passed": true,
+  "capacity_gate_passed": false,
+  "sql_sha256": "ed5889e4bffdfb85055b0882a96a61de9ff84cbbb75bfbf5b84144be639de809",
+  "cases": [
+    {
+      "case": "clean",
+      "passed": true,
+      "ordinary_workers_started": false,
+      "fixture_dirty_cycles": 0,
+      "planning_memory_used_kib": 1051,
+      "planning_memory_allocated_kib": 2072,
+      "planning_ms": 44.077,
+      "execution_ms": 73.094,
+      "result_bucket_count": 22.0,
+      "cleanup_complete": true,
+      "verifier_source_sha256": "bf8d4b65c8c7ec991f1b961fc36404b951cac4ca7a1612a6bb4c4e92097da7d9"
+    },
+    {
+      "case": "one_dirty_cycle",
+      "passed": true,
+      "ordinary_workers_started": false,
+      "fixture_dirty_cycles": 1,
+      "planning_memory_used_kib": 1049,
+      "planning_memory_allocated_kib": 2072,
+      "planning_ms": 43.946,
+      "execution_ms": 230.691,
+      "result_bucket_count": 22.0,
+      "cleanup_complete": true,
+      "verifier_source_sha256": "d787d75ba442b73c9b602fc3a50f1ea890963e561151f5ac5ffaa80380ab31ef"
+    }
+  ],
+  "postgres_memory_limit_mib": 768,
+  "all_management_images_amd64": true,
+  "emulated_on_arm64": true,
+  "ordinary_workers_started": false,
+  "limitations": [
+    "Single read query after migrate-only; not the concurrent API transaction or background-worker workload.",
+    "Clean and one-dirty-cycle plans do not reproduce the previously observed OOM. Do not infer the concurrent workload fits 384 MiB."
+  ],
+  "production_database_changed": false
+}

@@ -1,0 +1,892 @@
+{
+  "scope": "mixed-platform-real-snapshot-capacity",
+  "capacity_gate_passed": false,
+  "production_changed": false,
+  "api_128_mib": {
+    "scope": "isolated-real-snapshot-constrained-capacity",
+    "passed": false,
+    "snapshot_sha256": "9c8a203e25406496c8f2a91f4b12056a863c4162b8843e53dcd3e29ed467d9a2",
+    "private_logs": "/var/folders/5q/drsf84850pbcyk9rvyl6yd6h0000gn/T/hx0034-capacity-9hiwvtxo",
+    "target_host_capacity_proven": false,
+    "production_changed": false,
+    "limits_mib": {
+      "postgres": 384,
+      "redis": 64,
+      "api_each": 128,
+      "caddy": 48
+    },
+    "runtime_limit_sum_mib": 752,
+    "api_replicas": 2,
+    "guards": [
+      {
+        "default_deny": true,
+        "postgres_port": 5432,
+        "redis_port": 6379,
+        "ipv6_disabled": true,
+        "target_namespace_owned": true,
+        "nonroot": true,
+        "effective_capabilities": 0
+      },
+      {
+        "default_deny": true,
+        "postgres_port": 5432,
+        "redis_port": 6379,
+        "ipv6_disabled": true,
+        "target_namespace_owned": true,
+        "nonroot": true,
+        "effective_capabilities": 0
+      },
+      {
+        "default_deny": true,
+        "postgres_port": 5432,
+        "redis_port": 6379,
+        "ipv6_disabled": true,
+        "target_namespace_owned": true,
+        "nonroot": true,
+        "effective_capabilities": 0
+      }
+    ],
+    "verifier_source_sha256": "3cd301ab3593f9d48d9fa94d3b9c57dc083beded44ca1e103219d2db4fb534e5",
+    "postgres_settings": {
+      "shared_buffers": "96MB",
+      "work_mem": "4MB",
+      "maintenance_work_mem": "16MB",
+      "max_connections": 40,
+      "jit": "off",
+      "max_parallel_workers_per_gather": 0
+    },
+    "images": {
+      "api": {
+        "id": "sha256:180e946309dd2b3fad470822d605b2a1fcddb1ac5877aeb4e6bcb1ac46f373ed",
+        "architecture": "amd64"
+      },
+      "postgres": {
+        "id": "sha256:1f1c66e06b20326e8605215d3033d79e67a1341a46138ab8439e08cb58c231bc",
+        "architecture": "arm64"
+      },
+      "redis": {
+        "id": "sha256:15f5a4aad4c3ba34b9874ddbc7f755b469dbd7b8a9e88c12690c52ef6c72465c",
+        "architecture": "amd64"
+      },
+      "caddy": {
+        "id": "sha256:aac61abc4024c323602ccb9ee38bd68b147601f518626b2a055e06944e01c510",
+        "architecture": "amd64"
+      }
+    },
+    "docker_architecture": "aarch64",
+    "all_management_images_amd64": false,
+    "emulation_required": true,
+    "migration_memory": {
+      "memory.current": 72503296,
+      "memory.peak": 91324416,
+      "memory.max": 201326592,
+      "memory.events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      },
+      "cpu.stat": {
+        "usage_usec": 1066955,
+        "user_usec": 981435,
+        "system_usec": 85519,
+        "nice_usec": 0,
+        "nr_periods": 28,
+        "nr_throttled": 12,
+        "throttled_usec": 397932,
+        "nr_bursts": 0,
+        "burst_usec": 0
+      },
+      "oom_killed": false,
+      "restarts": 0,
+      "running": true,
+      "exit_code": 0,
+      "collection_complete": true
+    },
+    "failure_category": "RuntimeError",
+    "failure": "API readiness deadline exceeded",
+    "final_container_memory": {
+      "api1": {
+        "oom_killed": true,
+        "restarts": 0,
+        "running": false,
+        "exit_code": 137,
+        "collection_complete": false
+      },
+      "api0": {
+        "oom_killed": true,
+        "restarts": 0,
+        "running": false,
+        "exit_code": 137,
+        "collection_complete": false
+      },
+      "redis": {
+        "memory.current": 17674240,
+        "memory.peak": 25288704,
+        "memory.max": 67108864,
+        "memory.events": {
+          "low": 0,
+          "high": 0,
+          "max": 0,
+          "oom": 0,
+          "oom_kill": 0,
+          "oom_group_kill": 0,
+          "sock_throttled": 0
+        },
+        "cpu.stat": {
+          "usage_usec": 1345295,
+          "user_usec": 961747,
+          "system_usec": 383547,
+          "nice_usec": 0,
+          "nr_periods": 921,
+          "nr_throttled": 30,
+          "throttled_usec": 2655180,
+          "nr_bursts": 0,
+          "burst_usec": 0
+        },
+        "oom_killed": false,
+        "restarts": 0,
+        "running": true,
+        "exit_code": 0,
+        "collection_complete": true
+      },
+      "pg": {
+        "memory.current": 125194240,
+        "memory.peak": 402653184,
+        "memory.max": 402653184,
+        "memory.events": {
+          "low": 0,
+          "high": 0,
+          "max": 42902,
+          "oom": 0,
+          "oom_kill": 0,
+          "oom_group_kill": 0,
+          "sock_throttled": 0
+        },
+        "cpu.stat": {
+          "usage_usec": 39411657,
+          "user_usec": 28313062,
+          "system_usec": 11098594,
+          "nice_usec": 0,
+          "nr_periods": 1170,
+          "nr_throttled": 131,
+          "throttled_usec": 2300614,
+          "nr_bursts": 0,
+          "burst_usec": 0
+        },
+        "oom_killed": false,
+        "restarts": 0,
+        "running": true,
+        "exit_code": 0,
+        "collection_complete": true
+      }
+    },
+    "cleanup_complete": true,
+    "elapsed_seconds": 132.265178375
+  },
+  "api_192_mib": {
+    "scope": "isolated-real-snapshot-constrained-capacity",
+    "passed": true,
+    "snapshot_sha256": "9c8a203e25406496c8f2a91f4b12056a863c4162b8843e53dcd3e29ed467d9a2",
+    "private_logs": "/var/folders/5q/drsf84850pbcyk9rvyl6yd6h0000gn/T/hx0034-capacity-iix2mnye",
+    "target_host_capacity_proven": false,
+    "production_changed": false,
+    "limits_mib": {
+      "postgres": 384,
+      "redis": 64,
+      "api_each": 192,
+      "caddy": 48
+    },
+    "runtime_limit_sum_mib": 880,
+    "api_replicas": 2,
+    "guards": [
+      {
+        "default_deny": true,
+        "postgres_port": 5432,
+        "redis_port": 6379,
+        "ipv6_disabled": true,
+        "target_namespace_owned": true,
+        "nonroot": true,
+        "effective_capabilities": 0
+      },
+      {
+        "default_deny": true,
+        "postgres_port": 5432,
+        "redis_port": 6379,
+        "ipv6_disabled": true,
+        "target_namespace_owned": true,
+        "nonroot": true,
+        "effective_capabilities": 0
+      },
+      {
+        "default_deny": true,
+        "postgres_port": 5432,
+        "redis_port": 6379,
+        "ipv6_disabled": true,
+        "target_namespace_owned": true,
+        "nonroot": true,
+        "effective_capabilities": 0
+      }
+    ],
+    "verifier_source_sha256": "896eac1ddd174750ed66d88f7a6baed22b40e11e1cca739f299c6b396489c660",
+    "postgres_settings": {
+      "shared_buffers": "96MB",
+      "work_mem": "4MB",
+      "maintenance_work_mem": "16MB",
+      "max_connections": 40,
+      "jit": "off",
+      "max_parallel_workers_per_gather": 0
+    },
+    "images": {
+      "api": {
+        "id": "sha256:180e946309dd2b3fad470822d605b2a1fcddb1ac5877aeb4e6bcb1ac46f373ed",
+        "architecture": "amd64"
+      },
+      "postgres": {
+        "id": "sha256:1f1c66e06b20326e8605215d3033d79e67a1341a46138ab8439e08cb58c231bc",
+        "architecture": "arm64"
+      },
+      "redis": {
+        "id": "sha256:15f5a4aad4c3ba34b9874ddbc7f755b469dbd7b8a9e88c12690c52ef6c72465c",
+        "architecture": "amd64"
+      },
+      "caddy": {
+        "id": "sha256:aac61abc4024c323602ccb9ee38bd68b147601f518626b2a055e06944e01c510",
+        "architecture": "amd64"
+      }
+    },
+    "docker_architecture": "aarch64",
+    "all_management_images_amd64": false,
+    "emulation_required": true,
+    "migration_memory": {
+      "memory.current": 72892416,
+      "memory.peak": 90656768,
+      "memory.max": 201326592,
+      "memory.events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      },
+      "cpu.stat": {
+        "usage_usec": 1091982,
+        "user_usec": 1003935,
+        "system_usec": 88046,
+        "nice_usec": 0,
+        "nr_periods": 29,
+        "nr_throttled": 12,
+        "throttled_usec": 436773,
+        "nr_bursts": 0,
+        "burst_usec": 0
+      },
+      "oom_killed": false,
+      "restarts": 0,
+      "running": true,
+      "exit_code": 0,
+      "collection_complete": true
+    },
+    "workloads": {
+      "warm": {
+        "requests": 96,
+        "statuses": {
+          "200": 96
+        },
+        "p50_ms": 3.8565839999975537,
+        "p95_ms": 186.52654199999574,
+        "p99_ms": 646.3457499999947,
+        "backends_seen": 2,
+        "response_bytes": 971652
+      },
+      "redis_outage": {
+        "requests": 96,
+        "statuses": {
+          "200": 96
+        },
+        "p50_ms": 6.374917000002256,
+        "p95_ms": 1225.5214589999994,
+        "p99_ms": 1292.8239169999997,
+        "backends_seen": 2,
+        "response_bytes": 974400
+      },
+      "redis_empty_restart": {
+        "requests": 96,
+        "statuses": {
+          "200": 96
+        },
+        "p50_ms": 4.2642089999986865,
+        "p95_ms": 68.8882089999936,
+        "p99_ms": 809.9569580000008,
+        "backends_seen": 2,
+        "response_bytes": 974484
+      }
+    },
+    "memory": {
+      "warm": {
+        "postgres": {
+          "memory.current": 399884288,
+          "memory.peak": 402653184,
+          "memory.max": 402653184,
+          "memory.events": {
+            "low": 0,
+            "high": 0,
+            "max": 36843,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0,
+            "sock_throttled": 0
+          },
+          "cpu.stat": {
+            "usage_usec": 30021925,
+            "user_usec": 23536621,
+            "system_usec": 6485304,
+            "nice_usec": 0,
+            "nr_periods": 519,
+            "nr_throttled": 125,
+            "throttled_usec": 1722389,
+            "nr_bursts": 0,
+            "burst_usec": 0
+          },
+          "oom_killed": false,
+          "restarts": 0,
+          "running": true,
+          "exit_code": 0,
+          "collection_complete": true
+        },
+        "api0": {
+          "memory.current": 52301824,
+          "memory.peak": 142073856,
+          "memory.max": 201326592,
+          "memory.events": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0,
+            "sock_throttled": 0
+          },
+          "cpu.stat": {
+            "usage_usec": 1875919,
+            "user_usec": 1433597,
+            "system_usec": 442322,
+            "nice_usec": 0,
+            "nr_periods": 78,
+            "nr_throttled": 57,
+            "throttled_usec": 10211153,
+            "nr_bursts": 0,
+            "burst_usec": 0
+          },
+          "oom_killed": false,
+          "restarts": 0,
+          "running": true,
+          "exit_code": 0,
+          "collection_complete": true
+        },
+        "api1": {
+          "memory.current": 29425664,
+          "memory.peak": 105234432,
+          "memory.max": 201326592,
+          "memory.events": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0,
+            "sock_throttled": 0
+          },
+          "cpu.stat": {
+            "usage_usec": 1402790,
+            "user_usec": 1090949,
+            "system_usec": 311840,
+            "nice_usec": 0,
+            "nr_periods": 72,
+            "nr_throttled": 39,
+            "throttled_usec": 5301849,
+            "nr_bursts": 0,
+            "burst_usec": 0
+          },
+          "oom_killed": false,
+          "restarts": 0,
+          "running": true,
+          "exit_code": 0,
+          "collection_complete": true
+        },
+        "caddy": {
+          "memory.current": 49602560,
+          "memory.peak": 50331648,
+          "memory.max": 50331648,
+          "memory.events": {
+            "low": 0,
+            "high": 0,
+            "max": 2393,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0,
+            "sock_throttled": 0
+          },
+          "cpu.stat": {
+            "usage_usec": 815683,
+            "user_usec": 423865,
+            "system_usec": 391817,
+            "nice_usec": 0,
+            "nr_periods": 46,
+            "nr_throttled": 37,
+            "throttled_usec": 3050146,
+            "nr_bursts": 0,
+            "burst_usec": 0
+          },
+          "oom_killed": false,
+          "restarts": 0,
+          "running": true,
+          "exit_code": 0,
+          "collection_complete": true
+        }
+      },
+      "redis_outage": {
+        "postgres": {
+          "memory.current": 400048128,
+          "memory.peak": 402653184,
+          "memory.max": 402653184,
+          "memory.events": {
+            "low": 0,
+            "high": 0,
+            "max": 39489,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0,
+            "sock_throttled": 0
+          },
+          "cpu.stat": {
+            "usage_usec": 32975352,
+            "user_usec": 25959039,
+            "system_usec": 7016313,
+            "nice_usec": 0,
+            "nr_periods": 561,
+            "nr_throttled": 152,
+            "throttled_usec": 5976255,
+            "nr_bursts": 0,
+            "burst_usec": 0
+          },
+          "oom_killed": false,
+          "restarts": 0,
+          "running": true,
+          "exit_code": 0,
+          "collection_complete": true
+        },
+        "api0": {
+          "memory.current": 54947840,
+          "memory.peak": 142073856,
+          "memory.max": 201326592,
+          "memory.events": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0,
+            "sock_throttled": 0
+          },
+          "cpu.stat": {
+            "usage_usec": 2245459,
+            "user_usec": 1697955,
+            "system_usec": 547504,
+            "nice_usec": 0,
+            "nr_periods": 113,
+            "nr_throttled": 60,
+            "throttled_usec": 10417606,
+            "nr_bursts": 0,
+            "burst_usec": 0
+          },
+          "oom_killed": false,
+          "restarts": 0,
+          "running": true,
+          "exit_code": 0,
+          "collection_complete": true
+        },
+        "api1": {
+          "memory.current": 31010816,
+          "memory.peak": 105234432,
+          "memory.max": 201326592,
+          "memory.events": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0,
+            "sock_throttled": 0
+          },
+          "cpu.stat": {
+            "usage_usec": 1641074,
+            "user_usec": 1280116,
+            "system_usec": 360957,
+            "nice_usec": 0,
+            "nr_periods": 100,
+            "nr_throttled": 41,
+            "throttled_usec": 5379208,
+            "nr_bursts": 0,
+            "burst_usec": 0
+          },
+          "oom_killed": false,
+          "restarts": 0,
+          "running": true,
+          "exit_code": 0,
+          "collection_complete": true
+        },
+        "caddy": {
+          "memory.current": 48422912,
+          "memory.peak": 50331648,
+          "memory.max": 50331648,
+          "memory.events": {
+            "low": 0,
+            "high": 0,
+            "max": 2462,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0,
+            "sock_throttled": 0
+          },
+          "cpu.stat": {
+            "usage_usec": 940155,
+            "user_usec": 516625,
+            "system_usec": 423530,
+            "nice_usec": 0,
+            "nr_periods": 64,
+            "nr_throttled": 40,
+            "throttled_usec": 3266435,
+            "nr_bursts": 0,
+            "burst_usec": 0
+          },
+          "oom_killed": false,
+          "restarts": 0,
+          "running": true,
+          "exit_code": 0,
+          "collection_complete": true
+        }
+      },
+      "redis_empty_restart": {
+        "postgres": {
+          "memory.current": 382177280,
+          "memory.peak": 402653184,
+          "memory.max": 402653184,
+          "memory.events": {
+            "low": 0,
+            "high": 0,
+            "max": 39489,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0,
+            "sock_throttled": 0
+          },
+          "cpu.stat": {
+            "usage_usec": 34976957,
+            "user_usec": 27484006,
+            "system_usec": 7492951,
+            "nice_usec": 0,
+            "nr_periods": 646,
+            "nr_throttled": 160,
+            "throttled_usec": 6818537,
+            "nr_bursts": 0,
+            "burst_usec": 0
+          },
+          "oom_killed": false,
+          "restarts": 0,
+          "running": true,
+          "exit_code": 0,
+          "collection_complete": true
+        },
+        "api0": {
+          "memory.current": 47722496,
+          "memory.peak": 142073856,
+          "memory.max": 201326592,
+          "memory.events": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0,
+            "sock_throttled": 0
+          },
+          "cpu.stat": {
+            "usage_usec": 2924489,
+            "user_usec": 2101691,
+            "system_usec": 822798,
+            "nice_usec": 0,
+            "nr_periods": 189,
+            "nr_throttled": 69,
+            "throttled_usec": 10919765,
+            "nr_bursts": 0,
+            "burst_usec": 0
+          },
+          "oom_killed": false,
+          "restarts": 0,
+          "running": true,
+          "exit_code": 0,
+          "collection_complete": true
+        },
+        "api1": {
+          "memory.current": 31838208,
+          "memory.peak": 105234432,
+          "memory.max": 201326592,
+          "memory.events": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0,
+            "sock_throttled": 0
+          },
+          "cpu.stat": {
+            "usage_usec": 2070111,
+            "user_usec": 1554805,
+            "system_usec": 515306,
+            "nice_usec": 0,
+            "nr_periods": 163,
+            "nr_throttled": 48,
+            "throttled_usec": 5777310,
+            "nr_bursts": 0,
+            "burst_usec": 0
+          },
+          "oom_killed": false,
+          "restarts": 0,
+          "running": true,
+          "exit_code": 0,
+          "collection_complete": true
+        },
+        "caddy": {
+          "memory.current": 49729536,
+          "memory.peak": 50331648,
+          "memory.max": 50331648,
+          "memory.events": {
+            "low": 0,
+            "high": 0,
+            "max": 2573,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0,
+            "sock_throttled": 0
+          },
+          "cpu.stat": {
+            "usage_usec": 1060395,
+            "user_usec": 583732,
+            "system_usec": 476663,
+            "nice_usec": 0,
+            "nr_periods": 75,
+            "nr_throttled": 43,
+            "throttled_usec": 3460556,
+            "nr_bursts": 0,
+            "burst_usec": 0
+          },
+          "oom_killed": false,
+          "restarts": 0,
+          "running": true,
+          "exit_code": 0,
+          "collection_complete": true
+        }
+      }
+    },
+    "idempotency": {
+      "requests": 12,
+      "backends_seen": 2,
+      "exact_replay": true,
+      "user_count_delta": 1
+    },
+    "redis_keys_after_empty_restart": 15,
+    "redis_memory": {
+      "memory.current": 23502848,
+      "memory.peak": 26742784,
+      "memory.max": 67108864,
+      "memory.events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      },
+      "cpu.stat": {
+        "usage_usec": 810154,
+        "user_usec": 680920,
+        "system_usec": 129233,
+        "nice_usec": 0,
+        "nr_periods": 105,
+        "nr_throttled": 76,
+        "throttled_usec": 11218788,
+        "nr_bursts": 0,
+        "burst_usec": 0
+      },
+      "oom_killed": false,
+      "restarts": 0,
+      "running": true,
+      "exit_code": 0,
+      "collection_complete": true
+    },
+    "database_connections": 29,
+    "granted_advisory_lock_count_after_migration": 0,
+    "final_container_memory": {
+      "caddy": {
+        "memory.current": 47984640,
+        "memory.peak": 50331648,
+        "memory.max": 50331648,
+        "memory.events": {
+          "low": 0,
+          "high": 0,
+          "max": 2585,
+          "oom": 0,
+          "oom_kill": 0,
+          "oom_group_kill": 0,
+          "sock_throttled": 0
+        },
+        "cpu.stat": {
+          "usage_usec": 1099476,
+          "user_usec": 616201,
+          "system_usec": 483275,
+          "nice_usec": 0,
+          "nr_periods": 79,
+          "nr_throttled": 44,
+          "throttled_usec": 3544965,
+          "nr_bursts": 0,
+          "burst_usec": 0
+        },
+        "oom_killed": false,
+        "restarts": 0,
+        "running": true,
+        "exit_code": 0,
+        "collection_complete": true
+      },
+      "api1": {
+        "memory.current": 31494144,
+        "memory.peak": 105234432,
+        "memory.max": 201326592,
+        "memory.events": {
+          "low": 0,
+          "high": 0,
+          "max": 0,
+          "oom": 0,
+          "oom_kill": 0,
+          "oom_group_kill": 0,
+          "sock_throttled": 0
+        },
+        "cpu.stat": {
+          "usage_usec": 2220754,
+          "user_usec": 1668042,
+          "system_usec": 552712,
+          "nice_usec": 0,
+          "nr_periods": 182,
+          "nr_throttled": 51,
+          "throttled_usec": 5884887,
+          "nr_bursts": 0,
+          "burst_usec": 0
+        },
+        "oom_killed": false,
+        "restarts": 0,
+        "running": true,
+        "exit_code": 0,
+        "collection_complete": true
+      },
+      "api0": {
+        "memory.current": 47665152,
+        "memory.peak": 142073856,
+        "memory.max": 201326592,
+        "memory.events": {
+          "low": 0,
+          "high": 0,
+          "max": 0,
+          "oom": 0,
+          "oom_kill": 0,
+          "oom_group_kill": 0,
+          "sock_throttled": 0
+        },
+        "cpu.stat": {
+          "usage_usec": 3171837,
+          "user_usec": 2281551,
+          "system_usec": 890286,
+          "nice_usec": 0,
+          "nr_periods": 210,
+          "nr_throttled": 73,
+          "throttled_usec": 11233395,
+          "nr_bursts": 0,
+          "burst_usec": 0
+        },
+        "oom_killed": false,
+        "restarts": 0,
+        "running": true,
+        "exit_code": 0,
+        "collection_complete": true
+      },
+      "redis": {
+        "memory.current": 22708224,
+        "memory.peak": 26742784,
+        "memory.max": 67108864,
+        "memory.events": {
+          "low": 0,
+          "high": 0,
+          "max": 0,
+          "oom": 0,
+          "oom_kill": 0,
+          "oom_group_kill": 0,
+          "sock_throttled": 0
+        },
+        "cpu.stat": {
+          "usage_usec": 1014309,
+          "user_usec": 823715,
+          "system_usec": 190593,
+          "nice_usec": 0,
+          "nr_periods": 134,
+          "nr_throttled": 95,
+          "throttled_usec": 13275760,
+          "nr_bursts": 0,
+          "burst_usec": 0
+        },
+        "oom_killed": false,
+        "restarts": 0,
+        "running": true,
+        "exit_code": 0,
+        "collection_complete": true
+      },
+      "pg": {
+        "memory.current": 185151488,
+        "memory.peak": 402653184,
+        "memory.max": 402653184,
+        "memory.events": {
+          "low": 0,
+          "high": 0,
+          "max": 39489,
+          "oom": 0,
+          "oom_kill": 0,
+          "oom_group_kill": 0,
+          "sock_throttled": 0
+        },
+        "cpu.stat": {
+          "usage_usec": 35341490,
+          "user_usec": 27661305,
+          "system_usec": 7680185,
+          "nice_usec": 0,
+          "nr_periods": 675,
+          "nr_throttled": 160,
+          "throttled_usec": 6818537,
+          "nr_bursts": 0,
+          "burst_usec": 0
+        },
+        "oom_killed": false,
+        "restarts": 0,
+        "running": true,
+        "exit_code": 0,
+        "collection_complete": true
+      }
+    },
+    "cleanup_complete": true,
+    "elapsed_seconds": 77.341124041
+  },
+  "limitation": "PostgreSQL runs natively on arm64; API/Redis/Caddy are emulated amd64. This does not prove native target x86_64 capacity. The API candidate also differs from the earlier phase116 candidate, so platform alone is not isolated."
+}

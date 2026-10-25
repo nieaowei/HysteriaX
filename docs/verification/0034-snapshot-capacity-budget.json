@@ -1542,9 +1542,9 @@
     "current": 805298176,
     "anon": 504246272,
     "file": 741388288,
-    "kernel": 0,
     "oom": 0,
     "oom_kill": 0
   },
-  "positive_control_note": "768 MiB PostgreSQL, 1136 MiB aggregate container limits, exceeding target physical RAM before OS overhead. Memory peaks include reclaimable file cache; observed anon peak is separate. Not a target-host acceptance."
+  "positive_control_note": "768 MiB PostgreSQL, 1136 MiB aggregate container limits, exceeding target physical RAM before OS overhead. Memory peaks include reclaimable file cache; observed anon peak is separate. Not a target-host acceptance.",
+  "observer_note": "Per-field maxima can occur at different times. Kernel is omitted because the observer did not preserve whether that field was present."
 }

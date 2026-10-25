@@ -39,10 +39,13 @@ def main():
     parser.add_argument('--postgres-jit', choices=['on','off'], default='on')
     parser.add_argument('--postgres-parallel-workers', type=int, choices=range(0,9), default=2)
     parser.add_argument('--postgres-memory-mib', type=int, default=384)
+    parser.add_argument('--api-memory-mib', type=int, default=128)
     parser.add_argument('--report', type=Path, required=True)
     args = parser.parse_args()
     if not 128 <= args.postgres_memory_mib <= 8192:
         parser.error('PostgreSQL memory must be between 128 and 8192 MiB')
+    if not 64 <= args.api_memory_mib <= 4096:
+        parser.error('API memory must be between 64 and 4096 MiB')
     if args.key_file.stat().st_mode & 0o077:
         parser.error('key file must be owner-only')
     digest = hashlib.sha256()
@@ -58,8 +61,8 @@ def main():
     report = {'scope':'isolated-real-snapshot-constrained-capacity', 'passed':False,
               'snapshot_sha256':digest.hexdigest(), 'private_logs':str(private),
               'target_host_capacity_proven':False, 'production_changed':False,
-              'limits_mib':{'postgres':args.postgres_memory_mib, 'redis':64, 'api_each':128, 'caddy':48},
-              'runtime_limit_sum_mib':args.postgres_memory_mib+368, 'api_replicas':2, 'guards':[]}
+              'limits_mib':{'postgres':args.postgres_memory_mib, 'redis':64, 'api_each':args.api_memory_mib, 'caddy':48},
+              'runtime_limit_sum_mib':args.postgres_memory_mib+2*args.api_memory_mib+112, 'api_replicas':2, 'guards':[]}
     began = time.monotonic()
     report['verifier_source_sha256'] = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
     report['postgres_settings'] = {'shared_buffers':'96MB','work_mem':'4MB',
@@ -197,7 +200,7 @@ def main():
                      '--entrypoint','/bin/sh','-v',str(gate)+':/gate:ro','-v',str(assets)+':/assets']
             for key in api_env:
                 extra += ['-e',key]
-            name = start(role,args.image,192 if migrate else 128,.6 if migrate else .3,extra,['-c',command])
+            name = start(role,args.image,192 if migrate else args.api_memory_mib,.6 if migrate else .3,extra,['-c',command])
             uid = int(docker('exec',name,'id','-u').stdout)
             capabilities = docker('exec',name,'sh','-ec',
                                   'sed -n "s/^CapEff:[[:space:]]*//p" /proc/self/status').stdout.strip()

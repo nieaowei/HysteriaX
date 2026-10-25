@@ -1,0 +1,23 @@
+{
+  "scope": "updated-server2-readonly-capacity-preflight",
+  "exit": 0,
+  "inventory": {
+    "architecture": {
+      "exit": 0,
+      "output": "x86_64"
+    },
+    "memory": {
+      "exit": 0,
+      "output": "total        used        free      shared  buff/cache   available\nMem:             406         198          23           2         201         208\nSwap:              0           0           0"
+    },
+    "docker": {
+      "exit": 127,
+      "output": ""
+    }
+  },
+  "password_printed": false,
+  "host_trust_changed": false,
+  "services_installed": false,
+  "production_data_copied": false,
+  "full_capacity_fixture_supported": false
+}

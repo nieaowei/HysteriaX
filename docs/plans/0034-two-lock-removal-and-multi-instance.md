@@ -1148,4 +1148,12 @@
 - 该阳性对照容器上限合计 1136MiB，超过目标机总物理内存，不能用于放行生产双实例。旁路只读采样看到 PostgreSQL anon 最大 504246272 字节；file 最大值来自其他采样时刻，不能将各时刻最大值相加当同一时刻峰值。所有正式容量反例／阳性对照与目标机观察保存在 docs/verification/0034-snapshot-capacity-budget.json，capacity_gate_passed 仍为 false。下一步区分在线历史查询的规划／执行内存，再决定目标机发布策略，不以放宽测试门槛消除反例。
 - 最终本地 amd64 镜像重建已退出 0，并在 --network none 条件下再次通过模板运行检查。镜像 hysteriax-server:0034-amd64-2feade3-20261025 已由本地 docker save／gzip 通过现有受信 SSH 推送到服务器，无远端构建。最初直接比较 image inspect ID 不同而拒绝放行；随后逐项验证有序 RootFS layer 摘要、运行配置摘要和服务端二进制 SHA256 全部一致。二进制为 3b2f4361c9bf03e38d745fe9b77342b5028b5234a34de33936238cf28d7a906c。证据 docs/verification/0034-amd64-release-staged.json 同时保留两端不同的 inspect ID，不将它们伪称一致。当前运行 API 仍为旧 node-cleanup-fk-20261021，未迁移线上数据库、未启动新版服务；本次只完成发布物暂存。
 
+### 第一百一十七阶段：历史查询规划内存诊断与原生数据库对照
+
+- 使用最终已暂存镜像，在独立真实快照完成 --migrate-only 后，不启动任何普通 API／后台工作，分别对干净队列和夹具新建的 1 个 dirty cycle 执行同一 online_history.sql 的 EXPLAIN (ANALYZE, MEMORY, FORMAT JSON)。只保留聚合诊断数字，不输出快照行或完整执行计划。查询规划 Memory Used 分别 1051／1049KiB，Allocated 均 2072KiB；规划 44.077／43.946ms，执行 73.094／230.691ms。两轮完整清理自有资源。
+- 此结果不复现并发 API 工作负载下的 OOM，不能据此声称 384MiB 足够，也不据此更改查询语义或放宽门槛。证据 docs/verification/0034-online-history-memory-diagnostics.json。继续使用同一数据／负载和 384MiB PostgreSQL 上限，组合宿主原生 arm64 PostgreSQL、最终 2feade3 amd64 API 及 amd64 Redis／Caddy。该 API 镜像不同于第一百一十六阶段较早候选物，不能将所有差异仅归因于 PostgreSQL 平台；混合平台结果不作为目标 x86_64 主机容量通过。
+- 第二测试服务器使用现有验证文件与严格主机校验复查，直连仍 Connection closed，经第一服务器代理连接也失败（Connection closed／Connection refused）；没有改动密钥、主机信任或远端 SSH 配置。线上 schema／API 继续保持旧版本，双副本容量门槛仍关闭。
+- 原生 arm64 PostgreSQL／最终 amd64 API 的 128MiB 对照在 readiness 阶段失败：两个 API 均 OOMKilled=true／exit 137，PostgreSQL 无 OOM；未进入请求阶段，不将其归为查询容量通过。新增 --api-memory-mib 显式记录 API 限额，保持默认 128MiB；同数据、相同最终镜像，仅将 API 提至 192MiB 后退出 0（77.341s），三轮各 96 请求全部 200、两副本均覆盖，12 次幂等写仅新增 1 个用户且响应逐字节一致，Redis 空重启重建 15 键，数据库共 29 连接、观察到已授予 advisory lock 为 0，无 OOM／重启且完整清理。API 峰值分别 135.492／100.359MiB。服务限额合计 880MiB，不包含系统余量；混合平台验证不代替原生 x86_64 验收。证据 docs/verification/0034-native-postgres-capacity-control.json。
+- 用户更新 temp.cloud.md 后，第二测试服务器改用其提供的密码登录；通过私有临时 ASKPASS／进程环境传递，未在命令参数、工具输出或仓库写入密码，辅助文件随后删除。保持 StrictHostKeyChecking=yes，连接成功；只读检查确认为 x86_64、406MiB 总内存、无 swap，尚无 Docker。这个资源规模小于当前服务配置本身的上限，不能直接承载完整容量夹具。此前连接失败已解决，但原生完整容量环境仍不足；未在该主机安装服务或载入生产数据。
+
 工作区原有 macOS、OpenAPI、生成脚本与任务展示测试改动需持续保留；不得整体覆盖或混入第一阶段服务端提交。
