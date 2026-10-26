@@ -1,5 +1,7 @@
 //! Durable, bounded billing. A captured response survives process death; each
 //! item's checkpoint, baseline, ledger row, usage and revocation commit together.
+use std::collections::HashSet;
+
 use anyhow::{Result, ensure};
 use chrono::{DateTime, Utc};
 use serde_json::{Map, Value, json};
@@ -149,11 +151,13 @@ pub async fn process(pool: &PgPool, id: &str) -> Result<Progress> {
             // Explicitly lock users in ID order before touching any counter.
             sqlx::query("SELECT id FROM users WHERE id=ANY($1::text[]) ORDER BY id FOR NO KEY UPDATE")
                 .bind(&ids).fetch_all(&mut **tx).await?;
+            // Read membership once per page, after acquiring the same user locks
+            // as before. Stale counters still advance their item checkpoints.
+            let assigned:HashSet<String>=sqlx::query_scalar::<_,String>("SELECT user_id FROM node_assignments WHERE node_id=$1 AND user_id=ANY($2::text[])")
+                .bind(&node).bind(&ids).fetch_all(&mut **tx).await?.into_iter().collect();
             for item in &items {
                 let user:String=item.get("user_id");
-                let assigned:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM node_assignments WHERE node_id=$1 AND user_id=$2)")
-                    .bind(&node).bind(&user).fetch_one(&mut **tx).await?;
-                if !assigned {continue;}
+                if !assigned.contains(&user) {continue;}
                 let current_tx:i64=item.get("tx_total");
                 let current_rx:i64=item.get("rx_total");
                 let baseline=sqlx::query("SELECT instance_id,tx_total,rx_total,sample_order FROM traffic_baselines WHERE node_id=$1 AND user_id=$2 FOR UPDATE")

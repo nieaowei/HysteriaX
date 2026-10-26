@@ -281,6 +281,51 @@ async fn malformed_or_conflicting_payloads_never_replace_a_captured_batch() {
     assert_eq!(row.get::<String, _>("state"), "complete");
 }
 
+#[tokio::test]
+async fn stale_counters_checkpoint_across_pages_and_membership_is_rechecked_per_page() {
+    let pool = fixture(503).await;
+    let mut values = counters(503, 7, 3);
+    values.insert("user-9999".into(), json!({"tx":7,"rx":3}));
+    capture(&pool, "stale-counters", "a", &values).await;
+    // Other-node assignments must not authorize billing on this node. Include
+    // a counter for a nonexistent user, as real nodes can retain old counters.
+    sqlx::query("DELETE FROM node_assignments WHERE node_id='a' AND user_id NOT IN ('user-0001','user-0501','user-0503')")
+        .execute(&pool).await.unwrap();
+    assert_eq!(
+        batches::process(&pool, "stale-counters").await.unwrap(),
+        Progress::Committed {
+            items: 500,
+            complete: false
+        }
+    );
+    let first = usage(&pool).await;
+    assert_eq!(first[0], 10);
+    assert!(first[1..].iter().all(|value| *value == 0));
+    sqlx::query("DELETE FROM node_assignments WHERE node_id='a' AND user_id='user-0501'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        batches::process(&pool, "stale-counters").await.unwrap(),
+        Progress::Committed {
+            items: 4,
+            complete: true
+        }
+    );
+    let final_usage = usage(&pool).await;
+    assert_eq!(final_usage[0], 10);
+    assert_eq!(final_usage[502], 10);
+    assert!(final_usage[1..502].iter().all(|value| *value == 0));
+    let counts: (i64, i64, i64, i64) = sqlx::query_as("SELECT (SELECT count(*) FROM traffic_records),(SELECT count(*) FROM traffic_baselines),(SELECT count(*) FROM traffic_sample_items WHERE processed_at IS NOT NULL),(SELECT processed_count FROM traffic_sample_batches WHERE sample_id='stale-counters')")
+        .fetch_one(&pool).await.unwrap();
+    assert_eq!(counts, (2, 2, 504, 504));
+    assert_eq!(
+        batches::process(&pool, "stale-counters").await.unwrap(),
+        Progress::Finished
+    );
+    assert_eq!(usage(&pool).await, final_usage);
+}
+
 async fn reset_user(pool: &PgPool) -> Result<(), crate::error::ApiError> {
     let state = crate::state::AppState::new(
         pool.clone(),
