@@ -155,7 +155,7 @@ pub(crate) async fn sample_work(state: &AppState, work: &crate::background::Work
     }
     crate::background::admit_read(&state.pool, work).await?;
     let result = tokio::time::timeout(
-        Duration::from_secs(45),
+        Duration::from_secs(crate::runtime_config::operation_timeout_seconds(45)),
         sample_node(
             &state.pool,
             &state.secrets,
@@ -270,7 +270,7 @@ async fn sample_node(
         }
     };
     if let Err(error) = tokio::time::timeout(
-        Duration::from_secs(8),
+        Duration::from_secs(crate::runtime_config::operation_timeout_seconds(8)),
         crate::node_acme::sample(pool, secrets, node_id, &session),
     )
     .await

@@ -150,7 +150,9 @@ fn monitoring_node(
     }
     if let Some(at) = reading.online_sampled_at {
         sampled_at = Some(at);
-        online_status = if now - at > Duration::seconds(90) {
+        online_status = if now - at
+            > Duration::seconds(90.max(crate::runtime_config::sampling_freshness_seconds()))
+        {
             "stale"
         } else if reading.online_status.as_deref() == Some("ok") {
             "fresh"

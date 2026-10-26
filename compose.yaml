@@ -1,5 +1,6 @@
 services:
   postgres:
+    profiles: [local-db]
     image: postgres:18-bookworm
     init: true
     stop_grace_period: 1m
@@ -38,22 +39,30 @@ services:
     image: "${HYSTERIAX_IMAGE:-hysteriax-server}:${HYSTERIAX_VERSION:-dev}"
     restart: unless-stopped
     depends_on:
-      postgres:
-        condition: service_healthy
       redis:
         condition: service_healthy
     user: "${HYSTERIAX_UID:-1000}:${HYSTERIAX_GID:-1000}"
     environment:
-      DATABASE_URL: postgresql://${HYSTERIAX_DB_USER:-hysteriax}:${HYSTERIAX_DB_PASSWORD}@postgres:5432/${POSTGRES_DB:-hysteriax}
+      DATABASE_URL: "${HYSTERIAX_DATABASE_URL:?set HYSTERIAX_DATABASE_URL in .env}"
       HYSTERIAX_REDIS_URL: redis://:${HYSTERIAX_REDIS_PASSWORD}@redis:6379/0
       HYSTERIAX_LISTEN_ADDR: 0.0.0.0:8080
       HYSTERIAX_PUBLIC_URL: https://${HYSTERIAX_DOMAIN}
       HYSTERIAX_ADMIN_TOKEN: ${HYSTERIAX_ADMIN_TOKEN}
       HYSTERIAX_MASTER_KEY: ${HYSTERIAX_MASTER_KEY}
       HYSTERIAX_ASSET_CACHE_DIR: /var/cache/hysteriax/assets
+      HYSTERIAX_DB_POOL_MAX_CONNECTIONS: "${HYSTERIAX_DB_POOL_MAX_CONNECTIONS:-10}"
+      HYSTERIAX_DB_POOL_ACQUIRE_TIMEOUT_SECONDS: "${HYSTERIAX_DB_POOL_ACQUIRE_TIMEOUT_SECONDS:-5}"
+      HYSTERIAX_BACKGROUND_WORKER_PARALLELISM: "${HYSTERIAX_BACKGROUND_WORKER_PARALLELISM:-4}"
+      HYSTERIAX_DB_LOCK_TIMEOUT_SECONDS: "${HYSTERIAX_DB_LOCK_TIMEOUT_SECONDS:-1}"
+      HYSTERIAX_DB_STATEMENT_TIMEOUT_SECONDS: "${HYSTERIAX_DB_STATEMENT_TIMEOUT_SECONDS:-20}"
+      HYSTERIAX_DB_IDLE_TRANSACTION_TIMEOUT_SECONDS: "${HYSTERIAX_DB_IDLE_TRANSACTION_TIMEOUT_SECONDS:-20}"
+      HYSTERIAX_EXECUTION_LEASE_SECONDS: "${HYSTERIAX_EXECUTION_LEASE_SECONDS:-60}"
+      HYSTERIAX_OPERATION_TIMEOUT_SECONDS: "${HYSTERIAX_OPERATION_TIMEOUT_SECONDS:-0}"
+      HYSTERIAX_SAMPLING_INTERVAL_SECONDS: "${HYSTERIAX_SAMPLING_INTERVAL_SECONDS:-10}"
       RUST_LOG: info
     volumes:
       - ./data/assets:/var/cache/hysteriax/assets
+      - ./data/postgresql-ca.crt:/etc/hysteriax/postgresql-ca.crt:ro
     healthcheck:
       test: ["CMD", "curl", "--fail", "http://127.0.0.1:8080/readyz"]
       interval: 30s

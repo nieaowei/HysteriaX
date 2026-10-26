@@ -269,28 +269,32 @@ pub(crate) async fn sample_work(state: &AppState, work: &crate::background::Work
         return Ok(());
     };
     let token = crate::api::generate_token();
-    let result =
-        match tokio::time::timeout(Duration::from_secs(15), probe(state, work, &row, &token)).await
-        {
-            Ok(Ok(result)) => result,
-            Ok(Err(error)) if error.is::<crate::background::SlotExpired>() => return Err(error),
-            Ok(Err(error)) => ProbeResult {
-                status: "failed".into(),
-                reason: Some(
-                    error
-                        .downcast_ref::<ProbeFailure>()
-                        .map(|e| e.0)
-                        .unwrap_or("代理连接或目标请求失败")
-                        .into(),
-                ),
-                ..Default::default()
-            },
-            Err(_) => ProbeResult {
-                status: "failed".into(),
-                reason: Some("探测超过 15 秒".into()),
-                ..Default::default()
-            },
-        };
+    let timeout_seconds = crate::runtime_config::operation_timeout_seconds(15);
+    let result = match tokio::time::timeout(
+        Duration::from_secs(timeout_seconds),
+        probe(state, work, &row, &token),
+    )
+    .await
+    {
+        Ok(Ok(result)) => result,
+        Ok(Err(error)) if error.is::<crate::background::SlotExpired>() => return Err(error),
+        Ok(Err(error)) => ProbeResult {
+            status: "failed".into(),
+            reason: Some(
+                error
+                    .downcast_ref::<ProbeFailure>()
+                    .map(|e| e.0)
+                    .unwrap_or("代理连接或目标请求失败")
+                    .into(),
+            ),
+            ..Default::default()
+        },
+        Err(_) => ProbeResult {
+            status: "failed".into(),
+            reason: Some(format!("探测超过 {timeout_seconds} 秒")),
+            ..Default::default()
+        },
+    };
     save_result(state, work, result, &token_digest(&token)).await
 }
 
@@ -356,8 +360,11 @@ async fn install_token(state: &AppState, work: &crate::background::Work, hash: &
             let revision=work.payload["deployed_revision"].as_i64().context("missing proxy revision")?;
             sqlx::query("SELECT id FROM nodes WHERE id=$1 AND deployed_revision=$2 AND mtls_state='ready' AND state NOT IN ('deleting','delete_failed') FOR NO KEY UPDATE")
                 .bind(&node).bind(revision).fetch_optional(&mut **tx).await?.context("monitoring node source changed")?;
-            sqlx::query("INSERT INTO monitoring_probe_tokens(node_id,token_hash,expires_at,work_id,owner,node_generation,work_generation,epoch) VALUES($1,$2,clock_timestamp()+interval '30 seconds',$3,$4,$5,$6,$7) ON CONFLICT(node_id) DO UPDATE SET token_hash=excluded.token_hash,expires_at=excluded.expires_at,work_id=excluded.work_id,owner=excluded.owner,node_generation=excluded.node_generation,work_generation=excluded.work_generation,epoch=excluded.epoch")
-                .bind(node).bind(hash).bind(&work.id).bind(&primary.owner).bind(node_lease.generation).bind(primary.generation).bind(&primary.epoch).execute(&mut **tx).await?;
+            // Allow the whole probe budget after token admission. Ownership and
+            // generation checks still fence every use and result write.
+            let token_lifetime = crate::runtime_config::operation_timeout_seconds(15) * 2;
+            sqlx::query("INSERT INTO monitoring_probe_tokens(node_id,token_hash,expires_at,work_id,owner,node_generation,work_generation,epoch) VALUES($1,$2,clock_timestamp()+make_interval(secs=>$8::double precision),$3,$4,$5,$6,$7) ON CONFLICT(node_id) DO UPDATE SET token_hash=excluded.token_hash,expires_at=excluded.expires_at,work_id=excluded.work_id,owner=excluded.owner,node_generation=excluded.node_generation,work_generation=excluded.work_generation,epoch=excluded.epoch")
+                .bind(node).bind(hash).bind(&work.id).bind(&primary.owner).bind(node_lease.generation).bind(primary.generation).bind(&primary.epoch).bind(token_lifetime as f64).execute(&mut **tx).await?;
             Ok(())
         })
     }).await
@@ -540,7 +547,9 @@ async fn probe_using(
         .spawn()?;
     let http = reqwest::Client::builder()
         .no_proxy()
-        .timeout(Duration::from_secs(3))
+        .timeout(Duration::from_secs(
+            crate::runtime_config::operation_timeout_seconds(3),
+        ))
         .redirect(reqwest::redirect::Policy::none())
         .build()?;
     let stats_secret = state

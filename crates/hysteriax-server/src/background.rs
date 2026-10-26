@@ -29,7 +29,7 @@ pub async fn ensure_cycle(pool: &PgPool, kind: &str) -> Result<Uuid> {
     db::serializable(pool,move |tx| {
         let kind=kind.clone();
         Box::pin(async move {
-            let seconds=match kind.as_str(){"traffic"|"network"=>10_i64,"proxy"=>60_i64,_=>anyhow::bail!("unsupported sampling kind")};
+            let seconds=match kind.as_str(){"traffic"|"network"=>crate::runtime_config::sampling_interval_seconds() as i64,"proxy"=>60_i64,_=>anyhow::bail!("unsupported sampling kind")};
             let period:DateTime<Utc>=sqlx::query_scalar("SELECT to_timestamp(floor(extract(epoch FROM clock_timestamp())/$1)*$1)").bind(seconds as f64).fetch_one(&mut **tx).await?;
             let deadline=period+chrono::Duration::seconds(seconds);
             let created=sqlx::query("INSERT INTO sampling_cycles(id,kind,period_start,deadline_at,expected_nodes) VALUES($1,$2,$3,$4,0) ON CONFLICT(kind,period_start) DO NOTHING")
@@ -154,6 +154,23 @@ pub async fn expire(pool: &PgPool) -> Result<usize> {
 }
 
 pub async fn run_sampling(state: AppState, kind: &'static str) {
+    let max_parallel = crate::runtime_config::background_worker_parallelism();
+    let interval_seconds = match kind {
+        "traffic" | "network" => crate::runtime_config::sampling_interval_seconds(),
+        _ => 60,
+    };
+    let operation_timeout_seconds = crate::runtime_config::operation_timeout_seconds(match kind {
+        "traffic" => 45,
+        "network" => 30,
+        _ => 15,
+    });
+    tracing::info!(
+        kind,
+        max_parallel,
+        interval_seconds,
+        operation_timeout_seconds,
+        "sampling worker started"
+    );
     let mut timer = tokio::time::interval(std::time::Duration::from_secs(1));
     timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut tasks = tokio::task::JoinSet::new();
@@ -162,7 +179,7 @@ pub async fn run_sampling(state: AppState, kind: &'static str) {
             _=timer.tick()=>{
                 if let Err(error)=ensure_cycle(&state.pool,kind).await {tracing::warn!(kind,%error,"sampling cycle deferred");continue;}
                 if let Err(error)=expire(&state.pool).await {tracing::warn!(%error,"sampling expiry deferred");}
-                while tasks.len()<4 {
+                while tasks.len()<max_parallel {
                     let work=match claim(&state.pool,kind,&state.instance_id).await {Ok(Some(work))=>work,Ok(None)=>break,Err(error)=>{tracing::warn!(kind,%error,"sampling claim deferred");break;}};
                     let app=state.clone();
                     tasks.spawn(async move {

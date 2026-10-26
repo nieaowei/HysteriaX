@@ -49,7 +49,7 @@ pub async fn acquire(
         return Ok(None);
     }
     let acquired = sqlx::query("UPDATE resource_leases SET owner=$2,work_id=$3,epoch=hysteriax_execution_epoch(),generation=generation+1,expires_at=clock_timestamp()+make_interval(secs=>$4::double precision) WHERE resource_key=$1 RETURNING generation,epoch")
-        .bind(resource).bind(owner).bind(work).bind(LEASE_SECONDS as f64)
+        .bind(resource).bind(owner).bind(work).bind(crate::runtime_config::execution_lease_seconds() as f64)
         .fetch_one(&mut *connection).await?;
     Ok(Some(Execution {
         resource: resource.into(),
@@ -74,7 +74,7 @@ impl Execution {
 
     pub async fn renew(&self, pool: &PgPool) -> Result<bool, sqlx::Error> {
         Ok(sqlx::query("UPDATE resource_leases SET expires_at=clock_timestamp()+make_interval(secs=>$5::double precision) WHERE resource_key=$1 AND owner=$2 AND generation=$3 AND work_id=$4 AND epoch=$6 AND epoch=hysteriax_execution_epoch() AND expires_at>clock_timestamp() AND NOT blocked")
-            .bind(&self.resource).bind(&self.owner).bind(self.generation).bind(&self.work).bind(LEASE_SECONDS as f64).bind(&self.epoch)
+            .bind(&self.resource).bind(&self.owner).bind(self.generation).bind(&self.work).bind(crate::runtime_config::execution_lease_seconds() as f64).bind(&self.epoch)
             .execute(pool).await?.rows_affected()==1)
     }
 

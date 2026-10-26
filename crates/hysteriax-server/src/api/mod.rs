@@ -413,6 +413,7 @@ async fn api_version(
 }
 
 async fn readyz(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
+    let started = tokio::time::Instant::now();
     let check = sqlx::query_scalar::<_, bool>(
         "SELECT EXISTS(SELECT 1 FROM runtime_contract WHERE id AND schema_version=$1 AND management_protocol=$2 AND master_key_fingerprint=$3)",
     )
@@ -420,10 +421,23 @@ async fn readyz(State(state): State<AppState>) -> Result<Json<Value>, ApiError> 
     .bind(crate::bootstrap::MANAGEMENT_PROTOCOL)
     .bind(state.secrets.fingerprint())
     .fetch_one(&state.pool);
-    if !matches!(
-        tokio::time::timeout(Duration::from_secs(2), check).await,
-        Ok(Ok(true))
-    ) {
+    let (ready, failure_reason) = match tokio::time::timeout(Duration::from_secs(5), check).await {
+        Ok(Ok(true)) => (true, "ready"),
+        Ok(Ok(false)) => (false, "runtime_contract_mismatch"),
+        Ok(Err(_)) => (false, "query_failed"),
+        Err(_) => (false, "timeout"),
+    };
+    if !ready {
+        let pool_size = u64::from(state.pool.size());
+        let pool_idle = state.pool.num_idle() as u64;
+        tracing::warn!(
+            reason = failure_reason,
+            pool_size,
+            pool_idle,
+            pool_acquired = pool_size.saturating_sub(pool_idle),
+            check_ms = started.elapsed().as_millis() as u64,
+            "readiness database check failed"
+        );
         return Err(ApiError::new(
             StatusCode::SERVICE_UNAVAILABLE,
             "service_not_ready",

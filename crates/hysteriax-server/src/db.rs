@@ -16,13 +16,8 @@ mod legacy_lock_fixture;
 #[cfg(test)]
 pub use legacy_lock_fixture::hold_retired_global_write_lock;
 
-// A stopped client can leave one active statement, then an idle transaction.
-// Together their server-side limits must fit inside a fresh execution lease.
-const RUNTIME_STATEMENT_SECONDS: i64 = 20;
-const RUNTIME_IDLE_TRANSACTION_SECONDS: i64 = 20;
-const _: () = assert!(
-    RUNTIME_STATEMENT_SECONDS + RUNTIME_IDLE_TRANSACTION_SECONDS < crate::execution::LEASE_SECONDS
-);
+// Runtime configuration validates that a stopped client's statement and idle
+// transaction limits together fit inside a fresh execution lease.
 
 pub fn connect_options(database_url: &str) -> Result<PgConnectOptions> {
     let options = PgConnectOptions::from_str(database_url)
@@ -35,18 +30,33 @@ pub fn pool_options() -> PgPoolOptions {
     pool_options_for_maintenance(false)
 }
 pub fn pool_options_for_maintenance(maintenance: bool) -> PgPoolOptions {
+    let lock_timeout_seconds = crate::runtime_config::db_lock_timeout_seconds();
+    let statement_timeout_seconds = crate::runtime_config::db_statement_timeout_seconds();
+    let idle_transaction_timeout_seconds =
+        crate::runtime_config::db_idle_transaction_timeout_seconds();
+    let execution_lease_seconds = crate::runtime_config::execution_lease_seconds();
+    tracing::info!(
+        lock_timeout_seconds,
+        statement_timeout_seconds,
+        idle_transaction_timeout_seconds,
+        execution_lease_seconds,
+        "database timeout budgets configured"
+    );
     PgPoolOptions::new()
-        .max_connections(10)
-        .acquire_timeout(Duration::from_secs(5))
+        .max_connections(crate::runtime_config::db_pool_max_connections() as u32)
+        .acquire_timeout(Duration::from_secs(
+            crate::runtime_config::db_pool_acquire_timeout_seconds(),
+        ))
         .after_connect(move |connection, _| {
             Box::pin(async move {
                 // Bound resource waits and make runtime source checks explicit.
-                sqlx::query("SET lock_timeout='1s'")
+                sqlx::query("SELECT set_config('lock_timeout',$1,false)")
+                    .bind(format!("{lock_timeout_seconds}s"))
                     .execute(&mut *connection)
                     .await?;
                 sqlx::query("SELECT set_config('statement_timeout',$1,false),set_config('idle_in_transaction_session_timeout',$2,false)")
-                    .bind(if maintenance {"0".to_owned()} else {format!("{RUNTIME_STATEMENT_SECONDS}s")})
-                    .bind(if maintenance {"0".to_owned()} else {format!("{RUNTIME_IDLE_TRANSACTION_SECONDS}s")})
+                    .bind(if maintenance {"0".to_owned()} else {format!("{statement_timeout_seconds}s")})
+                    .bind(if maintenance {"0".to_owned()} else {format!("{idle_transaction_timeout_seconds}s")})
                     .execute(&mut *connection).await?;
                 sqlx::query("SELECT set_config('hysteriax.reference_maintenance',$1,false)")
                     .bind(if maintenance { "on" } else { "off" })

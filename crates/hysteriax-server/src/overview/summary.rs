@@ -58,7 +58,12 @@ impl NodeReading {
         .map_err(|_| ApiError::internal())?;
         let freshness = match self.last_sample_at {
             None => "not_collected",
-            Some(at) if (now - at).num_seconds() <= 30 => "fresh",
+            Some(at)
+                if (now - at).num_seconds()
+                    <= crate::runtime_config::sampling_freshness_seconds() =>
+            {
+                "fresh"
+            }
             Some(_) => "stale",
         };
         Ok(

@@ -253,7 +253,7 @@ pub(crate) fn snapshot_from_reading(
         json!({"usage_bytes": usage, "restricted": !restrictions.is_empty(), "reasons": restrictions,
         "next_reset_at": next_reset(&package, now), "interface": row.interface,
         "sampled_at": row.sampled_at, "gap_reason": row.gap_reason,
-        "freshness": if row.sampled_at.is_none() { "not_collected" } else if row.gap_reason.is_some() || row.sampled_at.is_some_and(|at| (now-at).num_seconds() > 30) { "stale" } else { "fresh" },
+        "freshness": if row.sampled_at.is_none() { "not_collected" } else if row.gap_reason.is_some() || row.sampled_at.is_some_and(|at| (now-at).num_seconds() > crate::runtime_config::sampling_freshness_seconds()) { "stale" } else { "fresh" },
         "pending_disconnects": pending, "failed_disconnects": if restrictions.is_empty() { 0 } else { failed }, "alerts": alerts}),
     ))
 }
@@ -466,7 +466,7 @@ pub(crate) async fn sample_work(state: &AppState, work: &crate::background::Work
     }
     crate::background::admit_read(&state.pool, work).await?;
     let result = tokio::time::timeout(
-        Duration::from_secs(30),
+        Duration::from_secs(crate::runtime_config::operation_timeout_seconds(30)),
         sample(state, &work.node, generation, captured_at),
     )
     .await

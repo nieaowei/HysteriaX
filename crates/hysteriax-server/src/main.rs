@@ -24,6 +24,7 @@ mod proxy_monitor;
 mod quota_rank;
 mod read_snapshot;
 mod redis_cache;
+pub(crate) mod runtime_config;
 mod security;
 mod ssh;
 mod state;

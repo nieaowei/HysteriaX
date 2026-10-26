@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 use sqlx::{PgPool, Row};
 use tokio::task::JoinSet;
 
-const MAX_PARALLEL_NODES: usize = 4;
+const DEFAULT_MAX_PARALLEL_NODES: usize = 4;
 const MAX_ATTEMPTS: i64 = 3;
 
 #[cfg(test)]
@@ -19,11 +19,13 @@ const MAX_ATTEMPTS: i64 = 3;
 mod node_cleanup_tests;
 
 pub async fn run(state: AppState) {
+    let max_parallel = crate::runtime_config::background_worker_parallelism();
+    tracing::info!(max_parallel, "background job worker started");
     let mut tasks = JoinSet::new();
     let mut reconciliation = tokio::time::interval(Duration::from_secs(1));
     reconciliation.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
-        while tasks.len() < MAX_PARALLEL_NODES {
+        while tasks.len() < max_parallel.min(DEFAULT_MAX_PARALLEL_NODES) {
             match claim_next_for(&state.pool, Some(&state.instance_id)).await {
                 Ok(Some(job)) => {
                     let worker_state = state.clone();
