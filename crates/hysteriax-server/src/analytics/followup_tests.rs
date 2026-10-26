@@ -27,9 +27,9 @@ async fn hourly_rollups_match_raw_before_after_refresh_and_corrections() {
             for (days, unit) in [(1, "hour"), (7, "rolling_day"), (30, "rolling_day")] {
                 for scope in [None, Some("n1")] {
                     let start = anchor - Duration::days(days);
-                    let actual: Vec<Reading> = sqlx::query_as(
-                        &include_str!("traffic_history.sql").replace("RAW_TABLE", table),
-                    )
+                    let actual: Vec<Reading> = sqlx::query_as(sqlx::AssertSqlSafe(
+                        include_str!("traffic_history.sql").replace("RAW_TABLE", table),
+                    ))
                     .bind(unit)
                     .bind(source)
                     .bind(start)
@@ -38,7 +38,7 @@ async fn hourly_rollups_match_raw_before_after_refresh_and_corrections() {
                     .fetch_all(&pool)
                     .await
                     .unwrap();
-                    let expected:Vec<Reading>=sqlx::query_as(&format!("SELECT date_bin($1::interval,sampled_at,$2) bucket,sum(delta_tx)::bigint,sum(delta_rx)::bigint,count(DISTINCT node_id)::bigint,bool_or(gap_reason IS NOT NULL OR baseline_only) FROM {table} WHERE sampled_at>=$2 AND sampled_at<$3 AND ($4::text IS NULL OR node_id=$4) GROUP BY bucket ORDER BY bucket"))
+                    let expected:Vec<Reading>=sqlx::query_as(sqlx::AssertSqlSafe(format!("SELECT date_bin($1::interval,sampled_at,$2) bucket,sum(delta_tx)::bigint,sum(delta_rx)::bigint,count(DISTINCT node_id)::bigint,bool_or(gap_reason IS NOT NULL OR baseline_only) FROM {table} WHERE sampled_at>=$2 AND sampled_at<$3 AND ($4::text IS NULL OR node_id=$4) GROUP BY bucket ORDER BY bucket")))
                         .bind(if days==1 {"1 hour"} else {"24 hours"}).bind(start).bind(anchor).bind(scope).fetch_all(&pool).await.unwrap();
                     assert_eq!(
                         actual, expected,
@@ -285,7 +285,7 @@ async fn aligned_online_history_skips_cycles_until_an_edge_or_dirty_minute_needs
                 "EXPLAIN (ANALYZE, FORMAT JSON) {}",
                 include_str!("online_history.sql")
             );
-            let row = sqlx::query(&explain)
+            let row = sqlx::query(sqlx::AssertSqlSafe(explain.as_str()))
                 .bind("hour")
                 .bind("UTC")
                 .bind(end - Duration::days(1))
@@ -370,15 +370,17 @@ async fn rollup_refresh_reads_only_dirty_ranges_and_skips_empty_queues() {
                 .execute(&mut *tx)
                 .await
                 .unwrap();
-            let row = sqlx::query(&format!("EXPLAIN (ANALYZE,FORMAT JSON) {statement}"))
-                .bind(if table.starts_with("traffic_") {
-                    &hours
-                } else {
-                    &minutes
-                })
-                .fetch_one(&mut *tx)
-                .await
-                .unwrap();
+            let row = sqlx::query(sqlx::AssertSqlSafe(format!(
+                "EXPLAIN (ANALYZE,FORMAT JSON) {statement}"
+            )))
+            .bind(if table.starts_with("traffic_") {
+                &hours
+            } else {
+                &minutes
+            })
+            .fetch_one(&mut *tx)
+            .await
+            .unwrap();
             let plan: serde_json::Value = row.get("QUERY PLAN");
             let scanned = read_rows(&plan[0]["Plan"], table);
             assert!(scanned < 100.0, "{table}: {scanned} rows, plan={plan}");
@@ -402,15 +404,17 @@ async fn rollup_refresh_reads_only_dirty_ranges_and_skips_empty_queues() {
                 .execute(&mut *tx)
                 .await
                 .unwrap();
-            let row = sqlx::query(&format!("EXPLAIN (ANALYZE,FORMAT JSON) {select}"))
-                .bind(if table.starts_with("traffic_") {
-                    &hours
-                } else {
-                    &minutes
-                })
-                .fetch_one(&mut *tx)
-                .await
-                .unwrap();
+            let row = sqlx::query(sqlx::AssertSqlSafe(format!(
+                "EXPLAIN (ANALYZE,FORMAT JSON) {select}"
+            )))
+            .bind(if table.starts_with("traffic_") {
+                &hours
+            } else {
+                &minutes
+            })
+            .fetch_one(&mut *tx)
+            .await
+            .unwrap();
             let plan: serde_json::Value = row.get("QUERY PLAN");
             let scanned = read_rows(&plan[0]["Plan"], table);
             assert!(scanned < 100.0, "{table}: {scanned} rows, plan={plan}");

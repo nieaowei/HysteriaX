@@ -482,12 +482,14 @@ pub(crate) async fn list_nodes(
     sqlx::query("SET LOCAL plan_cache_mode=force_custom_plan")
         .execute(&mut *tx)
         .await?;
-    let total: i64 = sqlx::query_scalar(&format!("SELECT count(*) FROM nodes WHERE {filter}"))
-        .bind(&pattern)
-        .fetch_one(&mut *tx)
-        .await?;
+    let total: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "SELECT count(*) FROM nodes WHERE {filter}"
+    )))
+    .bind(&pattern)
+    .fetch_one(&mut *tx)
+    .await?;
     let page = requested.min(((total + size - 1) / size).max(1));
-    let ids:Vec<String>=sqlx::query_scalar(&format!("SELECT id FROM nodes WHERE {filter} ORDER BY lower(name) COLLATE \"C\",name COLLATE \"C\",id LIMIT $2 OFFSET $3"))
+    let ids:Vec<String>=sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT id FROM nodes WHERE {filter} ORDER BY lower(name) COLLATE \"C\",name COLLATE \"C\",id LIMIT $2 OFFSET $3")))
         .bind(&pattern).bind(size).bind((page-1)*size).fetch_all(&mut *tx).await?;
     let readings = summary::read_nodes_on(&mut tx, Some(&ids)).await?;
     let now = Utc::now();
@@ -649,7 +651,7 @@ async fn history_at(
     };
     let sql = include_str!("analytics/traffic_history.sql").replace("RAW_TABLE", table);
     let traffic = if want_traffic {
-        sqlx::query(&sql)
+        sqlx::query(sqlx::AssertSqlSafe(sql.as_str()))
             .bind(unit)
             .bind(source)
             .bind(start)

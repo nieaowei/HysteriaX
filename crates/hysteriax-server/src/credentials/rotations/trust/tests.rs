@@ -74,7 +74,7 @@ async fn work(state: &AppState, ca: &str, rotation: &str, owner: &str) -> Work {
         .unwrap()
 }
 async fn count(state: &AppState, query: &str) -> i64 {
-    sqlx::query_scalar(query)
+    sqlx::query_scalar(sqlx::AssertSqlSafe(query))
         .fetch_one(&state.pool)
         .await
         .unwrap()
@@ -618,12 +618,14 @@ async fn empty_rotation_admission_uses_the_deadline_index_without_scanning_futur
         .fetch_one(&state.pool)
         .await
         .unwrap();
-    let plan: Value = sqlx::query_scalar(&format!("EXPLAIN (ANALYZE,FORMAT JSON) {ADMISSION}"))
-        .bind(now)
-        .bind(PAGE)
-        .fetch_one(&state.pool)
-        .await
-        .unwrap();
+    let plan: Value = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "EXPLAIN (ANALYZE,FORMAT JSON) {ADMISSION}"
+    )))
+    .bind(now)
+    .bind(PAGE)
+    .fetch_one(&state.pool)
+    .await
+    .unwrap();
     assert!(plan.to_string().contains("mtls_rotations_due"), "{plan}");
     assert_eq!(plan[0]["Plan"]["Actual Rows"].as_f64(), Some(0.0));
     assert_eq!(

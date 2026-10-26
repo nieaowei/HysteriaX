@@ -62,12 +62,12 @@ async fn prune_work(pool: &PgPool, work: &maintenance::Work) -> Result<u64> {
             let deadline:DateTime<Utc>=sqlx::query_scalar("SELECT clock_timestamp()-interval '5 minutes'").fetch_one(&mut **tx).await?;
             let after=work.payload["after_id"].as_str();
             let version=work.payload["after_version"].as_i64().unwrap_or(0);
-            let candidates:Vec<(String,i64)>=sqlx::query_as(&format!("{CANDIDATES} ORDER BY e.credential_id,e.credential_version LIMIT $2"))
+            let candidates:Vec<(String,i64)>=sqlx::query_as(sqlx::AssertSqlSafe(format!("{CANDIDATES} ORDER BY e.credential_id,e.credential_version LIMIT $2")))
                 .bind(deadline).bind(PAGE).bind(after).bind(version).fetch_all(&mut **tx).await?;
             let ids:std::collections::BTreeSet<_>=candidates.iter().map(|(id,_)|id.clone()).collect();
             let parents:Vec<String>=sqlx::query_scalar("SELECT id FROM credentials WHERE id=ANY($1::text[]) ORDER BY id FOR KEY SHARE SKIP LOCKED")
                 .bind(ids.into_iter().collect::<Vec<_>>()).fetch_all(&mut **tx).await?;
-            let rows=sqlx::query(&format!("{CANDIDATES} AND c.id=ANY($5::text[]) ORDER BY cv.credential_id,cv.version LIMIT $2 FOR UPDATE OF cv SKIP LOCKED"))
+            let rows=sqlx::query(sqlx::AssertSqlSafe(format!("{CANDIDATES} AND c.id=ANY($5::text[]) ORDER BY cv.credential_id,cv.version LIMIT $2 FOR UPDATE OF cv SKIP LOCKED")))
                 .bind(deadline).bind(PAGE).bind(after).bind(version).bind(parents).fetch_all(&mut **tx).await?;
             let mut removed=0;
             for row in rows {

@@ -148,7 +148,7 @@ async fn send(
     request.send().await.unwrap()
 }
 pub(super) async fn count(state: &AppState, query: &str) -> i64 {
-    sqlx::query_scalar(query)
+    sqlx::query_scalar(sqlx::AssertSqlSafe(query))
         .fetch_one(&state.pool)
         .await
         .unwrap()
@@ -173,10 +173,10 @@ pub(super) async fn snapshot(state: &AppState) -> Value {
         "cache_bucket_versions",
     ];
     let parts: Vec<String> = tables.iter().map(|t| format!("SELECT '{t}' AS kind,coalesce(jsonb_agg(to_jsonb(t) ORDER BY to_jsonb(t)::text),'[]'::jsonb) AS data FROM {t} t")).collect();
-    sqlx::query_scalar(&format!(
+    sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
         "SELECT jsonb_object_agg(kind,data) FROM ({}) snapshots",
         parts.join(" UNION ALL ")
-    ))
+    )))
     .fetch_one(&state.pool)
     .await
     .unwrap()
@@ -253,7 +253,7 @@ async fn seven_receipt_failures_roll_back_all_business_and_native_errors_commit_
                 "kind {kind}"
             );
             assert_eq!(snapshot(&state).await, before, "kind {kind}");
-            sqlx::raw_sql(&format!("CREATE SEQUENCE dns_attempt; CREATE OR REPLACE FUNCTION reject_dns_receipt() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF nextval('dns_attempt')=1 THEN RAISE EXCEPTION 'retry' USING ERRCODE='{code}'; END IF; RETURN NEW; END $$"))
+            sqlx::raw_sql(sqlx::AssertSqlSafe(format!("CREATE SEQUENCE dns_attempt; CREATE OR REPLACE FUNCTION reject_dns_receipt() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF nextval('dns_attempt')=1 THEN RAISE EXCEPTION 'retry' USING ERRCODE='{code}'; END IF; RETURN NEW; END $$")))
                 .execute(&state.pool).await.unwrap();
             let response = send(&client, &base, &case, "admin", Some("retry")).await;
             assert_eq!(response.status(), case.status, "kind {kind}, code {code}");

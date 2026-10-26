@@ -42,7 +42,7 @@ async fn restored_snapshot_removal_completes_while_reads_and_writes_continue() {
         "user_node_usage",
         "probe_minute_totals",
     ] {
-        let counts:Vec<(String,i64)>=sqlx::query_as(&format!("SELECT node_id,count(*) FROM {table} WHERE node_id<>$1 GROUP BY node_id ORDER BY node_id")).bind(&node).fetch_all(&pool).await.unwrap();
+        let counts:Vec<(String,i64)>=sqlx::query_as(sqlx::AssertSqlSafe(format!("SELECT node_id,count(*) FROM {table} WHERE node_id<>$1 GROUP BY node_id ORDER BY node_id"))).bind(&node).fetch_all(&pool).await.unwrap();
         before.push((table, counts));
     }
     sqlx::query("INSERT INTO admin_tokens(id,token_hash,label,created_at) VALUES('snapshot-probe',$1,'Snapshot validation',now())").bind(crate::security::token_digest("snapshot-probe-token")).execute(&pool).await.unwrap();
@@ -136,17 +136,19 @@ async fn restored_snapshot_removal_completes_while_reads_and_writes_continue() {
     );
     for (table, counts) in before {
         assert_eq!(
-            sqlx::query_scalar::<_, i64>(&format!("SELECT count(*) FROM {table} WHERE node_id=$1"))
-                .bind(&node)
-                .fetch_one(&pool)
-                .await
-                .unwrap(),
+            sqlx::query_scalar::<_, i64>(sqlx::AssertSqlSafe(format!(
+                "SELECT count(*) FROM {table} WHERE node_id=$1"
+            )))
+            .bind(&node)
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
             0,
             "{table}"
         );
-        let all_after: Vec<(String, i64)> = sqlx::query_as(&format!(
+        let all_after: Vec<(String, i64)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
             "SELECT node_id,count(*) FROM {table} GROUP BY node_id ORDER BY node_id"
-        ))
+        )))
         .fetch_all(&pool)
         .await
         .unwrap();
@@ -404,9 +406,9 @@ async fn large_record_removal_is_queued_idempotent_and_completes_without_ssh() {
         "probe_minute_totals",
     ] {
         assert_eq!(
-            sqlx::query_scalar::<_, i64>(&format!(
+            sqlx::query_scalar::<_, i64>(sqlx::AssertSqlSafe(format!(
                 "SELECT count(*) FROM {table} WHERE node_id='n1'"
-            ))
+            )))
             .fetch_one(&state.pool)
             .await
             .unwrap(),

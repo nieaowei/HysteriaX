@@ -27,7 +27,10 @@ async fn owner(pool: &PgPool, id: &str, name: &str) -> Vec<execution::Execution>
     vec![lease]
 }
 async fn count(pool: &PgPool, q: &str) -> i64 {
-    sqlx::query_scalar(q).fetch_one(pool).await.unwrap()
+    sqlx::query_scalar(sqlx::AssertSqlSafe(q))
+        .fetch_one(pool)
+        .await
+        .unwrap()
 }
 async fn logs(pool: &PgPool, id: &str) -> Value {
     sqlx::query_scalar("SELECT logs_json FROM jobs WHERE id=$1")

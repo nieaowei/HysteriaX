@@ -168,7 +168,7 @@ async fn send(client: &Client, base: &str, case: &Case, key: Option<&str>) -> re
     request.send().await.unwrap()
 }
 async fn count(state: &AppState, sql: &str) -> i64 {
-    sqlx::query_scalar(sql)
+    sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
         .fetch_one(&state.pool)
         .await
         .unwrap()
@@ -196,10 +196,13 @@ async fn snapshot(state: &AppState) -> Value {
             format!("'{t}',(SELECT jsonb_agg(to_jsonb(t) ORDER BY to_jsonb(t)::text) FROM {t} t)")
         })
         .collect();
-    sqlx::query_scalar(&format!("SELECT jsonb_build_object({})", parts.join(",")))
-        .fetch_one(&state.pool)
-        .await
-        .unwrap()
+    sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "SELECT jsonb_build_object({})",
+        parts.join(",")
+    )))
+    .fetch_one(&state.pool)
+    .await
+    .unwrap()
 }
 async fn assert_committed(state: &AppState, case: &Case, value: &Value) {
     assert_eq!(
@@ -340,7 +343,7 @@ async fn receipt_failure_rolls_back_retry_links_trust_history_events_and_cache_a
                 StatusCode::INTERNAL_SERVER_ERROR
             );
             assert_eq!(snapshot(&state).await, before, "kind {kind}, code {code}");
-            sqlx::raw_sql(&format!("CREATE SEQUENCE job_attempt; CREATE OR REPLACE FUNCTION reject_job_receipt() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF nextval('job_attempt')=1 THEN RAISE EXCEPTION 'retry' USING ERRCODE='{code}'; END IF; RETURN NEW; END $$"))
+            sqlx::raw_sql(sqlx::AssertSqlSafe(format!("CREATE SEQUENCE job_attempt; CREATE OR REPLACE FUNCTION reject_job_receipt() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF nextval('job_attempt')=1 THEN RAISE EXCEPTION 'retry' USING ERRCODE='{code}'; END IF; RETURN NEW; END $$")))
                 .execute(&state.pool).await.unwrap();
             let response = send(&client, &base, &case, Some("retry")).await;
             assert_eq!(

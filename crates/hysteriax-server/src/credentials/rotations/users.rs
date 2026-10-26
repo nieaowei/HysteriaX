@@ -150,7 +150,7 @@ pub(super) async fn missing_identity_on(
     tx: &mut Transaction<'_, Postgres>,
     ca: &str,
 ) -> Result<bool> {
-    Ok(sqlx::query_scalar(&format!("SELECT EXISTS(SELECT 1 FROM users u WHERE EXISTS(SELECT 1 FROM node_assignments a WHERE a.user_id=u.id AND a.node_id IN ({MEMBERS})) AND NOT EXISTS(SELECT 1 FROM mtls_user_identities i WHERE i.user_id=u.id AND i.ca_id=$1))"))
+    Ok(sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT EXISTS(SELECT 1 FROM users u WHERE EXISTS(SELECT 1 FROM node_assignments a WHERE a.user_id=u.id AND a.node_id IN ({MEMBERS})) AND NOT EXISTS(SELECT 1 FROM mtls_user_identities i WHERE i.user_id=u.id AND i.ca_id=$1))")))
         .bind(ca).fetch_one(&mut **tx).await?)
 }
 pub(super) async fn missing_leaf_on(
@@ -161,7 +161,7 @@ pub(super) async fn missing_leaf_on(
     let now: DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
         .fetch_one(&mut **tx)
         .await?;
-    Ok(sqlx::query_scalar(&format!("SELECT EXISTS(SELECT 1 FROM mtls_user_identities i JOIN users u ON u.id=i.user_id WHERE i.ca_id=$1 AND NOT i.archived AND {ELIGIBLE} AND NOT {LEAF})"))
+    Ok(sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT EXISTS(SELECT 1 FROM mtls_user_identities i JOIN users u ON u.id=i.user_id WHERE i.ca_id=$1 AND NOT i.archived AND {ELIGIBLE} AND NOT {LEAF})")))
         .bind(ca).bind(version).bind(now).fetch_one(&mut **tx).await?)
 }
 async fn lock_rotation(tx: &mut Transaction<'_, Postgres>, rotation: &str, ca: &str) -> Result<()> {
@@ -203,7 +203,7 @@ async fn admit_users(pool: &PgPool, work: &Work) -> Result<()> {
         work.guard_on(tx).await?;
         let (rotation,ca,version)=rotation_target(&work)?;
         ensure!(work.id==format!("maintenance:rotation-users:{rotation}"),"wrong admission scope");
-        let users:Vec<String>=sqlx::query_scalar(&format!("SELECT u.id FROM users u WHERE EXISTS(SELECT 1 FROM node_assignments a WHERE a.user_id=u.id AND a.node_id IN ({MEMBERS})) AND NOT EXISTS(SELECT 1 FROM mtls_user_identities i WHERE i.user_id=u.id AND i.ca_id=$1) ORDER BY u.id LIMIT $2 FOR NO KEY UPDATE OF u SKIP LOCKED"))
+        let users:Vec<String>=sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT u.id FROM users u WHERE EXISTS(SELECT 1 FROM node_assignments a WHERE a.user_id=u.id AND a.node_id IN ({MEMBERS})) AND NOT EXISTS(SELECT 1 FROM mtls_user_identities i WHERE i.user_id=u.id AND i.ca_id=$1) ORDER BY u.id LIMIT $2 FOR NO KEY UPDATE OF u SKIP LOCKED")))
             .bind(&ca).bind(PAGE).fetch_all(&mut **tx).await?;
         lock_rotation(tx,&rotation,&ca).await?;
         if !valid_rotation_on(tx,&rotation,&ca,version).await? {return work.finish_on(tx,false,0,Some("rotation_users_superseded")).await;}
@@ -212,7 +212,7 @@ async fn admit_users(pool: &PgPool, work: &Work) -> Result<()> {
                 .bind(user).bind(&ca).execute(&mut **tx).await?;
         }
         let now:DateTime<Utc>=sqlx::query_scalar("SELECT clock_timestamp()").fetch_one(&mut **tx).await?;
-        let candidates=sqlx::query(&format!("SELECT i.id,i.user_id,i.revision,i.authorization_revision FROM mtls_user_identities i JOIN users u ON u.id=i.user_id WHERE i.ca_id=$1 AND NOT i.archived AND {ELIGIBLE} AND NOT {LEAF} AND NOT EXISTS(SELECT 1 FROM background_work w WHERE w.id='rotation-user:'||$4||':'||i.id AND (w.state IN ('queued','running') OR w.available_at>$3)) ORDER BY i.user_id,i.id LIMIT $5 FOR UPDATE OF i SKIP LOCKED"))
+        let candidates=sqlx::query(sqlx::AssertSqlSafe(format!("SELECT i.id,i.user_id,i.revision,i.authorization_revision FROM mtls_user_identities i JOIN users u ON u.id=i.user_id WHERE i.ca_id=$1 AND NOT i.archived AND {ELIGIBLE} AND NOT {LEAF} AND NOT EXISTS(SELECT 1 FROM background_work w WHERE w.id='rotation-user:'||$4||':'||i.id AND (w.state IN ('queued','running') OR w.available_at>$3)) ORDER BY i.user_id,i.id LIMIT $5 FOR UPDATE OF i SKIP LOCKED")))
             .bind(&ca).bind(version).bind(now).bind(&rotation).bind(PAGE).fetch_all(&mut **tx).await?;
         for row in candidates {
             let identity:String=row.get("id");
@@ -287,7 +287,7 @@ async fn source_on(tx: &mut Transaction<'_, Postgres>, t: &Target) -> Result<Opt
     let now: DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
         .fetch_one(&mut **tx)
         .await?;
-    Ok(sqlx::query_as(&format!("SELECT i.revision,i.authorization_revision authorization,u.revision user_revision,a.policy_revision,i.credential_id,({ELIGIBLE} AND NOT i.archived AND NOT c.archived AND g.state='preparing' AND g.expires_at>$3 AND r.phase IN ('identities','publish')) eligible,{LEAF} has_leaf FROM mtls_user_identities i JOIN users u ON u.id=i.user_id JOIN mtls_authorities a ON a.credential_id=i.ca_id JOIN credentials c ON c.id=i.ca_id JOIN mtls_ca_generations g ON g.ca_id=i.ca_id AND g.ca_version=$2 JOIN mtls_rotations r ON r.id=$4 AND r.ca_id=i.ca_id AND r.ca_version=$2 WHERE i.ca_id=$1 AND i.id=$5 AND i.user_id=$6"))
+    Ok(sqlx::query_as(sqlx::AssertSqlSafe(format!("SELECT i.revision,i.authorization_revision authorization,u.revision user_revision,a.policy_revision,i.credential_id,({ELIGIBLE} AND NOT i.archived AND NOT c.archived AND g.state='preparing' AND g.expires_at>$3 AND r.phase IN ('identities','publish')) eligible,{LEAF} has_leaf FROM mtls_user_identities i JOIN users u ON u.id=i.user_id JOIN mtls_authorities a ON a.credential_id=i.ca_id JOIN credentials c ON c.id=i.ca_id JOIN mtls_ca_generations g ON g.ca_id=i.ca_id AND g.ca_version=$2 JOIN mtls_rotations r ON r.id=$4 AND r.ca_id=i.ca_id AND r.ca_version=$2 WHERE i.ca_id=$1 AND i.id=$5 AND i.user_id=$6")))
         .bind(&t.ca).bind(t.version).bind(now).bind(&t.rotation).bind(&t.identity).bind(&t.user).fetch_optional(&mut **tx).await?)
 }
 #[derive(Clone)]

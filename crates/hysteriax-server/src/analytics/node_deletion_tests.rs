@@ -43,11 +43,12 @@ async fn node_cascade_skips_rollup_updates_and_preserves_other_nodes() {
         "user_node_usage",
         "probe_minute_totals",
     ] {
-        let count: i64 =
-            sqlx::query_scalar(&format!("SELECT count(*) FROM {table} WHERE node_id='n1'"))
-                .fetch_one(&pool)
-                .await
-                .unwrap();
+        let count: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+            "SELECT count(*) FROM {table} WHERE node_id='n1'"
+        )))
+        .fetch_one(&pool)
+        .await
+        .unwrap();
         assert_eq!(count, 0, "{table} must cascade with the deleted node");
     }
     let surviving: (i64, i64, i64) = sqlx::query_as(
@@ -58,9 +59,9 @@ async fn node_cascade_skips_rollup_updates_and_preserves_other_nodes() {
     .unwrap();
     assert_eq!(surviving, (20000, 40000, 2000));
     for table in ["traffic_minute_totals", "traffic_hour_totals"] {
-        let totals: Vec<(String, i64, i64)> = sqlx::query_as(&format!(
+        let totals: Vec<(String, i64, i64)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
             "SELECT source,sum(tx)::bigint,sum(rx)::bigint FROM {table} WHERE node_id='n2' GROUP BY source ORDER BY source"
-        ))
+        )))
         .fetch_all(&pool)
         .await
         .unwrap();

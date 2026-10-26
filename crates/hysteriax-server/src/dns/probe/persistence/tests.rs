@@ -81,7 +81,7 @@ async fn save(f: &Fixture, w: &Work, status: &str) -> Option<Result<Value>> {
     .await
 }
 async fn count(f: &Fixture, q: &str) -> i64 {
-    sqlx::query_scalar(q)
+    sqlx::query_scalar(sqlx::AssertSqlSafe(q))
         .fetch_one(&f.state.pool)
         .await
         .unwrap()

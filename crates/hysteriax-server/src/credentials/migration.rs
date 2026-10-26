@@ -307,7 +307,7 @@ async fn migrate_tls_pairs_on(
                     current.extend(super::references(&config)?.into_iter().map(|(_, r)| r.id));
                 }
                 let query = format!("UPDATE nodes SET {field}=$1 WHERE id=$2");
-                sqlx::query(&query)
+                sqlx::query(sqlx::AssertSqlSafe(query.as_str()))
                     .bind(secrets.encrypt(&config.to_string())?)
                     .bind(&node)
                     .execute(&mut **tx)

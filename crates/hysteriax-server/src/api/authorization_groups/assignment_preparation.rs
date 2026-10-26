@@ -145,7 +145,7 @@ mod tests {
             assert_eq!(unchanged, 0);
             let id = Uuid::new_v4().to_string();
             let expected = id.clone();
-            sqlx::raw_sql(&format!("CREATE SEQUENCE grant_attempt; CREATE FUNCTION retry_prepared_grant() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.action='authorization_group.created' AND nextval('grant_attempt')=1 THEN RAISE EXCEPTION 'retry' USING ERRCODE='{code}'; END IF; RETURN NEW; END $$; CREATE TRIGGER retry_prepared_grant BEFORE INSERT ON audit_records FOR EACH ROW EXECUTE FUNCTION retry_prepared_grant()"))
+            sqlx::raw_sql(sqlx::AssertSqlSafe(format!("CREATE SEQUENCE grant_attempt; CREATE FUNCTION retry_prepared_grant() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.action='authorization_group.created' AND nextval('grant_attempt')=1 THEN RAISE EXCEPTION 'retry' USING ERRCODE='{code}'; END IF; RETURN NEW; END $$; CREATE TRIGGER retry_prepared_grant BEFORE INSERT ON audit_records FOR EACH ROW EXECUTE FUNCTION retry_prepared_grant()")))
                 .execute(&state.pool).await.unwrap();
             let app = state.clone();
             let receipt = db::serializable(&state.pool, move |tx| {

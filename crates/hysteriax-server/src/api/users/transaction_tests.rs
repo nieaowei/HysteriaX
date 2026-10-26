@@ -53,10 +53,10 @@ async fn reject_audit(state: &AppState, action: &str) {
             .bytes()
             .all(|c| c.is_ascii_alphanumeric() || c == b'.' || c == b'_')
     );
-    sqlx::raw_sql(&format!("CREATE FUNCTION reject_user_audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.action='{action}' THEN RAISE EXCEPTION 'injected audit failure'; END IF; RETURN NEW; END $$; CREATE TRIGGER reject_user_audit BEFORE INSERT ON audit_records FOR EACH ROW EXECUTE FUNCTION reject_user_audit();")).execute(&state.pool).await.unwrap();
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!("CREATE FUNCTION reject_user_audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.action='{action}' THEN RAISE EXCEPTION 'injected audit failure'; END IF; RETURN NEW; END $$; CREATE TRIGGER reject_user_audit BEFORE INSERT ON audit_records FOR EACH ROW EXECUTE FUNCTION reject_user_audit();"))).execute(&state.pool).await.unwrap();
 }
 async fn count(state: &AppState, query: &str) -> i64 {
-    sqlx::query_scalar(query)
+    sqlx::query_scalar(sqlx::AssertSqlSafe(query))
         .fetch_one(&state.pool)
         .await
         .unwrap()

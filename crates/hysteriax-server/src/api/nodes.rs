@@ -131,11 +131,13 @@ pub(crate) async fn list(
         .collect();
     let filter = "($1 = '' OR strpos(lower(n.name), lower($1)) > 0 OR strpos(lower(n.ssh_host), lower($1)) > 0 OR strpos(lower(n.id), lower($1)) > 0 OR strpos(lower(n.state), lower($1)) > 0 OR n.state = ANY($2))";
     let mut tx = crate::read_snapshot::begin(&state.pool).await?;
-    let total: i64 = sqlx::query_scalar(&format!("SELECT count(*) FROM nodes n WHERE {filter}"))
-        .bind(search)
-        .bind(&states)
-        .fetch_one(&mut *tx)
-        .await?;
+    let total: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "SELECT count(*) FROM nodes n WHERE {filter}"
+    )))
+    .bind(search)
+    .bind(&states)
+    .fetch_one(&mut *tx)
+    .await?;
     let page = requested_page.min(((total + page_size - 1) / page_size).max(1));
     let order_by = match sort {
         "name" => format!(
@@ -147,9 +149,9 @@ pub(crate) async fn list(
         "state" => format!("n.state {order}, n.name COLLATE \"C\" {order}, n.id {order}"),
         _ => format!("n.created_at {order}, n.id {order}"),
     };
-    let rows = sqlx::query(&format!(
+    let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
         "SELECT n.*,c.kind AS credential_kind FROM nodes n LEFT JOIN credentials c ON c.id=n.ssh_credential_id WHERE {filter} ORDER BY {order_by} LIMIT $3 OFFSET $4"
-    ))
+    )))
     .bind(search)
     .bind(&states)
     .bind(page_size)
@@ -1636,10 +1638,11 @@ mod removal_tests {
             "config_versions",
             "kick_requests",
         ] {
-            let count: i64 = sqlx::query_scalar(&format!("SELECT count(*) FROM {table}"))
-                .fetch_one(&state.pool)
-                .await
-                .unwrap();
+            let count: i64 =
+                sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT count(*) FROM {table}")))
+                    .fetch_one(&state.pool)
+                    .await
+                    .unwrap();
             assert_eq!(count, 0, "{table}");
         }
         assert_eq!(

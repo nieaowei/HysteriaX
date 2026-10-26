@@ -104,9 +104,9 @@ pub(super) async fn member_on(
     ca: &str,
     v: i64,
 ) -> Result<bool> {
-    Ok(sqlx::query_scalar(&format!(
+    Ok(sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
         "SELECT EXISTS(SELECT 1 FROM ({MEMBERS}) m WHERE node_id=$3)"
-    ))
+    )))
     .bind(ca)
     .bind(v)
     .bind(node)
@@ -133,9 +133,9 @@ async fn page(pool: &PgPool, work: &Work) -> Result<()> {
         let (ca,v,cursor)=target(&work)?;
         // Node parent order precedes CA/authority and the cleanup ledger. Busy
         // nodes remain authoritative members and are revisited after wrapping.
-        let locked:Vec<String>=sqlx::query_scalar(&format!("WITH live AS (SELECT node_id FROM ({MEMBERS}) m WHERE node_id>$3 ORDER BY node_id LIMIT $4), stale AS (SELECT node_id FROM mtls_cleanup_nodes WHERE ca_id=$1 AND ca_version=$2 AND NOT completed AND node_id NOT IN ({MEMBERS}) ORDER BY node_id LIMIT $4) SELECT n.id FROM nodes n WHERE n.id IN (SELECT node_id FROM live UNION SELECT node_id FROM stale) ORDER BY n.id FOR NO KEY UPDATE OF n SKIP LOCKED"))
+        let locked:Vec<String>=sqlx::query_scalar(sqlx::AssertSqlSafe(format!("WITH live AS (SELECT node_id FROM ({MEMBERS}) m WHERE node_id>$3 ORDER BY node_id LIMIT $4), stale AS (SELECT node_id FROM mtls_cleanup_nodes WHERE ca_id=$1 AND ca_version=$2 AND NOT completed AND node_id NOT IN ({MEMBERS}) ORDER BY node_id LIMIT $4) SELECT n.id FROM nodes n WHERE n.id IN (SELECT node_id FROM live UNION SELECT node_id FROM stale) ORDER BY n.id FOR NO KEY UPDATE OF n SKIP LOCKED")))
             .bind(&ca).bind(v).bind(&cursor).bind(PAGE).fetch_all(&mut **tx).await?;
-        let nodes:Vec<String>=sqlx::query_scalar(&format!("SELECT node_id FROM ({MEMBERS}) m WHERE node_id=ANY($3::text[]) AND node_id>$4 ORDER BY node_id LIMIT $5"))
+        let nodes:Vec<String>=sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT node_id FROM ({MEMBERS}) m WHERE node_id=ANY($3::text[]) AND node_id>$4 ORDER BY node_id LIMIT $5")))
             .bind(&ca).bind(v).bind(&locked).bind(&cursor).bind(PAGE).fetch_all(&mut **tx).await?;
         sqlx::query("SELECT id FROM credentials WHERE id=$1 FOR KEY SHARE").bind(&ca).fetch_optional(&mut **tx).await?;
         sqlx::query("SELECT credential_id FROM mtls_authorities WHERE credential_id=$1 FOR UPDATE").bind(&ca).fetch_optional(&mut **tx).await?;
@@ -159,13 +159,13 @@ async fn page(pool: &PgPool, work: &Work) -> Result<()> {
         }
         // A later ordinary deployment or a node removal can also prove that an
         // anchor is absent. Materialize only that fact, at most one page at a time.
-        sqlx::query(&format!("UPDATE mtls_cleanup_nodes SET completed=true,error_message=NULL WHERE (ca_id,ca_version,node_id) IN (SELECT ca_id,ca_version,node_id FROM mtls_cleanup_nodes WHERE ca_id=$1 AND ca_version=$2 AND NOT completed AND node_id=ANY($3::text[]) AND node_id NOT IN ({MEMBERS}) ORDER BY node_id LIMIT $4 FOR UPDATE SKIP LOCKED)"))
+        sqlx::query(sqlx::AssertSqlSafe(format!("UPDATE mtls_cleanup_nodes SET completed=true,error_message=NULL WHERE (ca_id,ca_version,node_id) IN (SELECT ca_id,ca_version,node_id FROM mtls_cleanup_nodes WHERE ca_id=$1 AND ca_version=$2 AND NOT completed AND node_id=ANY($3::text[]) AND node_id NOT IN ({MEMBERS}) ORDER BY node_id LIMIT $4 FOR UPDATE SKIP LOCKED)")))
             .bind(&ca).bind(v).bind(&locked).bind(PAGE).execute(&mut **tx).await?;
-        let remains:bool=sqlx::query_scalar(&format!("SELECT EXISTS(SELECT 1 FROM ({MEMBERS}) m)")).bind(&ca).bind(v).fetch_one(&mut **tx).await?;
+        let remains:bool=sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT EXISTS(SELECT 1 FROM ({MEMBERS}) m)"))).bind(&ca).bind(v).fetch_one(&mut **tx).await?;
         let cached:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM mtls_cleanup_nodes WHERE ca_id=$1 AND ca_version=$2 AND NOT completed)").bind(&ca).bind(v).fetch_one(&mut **tx).await?;
         let done=!remains && !cached;
         let last=nodes.last().map(String::as_str).unwrap_or(&cursor);
-        let more:bool=sqlx::query_scalar(&format!("SELECT EXISTS(SELECT 1 FROM ({MEMBERS}) m WHERE node_id>$3)")).bind(&ca).bind(v).bind(last).fetch_one(&mut **tx).await?;
+        let more:bool=sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT EXISTS(SELECT 1 FROM ({MEMBERS}) m WHERE node_id>$3)"))).bind(&ca).bind(v).bind(last).fetch_one(&mut **tx).await?;
         let next=if more && !nodes.is_empty() {last}else{""};
         sqlx::query("UPDATE background_work SET payload=jsonb_set(payload,'{cursor}',to_jsonb($2::text)) WHERE id=$1").bind(&work.id).bind(next).execute(&mut **tx).await?;
         let delay=if more {1}else{60};

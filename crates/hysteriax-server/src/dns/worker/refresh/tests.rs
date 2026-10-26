@@ -186,7 +186,7 @@ async fn snapshot(w: &Work) -> Value {
         .fetch_one(&w.state.pool).await.unwrap()
 }
 async fn count(w: &Work, q: &str) -> i64 {
-    sqlx::query_scalar(q)
+    sqlx::query_scalar(sqlx::AssertSqlSafe(q))
         .fetch_one(&w.state.pool)
         .await
         .unwrap()

@@ -359,7 +359,10 @@ async fn contended_resets_follow_node_then_user_admission_order_in_both_directio
                 "CREATE FUNCTION billing_gate() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN PERFORM pg_advisory_xact_lock({key}); RETURN NEW; END $$; CREATE TRIGGER billing_gate BEFORE INSERT ON traffic_records FOR EACH ROW EXECUTE FUNCTION billing_gate();"
             )
         };
-        sqlx::raw_sql(&trigger).execute(&pool).await.unwrap();
+        sqlx::raw_sql(sqlx::AssertSqlSafe(trigger.as_str()))
+            .execute(&pool)
+            .await
+            .unwrap();
         if reset_first {
             let reset_pool = pool.clone();
             let reset = tokio::spawn(async move { reset_user(&reset_pool).await });
@@ -625,7 +628,10 @@ async fn an_unrelated_node_commits_while_another_billing_transaction_is_paused()
     let trigger = format!(
         "CREATE FUNCTION pause_one_node() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.node_id='a' THEN PERFORM pg_advisory_xact_lock({key}); END IF; RETURN NEW; END $$; CREATE TRIGGER pause_one_node BEFORE INSERT ON traffic_records FOR EACH ROW EXECUTE FUNCTION pause_one_node();"
     );
-    sqlx::raw_sql(&trigger).execute(&pool).await.unwrap();
+    sqlx::raw_sql(sqlx::AssertSqlSafe(trigger.as_str()))
+        .execute(&pool)
+        .await
+        .unwrap();
     let blocked_pool = pool.clone();
     let blocked = tokio::spawn(async move { batches::drain(&blocked_pool, "a1").await });
     await_advisory_waiter(&pool, key).await;

@@ -15,7 +15,10 @@ async fn nodes(pool: &PgPool, n: i32) {
         .bind(n).execute(pool).await.unwrap();
 }
 async fn count(pool: &PgPool, query: &str) -> i64 {
-    sqlx::query_scalar(query).fetch_one(pool).await.unwrap()
+    sqlx::query_scalar(sqlx::AssertSqlSafe(query))
+        .fetch_one(pool)
+        .await
+        .unwrap()
 }
 async fn package(pool: &PgPool, node: &str, blocked: bool) {
     let (node, package) = (

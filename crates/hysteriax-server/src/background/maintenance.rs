@@ -150,7 +150,10 @@ mod tests {
     use super::*;
     use serde_json::json;
     async fn count(pool: &PgPool, sql: &str) -> i64 {
-        sqlx::query_scalar(sql).fetch_one(pool).await.unwrap()
+        sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
+            .fetch_one(pool)
+            .await
+            .unwrap()
     }
     async fn due(pool: &PgPool) {
         sqlx::query(

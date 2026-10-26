@@ -1,7 +1,7 @@
 use super::*;
 
 async fn retry_audit(state: &AppState, action: &str, code: &str) {
-    sqlx::raw_sql(&format!("CREATE SEQUENCE preparation_attempts; CREATE FUNCTION retry_preparation_audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.action='{action}' AND nextval('preparation_attempts')=1 THEN RAISE EXCEPTION 'retry' USING ERRCODE='{code}'; END IF; RETURN NEW; END $$; CREATE TRIGGER retry_preparation_audit BEFORE INSERT ON audit_records FOR EACH ROW EXECUTE FUNCTION retry_preparation_audit()"))
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!("CREATE SEQUENCE preparation_attempts; CREATE FUNCTION retry_preparation_audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.action='{action}' AND nextval('preparation_attempts')=1 THEN RAISE EXCEPTION 'retry' USING ERRCODE='{code}'; END IF; RETURN NEW; END $$; CREATE TRIGGER retry_preparation_audit BEFORE INSERT ON audit_records FOR EACH ROW EXECUTE FUNCTION retry_preparation_audit()")))
         .execute(&state.pool).await.unwrap();
 }
 
@@ -135,12 +135,14 @@ async fn unchanged_business_revision_cannot_overwrite_changed_configuration_or_c
         } else {
             "changed.example.test".into()
         };
-        sqlx::query(&format!("UPDATE nodes SET {field}=$1 WHERE id=$2"))
-            .bind(&changed)
-            .bind(&node)
-            .execute(&state.pool)
-            .await
-            .unwrap();
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "UPDATE nodes SET {field}=$1 WHERE id=$2"
+        )))
+        .bind(&changed)
+        .bind(&node)
+        .execute(&state.pool)
+        .await
+        .unwrap();
         let before: Value = sqlx::query_scalar("SELECT to_jsonb(n) FROM nodes n WHERE id=$1")
             .bind(&node)
             .fetch_one(&state.pool)

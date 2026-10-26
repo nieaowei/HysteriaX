@@ -311,7 +311,7 @@ async fn receipt_failure_rolls_back_business_audit_and_reservation_and_native_er
         .await
         .unwrap();
     for code in ["40001", "40P01"] {
-        sqlx::raw_sql(&format!("CREATE SEQUENCE receipt_attempt; CREATE FUNCTION retry_receipt() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF nextval('receipt_attempt')=1 THEN RAISE EXCEPTION 'retry' USING ERRCODE='{code}'; END IF; RETURN NEW; END $$; CREATE TRIGGER retry_receipt BEFORE UPDATE ON management_receipts FOR EACH ROW EXECUTE FUNCTION retry_receipt()"))
+        sqlx::raw_sql(sqlx::AssertSqlSafe(format!("CREATE SEQUENCE receipt_attempt; CREATE FUNCTION retry_receipt() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF nextval('receipt_attempt')=1 THEN RAISE EXCEPTION 'retry' USING ERRCODE='{code}'; END IF; RETURN NEW; END $$; CREATE TRIGGER retry_receipt BEFORE UPDATE ON management_receipts FOR EACH ROW EXECUTE FUNCTION retry_receipt()")))
             .execute(&state.pool).await.unwrap();
         let first = mutate(
             &state,

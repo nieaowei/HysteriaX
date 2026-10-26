@@ -56,7 +56,10 @@ async fn work(state: &AppState, ca: &str, owner: &str) -> Work {
         .unwrap()
 }
 async fn count(state: &AppState, q: &str) -> i64 {
-    sqlx::query_scalar(q).fetch_one(&state.pool).await.unwrap()
+    sqlx::query_scalar(sqlx::AssertSqlSafe(q))
+        .fetch_one(&state.pool)
+        .await
+        .unwrap()
 }
 async fn done(state: &AppState, ca: &str) -> bool {
     sqlx::query_scalar(
@@ -552,12 +555,14 @@ async fn an_empty_future_cleanup_range_uses_the_ledger_deadline_index() {
         .fetch_one(&state.pool)
         .await
         .unwrap();
-    let plan: Value = sqlx::query_scalar(&format!("EXPLAIN (ANALYZE,FORMAT JSON) {ADMISSION}"))
-        .bind(now)
-        .bind(PAGE)
-        .fetch_one(&state.pool)
-        .await
-        .unwrap();
+    let plan: Value = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "EXPLAIN (ANALYZE,FORMAT JSON) {ADMISSION}"
+    )))
+    .bind(now)
+    .bind(PAGE)
+    .fetch_one(&state.pool)
+    .await
+    .unwrap();
     assert!(
         plan.to_string().contains("mtls_trust_cleanup_due"),
         "{plan}"

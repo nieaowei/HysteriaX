@@ -659,10 +659,12 @@ async fn identity_claim_and_release_retry_native_conflicts_without_polling_the_s
     assert_eq!(polls.load(Ordering::SeqCst), 1);
     for sequence in ["identity_claim_attempt", "identity_release_attempt"] {
         assert_eq!(
-            sqlx::query_scalar::<_, i64>(&format!("SELECT last_value FROM {sequence}"))
-                .fetch_one(&f.state.pool)
-                .await
-                .unwrap(),
+            sqlx::query_scalar::<_, i64>(sqlx::AssertSqlSafe(format!(
+                "SELECT last_value FROM {sequence}"
+            )))
+            .fetch_one(&f.state.pool)
+            .await
+            .unwrap(),
             2
         );
     }

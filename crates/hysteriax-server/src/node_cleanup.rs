@@ -201,10 +201,10 @@ pub async fn prepare_final_delete(pool: &PgPool, node: &str) -> Result<(), sqlx:
         ] {
             sqlx::query(setting).execute(&mut *tx).await?;
         }
-        sqlx::query(&format!(
+        sqlx::query(sqlx::AssertSqlSafe(format!(
             "SELECT ctid FROM ONLY {} WHERE node_id=$1",
             history.table
-        ))
+        )))
         .bind(node)
         .fetch_optional(&mut *tx)
         .await?;
@@ -460,7 +460,7 @@ async fn purge_batch_on(
         id = history.id,
         table = history.table
     );
-    let mut query = sqlx::query(&statement).bind(node);
+    let mut query = sqlx::query(sqlx::AssertSqlSafe(statement.as_str())).bind(node);
     if let Some((at, id)) = cursor {
         query = query.bind(at).bind(id);
     }
@@ -474,10 +474,10 @@ async fn purge_batch_on(
         last.get::<String, _>("cursor_id"),
     );
     let locations: Vec<String> = rows.iter().map(|row| row.get("location")).collect();
-    let deleted = sqlx::query(&format!(
+    let deleted = sqlx::query(sqlx::AssertSqlSafe(format!(
         "DELETE FROM {} WHERE ctid=ANY($1::text[]::tid[])",
         history.table
-    ))
+    )))
     .bind(locations)
     .execute(&mut **tx)
     .await?

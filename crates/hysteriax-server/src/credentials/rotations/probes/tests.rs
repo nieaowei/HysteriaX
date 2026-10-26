@@ -35,7 +35,10 @@ async fn parent(state: &AppState) -> Work {
     claim(state, ADMIT, "admission").await
 }
 async fn count(state: &AppState, q: &str) -> i64 {
-    sqlx::query_scalar(q).fetch_one(&state.pool).await.unwrap()
+    sqlx::query_scalar(sqlx::AssertSqlSafe(q))
+        .fetch_one(&state.pool)
+        .await
+        .unwrap()
 }
 async fn phase(state: &AppState, r: &str) -> String {
     sqlx::query_scalar("SELECT phase FROM mtls_rotations WHERE id=$1")
@@ -506,12 +509,14 @@ async fn rotation_admission_is_bounded_preserves_healthy_owners_and_seeks_empty_
         .fetch_one(&state.pool)
         .await
         .unwrap();
-    let plan: Value = sqlx::query_scalar(&format!("EXPLAIN (ANALYZE,FORMAT JSON) {ADMISSION}"))
-        .bind(now)
-        .bind(PAGE)
-        .fetch_one(&state.pool)
-        .await
-        .unwrap();
+    let plan: Value = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "EXPLAIN (ANALYZE,FORMAT JSON) {ADMISSION}"
+    )))
+    .bind(now)
+    .bind(PAGE)
+    .fetch_one(&state.pool)
+    .await
+    .unwrap();
     assert!(plan.to_string().contains("mtls_rotations_due"), "{plan}");
     assert_eq!(plan[0]["Plan"]["Actual Rows"].as_f64(), Some(0.0));
 }
@@ -528,14 +533,16 @@ async fn direct_switch_pass_uses_an_empty_index_range_for_a_large_future_child_b
         .fetch_one(&state.pool)
         .await
         .unwrap();
-    let plan: Value = sqlx::query_scalar(&format!("EXPLAIN (ANALYZE,FORMAT JSON) {CHILD_DUE}"))
-        .bind(CHILD)
-        .bind(&r)
-        .bind(now)
-        .bind(PAGE)
-        .fetch_one(&state.pool)
-        .await
-        .unwrap();
+    let plan: Value = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "EXPLAIN (ANALYZE,FORMAT JSON) {CHILD_DUE}"
+    )))
+    .bind(CHILD)
+    .bind(&r)
+    .bind(now)
+    .bind(PAGE)
+    .fetch_one(&state.pool)
+    .await
+    .unwrap();
     assert!(
         plan.to_string()
             .contains("background_work_rotation_identity_due"),

@@ -39,7 +39,10 @@ async fn replace(
     .map(|(_, Json(v))| v)
 }
 async fn count(state: &AppState, q: &str) -> i64 {
-    sqlx::query_scalar(q).fetch_one(&state.pool).await.unwrap()
+    sqlx::query_scalar(sqlx::AssertSqlSafe(q))
+        .fetch_one(&state.pool)
+        .await
+        .unwrap()
 }
 async fn claim(state: &AppState, owner: &str) -> Work {
     sqlx::query(
@@ -457,16 +460,18 @@ async fn pending_job_index_and_trigger_follow_all_authoritative_status_transitio
         .execute(&state.pool)
         .await
         .unwrap();
-    let plan: Value = sqlx::query_scalar(&format!("EXPLAIN (ANALYZE,FORMAT JSON) {PENDING}"))
-        .bind(&rotation)
-        .bind(&ca)
-        .bind(2_i64)
-        .bind("")
-        .bind("")
-        .bind(PAGE)
-        .fetch_one(&state.pool)
-        .await
-        .unwrap();
+    let plan: Value = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "EXPLAIN (ANALYZE,FORMAT JSON) {PENDING}"
+    )))
+    .bind(&rotation)
+    .bind(&ca)
+    .bind(2_i64)
+    .bind("")
+    .bind("")
+    .bind(PAGE)
+    .fetch_one(&state.pool)
+    .await
+    .unwrap();
     assert!(
         plan.to_string().contains("mtls_rotation_pending_jobs"),
         "{plan}"
@@ -524,7 +529,7 @@ async fn migration_0060_to_0061_backfills_only_derived_flags_and_keeps_all_job_h
     let snapshot = format!(
         "SELECT jsonb_build_object('sources',({SNAPSHOTS}),'jobs',(SELECT jsonb_agg(to_jsonb(j) ORDER BY id) FROM jobs j),'events',(SELECT jsonb_agg(to_jsonb(e) ORDER BY id) FROM job_events e))"
     );
-    let before: Value = sqlx::query_scalar(&snapshot)
+    let before: Value = sqlx::query_scalar(sqlx::AssertSqlSafe(snapshot.as_str()))
         .fetch_one(&state.pool)
         .await
         .unwrap();
@@ -532,7 +537,7 @@ async fn migration_0060_to_0061_backfills_only_derived_flags_and_keeps_all_job_h
         db::run_migrations(&state.pool).await.unwrap();
         assert_eq!(
             before,
-            sqlx::query_scalar::<_, Value>(&snapshot)
+            sqlx::query_scalar::<_, Value>(sqlx::AssertSqlSafe(snapshot.as_str()))
                 .fetch_one(&state.pool)
                 .await
                 .unwrap()

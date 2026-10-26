@@ -109,7 +109,7 @@ async fn replay_saved(client: &Client, saved: &Saved) {
     assert_eq!(response.bytes().await.unwrap().as_ref(), saved.bytes);
 }
 async fn count(state: &AppState, query: &str) -> i64 {
-    sqlx::query_scalar(query)
+    sqlx::query_scalar(sqlx::AssertSqlSafe(query))
         .fetch_one(&state.pool)
         .await
         .unwrap()
@@ -131,10 +131,10 @@ async fn snapshot(state: &AppState) -> Value {
         "cache_bucket_versions",
     ];
     let parts:Vec<String>=tables.iter().map(|t|format!("SELECT '{t}' AS kind,coalesce(jsonb_agg(to_jsonb(t) ORDER BY to_jsonb(t)::text),'[]'::jsonb) AS data FROM {t} t")).collect();
-    sqlx::query_scalar(&format!(
+    sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
         "SELECT jsonb_object_agg(kind,data) FROM ({}) snapshots",
         parts.join(" UNION ALL ")
-    ))
+    )))
     .fetch_one(&state.pool)
     .await
     .unwrap()
@@ -465,7 +465,7 @@ async fn receipt_failure_rolls_back_all_seven_mutations_and_native_conflicts_kee
             notifications.try_recv(),
             Err(tokio::sync::broadcast::error::TryRecvError::Empty)
         ));
-        sqlx::raw_sql(&format!("DROP TRIGGER fail_node_receipt ON management_receipts; CREATE SEQUENCE node_receipt_attempt; CREATE FUNCTION retry_node_receipt() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF mod(nextval('node_receipt_attempt'),2)=1 THEN RAISE EXCEPTION 'native conflict' USING ERRCODE='{code}'; END IF; RETURN NEW; END $$; CREATE TRIGGER retry_node_receipt BEFORE UPDATE ON management_receipts FOR EACH ROW EXECUTE FUNCTION retry_node_receipt()"))
+        sqlx::raw_sql(sqlx::AssertSqlSafe(format!("DROP TRIGGER fail_node_receipt ON management_receipts; CREATE SEQUENCE node_receipt_attempt; CREATE FUNCTION retry_node_receipt() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF mod(nextval('node_receipt_attempt'),2)=1 THEN RAISE EXCEPTION 'native conflict' USING ERRCODE='{code}'; END IF; RETURN NEW; END $$; CREATE TRIGGER retry_node_receipt BEFORE UPDATE ON management_receipts FOR EACH ROW EXECUTE FUNCTION retry_node_receipt()")))
             .execute(&state.pool).await.unwrap();
         let mut receipts = vec![];
         for (method, mut url, key, body, status) in cases {

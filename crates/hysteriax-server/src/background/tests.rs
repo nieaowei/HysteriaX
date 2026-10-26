@@ -41,7 +41,7 @@ async fn expire_leases(state: &AppState) {
         .unwrap();
 }
 async fn count(state: &AppState, sql: &str) -> i64 {
-    sqlx::query_scalar(sql)
+    sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
         .fetch_one(&state.pool)
         .await
         .unwrap()

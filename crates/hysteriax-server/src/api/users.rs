@@ -80,10 +80,12 @@ pub(crate) async fn list(
     let search = query.q.as_deref().unwrap_or("").trim();
     let filter = "($1 = '' OR strpos(lower(u.name), lower($1)) > 0 OR strpos(lower(u.id), lower($1)) > 0 OR EXISTS (SELECT 1 FROM node_assignments na WHERE na.user_id=u.id AND strpos(lower(na.node_id), lower($1)) > 0))";
     let mut tx = crate::read_snapshot::begin(&state.pool).await?;
-    let total: i64 = sqlx::query_scalar(&format!("SELECT count(*) FROM users u WHERE {filter}"))
-        .bind(search)
-        .fetch_one(&mut *tx)
-        .await?;
+    let total: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "SELECT count(*) FROM users u WHERE {filter}"
+    )))
+    .bind(search)
+    .fetch_one(&mut *tx)
+    .await?;
     let page = requested_page.min(((total + page_size - 1) / page_size).max(1));
     // Apply the direction to every name component, then use ID to break ties.
     let order_by = if query.sort.as_deref().unwrap_or("name") == "name" {
@@ -91,9 +93,9 @@ pub(crate) async fn list(
     } else {
         format!("{sort} {order}, u.id {order}")
     };
-    let rows = sqlx::query(&format!(
+    let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
         "SELECT u.* FROM users u WHERE {filter} ORDER BY {order_by} LIMIT $2 OFFSET $3"
-    ))
+    )))
     .bind(search)
     .bind(page_size)
     .bind((page - 1) * page_size)

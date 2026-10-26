@@ -274,9 +274,9 @@ pub async fn initialize(pool: &PgPool, secrets: &SecretBox) -> Result<(), ApiErr
         "reference_edge_version",
         "reference_edge_history",
     ] {
-        sqlx::query(&format!(
+        sqlx::query(sqlx::AssertSqlSafe(format!(
             "ALTER TABLE credential_reference_edges VALIDATE CONSTRAINT {name}"
-        ))
+        )))
         .execute(pool)
         .await?;
     }

@@ -24,7 +24,7 @@ async fn fixture(users: usize, nodes: usize) -> AppState {
     )
 }
 async fn count(state: &AppState, query: &str) -> i64 {
-    sqlx::query_scalar(query)
+    sqlx::query_scalar(sqlx::AssertSqlSafe(query))
         .fetch_one(&state.pool)
         .await
         .unwrap()
@@ -802,9 +802,9 @@ async fn an_empty_due_range_uses_the_queue_index_without_scanning_future_users()
         .fetch_one(&state.pool)
         .await
         .unwrap();
-    let plan: serde_json::Value = sqlx::query_scalar(&format!(
+    let plan: serde_json::Value = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
         "EXPLAIN (ANALYZE,BUFFERS,FORMAT JSON) {DUE_USERS_SQL}"
-    ))
+    )))
     .bind(cutoff)
     .bind(USER_BATCH)
     .fetch_one(&state.pool)

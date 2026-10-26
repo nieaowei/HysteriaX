@@ -11,7 +11,7 @@ async fn latest_monitoring_samples_use_node_indexes_for_empty_and_stale_nodes() 
     sqlx::query("INSERT INTO proxy_probe_samples(node_id,revision,sampled_at,status,latency_ms) SELECT $1,1,now()-interval '2 days'-i*interval '1 second','ok',i FROM generate_series(1,20000) i")
         .bind(&nodes[0]).execute(&state.pool).await.unwrap();
     for table in ["nodes", "online_samples", "proxy_probe_samples"] {
-        sqlx::query(&format!("ANALYZE {table}"))
+        sqlx::query(sqlx::AssertSqlSafe(format!("ANALYZE {table}")))
             .execute(&state.pool)
             .await
             .unwrap();
@@ -66,11 +66,13 @@ async fn latest_monitoring_samples_use_node_indexes_for_empty_and_stale_nodes() 
     }
     // Both overview (all nodes) and the paginated node directory use this SQL.
     for ids in [None, Some(nodes.clone())] {
-        let row = sqlx::query(&format!("EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) {sql}"))
-            .bind(ids)
-            .fetch_one(&state.pool)
-            .await
-            .unwrap();
+        let row = sqlx::query(sqlx::AssertSqlSafe(format!(
+            "EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) {sql}"
+        )))
+        .bind(ids)
+        .fetch_one(&state.pool)
+        .await
+        .unwrap();
         let plan: Value = row.get("QUERY PLAN");
         let mut indexes = Vec::new();
         check_sample_scans(&plan[0]["Plan"], &mut indexes);
@@ -123,7 +125,7 @@ async fn aligned_traffic_history_never_scans_raw_records() {
     }
     for (offset, expected_scan) in [(Duration::zero(), false), (Duration::seconds(17), true)] {
         let end = anchor - offset;
-        let row = sqlx::query(&query)
+        let row = sqlx::query(sqlx::AssertSqlSafe(query.as_str()))
             .bind("hour")
             .bind("users")
             .bind(end - Duration::days(1))
@@ -619,7 +621,7 @@ async fn rolling_windows_have_exact_bounds_across_midnight_and_dst() {
                 "online_samples",
                 "proxy_probe_samples",
             ] {
-                sqlx::query(&format!("DELETE FROM {table}"))
+                sqlx::query(sqlx::AssertSqlSafe(format!("DELETE FROM {table}")))
                     .execute(&state.pool)
                     .await
                     .unwrap();

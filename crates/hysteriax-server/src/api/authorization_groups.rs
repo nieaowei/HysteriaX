@@ -322,7 +322,7 @@ async fn validate_ids_exist(
         return Ok(());
     }
     let query = format!("SELECT id FROM {table} WHERE id=ANY($1::text[])");
-    let existing: HashSet<String> = sqlx::query_scalar(&query)
+    let existing: HashSet<String> = sqlx::query_scalar(sqlx::AssertSqlSafe(query.as_str()))
         .bind(ids)
         .fetch_all(&mut **tx)
         .await?

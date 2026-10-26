@@ -34,7 +34,7 @@ async fn work(state: &AppState, ca: &str, rotation: &str, owner: &str) -> Work {
     .unwrap()
 }
 async fn count(state: &AppState, query: &str) -> i64 {
-    sqlx::query_scalar(query)
+    sqlx::query_scalar(sqlx::AssertSqlSafe(query))
         .fetch_one(&state.pool)
         .await
         .unwrap()
@@ -452,12 +452,14 @@ async fn publication_admission_uses_an_empty_due_index_range_for_future_rotation
         .fetch_one(&state.pool)
         .await
         .unwrap();
-    let plan: Value = sqlx::query_scalar(&format!("EXPLAIN (ANALYZE,FORMAT JSON) {ADMISSION}"))
-        .bind(now)
-        .bind(PAGE)
-        .fetch_one(&state.pool)
-        .await
-        .unwrap();
+    let plan: Value = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "EXPLAIN (ANALYZE,FORMAT JSON) {ADMISSION}"
+    )))
+    .bind(now)
+    .bind(PAGE)
+    .fetch_one(&state.pool)
+    .await
+    .unwrap();
     assert!(plan.to_string().contains("mtls_rotations_due"), "{plan}");
     assert_eq!(plan[0]["Plan"]["Actual Rows"].as_f64(), Some(0.0));
 }
@@ -479,9 +481,9 @@ async fn retention_seeks_the_latest_leaf_including_discarded_history_of_a_delete
         .execute(&state.pool)
         .await
         .unwrap();
-    let plan: Value = sqlx::query_scalar(&format!(
+    let plan: Value = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
         "EXPLAIN (ANALYZE,FORMAT JSON) {RETENTION_DEADLINE}"
-    ))
+    )))
     .bind(&ca)
     .bind(1_i64)
     .fetch_one(&state.pool)

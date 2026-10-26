@@ -232,11 +232,13 @@ mod tests {
             .await
             .unwrap();
             sqlx::query("INSERT INTO users(id,name,created_at,updated_at) VALUES('owner','Owner',clock_timestamp(),clock_timestamp())").execute(&state.pool).await.unwrap();
-            sqlx::query(&format!("UPDATE credentials SET {change} WHERE id=$1"))
-                .bind(&id)
-                .execute(&state.pool)
-                .await
-                .unwrap();
+            sqlx::query(sqlx::AssertSqlSafe(format!(
+                "UPDATE credentials SET {change} WHERE id=$1"
+            )))
+            .bind(&id)
+            .execute(&state.pool)
+            .await
+            .unwrap();
             let query = "SELECT jsonb_build_object('credentials',(SELECT jsonb_agg(to_jsonb(t) ORDER BY id) FROM credentials t),'versions',(SELECT jsonb_agg(to_jsonb(t) ORDER BY credential_id,version) FROM credential_versions t),'batches',(SELECT jsonb_agg(to_jsonb(t) ORDER BY id) FROM credential_batches t),'jobs',(SELECT jsonb_agg(to_jsonb(t) ORDER BY id) FROM jobs t),'audits',(SELECT jsonb_agg(to_jsonb(t) ORDER BY id) FROM audit_records t))";
             let before: Value = sqlx::query_scalar(query)
                 .fetch_one(&state.pool)

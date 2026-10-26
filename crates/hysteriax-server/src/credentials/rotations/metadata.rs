@@ -131,14 +131,14 @@ async fn admit(pool: &PgPool, work: &Work) -> Result<()> {
         sqlx::query("SELECT credential_id FROM mtls_authorities WHERE credential_id=$1 FOR UPDATE").bind(&ca).fetch_optional(&mut **tx).await?;
         if !current_on(tx,&rotation,&ca,version).await? {return work.finish_on(tx,false,0,Some("node_metadata_superseded")).await;}
         let cursor=work.payload["cursor"].as_str().context("missing metadata cursor")?;
-        let nodes:Vec<String>=sqlx::query_scalar(&format!("SELECT n.id FROM nodes n WHERE n.id IN ({MEMBERS}) AND n.id>$2 ORDER BY n.id LIMIT $3"))
+        let nodes:Vec<String>=sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT n.id FROM nodes n WHERE n.id IN ({MEMBERS}) AND n.id>$2 ORDER BY n.id LIMIT $3")))
             .bind(&ca).bind(cursor).bind(PAGE).fetch_all(&mut **tx).await?;
         for node in &nodes {
             sqlx::query("INSERT INTO background_work(id,kind,payload) VALUES($1,$2,$3) ON CONFLICT(id) DO NOTHING")
                 .bind(format!("node-publication:{rotation}:{node}")).bind(KIND).bind(json!({"rotation_id":rotation,"ca_id":ca,"ca_version":version,"node_id":node,"lease_resources":[format!("ca:{ca}"),format!("node:{node}")]})).execute(&mut **tx).await?;
         }
         let last=nodes.last().map(String::as_str).unwrap_or(cursor);
-        let more:bool=sqlx::query_scalar(&format!("SELECT EXISTS(SELECT 1 FROM ({MEMBERS}) m WHERE node_id>$2)")).bind(&ca).bind(last).fetch_one(&mut **tx).await?;
+        let more:bool=sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT EXISTS(SELECT 1 FROM ({MEMBERS}) m WHERE node_id>$2)"))).bind(&ca).bind(last).fetch_one(&mut **tx).await?;
         sqlx::query("UPDATE background_work SET payload=jsonb_set(payload,'{cursor}',to_jsonb($2::text)) WHERE id=$1").bind(&work.id).bind(last).execute(&mut **tx).await?;
         work.finish_on(tx,more,if more {1}else{0},None).await
     })}).await

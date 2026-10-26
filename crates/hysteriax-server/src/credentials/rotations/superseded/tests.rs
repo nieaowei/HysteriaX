@@ -52,7 +52,7 @@ async fn replace(
     .map(|(_, Json(v))| v)
 }
 async fn count(state: &AppState, query: &str) -> i64 {
-    sqlx::query_scalar(query)
+    sqlx::query_scalar(sqlx::AssertSqlSafe(query))
         .fetch_one(&state.pool)
         .await
         .unwrap()
@@ -528,7 +528,7 @@ async fn migration_0059_to_0060_preserves_all_history_and_only_changes_logical_s
     let snapshot = format!(
         "{snapshot}{HISTORY}),'leaves',(SELECT jsonb_agg(to_jsonb(v) ORDER BY credential_version) FROM mtls_user_versions v),'generations',(SELECT jsonb_agg(to_jsonb(g) ORDER BY ca_id,ca_version) FROM mtls_ca_generations g),'rotations',(SELECT jsonb_agg(to_jsonb(r) ORDER BY id) FROM mtls_rotations r))"
     );
-    let before: Value = sqlx::query_scalar(&snapshot)
+    let before: Value = sqlx::query_scalar(sqlx::AssertSqlSafe(snapshot.as_str()))
         .fetch_one(&state.pool)
         .await
         .unwrap();
@@ -544,7 +544,7 @@ async fn migration_0059_to_0060_preserves_all_history_and_only_changes_logical_s
         db::run_migrations(&state.pool).await.unwrap();
         assert_eq!(
             before,
-            sqlx::query_scalar::<_, Value>(&snapshot)
+            sqlx::query_scalar::<_, Value>(sqlx::AssertSqlSafe(snapshot.as_str()))
                 .fetch_one(&state.pool)
                 .await
                 .unwrap()

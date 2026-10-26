@@ -12,7 +12,10 @@ async fn phase(state: &AppState, id: &str) -> String {
         .unwrap()
 }
 async fn count(state: &AppState, q: &str) -> i64 {
-    sqlx::query_scalar(q).fetch_one(&state.pool).await.unwrap()
+    sqlx::query_scalar(sqlx::AssertSqlSafe(q))
+        .fetch_one(&state.pool)
+        .await
+        .unwrap()
 }
 
 #[tokio::test]

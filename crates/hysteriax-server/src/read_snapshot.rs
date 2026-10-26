@@ -61,11 +61,8 @@ pub fn cacheable() -> bool {
     CURRENT.try_with(|s| s.cacheable).unwrap_or(true)
 }
 pub async fn transaction(pool: &PgPool) -> Result<Tx, sqlx::Error> {
-    let mut tx = pool.begin().await?;
-    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
-        .execute(&mut *tx)
-        .await?;
-    Ok(tx)
+    pool.begin_with("BEGIN ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+        .await
 }
 pub async fn begin(pool: &PgPool) -> Result<Reader, sqlx::Error> {
     if let Some(reader) = current().await {

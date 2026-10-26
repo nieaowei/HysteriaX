@@ -13,7 +13,10 @@ pub(super) async fn claim(pool: &PgPool, owner: &str) -> ClaimedJob {
     claim_next_for(pool, Some(owner)).await.unwrap().unwrap()
 }
 pub(super) async fn count(pool: &PgPool, q: &str) -> i64 {
-    sqlx::query_scalar(q).fetch_one(pool).await.unwrap()
+    sqlx::query_scalar(sqlx::AssertSqlSafe(q))
+        .fetch_one(pool)
+        .await
+        .unwrap()
 }
 async fn lease_snapshot(pool: &PgPool) -> Value {
     sqlx::query_scalar("SELECT coalesce(jsonb_agg(to_jsonb(l) ORDER BY resource_key),'[]'::jsonb) FROM resource_leases l").fetch_one(pool).await.unwrap()

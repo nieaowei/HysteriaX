@@ -223,7 +223,7 @@ async fn six_mutations_and_their_receipts_roll_back_together_and_native_errors_r
                 "kind {kind}"
             );
             assert_eq!(snapshot(&state).await, before, "kind {kind}");
-            sqlx::raw_sql(&format!("CREATE SEQUENCE record_attempt; CREATE OR REPLACE FUNCTION reject_record_receipt() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF nextval('record_attempt')=1 THEN RAISE EXCEPTION 'retry' USING ERRCODE='{code}'; END IF; RETURN NEW; END $$"))
+            sqlx::raw_sql(sqlx::AssertSqlSafe(format!("CREATE SEQUENCE record_attempt; CREATE OR REPLACE FUNCTION reject_record_receipt() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF nextval('record_attempt')=1 THEN RAISE EXCEPTION 'retry' USING ERRCODE='{code}'; END IF; RETURN NEW; END $$")))
                 .execute(&state.pool).await.unwrap();
             let response = send(&client, &base, &case, Some("retry")).await;
             assert_eq!(response.status(), case.status, "kind {kind}, code {code}");

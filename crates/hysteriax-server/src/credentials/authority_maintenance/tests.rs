@@ -28,7 +28,7 @@ async fn fixture(n: i32) -> AppState {
     state
 }
 async fn count(state: &AppState, sql: &str) -> i64 {
-    sqlx::query_scalar(sql)
+    sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
         .fetch_one(&state.pool)
         .await
         .unwrap()
@@ -420,13 +420,14 @@ async fn an_empty_due_range_uses_the_authority_deadline_index() {
         .fetch_one(&state.pool)
         .await
         .unwrap();
-    let plan: serde_json::Value =
-        sqlx::query_scalar(&format!("EXPLAIN (ANALYZE, FORMAT JSON) {DUE}"))
-            .bind(now)
-            .bind(PAGE)
-            .fetch_one(&state.pool)
-            .await
-            .unwrap();
+    let plan: serde_json::Value = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "EXPLAIN (ANALYZE, FORMAT JSON) {DUE}"
+    )))
+    .bind(now)
+    .bind(PAGE)
+    .fetch_one(&state.pool)
+    .await
+    .unwrap();
     assert!(plan.to_string().contains("mtls_authorities_due"), "{plan}");
     assert_eq!(plan[0]["Plan"]["Actual Rows"].as_f64(), Some(0.0));
     assert_eq!(

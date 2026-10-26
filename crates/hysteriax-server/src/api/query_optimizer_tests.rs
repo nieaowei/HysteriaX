@@ -40,17 +40,19 @@ async fn selective_history_search_and_status_paging_use_indexes() {
         let query = format!(
             "SELECT count(*) FROM {table} WHERE ($1='' OR {expression} LIKE lower($1) ESCAPE '\\')"
         );
-        let actual: i64 = sqlx::query_scalar(&query)
+        let actual: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(query.as_str()))
             .bind(&pattern)
             .fetch_one(&mut *tx)
             .await
             .unwrap();
         assert_eq!(actual, 1);
-        let row = sqlx::query(&format!("EXPLAIN (ANALYZE,FORMAT JSON) {query}"))
-            .bind(&pattern)
-            .fetch_one(&mut *tx)
-            .await
-            .unwrap();
+        let row = sqlx::query(sqlx::AssertSqlSafe(format!(
+            "EXPLAIN (ANALYZE,FORMAT JSON) {query}"
+        )))
+        .bind(&pattern)
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap();
         let plan: Value = row.get("QUERY PLAN");
         assert!(uses_index(&plan[0]["Plan"], index), "{plan}");
         tx.rollback().await.unwrap();
@@ -59,9 +61,9 @@ async fn selective_history_search_and_status_paging_use_indexes() {
         ("jobs", "status", "jobs_status_page"),
         ("audit_records", "action", "audit_action_page"),
     ] {
-        let row = sqlx::query(&format!(
+        let row = sqlx::query(sqlx::AssertSqlSafe(format!(
             "EXPLAIN (ANALYZE,FORMAT JSON) SELECT * FROM {table} ORDER BY {sort},id LIMIT 25"
-        ))
+        )))
         .fetch_one(&pool)
         .await
         .unwrap();

@@ -37,7 +37,7 @@ async fn ca_creation_preparation_is_readonly_and_native_retries_preserve_exact_m
         let material = prepared.material.clone().unwrap();
         let before:i64=sqlx::query_scalar("SELECT (SELECT count(*) FROM credentials)+(SELECT count(*) FROM mtls_operations)+(SELECT count(*) FROM audit_records)").fetch_one(&state.pool).await.unwrap();
         assert_eq!(before, 0);
-        sqlx::raw_sql(&format!("CREATE SEQUENCE creation_attempt; CREATE FUNCTION retry_ca_creation() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF nextval('creation_attempt')=1 THEN RAISE EXCEPTION 'retry' USING ERRCODE='{code}'; END IF; RETURN NEW; END $$; CREATE TRIGGER retry_ca_creation BEFORE INSERT ON audit_records FOR EACH ROW EXECUTE FUNCTION retry_ca_creation()"))
+        sqlx::raw_sql(sqlx::AssertSqlSafe(format!("CREATE SEQUENCE creation_attempt; CREATE FUNCTION retry_ca_creation() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF nextval('creation_attempt')=1 THEN RAISE EXCEPTION 'retry' USING ERRCODE='{code}'; END IF; RETURN NEW; END $$; CREATE TRIGGER retry_ca_creation BEFORE INSERT ON audit_records FOR EACH ROW EXECUTE FUNCTION retry_ca_creation()")))
             .execute(&state.pool).await.unwrap();
         let response = db::serializable(&state.pool, move |tx| {
             let prepared = prepared.clone();

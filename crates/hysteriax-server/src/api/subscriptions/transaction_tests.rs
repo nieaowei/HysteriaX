@@ -21,7 +21,7 @@ async fn rotate_once(state: &AppState) -> Result<Json<Value>, ApiError> {
     .await
 }
 async fn count(state: &AppState, query: &str) -> i64 {
-    sqlx::query_scalar(query)
+    sqlx::query_scalar(sqlx::AssertSqlSafe(query))
         .fetch_one(&state.pool)
         .await
         .unwrap()

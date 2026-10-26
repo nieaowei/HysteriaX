@@ -196,9 +196,9 @@ pub(crate) async fn list(
     sqlx::query("SET LOCAL plan_cache_mode=force_custom_plan")
         .execute(&mut *tx)
         .await?;
-    let total: i64 = sqlx::query_scalar(&format!(
+    let total: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
         "SELECT count(*) FROM credential_directory WHERE {filter}"
-    ))
+    )))
     .bind(category)
     .bind(kind)
     .bind(&pattern)
@@ -219,7 +219,7 @@ pub(crate) async fn list(
             "{leading} {direction},lower(name) COLLATE \"C\" {direction},name COLLATE \"C\" {direction},id COLLATE \"C\" {direction}"
         )
     };
-    let selected = sqlx::query(&format!("SELECT id,source,entity_id,node_id FROM credential_directory WHERE {filter} ORDER BY {ordering} LIMIT $5 OFFSET $6"))
+    let selected = sqlx::query(sqlx::AssertSqlSafe(format!("SELECT id,source,entity_id,node_id FROM credential_directory WHERE {filter} ORDER BY {ordering} LIMIT $5 OFFSET $6")))
         .bind(category).bind(kind).bind(&pattern).bind(query.include_internal.unwrap_or(false)).bind(page_size).bind((page-1)*page_size)
         .fetch_all(&mut *tx).await?;
     let mut managed = Vec::new();

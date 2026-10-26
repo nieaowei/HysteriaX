@@ -92,7 +92,7 @@ async fn snapshot(f: &Fixture) -> Value {
     sqlx::query_scalar("SELECT jsonb_build_object('nodes',(SELECT jsonb_agg(to_jsonb(n) ORDER BY id) FROM nodes n),'items',(SELECT jsonb_agg(to_jsonb(i) ORDER BY batch_id,node_id,user_id) FROM credential_batch_items i),'snapshots',(SELECT jsonb_agg(to_jsonb(v) ORDER BY id) FROM config_versions v),'receipts',(SELECT jsonb_agg(to_jsonb(r) ORDER BY job_id) FROM credential_application_receipts r),'jobs',(SELECT jsonb_agg(to_jsonb(j) ORDER BY id) FROM jobs j),'events',(SELECT jsonb_agg(to_jsonb(e) ORDER BY id) FROM job_events e),'refs',(SELECT jsonb_agg(to_jsonb(e) ORDER BY to_jsonb(e)::text) FROM credential_reference_edges e))").fetch_one(&f.state.pool).await.unwrap()
 }
 async fn count(f: &Fixture, q: &str) -> i64 {
-    sqlx::query_scalar(q)
+    sqlx::query_scalar(sqlx::AssertSqlSafe(q))
         .fetch_one(&f.state.pool)
         .await
         .unwrap()

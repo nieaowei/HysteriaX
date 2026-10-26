@@ -56,7 +56,7 @@ async fn plain_node(state: &AppState) -> String {
     created["node"]["id"].as_str().unwrap().into()
 }
 async fn count(state: &AppState, sql: &str) -> i64 {
-    sqlx::query_scalar(sql)
+    sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
         .fetch_one(&state.pool)
         .await
         .unwrap()

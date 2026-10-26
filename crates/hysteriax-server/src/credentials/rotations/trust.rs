@@ -145,7 +145,7 @@ async fn page(pool: &PgPool, work: &Work) -> Result<bool> {
             let now: DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()").fetch_one(&mut **tx).await?;
             // Parent order matches ordinary node mutations. Skipped nodes are
             // revisited when the persistent cursor wraps; no proof is assumed.
-            let members: Vec<String> = sqlx::query_scalar(&format!("SELECT n.id FROM nodes n WHERE n.id IN ({MEMBERS}) AND n.id>$2 ORDER BY n.id LIMIT $3 FOR NO KEY UPDATE OF n SKIP LOCKED"))
+            let members: Vec<String> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT n.id FROM nodes n WHERE n.id IN ({MEMBERS}) AND n.id>$2 ORDER BY n.id LIMIT $3 FOR NO KEY UPDATE OF n SKIP LOCKED")))
                 .bind(&target.ca).bind(&target.cursor).bind(PAGE).fetch_all(&mut **tx).await?;
             sqlx::query("SELECT id FROM credentials WHERE id=$1 FOR UPDATE").bind(&target.ca).fetch_optional(&mut **tx).await?;
             sqlx::query("SELECT credential_id FROM mtls_authorities WHERE credential_id=$1 FOR UPDATE").bind(&target.ca).fetch_optional(&mut **tx).await?;
@@ -158,10 +158,10 @@ async fn page(pool: &PgPool, work: &Work) -> Result<bool> {
             let retry: bool = source.get("retry_requested");
             // Garbage membership is also deleted in bounded pages. Final
             // readiness does not depend on these cached membership rows.
-            sqlx::query(&format!("DELETE FROM mtls_rotation_nodes WHERE (rotation_id,node_id) IN (SELECT rotation_id,node_id FROM mtls_rotation_nodes WHERE rotation_id=$2 AND node_id NOT IN ({MEMBERS}) ORDER BY node_id LIMIT $3 FOR UPDATE SKIP LOCKED)"))
+            sqlx::query(sqlx::AssertSqlSafe(format!("DELETE FROM mtls_rotation_nodes WHERE (rotation_id,node_id) IN (SELECT rotation_id,node_id FROM mtls_rotation_nodes WHERE rotation_id=$2 AND node_id NOT IN ({MEMBERS}) ORDER BY node_id LIMIT $3 FOR UPDATE SKIP LOCKED)")))
                 .bind(&target.ca).bind(&target.rotation).bind(PAGE).execute(&mut **tx).await?;
             for node in &members {
-                let proof: bool = sqlx::query_scalar(&format!("SELECT {PROOF} FROM nodes n WHERE n.id=$4"))
+                let proof: bool = sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT {PROOF} FROM nodes n WHERE n.id=$4")))
                     .bind(&target.ca).bind(target.version).bind(now).bind(node).fetch_one(&mut **tx).await?;
                 sqlx::query("INSERT INTO mtls_rotation_nodes(rotation_id,node_id,expected_revision,trust_prepared) SELECT $1,id,desired_revision,$3 FROM nodes WHERE id=$2 ON CONFLICT(rotation_id,node_id) DO UPDATE SET expected_revision=excluded.expected_revision,trust_prepared=excluded.trust_prepared")
                     .bind(&target.rotation).bind(node).bind(proof).execute(&mut **tx).await?;
@@ -180,7 +180,7 @@ async fn page(pool: &PgPool, work: &Work) -> Result<bool> {
                     .bind(&target.rotation).bind(node).bind(job).execute(&mut **tx).await?;
             }
             let last = members.last().map(String::as_str).unwrap_or(&target.cursor);
-            let more: bool = sqlx::query_scalar(&format!("SELECT EXISTS(SELECT 1 FROM ({MEMBERS}) m WHERE node_id>$2)"))
+            let more: bool = sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT EXISTS(SELECT 1 FROM ({MEMBERS}) m WHERE node_id>$2)")))
                 .bind(&target.ca).bind(last).fetch_one(&mut **tx).await?;
             let missing = missing_proof_on(tx, &target.ca, target.version, now).await?;
             let ready = !missing;
@@ -204,9 +204,9 @@ pub(super) async fn missing_proof_on(
     version: i64,
     now: DateTime<Utc>,
 ) -> Result<bool> {
-    Ok(sqlx::query_scalar(&format!(
+    Ok(sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
         "SELECT EXISTS(SELECT 1 FROM nodes n WHERE n.id IN ({MEMBERS}) AND NOT {PROOF})"
-    ))
+    )))
     .bind(ca)
     .bind(version)
     .bind(now)

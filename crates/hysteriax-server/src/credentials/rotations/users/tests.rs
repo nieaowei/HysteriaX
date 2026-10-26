@@ -14,7 +14,7 @@ async fn initialize(state: &AppState, n: i32) {
     sqlx::query("INSERT INTO node_assignments(node_id,user_id,credential_hash,credential_enc,created_at) SELECT 'member-0001',id,'assignment-'||id,$1,now() FROM users").bind(state.secrets.encrypt("fixture-only").unwrap()).execute(&state.pool).await.unwrap();
 }
 async fn count(state: &AppState, query: &str) -> i64 {
-    sqlx::query_scalar(query)
+    sqlx::query_scalar(sqlx::AssertSqlSafe(query))
         .fetch_one(&state.pool)
         .await
         .unwrap()
@@ -756,14 +756,16 @@ async fn direct_rotation_advancement_uses_its_indexed_empty_due_range_despite_ot
         .fetch_one(&state.pool)
         .await
         .unwrap();
-    let plan: Value = sqlx::query_scalar(&format!("EXPLAIN (ANALYZE,FORMAT JSON) {ISSUE_DUE}"))
-        .bind(ISSUE)
-        .bind(&rotation)
-        .bind(PAGE)
-        .bind(now)
-        .fetch_one(&state.pool)
-        .await
-        .unwrap();
+    let plan: Value = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "EXPLAIN (ANALYZE,FORMAT JSON) {ISSUE_DUE}"
+    )))
+    .bind(ISSUE)
+    .bind(&rotation)
+    .bind(PAGE)
+    .bind(now)
+    .fetch_one(&state.pool)
+    .await
+    .unwrap();
     assert!(
         plan.to_string()
             .contains("background_work_rotation_identity_due"),

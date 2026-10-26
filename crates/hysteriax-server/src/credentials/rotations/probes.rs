@@ -192,9 +192,9 @@ async fn page_on(tx: &mut Transaction<'static, Postgres>, work: &Work, audit: &s
         .await?;
     // Cached membership is presentation data. Retire it in bounded pages too,
     // revisiting locked rows before declaring the rotation fully complete.
-    sqlx::query(&format!("DELETE FROM mtls_rotation_nodes WHERE (rotation_id,node_id) IN (SELECT rotation_id,node_id FROM mtls_rotation_nodes WHERE rotation_id=$2 AND node_id NOT IN ({MEMBERS}) ORDER BY node_id LIMIT $3 FOR UPDATE SKIP LOCKED)"))
+    sqlx::query(sqlx::AssertSqlSafe(format!("DELETE FROM mtls_rotation_nodes WHERE (rotation_id,node_id) IN (SELECT rotation_id,node_id FROM mtls_rotation_nodes WHERE rotation_id=$2 AND node_id NOT IN ({MEMBERS}) ORDER BY node_id LIMIT $3 FOR UPDATE SKIP LOCKED)")))
         .bind(&ca).bind(&r).bind(PAGE).execute(&mut **tx).await?;
-    let obsolete:bool=sqlx::query_scalar(&format!("SELECT EXISTS(SELECT 1 FROM mtls_rotation_nodes WHERE rotation_id=$2 AND node_id NOT IN ({MEMBERS}))"))
+    let obsolete:bool=sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT EXISTS(SELECT 1 FROM mtls_rotation_nodes WHERE rotation_id=$2 AND node_id NOT IN ({MEMBERS}))")))
         .bind(&ca).bind(&r).fetch_one(&mut **tx).await?;
     let cursor = work.payload["cursor"]
         .as_str()
@@ -203,7 +203,7 @@ async fn page_on(tx: &mut Transaction<'static, Postgres>, work: &Work, audit: &s
     // or a cached member claims that switching already finished.
     let cache = "EXISTS(SELECT 1 FROM mtls_rotation_nodes rn WHERE rn.rotation_id=$6 AND rn.node_id=n.id AND rn.expected_revision=n.desired_revision AND rn.trust_prepared AND rn.probe_switched)";
     let missing = format!("(NOT {ACTIVE} OR NOT {} OR NOT {cache})", trust::PROOF);
-    let nodes:Vec<String>=sqlx::query_scalar(&format!("SELECT n.id FROM nodes n WHERE n.id IN ({MEMBERS}) AND n.id>$4 AND {missing} ORDER BY n.id LIMIT $5"))
+    let nodes:Vec<String>=sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT n.id FROM nodes n WHERE n.id IN ({MEMBERS}) AND n.id>$4 AND {missing} ORDER BY n.id LIMIT $5")))
             .bind(&ca).bind(v).bind(now).bind(cursor).bind(PAGE).bind(&r).fetch_all(&mut **tx).await?;
     for node in &nodes {
         sqlx::query("INSERT INTO background_work(id,kind,payload) VALUES($1,$2,$3) ON CONFLICT(id) DO UPDATE SET state='queued',finished_at=NULL,error_code=NULL WHERE background_work.kind=excluded.kind AND background_work.state IN ('complete','failed') AND background_work.available_at<=clock_timestamp()")
@@ -213,14 +213,14 @@ async fn page_on(tx: &mut Transaction<'static, Postgres>, work: &Work, audit: &s
         .fetch_one(&mut **tx)
         .await?;
     let missing_proof = trust::missing_proof_on(tx, &ca, v, now).await?;
-    let missing_active: bool = sqlx::query_scalar(&format!(
+    let missing_active: bool = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
         "SELECT EXISTS(SELECT 1 FROM nodes n WHERE n.id IN ({MEMBERS}) AND NOT {ACTIVE})"
-    ))
+    )))
     .bind(&ca)
     .bind(v)
     .fetch_one(&mut **tx)
     .await?;
-    let missing_cache:bool=sqlx::query_scalar(&format!("SELECT EXISTS(SELECT 1 FROM nodes n WHERE n.id IN ({MEMBERS}) AND NOT EXISTS(SELECT 1 FROM mtls_rotation_nodes rn WHERE rn.rotation_id=$2 AND rn.node_id=n.id AND rn.expected_revision=n.desired_revision AND rn.trust_prepared AND rn.probe_switched))"))
+    let missing_cache:bool=sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT EXISTS(SELECT 1 FROM nodes n WHERE n.id IN ({MEMBERS}) AND NOT EXISTS(SELECT 1 FROM mtls_rotation_nodes rn WHERE rn.rotation_id=$2 AND rn.node_id=n.id AND rn.expected_revision=n.desired_revision AND rn.trust_prepared AND rn.probe_switched))")))
         .bind(&ca).bind(&r).fetch_one(&mut **tx).await?;
     let ready = !obsolete
         && !missing_proof
@@ -248,12 +248,12 @@ async fn switch(pool: &PgPool, work: &Work) -> Result<()> {
         let Some((revision,state))=source else {return work.finish_on(tx,false,0,Some("rotation_probe_removed")).await;};
         lock_ca(tx,&ca,&r).await?;
         if !current(tx,&r,&ca,v).await? {return work.finish_on(tx,false,0,Some("rotation_probes_superseded")).await;}
-        let member:bool=sqlx::query_scalar(&format!("SELECT EXISTS(SELECT 1 FROM ({MEMBERS}) m WHERE node_id=$2)")).bind(&ca).bind(node).fetch_one(&mut **tx).await?;
+        let member:bool=sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT EXISTS(SELECT 1 FROM ({MEMBERS}) m WHERE node_id=$2)"))).bind(&ca).bind(node).fetch_one(&mut **tx).await?;
         if !member {return work.finish_on(tx,false,0,Some("rotation_probe_removed")).await;}
         if matches!(state.as_str(),"deleting"|"delete_failed") || !proof_on(tx,node,&ca,v).await? {
             return work.finish_on(tx,true,60,Some("rotation_probe_waiting_proof")).await;
         }
-        let active:bool=sqlx::query_scalar(&format!("SELECT {ACTIVE} FROM nodes n WHERE n.id=$3")).bind(&ca).bind(v).bind(node).fetch_one(&mut **tx).await?;
+        let active:bool=sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT {ACTIVE} FROM nodes n WHERE n.id=$3"))).bind(&ca).bind(v).bind(node).fetch_one(&mut **tx).await?;
         if !active && !switch_probe_on(tx,node,&ca,v).await? {return work.finish_on(tx,true,60,Some("rotation_probe_waiting_proof")).await;}
         sqlx::query("INSERT INTO mtls_rotation_nodes(rotation_id,node_id,expected_revision,trust_prepared,probe_switched) VALUES($1,$2,$3,true,true) ON CONFLICT(rotation_id,node_id) DO UPDATE SET expected_revision=$3,trust_prepared=true,probe_switched=true").bind(&r).bind(node).bind(revision).execute(&mut **tx).await?;
         work.finish_on(tx,false,0,None).await

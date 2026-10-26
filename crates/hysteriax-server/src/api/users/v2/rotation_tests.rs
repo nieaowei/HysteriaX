@@ -191,7 +191,7 @@ async fn rotation_receipt_failure_rolls_back_all_secrets_and_native_retry_commit
                 StatusCode::INTERNAL_SERVER_ERROR
             );
             assert_eq!(snapshot(&state).await, before);
-            sqlx::raw_sql(&format!("DROP TRIGGER reject_rotation_receipt ON management_receipts; CREATE SEQUENCE rotation_receipt_attempt; CREATE FUNCTION retry_rotation_receipt() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF nextval('rotation_receipt_attempt')=1 THEN RAISE EXCEPTION 'native conflict' USING ERRCODE='{code}'; END IF; RETURN NEW; END $$; CREATE TRIGGER retry_rotation_receipt BEFORE UPDATE ON management_receipts FOR EACH ROW EXECUTE FUNCTION retry_rotation_receipt()"))
+            sqlx::raw_sql(sqlx::AssertSqlSafe(format!("DROP TRIGGER reject_rotation_receipt ON management_receipts; CREATE SEQUENCE rotation_receipt_attempt; CREATE FUNCTION retry_rotation_receipt() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF nextval('rotation_receipt_attempt')=1 THEN RAISE EXCEPTION 'native conflict' USING ERRCODE='{code}'; END IF; RETURN NEW; END $$; CREATE TRIGGER retry_rotation_receipt BEFORE UPDATE ON management_receipts FOR EACH ROW EXECUTE FUNCTION retry_rotation_receipt()")))
                 .execute(&state.pool).await.unwrap();
             let response = post(&client, &uri, Some("retry"), 1).await;
             assert_eq!(response.status(), StatusCode::OK);

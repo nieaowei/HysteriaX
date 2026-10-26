@@ -41,7 +41,7 @@ pub(super) async fn snapshot(state: &AppState) -> Value {
 }
 
 pub(super) async fn count(state: &AppState, query: &str) -> i64 {
-    sqlx::query_scalar(query)
+    sqlx::query_scalar(sqlx::AssertSqlSafe(query))
         .fetch_one(&state.pool)
         .await
         .unwrap()
@@ -313,7 +313,7 @@ async fn native_conflicts_retry_each_user_mutation_with_one_business_commit() {
         let state = fixture().await;
         let (base, server) = serve(state.clone()).await;
         let client = client();
-        sqlx::raw_sql(&format!("CREATE SEQUENCE user_receipt_attempt; CREATE FUNCTION retry_user_receipt() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF mod(nextval('user_receipt_attempt'),2)=1 THEN RAISE EXCEPTION 'retry' USING ERRCODE='{code}'; END IF; RETURN NEW; END $$; CREATE TRIGGER retry_user_receipt BEFORE UPDATE ON management_receipts FOR EACH ROW EXECUTE FUNCTION retry_user_receipt()"))
+        sqlx::raw_sql(sqlx::AssertSqlSafe(format!("CREATE SEQUENCE user_receipt_attempt; CREATE FUNCTION retry_user_receipt() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF mod(nextval('user_receipt_attempt'),2)=1 THEN RAISE EXCEPTION 'retry' USING ERRCODE='{code}'; END IF; RETURN NEW; END $$; CREATE TRIGGER retry_user_receipt BEFORE UPDATE ON management_receipts FOR EACH ROW EXECUTE FUNCTION retry_user_receipt()")))
             .execute(&state.pool).await.unwrap();
         assert_eq!(
             client

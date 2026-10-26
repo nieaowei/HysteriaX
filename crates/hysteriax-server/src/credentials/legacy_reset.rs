@@ -79,7 +79,7 @@ pub async fn reset(tx: &mut Transaction<'_, Postgres>, secrets: &SecretBox) -> R
             }
             if changed {
                 let query = format!("UPDATE nodes SET {field}=$2 WHERE id=$1");
-                sqlx::query(&query)
+                sqlx::query(sqlx::AssertSqlSafe(query.as_str()))
                     .bind(&id)
                     .bind(secrets.encrypt(&value.to_string())?)
                     .execute(&mut **tx)

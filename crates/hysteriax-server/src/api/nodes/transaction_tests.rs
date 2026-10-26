@@ -19,7 +19,7 @@ pub(super) async fn fixture() -> (AppState, String) {
     (state, node)
 }
 async fn count(state: &AppState, sql: &str) -> i64 {
-    sqlx::query_scalar(sql)
+    sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
         .fetch_one(&state.pool)
         .await
         .unwrap()

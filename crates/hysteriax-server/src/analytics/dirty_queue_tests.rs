@@ -100,10 +100,11 @@ async fn statistics_queues_are_bounded_and_acknowledgements_roll_back_with_resul
         "online_dirty_minutes",
         "job_retry_state_dirty",
     ] {
-        let count: i64 = sqlx::query_scalar(&format!("SELECT count(*) FROM {table}"))
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+        let count: i64 =
+            sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT count(*) FROM {table}")))
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert_eq!(count, 300, "rollback of {table}");
     }
     let mut tx = pool.begin().await.unwrap();
@@ -115,10 +116,11 @@ async fn statistics_queues_are_bounded_and_acknowledgements_roll_back_with_resul
         "online_dirty_minutes",
         "job_retry_state_dirty",
     ] {
-        let count: i64 = sqlx::query_scalar(&format!("SELECT count(*) FROM {table}"))
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+        let count: i64 =
+            sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT count(*) FROM {table}")))
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert_eq!(count, 44, "bounded acknowledgement of {table}");
     }
     refresh(&pool).await.unwrap();
@@ -284,9 +286,9 @@ async fn migration_preserves_pending_keys_and_source_content() {
     ];
     let mut saved = Vec::new();
     for table in tables {
-        let value: Value = sqlx::query_scalar(&format!(
+        let value: Value = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
             "SELECT jsonb_agg(to_jsonb(d) ORDER BY to_jsonb(d)::text) FROM {table} d"
-        ))
+        )))
         .fetch_one(&pool)
         .await
         .unwrap();
@@ -311,7 +313,7 @@ async fn migration_preserves_pending_keys_and_source_content() {
         "migration must preserve usage, ciphertext and historical samples"
     );
     for (table, before) in tables.into_iter().zip(saved) {
-        let value:Value=sqlx::query_scalar(&format!("SELECT jsonb_agg(to_jsonb(d)-'generation' ORDER BY (to_jsonb(d)-'generation')::text) FROM {table} d")).fetch_one(&pool).await.unwrap();
+        let value:Value=sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT jsonb_agg(to_jsonb(d)-'generation' ORDER BY (to_jsonb(d)-'generation')::text) FROM {table} d"))).fetch_one(&pool).await.unwrap();
         assert_eq!(value, before, "{table}");
     }
     let count: i64 =

@@ -176,7 +176,7 @@ async fn send(client: &Client, base: &str, case: &Case, key: Option<&str>) -> re
     request.send().await.unwrap()
 }
 async fn count(state: &AppState, query: &str) -> i64 {
-    sqlx::query_scalar(query)
+    sqlx::query_scalar(sqlx::AssertSqlSafe(query))
         .fetch_one(&state.pool)
         .await
         .unwrap()
@@ -203,10 +203,10 @@ async fn snapshot(state: &AppState, exclude_failure_audit: bool) -> Value {
         };
         format!("SELECT '{t}' AS kind,coalesce(jsonb_agg(to_jsonb(t) ORDER BY to_jsonb(t)::text),'[]'::jsonb) AS data FROM {t} t{predicate}")
     }).collect();
-    sqlx::query_scalar(&format!(
+    sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
         "SELECT jsonb_object_agg(kind,data) FROM ({}) snapshots",
         parts.join(" UNION ALL ")
-    ))
+    )))
     .fetch_one(&state.pool)
     .await
     .unwrap()
@@ -342,7 +342,7 @@ async fn ten_receipt_failures_roll_back_all_business_and_native_conflicts_commit
                 .await,
                 audit_version + failed
             );
-            sqlx::raw_sql(&format!("CREATE SEQUENCE template_attempt; CREATE OR REPLACE FUNCTION reject_template_receipt() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF nextval('template_attempt')=1 THEN RAISE EXCEPTION 'retry' USING ERRCODE='{code}'; END IF; RETURN NEW; END $$"))
+            sqlx::raw_sql(sqlx::AssertSqlSafe(format!("CREATE SEQUENCE template_attempt; CREATE OR REPLACE FUNCTION reject_template_receipt() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF nextval('template_attempt')=1 THEN RAISE EXCEPTION 'retry' USING ERRCODE='{code}'; END IF; RETURN NEW; END $$")))
                 .execute(&state.pool).await.unwrap();
             let response = send(&client, &base, &case, Some("retry")).await;
             assert_eq!(response.status(), case.status, "kind {kind}, code {code}");

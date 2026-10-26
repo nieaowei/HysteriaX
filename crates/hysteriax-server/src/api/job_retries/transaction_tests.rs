@@ -41,7 +41,7 @@ async fn submit(state: &AppState, job: &str) -> Result<(StatusCode, Json<Value>)
     .await
 }
 async fn count(state: &AppState, sql: &str) -> i64 {
-    sqlx::query_scalar(sql)
+    sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
         .fetch_one(&state.pool)
         .await
         .unwrap()

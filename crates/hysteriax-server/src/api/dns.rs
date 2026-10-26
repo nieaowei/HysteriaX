@@ -179,9 +179,9 @@ pub(crate) async fn list_records(
     let search = query.q.as_deref().unwrap_or("").trim();
     let filter = "($1::text IS NULL OR r.zone_id=$1) AND ($2::text IS NULL OR z.connection_id=$2) AND ($3 = '' OR strpos(lower(r.name),lower($3)) > 0 OR strpos(lower(r.content),lower($3)) > 0 OR strpos(lower(r.id),lower($3)) > 0) AND (r.deleted_at IS NULL OR EXISTS(SELECT 1 FROM dns_bindings b WHERE b.record_ids ? r.id))";
     let mut tx = crate::read_snapshot::begin(&state.pool).await?;
-    let total: i64 = sqlx::query_scalar(&format!(
+    let total: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
         "SELECT count(*) FROM dns_records r JOIN dns_zones z ON z.id=r.zone_id WHERE {filter}"
-    ))
+    )))
     .bind(zone)
     .bind(connection)
     .bind(search)
@@ -196,7 +196,7 @@ pub(crate) async fn list_records(
         )
     };
     // Preserve the complete directory's visibility and node-binding rules.
-    let rows = sqlx::query(&format!("SELECT r.*,(SELECT n.id FROM nodes n WHERE EXISTS(SELECT 1 FROM dns_bindings b WHERE b.node_id=n.id AND b.record_ids ? r.id) OR n.published_connection->>'public_host'=r.name LIMIT 1) AS bound_node_id FROM dns_records r JOIN dns_zones z ON z.id=r.zone_id WHERE {filter} ORDER BY {order_by} LIMIT $4 OFFSET $5"))
+    let rows = sqlx::query(sqlx::AssertSqlSafe(format!("SELECT r.*,(SELECT n.id FROM nodes n WHERE EXISTS(SELECT 1 FROM dns_bindings b WHERE b.node_id=n.id AND b.record_ids ? r.id) OR n.published_connection->>'public_host'=r.name LIMIT 1) AS bound_node_id FROM dns_records r JOIN dns_zones z ON z.id=r.zone_id WHERE {filter} ORDER BY {order_by} LIMIT $4 OFFSET $5")))
         .bind(zone).bind(connection).bind(search).bind(page_size).bind((page - 1) * page_size)
         .fetch_all(&mut *tx).await?;
     tx.commit().await?;

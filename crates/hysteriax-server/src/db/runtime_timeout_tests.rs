@@ -145,7 +145,7 @@ async fn runtime_timeouts_are_disabled_for_migration_and_restored_after_success_
             10000 + i64::from(fail),
             "timeout fixture".into(),
             MigrationType::Simple,
-            sql.into(),
+            sqlx::SqlSafeStr::into_sql_str(sqlx::AssertSqlSafe(sql)),
             false,
         );
         let migrator = Migrator {
@@ -153,6 +153,7 @@ async fn runtime_timeouts_are_disabled_for_migration_and_restored_after_success_
             ignore_missing: true,
             locking: true,
             no_tx: false,
+            ..Migrator::DEFAULT
         };
         let result = migrate_with(&runtime, &migrator).await;
         assert_eq!(result.is_err(), fail);

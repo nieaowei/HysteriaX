@@ -52,7 +52,10 @@ async fn snapshot(pool: &PgPool) -> Value {
     sqlx::query_scalar("SELECT jsonb_build_object('nodes',(SELECT jsonb_agg(to_jsonb(n) ORDER BY id) FROM nodes n),'activations',(SELECT jsonb_agg(to_jsonb(a) ORDER BY id) FROM mtls_activations a),'trust',(SELECT jsonb_agg(to_jsonb(t) ORDER BY activation_id,ca_id,ca_version) FROM mtls_activation_trust t))").fetch_one(pool).await.unwrap()
 }
 async fn count(pool: &PgPool, q: &str) -> i64 {
-    sqlx::query_scalar(q).fetch_one(pool).await.unwrap()
+    sqlx::query_scalar(sqlx::AssertSqlSafe(q))
+        .fetch_one(pool)
+        .await
+        .unwrap()
 }
 
 #[tokio::test]

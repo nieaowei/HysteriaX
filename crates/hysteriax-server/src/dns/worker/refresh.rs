@@ -26,7 +26,7 @@ async fn connection_on(
         "SELECT to_jsonb(c)-'updated_at'-'verified_at' FROM dns_connections c WHERE id=$1 FOR {}",
         if exclusive { "NO KEY UPDATE" } else { "SHARE" }
     );
-    Ok(sqlx::query_scalar(&statement)
+    Ok(sqlx::query_scalar(sqlx::AssertSqlSafe(statement.as_str()))
         .bind(id)
         .fetch_one(&mut **tx)
         .await?)

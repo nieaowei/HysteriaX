@@ -20,7 +20,7 @@ async fn add_leaf(pool: &PgPool, id: &str, expired: i64) {
         .bind(id).bind(expired+1).execute(pool).await.unwrap();
 }
 async fn count(state: &AppState, query: &str) -> i64 {
-    sqlx::query_scalar(query)
+    sqlx::query_scalar(sqlx::AssertSqlSafe(query))
         .fetch_one(&state.pool)
         .await
         .unwrap()

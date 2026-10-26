@@ -50,7 +50,7 @@ async fn send(
         .unwrap()
 }
 async fn count(state: &AppState, query: &str) -> i64 {
-    sqlx::query_scalar(query)
+    sqlx::query_scalar(sqlx::AssertSqlSafe(query))
         .fetch_one(&state.pool)
         .await
         .unwrap()
@@ -71,10 +71,10 @@ async fn snapshot(state: &AppState) -> Value {
         "cache_bucket_versions",
     ];
     let parts:Vec<String>=tables.iter().map(|t|format!("SELECT '{t}' AS kind,coalesce(jsonb_agg(to_jsonb(t) ORDER BY to_jsonb(t)::text),'[]'::jsonb) AS data FROM {t} t")).collect();
-    sqlx::query_scalar(&format!(
+    sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
         "SELECT jsonb_object_agg(kind,data) FROM ({}) snapshots",
         parts.join(" UNION ALL ")
-    ))
+    )))
     .fetch_one(&state.pool)
     .await
     .unwrap()
@@ -220,7 +220,7 @@ async fn receipt_failure_rolls_back_dns_creation_and_patch_then_native_retry_com
             StatusCode::INTERNAL_SERVER_ERROR
         );
         assert_eq!(snapshot(&state).await, before);
-        sqlx::raw_sql(&format!("DROP TRIGGER fail_creation_receipt ON management_receipts; CREATE SEQUENCE creation_attempt; CREATE FUNCTION retry_creation_receipt() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF mod(nextval('creation_attempt'),2)=1 THEN RAISE EXCEPTION 'retry' USING ERRCODE='{code}'; END IF; RETURN NEW; END $$; CREATE TRIGGER retry_creation_receipt BEFORE UPDATE ON management_receipts FOR EACH ROW EXECUTE FUNCTION retry_creation_receipt()"))
+        sqlx::raw_sql(sqlx::AssertSqlSafe(format!("DROP TRIGGER fail_creation_receipt ON management_receipts; CREATE SEQUENCE creation_attempt; CREATE FUNCTION retry_creation_receipt() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF mod(nextval('creation_attempt'),2)=1 THEN RAISE EXCEPTION 'retry' USING ERRCODE='{code}'; END IF; RETURN NEW; END $$; CREATE TRIGGER retry_creation_receipt BEFORE UPDATE ON management_receipts FOR EACH ROW EXECUTE FUNCTION retry_creation_receipt()")))
             .execute(&state.pool).await.unwrap();
         let response = send(&client, Method::POST, &base, "admin", "create", &input).await;
         assert_eq!(response.status(), StatusCode::CREATED);

@@ -21,7 +21,7 @@ async fn capture(state: &AppState, id: &str, node: &str, users: usize, tx: i64) 
         .unwrap();
 }
 async fn number(state: &AppState, sql: &str) -> i64 {
-    sqlx::query_scalar(sql)
+    sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
         .fetch_one(&state.pool)
         .await
         .unwrap()

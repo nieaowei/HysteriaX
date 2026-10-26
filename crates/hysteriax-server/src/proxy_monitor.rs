@@ -229,8 +229,11 @@ async fn cleanup_work(state: &AppState, work: &crate::background::maintenance::W
                     .bind(age_days)
                     .fetch_one(&mut **tx)
                     .await?;
-            sqlx::query(&delete).bind(cutoff).execute(&mut **tx).await?;
-            let more: bool = sqlx::query_scalar(&remaining)
+            sqlx::query(sqlx::AssertSqlSafe(delete.as_str()))
+                .bind(cutoff)
+                .execute(&mut **tx)
+                .await?;
+            let more: bool = sqlx::query_scalar(sqlx::AssertSqlSafe(remaining.as_str()))
                 .bind(cutoff)
                 .fetch_one(&mut **tx)
                 .await?;
@@ -665,8 +668,8 @@ mod tests {
     async fn retention_preserves_accounting_and_removes_only_old_monitoring() {
         let (state, node) = fixture().await;
         for at in ["now()-interval '31 days'", "now()"] {
-            sqlx::query(&format!("INSERT INTO online_samples(cycle_id,node_id,sampled_at,status) VALUES($1,$2,{at},'ok')")).bind(Uuid::new_v4()).bind(&node).execute(&state.pool).await.unwrap();
-            sqlx::query(&format!("INSERT INTO proxy_probe_samples(node_id,revision,sampled_at,status) VALUES($1,1,{at},'ok')")).bind(&node).execute(&state.pool).await.unwrap();
+            sqlx::query(sqlx::AssertSqlSafe(format!("INSERT INTO online_samples(cycle_id,node_id,sampled_at,status) VALUES($1,$2,{at},'ok')"))).bind(Uuid::new_v4()).bind(&node).execute(&state.pool).await.unwrap();
+            sqlx::query(sqlx::AssertSqlSafe(format!("INSERT INTO proxy_probe_samples(node_id,revision,sampled_at,status) VALUES($1,1,{at},'ok')"))).bind(&node).execute(&state.pool).await.unwrap();
         }
         sqlx::query("INSERT INTO node_network_samples(node_id,period_id,delta_tx,delta_rx,sampled_at) VALUES($1,'billing',10,20,now()-interval '31 days')").bind(&node).execute(&state.pool).await.unwrap();
         cleanup(&state).await.unwrap();
@@ -675,10 +678,11 @@ mod tests {
             "proxy_probe_samples",
             "node_network_samples",
         ] {
-            let count: i64 = sqlx::query_scalar(&format!("SELECT count(*) FROM {table}"))
-                .fetch_one(&state.pool)
-                .await
-                .unwrap();
+            let count: i64 =
+                sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT count(*) FROM {table}")))
+                    .fetch_one(&state.pool)
+                    .await
+                    .unwrap();
             assert_eq!(count, 1);
         }
     }
@@ -880,7 +884,7 @@ mod tests {
         );
     }
     async fn number(state: &AppState, query: &str) -> i64 {
-        sqlx::query_scalar(query)
+        sqlx::query_scalar(sqlx::AssertSqlSafe(query))
             .fetch_one(&state.pool)
             .await
             .unwrap()

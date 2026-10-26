@@ -96,9 +96,8 @@ where
 {
     for attempt in 0..=5 {
         let result = async {
-            let mut tx = pool.begin().await.map_err(E::from)?;
-            sqlx::query("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
-                .execute(&mut *tx)
+            let mut tx = pool
+                .begin_with("BEGIN ISOLATION LEVEL SERIALIZABLE")
                 .await
                 .map_err(E::from)?;
             crate::execution::guard_current(&mut tx)
@@ -144,9 +143,8 @@ where
 {
     for attempt in 0..=5 {
         let result = async {
-            let mut tx = pool.begin().await.map_err(E::from)?;
-            sqlx::query("SET TRANSACTION ISOLATION LEVEL READ COMMITTED")
-                .execute(&mut *tx)
+            let mut tx = pool
+                .begin_with("BEGIN ISOLATION LEVEL READ COMMITTED")
                 .await
                 .map_err(E::from)?;
             crate::execution::guard_current(&mut tx)
@@ -223,7 +221,7 @@ pub async fn test_pool_through_version(max_connections: u32, through_version: i6
     let mut admin = PgConnection::connect(&database_url)
         .await
         .expect("connect to test PostgreSQL database");
-    sqlx::query(&format!("CREATE SCHEMA {schema}"))
+    sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
         .execute(&mut admin)
         .await
         .expect("create isolated PostgreSQL test schema");
@@ -235,7 +233,7 @@ pub async fn test_pool_through_version(max_connections: u32, through_version: i6
         .after_connect(move |connection, _| {
             let schema = connection_schema.clone();
             Box::pin(async move {
-                sqlx::query(&format!("SET search_path TO {schema}"))
+                sqlx::query(sqlx::AssertSqlSafe(format!("SET search_path TO {schema}")))
                     .execute(&mut *connection)
                     .await?;
                 sqlx::query("SET lock_timeout = '1s'")
@@ -262,6 +260,7 @@ pub async fn test_pool_through_version(max_connections: u32, through_version: i6
         ignore_missing: false,
         locking: true,
         no_tx: false,
+        ..Migrator::DEFAULT
     };
     migrate_with(&pool, &migrator)
         .await

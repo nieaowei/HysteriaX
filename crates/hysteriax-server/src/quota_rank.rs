@@ -196,10 +196,12 @@ impl QuotaRank {
         };
         let ids: Vec<String> = changes.iter().map(|(id, _)| id.clone()).collect();
         let rows: Vec<Entry> = if frontier.is_some() {
-            sqlx::query_as(&format!("{ROWS} AND n.id=ANY($1::text[])"))
-                .bind(&ids)
-                .fetch_all(&mut *connection)
-                .await?
+            sqlx::query_as(sqlx::AssertSqlSafe(format!(
+                "{ROWS} AND n.id=ANY($1::text[])"
+            )))
+            .bind(&ids)
+            .fetch_all(&mut *connection)
+            .await?
         } else {
             sqlx::query_as(ROWS).fetch_all(&mut *connection).await?
         };

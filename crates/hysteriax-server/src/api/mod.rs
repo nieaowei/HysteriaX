@@ -549,15 +549,17 @@ async fn list_jobs(
             .fetch_one(&mut *tx)
             .await?
     } else {
-        sqlx::query_scalar(&format!("SELECT count(*) FROM jobs j WHERE {filter}"))
-            .bind(&pattern)
-            .fetch_one(&mut *tx)
-            .await?
+        sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+            "SELECT count(*) FROM jobs j WHERE {filter}"
+        )))
+        .bind(&pattern)
+        .fetch_one(&mut *tx)
+        .await?
     };
     let page_count = ((total + page_size - 1) / page_size).max(1);
     let page = requested_page.min(page_count);
     // Only validated SQL fragments are interpolated; all user values are bound.
-    let rows = sqlx::query(&format!("SELECT j.*, (SELECT child.id FROM jobs child WHERE child.retry_of_job_id=j.id) retry_job_id FROM jobs j WHERE {filter} ORDER BY {sort} {order}, j.id {order} LIMIT $2 OFFSET $3"))
+    let rows = sqlx::query(sqlx::AssertSqlSafe(format!("SELECT j.*, (SELECT child.id FROM jobs child WHERE child.retry_of_job_id=j.id) retry_job_id FROM jobs j WHERE {filter} ORDER BY {sort} {order}, j.id {order} LIMIT $2 OFFSET $3")))
         .bind(&pattern).bind(page_size).bind((page - 1) * page_size)
         .fetch_all(&mut *tx).await?;
     tx.commit().await?;
@@ -701,9 +703,9 @@ async fn list_audit_records(
             .fetch_one(&mut *tx)
             .await?
     } else {
-        sqlx::query_scalar(&format!(
+        sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
             "SELECT count(*) FROM audit_records a WHERE {filter}"
-        ))
+        )))
         .bind(&pattern)
         .bind(&actions)
         .bind(&entity_types)
@@ -712,7 +714,7 @@ async fn list_audit_records(
         .await?
     };
     let page = requested_page.min(((total + page_size - 1) / page_size).max(1));
-    let rows = sqlx::query(&format!("SELECT a.* FROM audit_records a WHERE {filter} ORDER BY {sort} {order}, a.id {order} LIMIT $5 OFFSET $6"))
+    let rows = sqlx::query(sqlx::AssertSqlSafe(format!("SELECT a.* FROM audit_records a WHERE {filter} ORDER BY {sort} {order}, a.id {order} LIMIT $5 OFFSET $6")))
         .bind(&pattern).bind(&actions).bind(&entity_types).bind(&actors).bind(page_size).bind((page - 1) * page_size)
         .fetch_all(&mut *tx).await?;
     tx.commit().await?;

@@ -79,7 +79,7 @@ async fn fixture_through(n: i32, version: i64) -> (AppState, String) {
     (state, ca)
 }
 async fn count(state: &AppState, sql: &str) -> i64 {
-    sqlx::query_scalar(sql)
+    sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
         .fetch_one(&state.pool)
         .await
         .unwrap()
@@ -480,13 +480,14 @@ async fn empty_due_range_uses_the_due_index_with_many_future_probes() {
         .fetch_one(&state.pool)
         .await
         .unwrap();
-    let plan: serde_json::Value =
-        sqlx::query_scalar(&format!("EXPLAIN (ANALYZE,BUFFERS,FORMAT JSON) {DUE}"))
-            .bind(now)
-            .bind(PAGE)
-            .fetch_one(&state.pool)
-            .await
-            .unwrap();
+    let plan: serde_json::Value = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "EXPLAIN (ANALYZE,BUFFERS,FORMAT JSON) {DUE}"
+    )))
+    .bind(now)
+    .bind(PAGE)
+    .fetch_one(&state.pool)
+    .await
+    .unwrap();
     fn indexed_empty(plan: &serde_json::Value) -> bool {
         if plan["Index Name"] == "mtls_probe_versions_due"
             && plan["Actual Rows"].as_f64() == Some(0.0)

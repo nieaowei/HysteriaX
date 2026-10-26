@@ -30,7 +30,7 @@ async fn fixture() -> (crate::state::AppState, String, String) {
         .after_connect(move |connection, _| {
             let schema = schema.clone();
             Box::pin(async move {
-                sqlx::query(&format!("SET search_path TO {schema}"))
+                sqlx::query(sqlx::AssertSqlSafe(format!("SET search_path TO {schema}")))
                     .execute(&mut *connection)
                     .await?;
                 sqlx::query("SET lock_timeout='1s'")

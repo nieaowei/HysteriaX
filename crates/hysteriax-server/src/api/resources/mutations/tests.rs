@@ -59,7 +59,7 @@ async fn delete(
 }
 
 async fn count(state: &AppState, query: &str) -> i64 {
-    sqlx::query_scalar(query)
+    sqlx::query_scalar(sqlx::AssertSqlSafe(query))
         .fetch_one(&state.pool)
         .await
         .unwrap()
@@ -249,7 +249,7 @@ async fn receipt_failure_rolls_back_resources_audit_and_cache_then_native_retry_
             StatusCode::INTERNAL_SERVER_ERROR
         );
         assert_eq!(snapshot(&state).await, before);
-        sqlx::raw_sql(&format!("DROP TRIGGER reject_resource_receipt ON management_receipts; CREATE SEQUENCE resource_receipt_attempt; CREATE FUNCTION retry_resource_receipt() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF mod(nextval('resource_receipt_attempt'),2)=1 THEN RAISE EXCEPTION 'retry' USING ERRCODE='{code}'; END IF; RETURN NEW; END $$; CREATE TRIGGER retry_resource_receipt BEFORE UPDATE ON management_receipts FOR EACH ROW EXECUTE FUNCTION retry_resource_receipt()"))
+        sqlx::raw_sql(sqlx::AssertSqlSafe(format!("DROP TRIGGER reject_resource_receipt ON management_receipts; CREATE SEQUENCE resource_receipt_attempt; CREATE FUNCTION retry_resource_receipt() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF mod(nextval('resource_receipt_attempt'),2)=1 THEN RAISE EXCEPTION 'retry' USING ERRCODE='{code}'; END IF; RETURN NEW; END $$; CREATE TRIGGER retry_resource_receipt BEFORE UPDATE ON management_receipts FOR EACH ROW EXECUTE FUNCTION retry_resource_receipt()")))
             .execute(&state.pool).await.unwrap();
         assert_eq!(
             post(&client, &base, "upload", "new.bin").await.status(),

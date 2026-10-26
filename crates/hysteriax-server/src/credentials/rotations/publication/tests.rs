@@ -40,7 +40,7 @@ async fn publish(state: &AppState, ca: &str, rotation: &str) {
         .unwrap();
 }
 async fn count(state: &AppState, query: &str) -> i64 {
-    sqlx::query_scalar(query)
+    sqlx::query_scalar(sqlx::AssertSqlSafe(query))
         .fetch_one(&state.pool)
         .await
         .unwrap()
@@ -530,15 +530,17 @@ async fn completed_schedule_markers_use_an_empty_index_range_instead_of_revisiti
         .execute(&state.pool)
         .await
         .unwrap();
-    let plan: Value = sqlx::query_scalar(&format!("EXPLAIN (ANALYZE,FORMAT JSON) {PENDING}"))
-        .bind(&ca)
-        .bind(2_i64)
-        .bind(-1_i64)
-        .bind("")
-        .bind(PAGE)
-        .fetch_one(&state.pool)
-        .await
-        .unwrap();
+    let plan: Value = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "EXPLAIN (ANALYZE,FORMAT JSON) {PENDING}"
+    )))
+    .bind(&ca)
+    .bind(2_i64)
+    .bind(-1_i64)
+    .bind("")
+    .bind(PAGE)
+    .fetch_one(&state.pool)
+    .await
+    .unwrap();
     assert!(
         plan.to_string().contains("mtls_identity_schedule_pending"),
         "{plan}"

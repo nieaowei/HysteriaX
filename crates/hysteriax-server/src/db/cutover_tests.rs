@@ -7,7 +7,7 @@ async fn snapshot(pool: &PgPool) -> Vec<(String, Value)> {
     let mut result = vec![];
     for table in tables {
         let quoted = table.replace('"', "\"\"");
-        let data:Value=sqlx::query_scalar(&format!("SELECT coalesce(jsonb_agg(to_jsonb(r) ORDER BY to_jsonb(r)::text),'[]'::jsonb) FROM \"{quoted}\" r"))
+        let data:Value=sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT coalesce(jsonb_agg(to_jsonb(r) ORDER BY to_jsonb(r)::text),'[]'::jsonb) FROM \"{quoted}\" r")))
             .fetch_one(pool).await.unwrap();
         result.push((table, data));
     }

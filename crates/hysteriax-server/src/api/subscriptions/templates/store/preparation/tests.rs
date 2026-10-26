@@ -21,7 +21,7 @@ async fn native_conflict_retries_reuse_the_prepared_identifier_and_ciphertext() 
             },
         )
         .unwrap();
-        sqlx::raw_sql(&format!("CREATE SEQUENCE creation_attempt; CREATE FUNCTION retry_template_creation() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.action='template.created' AND nextval('creation_attempt')=1 THEN RAISE EXCEPTION 'retry' USING ERRCODE='{code}'; END IF; RETURN NEW; END $$; CREATE TRIGGER retry_template_creation BEFORE INSERT ON audit_records FOR EACH ROW EXECUTE FUNCTION retry_template_creation()"))
+        sqlx::raw_sql(sqlx::AssertSqlSafe(format!("CREATE SEQUENCE creation_attempt; CREATE FUNCTION retry_template_creation() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.action='template.created' AND nextval('creation_attempt')=1 THEN RAISE EXCEPTION 'retry' USING ERRCODE='{code}'; END IF; RETURN NEW; END $$; CREATE TRIGGER retry_template_creation BEFORE INSERT ON audit_records FOR EACH ROW EXECUTE FUNCTION retry_template_creation()")))
             .execute(&state.pool).await.unwrap();
         let (status, Json(result)) = db::serializable::<_, ApiError, _>(&state.pool, |tx| {
             let prepared = prepared.clone();
