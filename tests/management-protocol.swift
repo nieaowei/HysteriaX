@@ -21,10 +21,14 @@ private final class ProtocolTransport: URLProtocol, @unchecked Sendable {
         var headSequence: Int64 = 0
         var failGroups = false
         var failedGroupsReads = 0
-        func reset(lost: Int = 0, statuses: [Int] = [], corrupt: Bool = false, events: String = "", store: Bool = false) {
+        var failurePath: String?
+        var feature: String?
+        func reset(lost: Int = 0, statuses: [Int] = [], corrupt: Bool = false, events: String = "", store: Bool = false, failurePath: String? = nil, feature: String? = nil) {
             lock.lock(); defer { lock.unlock() }
             self.lost=lost; self.statuses=statuses; self.corrupt=corrupt; self.events=events
             writes=0; requests=[]; receipts=[:]; storeMode=store; failState=false; failedStateReads=0
+            self.failurePath=failurePath; self.feature=feature
+            resetNextStream=false; headSequence=0; failGroups=false; failedGroupsReads=0
         }
         func recorded() -> [URLRequest] { lock.lock(); defer { lock.unlock() }; return requests }
         func commits() -> Int { lock.lock(); defer { lock.unlock() }; return writes }
@@ -48,10 +52,13 @@ private final class ProtocolTransport: URLProtocol, @unchecked Sendable {
                 return .response(200,Data(events.utf8),"text/event-stream")
             }
             if storeMode {
+                if path == failurePath {
+                    return .response(503,Data("{\"error\":{\"code\":\"fixture_failure\",\"message\":\"fixture refresh unavailable\"}}".utf8),"application/json")
+                }
                 if path.hasSuffix("/events/head") { return .response(200,try! JSONSerialization.data(withJSONObject:["cursor":"v2:77777777-7777-4777-8777-777777777777:\(headSequence)","epoch":"77777777-7777-4777-8777-777777777777","publication_seq":headSequence]),"application/json") }
                 if path.hasSuffix("/authorization-groups"), failGroups { failedGroupsReads += 1; return .response(503,Data(),"application/json") }
                 if path.hasSuffix("/authorization-groups") { return .response(200,Data("[]".utf8),"application/json") }
-                if path.hasSuffix("/version") { return .response(200,Data("{\"api_version\":\"2.0.0\",\"management_protocol\":2,\"current_admin_token_id\":\"fixture-admin\",\"directory_version\":\"b3:test\",\"service_version\":\"test\",\"hysteria_version\":\"test\",\"mihomo_version\":\"test\",\"features\":[]}".utf8),"application/json") }
+                if path.hasSuffix("/version") { return .response(200,Data("{\"api_version\":\"2.0.0\",\"management_protocol\":2,\"current_admin_token_id\":\"fixture-admin\",\"directory_version\":\"b3:test\",\"service_version\":\"test\",\"hysteria_version\":\"test\",\"mihomo_version\":\"test\",\"features\":\(feature.map { "[\"\($0)\"]" } ?? "[]")}".utf8),"application/json") }
                 if path == "/readyz" { return .response(200,Data("{\"status\":\"ok\"}".utf8),"application/json") }
                 if path.hasSuffix("/users"), failState { failedStateReads += 1; return .response(503,Data(),"application/json") }
                 if path.hasSuffix("/tokens") { return .response(200,Data("[]".utf8),"application/json") }
@@ -200,6 +207,7 @@ struct ManagementProtocolChecks {
         ProtocolTransport.backend.reset(statuses:[410])
         do {_ = try await client.events(APIOperation<NoRequest,NoResponse>(method:"GET",path:"api/v2/events",queryParameters:[:]),lastEventID:nil);preconditionFailure("410 must request a full resync")}
         catch APIClientError.eventCursorExpired {}
+        try await connectionFailureChecks(session:transport)
         try await acknowledgementCheck(session:transport)
         print("management protocol: stable write recovery, bounded journal, SSE parsing and acknowledgement passed")
     }
@@ -231,6 +239,45 @@ struct ManagementProtocolChecks {
         for line in ["id: \(valid)","event: stream.cursor","data: {\"cursor\":\"wrong\"}"] {_ = try invalid.append(line)}
         do {_ = try invalid.append("");preconditionFailure("checkpoint mismatch accepted")}
         catch is APIClientError {}
+    }
+
+    @MainActor static func connectionFailureChecks(session: URLSession) async throws {
+        let previousAddress = UserDefaults.standard.object(forKey: "serviceAddress")
+        defer {
+            if let previousAddress { UserDefaults.standard.set(previousAddress, forKey: "serviceAddress") }
+            else { UserDefaults.standard.removeObject(forKey: "serviceAddress") }
+        }
+        let cases: [(String, String?)] = [
+            ("/api/v2/users", nil),
+            ("/api/v2/client/summary", "client_summary"),
+            ("/api/v2/authorization-groups", nil),
+            ("/api/v2/overview", "overview_monitoring"),
+            ("/api/v2/dns/connections", "dns_management"),
+        ]
+        for (path, feature) in cases {
+            let address = "https://failure-\(UUID().uuidString.lowercased()).invalid"
+            let cursorKey = ManagementStore.eventCursorStorageKey(service: address, actor: "fixture-admin")
+            defer {
+                for prefix in ["displaySnapshot.", "dnsDisplaySnapshot."] {
+                    UserDefaults.standard.removeObject(forKey: prefix + address)
+                }
+                UserDefaults.standard.removeObject(forKey: cursorKey)
+            }
+            ProtocolTransport.backend.reset(store: true, failurePath: path, feature: feature)
+            let notifications = NodeAlertNotifications(transport: SilentNotifications(), defaults: UserDefaults(suiteName: "hysteriax.protocol.notifications")!)
+            let store = ManagementStore(restoreSnapshot: false, nodeNotifications: notifications)
+            do {
+                try await store.connect(serviceAddress: address, token: "test-store-token", session: session)
+                preconditionFailure("failed refresh must reject connection: \(path)")
+            } catch {
+                let expected = feature == "overview_monitoring"
+                    ? L10n.text("概览监控暂不可用：{0}", "fixture refresh unavailable")
+                    : "fixture refresh unavailable"
+                precondition(error.localizedDescription == expected, "lost original error for \(path): \(error)")
+                precondition(store.errorMessage == error.localizedDescription && !store.isConnected)
+                precondition(UserDefaults.standard.string(forKey: cursorKey) == nil, "failed refresh must not acknowledge a head")
+            }
+        }
     }
 
     @MainActor static func acknowledgementCheck(session:URLSession) async throws {

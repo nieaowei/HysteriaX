@@ -364,20 +364,9 @@ async fn require_admin(
     };
     let id: String = actor.get("id");
     if actor.get::<bool, _>("usage_due") {
-        // Usage metadata must not turn a read request into a blocking writer.
-        // Authentication and revocation are checked by the SELECT above.
-        // Metadata is optional: bound both pool admission and database work.
-        // Dropping a timed-out transaction rolls it back before pool reuse.
-        let touched = tokio::time::timeout(
-            Duration::from_millis(50),
-            token_usage::touch(&state.pool, &id, &digest),
-        )
-        .await;
-        if let Ok(Err(error)) = touched
-            && error.as_database_error().and_then(|e| e.code()).as_deref() != Some("55P03")
-        {
-            tracing::warn!(error = %error, "administrator token usage timestamp not updated");
-        }
+        // Optional metadata does not delay authentication or cancel a database
+        // transaction on a deadline shorter than its network round trips.
+        token_usage::schedule(&state, &id, &digest);
     }
     request
         .extensions_mut()

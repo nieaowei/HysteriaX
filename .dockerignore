@@ -11,3 +11,5 @@ backups
 dist
 *.db
 .codegraph
+
+production

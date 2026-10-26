@@ -47,6 +47,23 @@ pub fn pool_options_for_maintenance(maintenance: bool) -> PgPoolOptions {
         .acquire_timeout(Duration::from_secs(
             crate::runtime_config::db_pool_acquire_timeout_seconds(),
         ))
+        .after_release(|connection, _| {
+            Box::pin(async move {
+                // A cancelled SQLx BEGIN can leave an open server transaction
+                // even when its client-side transaction depth is zero. Reset
+                // unconditionally; a protocol ping alone cannot detect it.
+                // Suppress only the expected idle-ROLLBACK notice during reset.
+                // SET fails in an aborted transaction: reject that connection
+                // so SQLx closes it rather than publishing it back to the pool.
+                let reset = sqlx::raw_sql(
+                    "SET client_min_messages='error'; ROLLBACK; RESET client_min_messages",
+                ).execute(connection);
+                match tokio::time::timeout(Duration::from_secs(5), reset).await {
+                    Ok(result) => result.map(|_| true),
+                    Err(_) => Err(sqlx::Error::Protocol("pool transaction reset timed out".into())),
+                }
+            })
+        })
         .after_connect(move |connection, _| {
             Box::pin(async move {
                 // Bound resource waits and make runtime source checks explicit.
@@ -572,3 +589,7 @@ mod runtime_timeout_tests;
 #[cfg(test)]
 #[path = "db/cutover_tests.rs"]
 mod cutover_tests;
+
+#[cfg(test)]
+#[path = "db/transaction_cancellation_tests.rs"]
+mod transaction_cancellation_tests;

@@ -153,3 +153,146 @@ async fn actual_authentication_survives_locked_or_failed_metadata_and_observes_r
     assert!(used(&pool, "two").await.is_none());
     server.abort();
 }
+
+#[tokio::test]
+async fn scheduled_usage_is_bounded_and_outlives_the_callers_deadline() {
+    let pool = fixture().await;
+    let state = crate::state::AppState::new(
+        pool.clone(),
+        crate::security::SecretBox::from_base64("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+            .unwrap(),
+    );
+    // Delay the actual update beyond the old 50ms request deadline.
+    sqlx::raw_sql("CREATE FUNCTION slow_touch() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN PERFORM pg_sleep(0.15); RETURN NEW; END $$; CREATE TRIGGER slow_touch BEFORE UPDATE ON admin_tokens FOR EACH ROW EXECUTE FUNCTION slow_touch()")
+        .execute(&pool).await.unwrap();
+    for _ in 0..100 {
+        schedule(&state, "one", &token_digest("one"));
+    }
+    assert_eq!(state.admin_token_usage_updates.available_permits(), 0);
+    let waiting = tokio::time::timeout(
+        std::time::Duration::from_millis(50),
+        state.admin_token_usage_updates.acquire(),
+    )
+    .await;
+    assert!(
+        waiting.is_err(),
+        "the caller's deadline must not cancel the update"
+    );
+    let completed = tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        state.admin_token_usage_updates.acquire(),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert!(used(&pool, "one").await.is_some());
+    assert!(used(&pool, "two").await.is_none());
+    drop(completed);
+}
+
+#[tokio::test]
+async fn production_latency_cancellation_cleans_pool_and_background_usage_completes() {
+    use sqlx::Connection;
+    use std::time::Duration;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let direct = fixture().await;
+    let schema: String = sqlx::query_scalar("SELECT current_schema()")
+        .fetch_one(&direct)
+        .await
+        .unwrap();
+    let options = (*direct.connect_options()).clone();
+    let target = (options.get_host().to_owned(), options.get_port());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let relay = tokio::spawn(async move {
+        loop {
+            let (downstream, _) = listener.accept().await.unwrap();
+            let target = target.clone();
+            tokio::spawn(async move {
+                let upstream = tokio::net::TcpStream::connect(target).await.unwrap();
+                let (mut dr, mut dw) = downstream.into_split();
+                let (mut ur, mut uw) = upstream.into_split();
+                let send = tokio::io::copy(&mut dr, &mut uw);
+                let receive = async {
+                    let mut bytes = [0_u8; 65536];
+                    loop {
+                        let count = ur.read(&mut bytes).await?;
+                        if count == 0 {
+                            return Ok::<(), std::io::Error>(());
+                        }
+                        tokio::time::sleep(Duration::from_millis(26)).await;
+                        dw.write_all(&bytes[..count]).await?;
+                    }
+                };
+                tokio::select! { _ = send => {}, _ = receive => {} }
+            });
+        }
+    });
+    let pool = db::pool_options()
+        .max_connections(1)
+        .after_connect(move |connection, _| {
+            let schema = schema.clone();
+            Box::pin(async move {
+                sqlx::query(sqlx::AssertSqlSafe(format!("SET search_path TO {schema}")))
+                    .execute(connection)
+                    .await?;
+                Ok(())
+            })
+        })
+        .connect_with(
+            options
+                .host("127.0.0.1")
+                .port(port)
+                .ssl_mode(sqlx::postgres::PgSslMode::Disable),
+        )
+        .await
+        .unwrap();
+    // Warm the single connection so its next acquisition includes the same
+    // health-check round trip as production.
+    let connection = pool.acquire().await.unwrap();
+    drop(connection);
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(
+        tokio::time::timeout(
+            Duration::from_millis(50),
+            touch(&pool, "one", &token_digest("one"))
+        )
+        .await
+        .is_err()
+    );
+    let mut connection = pool.acquire().await.unwrap();
+    assert!(!connection.is_in_transaction());
+    let read_only: String = sqlx::query_scalar("SHOW transaction_read_only")
+        .fetch_one(&mut *connection)
+        .await
+        .unwrap();
+    assert_eq!(read_only, "off");
+    // A different isolation level after a real query must be a fresh BEGIN,
+    // rather than the 25001 -> 25P02 failure seen with the unpatched driver.
+    let tx = connection
+        .begin_with("BEGIN ISOLATION LEVEL SERIALIZABLE")
+        .await
+        .unwrap();
+    tx.rollback().await.unwrap();
+    drop(connection);
+    assert!(used(&direct, "one").await.is_none());
+    let state = crate::state::AppState::new(
+        pool.clone(),
+        crate::security::SecretBox::from_base64("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+            .unwrap(),
+    );
+    for _ in 0..100 {
+        schedule(&state, "one", &token_digest("one"));
+    }
+    let complete = tokio::time::timeout(
+        Duration::from_secs(5),
+        state.admin_token_usage_updates.acquire(),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert!(used(&direct, "one").await.is_some());
+    drop(complete);
+    pool.close().await;
+    relay.abort();
+}
