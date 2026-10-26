@@ -97,6 +97,7 @@ async fn main() -> Result<()> {
     proxy_monitor::cleanup_probe_directories()?;
     let publisher = tokio::spawn(events::run_publisher(state.clone()));
     let heartbeat = tokio::spawn(execution::run_heartbeats(state.clone()));
+    let sampling_expiry = tokio::spawn(background::run_expiry(state.clone()));
     let mtls = tokio::spawn(credentials::maintenance::run(state.clone()));
     let analytics = tokio::spawn(analytics::run(state.clone()));
     let jobs = tokio::spawn(jobs::run(state.clone()));
@@ -124,7 +125,17 @@ async fn main() -> Result<()> {
     // Stop all workers before returning. Recovery is driven by expired resource
     // leases; another healthy instance continues its own claimed work.
     let workers = [
-        analytics, jobs, traffic, network, limits, probes, quota_rank, mtls, heartbeat, publisher,
+        analytics,
+        jobs,
+        traffic,
+        network,
+        limits,
+        probes,
+        quota_rank,
+        mtls,
+        heartbeat,
+        publisher,
+        sampling_expiry,
     ];
     for worker in &workers {
         worker.abort();

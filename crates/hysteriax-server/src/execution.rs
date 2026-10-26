@@ -3,7 +3,9 @@
 //! A lease fences database writes, never an already dispatched SSH/DNS request.
 //! Uncertain operations keep their resource blocked after expiry until verified.
 mod identity_scope;
+mod sampling_admission;
 pub(crate) use identity_scope::with_identity_leases;
+pub(crate) use sampling_admission::admit_sampling_read;
 
 use serde_json::Value;
 use sqlx::{PgConnection, PgPool, Row};

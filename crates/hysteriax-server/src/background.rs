@@ -106,17 +106,7 @@ pub struct SlotExpired;
 /// claimant cannot start an uncaptured remote read after its slot has closed.
 /// Once collection has started, its bounded result may arrive after the slot.
 pub async fn admit_read(pool: &PgPool, work: &Work) -> Result<()> {
-    let work = work.clone();
-    db::write(pool,move |tx| {
-        let work=work.clone();
-        Box::pin(async move {
-            for lease in &work.leases {lease.guard(tx).await?;}
-            let timely:bool=sqlx::query_scalar("SELECT deadline_at>clock_timestamp() OR (kind='traffic' AND EXISTS(SELECT 1 FROM traffic_sample_batches b WHERE b.sample_id=w.id AND b.payload_digest IS NOT NULL)) FROM background_work w WHERE id=$1")
-                .bind(&work.id).fetch_one(&mut **tx).await?;
-            if !timely {return Err(SlotExpired.into());}
-            Ok(())
-        })
-    }).await
+    execution::admit_sampling_read(pool, work).await
 }
 
 pub async fn finish(pool: &PgPool, work: &Work, success: bool) -> Result<()> {
@@ -141,16 +131,79 @@ pub async fn finish(pool: &PgPool, work: &Work, success: bool) -> Result<()> {
 }
 
 pub async fn expire(pool: &PgPool) -> Result<usize> {
-    db::write(pool,|tx|Box::pin(async move {
-        let rows=sqlx::query("SELECT w.id,w.cycle_id,w.node_id,w.kind FROM background_work w WHERE w.cycle_id IS NOT NULL AND w.state IN ('queued','running') AND (w.deadline_at<=clock_timestamp() OR NOT EXISTS(SELECT 1 FROM nodes n WHERE n.id=w.node_id AND n.state NOT IN ('deleting','delete_failed'))) AND NOT EXISTS(SELECT 1 FROM resource_leases l WHERE l.resource_key='work:'||w.id AND l.owner IS NOT NULL AND l.expires_at>clock_timestamp()) AND NOT (w.kind='traffic' AND EXISTS(SELECT 1 FROM traffic_sample_batches b WHERE b.sample_id=w.id AND b.payload_digest IS NOT NULL)) ORDER BY w.deadline_at,w.id LIMIT 256 FOR UPDATE OF w SKIP LOCKED").fetch_all(&mut **tx).await?;
-        for row in &rows {
-            sqlx::query("UPDATE background_work SET state='expired',owner=NULL,finished_at=clock_timestamp(),error_code='sampling_slot_expired' WHERE id=$1").bind(row.get::<String,_>("id")).execute(&mut **tx).await?;
-            if row.get::<String,_>("kind")=="traffic" {
-                sqlx::query("UPDATE online_samples SET pending=false,traffic_status='failed' WHERE cycle_id=$1 AND node_id=$2 AND pending").bind(row.get::<Uuid,_>("cycle_id")).bind(row.get::<String,_>("node_id")).execute(&mut **tx).await?;
-            }
+    db::write(pool, |tx| {
+        Box::pin(async move {
+            // Work rows remain locked until both task and online status changes
+            // commit. Competing expiry workers skip this bounded cohort; live
+            // owners and captured billing retain their original exclusions.
+            let expired: i64 = sqlx::query_scalar(
+                r#"
+                WITH candidates AS MATERIALIZED (
+                    SELECT w.id
+                    FROM background_work w
+                    WHERE w.cycle_id IS NOT NULL
+                      AND w.state IN ('queued','running')
+                      AND (w.deadline_at <= clock_timestamp() OR NOT EXISTS (
+                          SELECT 1 FROM nodes n
+                          WHERE n.id=w.node_id AND n.state NOT IN ('deleting','delete_failed')
+                      ))
+                      AND NOT EXISTS (
+                          SELECT 1 FROM resource_leases l
+                          WHERE l.resource_key='work:'||w.id
+                            AND l.owner IS NOT NULL AND l.expires_at>clock_timestamp()
+                      )
+                      AND NOT (w.kind='traffic' AND EXISTS (
+                          SELECT 1 FROM traffic_sample_batches b
+                          WHERE b.sample_id=w.id AND b.payload_digest IS NOT NULL
+                      ))
+                    ORDER BY w.deadline_at,w.id
+                    LIMIT 256
+                    FOR UPDATE OF w SKIP LOCKED
+                ), expired AS (
+                    UPDATE background_work w
+                    SET state='expired',owner=NULL,finished_at=clock_timestamp(),
+                        error_code='sampling_slot_expired'
+                    FROM candidates c
+                    WHERE w.id=c.id
+                    RETURNING w.cycle_id,w.node_id,w.kind
+                ), online AS (
+                    UPDATE online_samples s
+                    SET pending=false,traffic_status='failed'
+                    FROM expired e
+                    WHERE e.kind='traffic' AND s.cycle_id=e.cycle_id
+                      AND s.node_id=e.node_id AND s.pending
+                    RETURNING s.id
+                )
+                SELECT count(*) FROM expired
+                "#,
+            )
+            .fetch_one(&mut **tx)
+            .await?;
+            Ok(expired as usize)
+        })
+    })
+    .await
+}
+
+/// Expiry never sits on the sampling admission path. One loop per instance
+/// handles all queues; row locks and SKIP LOCKED coordinate multiple instances.
+pub async fn run_expiry(state: AppState) {
+    tracing::info!(batch_limit = 256, "sampling expiry worker started");
+    let mut timer = tokio::time::interval(std::time::Duration::from_secs(1));
+    timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        timer.tick().await;
+        let started = std::time::Instant::now();
+        match expire(&state.pool).await {
+            Ok(expired) if expired > 0 => tracing::info!(
+                expired,
+                elapsed_ms = started.elapsed().as_millis() as u64,
+                "sampling expiry batch completed"
+            ),
+            Ok(_) => {}
+            Err(error) => tracing::warn!(%error, "sampling expiry deferred"),
         }
-        Ok(rows.len())
-    })).await
+    }
 }
 
 pub async fn run_sampling(state: AppState, kind: &'static str) {
@@ -178,7 +231,6 @@ pub async fn run_sampling(state: AppState, kind: &'static str) {
         tokio::select! {
             _=timer.tick()=>{
                 if let Err(error)=ensure_cycle(&state.pool,kind).await {tracing::warn!(kind,%error,"sampling cycle deferred");continue;}
-                if let Err(error)=expire(&state.pool).await {tracing::warn!(%error,"sampling expiry deferred");}
                 while tasks.len()<max_parallel {
                     let work=match claim(&state.pool,kind,&state.instance_id).await {Ok(Some(work))=>work,Ok(None)=>break,Err(error)=>{tracing::warn!(kind,%error,"sampling claim deferred");break;}};
                     let app=state.clone();
