@@ -2193,3 +2193,6 @@
 "外部操作" = "External operation";
 "首页" = "First page";
 "文件上传" = "File upload";
+"服务未连接，恢复连接后可读取远端操作核验状态。" = "The service is disconnected. Reconnect to load remote operation verification status.";
+"正在读取核验状态…" = "Loading verification status…";
+"暂无待核验的远端操作。" = "No remote operations are awaiting verification.";

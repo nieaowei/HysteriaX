@@ -17,54 +17,60 @@ struct JobExecutionRechecksView: View {
     }
 
     var body: some View {
-        Group {
-            if isLoading || error != nil || !operations.isEmpty || result != nil || cursor != nil {
-                GroupBox {
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text(L10n.text("核验会检查远端完成证明。无法确认时资源继续阻塞；核验不会重发原操作，也不会自动重试任务。"))
-                            .font(.callout).foregroundStyle(.secondary)
-                        if let result {
-                            Label(resultText(result), systemImage: result.resourceBlocked ? "exclamationmark.triangle" : "checkmark.circle")
-                                .foregroundStyle(result.resourceBlocked ? Color.orange : Color.secondary)
-                                .accessibilityIdentifier("jobs.recheck.result")
-                        }
-                        if let error {
-                            Text(error).foregroundStyle(.orange).textSelection(.enabled)
-                        }
-                        ForEach(operations, id: \.operationId) { operation in
-                            HStack(alignment: .center, spacing: 12) {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(operation.kind == "ssh-command" ? L10n.text("SSH 命令") : operation.kind == "ssh-upload" ? L10n.text("文件上传") : L10n.text("外部操作"))
-                                    Text(JobDisplayText.status(operation.state)).font(.caption).foregroundStyle(.secondary)
-                                    Text(operation.operationId).font(.system(.caption, design: .monospaced)).foregroundStyle(.secondary).textSelection(.enabled)
-                                }
-                                Spacer(minLength: 8)
-                                Button(L10n.text("重新核验")) { Task { await verify(operation) } }
-                                    .disabled(!store.isConnected || verifyingID != nil || isLoading)
-                                    .accessibilityIdentifier("jobs.recheck.\(operation.operationId)")
-                                if verifyingID == operation.operationId { ProgressView().controlSize(.small) }
-                            }
-                        }
-                        HStack {
-                            Button(L10n.text("刷新核验状态")) { Task { await load(after: cursor) } }
-                            if cursor != nil {
-                                Button(L10n.text("首页")) { Task { await load(after: nil) } }
-                            }
-                            if let nextCursor {
-                                Button(L10n.text("下一页")) { Task { await load(after: nextCursor) } }
-                            }
-                            if isLoading { ProgressView().controlSize(.small) }
-                        }
-                        .disabled(!store.isConnected || verifyingID != nil || isLoading)
-                    }
-                    .padding(.vertical, 4)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                } label: {
-                    Label(L10n.text("远端操作核验"), systemImage: "checkmark.shield")
+        GroupBox {
+            VStack(alignment: .leading, spacing: 12) {
+                Text(L10n.text("核验会检查远端完成证明。无法确认时资源继续阻塞；核验不会重发原操作，也不会自动重试任务。"))
+                    .font(.callout).foregroundStyle(.secondary)
+                if let result {
+                    Label(resultText(result), systemImage: result.resourceBlocked ? "exclamationmark.triangle" : "checkmark.circle")
+                        .foregroundStyle(result.resourceBlocked ? Color.orange : Color.secondary)
+                        .accessibilityIdentifier("jobs.recheck.result")
                 }
-                .accessibilityIdentifier("jobs.recheck.panel")
+                if let error {
+                    Text(error).foregroundStyle(.orange).textSelection(.enabled)
+                }
+                if !store.isConnected {
+                    Text(L10n.text("服务未连接，恢复连接后可读取远端操作核验状态。"))
+                        .foregroundStyle(.secondary)
+                } else if isLoading && operations.isEmpty {
+                    Text(L10n.text("正在读取核验状态…"))
+                        .foregroundStyle(.secondary)
+                } else if operations.isEmpty && error == nil && result == nil {
+                    Text(L10n.text("暂无待核验的远端操作。"))
+                        .foregroundStyle(.secondary)
+                }
+                ForEach(operations, id: \.operationId) { operation in
+                    HStack(alignment: .center, spacing: 12) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(operation.kind == "ssh-command" ? L10n.text("SSH 命令") : operation.kind == "ssh-upload" ? L10n.text("文件上传") : L10n.text("外部操作"))
+                            Text(JobDisplayText.status(operation.state)).font(.caption).foregroundStyle(.secondary)
+                            Text(operation.operationId).font(.system(.caption, design: .monospaced)).foregroundStyle(.secondary).textSelection(.enabled)
+                        }
+                        Spacer(minLength: 8)
+                        Button(L10n.text("重新核验")) { Task { await verify(operation) } }
+                            .disabled(!store.isConnected || verifyingID != nil || isLoading)
+                            .accessibilityIdentifier("jobs.recheck.\(operation.operationId)")
+                        if verifyingID == operation.operationId { ProgressView().controlSize(.small) }
+                    }
+                }
+                HStack {
+                    Button(L10n.text("刷新核验状态")) { Task { await load(after: cursor) } }
+                    if cursor != nil {
+                        Button(L10n.text("首页")) { Task { await load(after: nil) } }
+                    }
+                    if let nextCursor {
+                        Button(L10n.text("下一页")) { Task { await load(after: nextCursor) } }
+                    }
+                    if isLoading { ProgressView().controlSize(.small) }
+                }
+                .disabled(!store.isConnected || verifyingID != nil || isLoading)
             }
+            .padding(.vertical, 4)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        } label: {
+            Label(L10n.text("远端操作核验"), systemImage: "checkmark.shield")
         }
+        .accessibilityIdentifier("jobs.recheck.panel")
         .task(id: requestKey) {
             guard verifyingID == nil else { return }
             await load(after: cursor)
@@ -84,9 +90,17 @@ struct JobExecutionRechecksView: View {
     }
 
     private func load(after: String?) async {
-        guard store.isConnected else { operations = []; isLoading = false; return }
         let current = UUID()
         loadID = current
+        guard store.isConnected else {
+            operations = []
+            cursor = nil
+            nextCursor = nil
+            error = nil
+            result = nil
+            isLoading = false
+            return
+        }
         isLoading = true
         error = nil
         defer { if loadID == current { isLoading = false } }
