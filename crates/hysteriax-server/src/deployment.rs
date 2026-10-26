@@ -744,7 +744,7 @@ async fn deploy_with_probe(
         ))
         .await?;
     session
-        .upload(&format!("{remote_staging}/hysteria"), &artifact)
+        .upload_release_binary(&format!("{remote_staging}/hysteria"), &artifact)
         .await?;
     session
         .upload(

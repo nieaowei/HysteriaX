@@ -75,3 +75,7 @@ certificates use `ca_certificate`. Current management APIs do not support standa
 split configured material is merged, old standalone objects are removed, and
 current/deployed/historical configuration retains its runtime content and file
 names. Run conversion through `--migrate-only`; no node deployment is scheduled by this migration.
+
+## File upload timeout
+
+`HYSTERIAX_SSH_UPLOAD_TIMEOUT_SECONDS` controls each SSH file upload independently of `HYSTERIAX_OPERATION_TIMEOUT_SECONDS`. It defaults to **180 seconds (3 minutes)** and accepts 1–3600 seconds. Missing or invalid values use 180 seconds. For a bandwidth-limited management server, increase only this setting; ordinary SSH commands, probes and sampling retain their existing operation budgets. The client reserves another five seconds after the receiver deadline to collect its completion receipt.

@@ -81,7 +81,13 @@ cleanup() {
     rm -f -- "$op/stdout.fifo" "$op/stderr.fifo" "$op/stdout" "$op/stderr" "$op/result.new"
 }
 trap cleanup EXIT
-trap 'exit 125' HUP INT TERM
+if [ "$payload_lock" -eq 1 ]; then
+    # The upload has a remote deadline. Keep the journal alive on disconnect
+    # so a short read or timed-out receiver can still leave a completion receipt.
+    trap '' HUP INT TERM
+else
+    trap 'exit 125' HUP INT TERM
+fi
 mkfifo -m 600 "$op/stdout.fifo" "$op/stderr.fifo"
 # Parent-held read/write ends keep reader opens bounded even on early failure.
 exec 6<>"$op/stdout.fifo" 7<>"$op/stderr.fifo"
@@ -90,7 +96,10 @@ out_pid=$!
 (head -c "$((cap+1))" < "$op/stderr.fifo" > "$op/stderr" 6>&- 7>&- 8>&-) &
 err_pid=$!
 set +e
-(umask "$payload_umask"; sh -c "$command" 6>&- 7>&- 8>&-) > "$op/stdout.fifo" 2> "$op/stderr.fifo"
+# Uploads inherit the resource lock until their bounded stdin consumer exits.
+# A disconnected sender must never leave a writer running after a recheck.
+(umask "$payload_umask"; if [ "$payload_lock" -eq 0 ]; then exec 8>&-; fi
+ sh -c "$command" 6>&- 7>&-) > "$op/stdout.fifo" 2> "$op/stderr.fifo"
 code=$?
 set -e
 exec 6>&- 7>&-

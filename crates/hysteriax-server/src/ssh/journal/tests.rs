@@ -344,12 +344,17 @@ fn linux_journal_preserves_outputs_fences_replays_and_keeps_unknown_barriers() {
 struct JournalServer {
     container: String,
     home: String,
+    inputs: std::collections::HashMap<russh::ChannelId, tokio::sync::mpsc::Sender<Vec<u8>>>,
 }
 pub(crate) fn fixture_handler(
     container: String,
     home: String,
 ) -> impl russh::server::Handler<Error = russh::Error> + Send {
-    JournalServer { container, home }
+    JournalServer {
+        container,
+        home,
+        inputs: Default::default(),
+    }
 }
 impl russh::server::Handler for JournalServer {
     type Error = russh::Error;
@@ -379,8 +384,26 @@ impl russh::server::Handler for JournalServer {
         let command = String::from_utf8(data.to_vec()).unwrap();
         let (container, home, handle) =
             (self.container.clone(), self.home.clone(), session.handle());
+        let (sender, mut input) = tokio::sync::mpsc::channel::<Vec<u8>>(8);
+        self.inputs.insert(channel, sender);
         tokio::spawn(async move {
             let mut drop_ack = command.contains("HX_DROP_ACK_AFTER_EXECUTION");
+            if command.contains("payload_lock=1") {
+                drop_ack |= tokio::process::Command::new("docker")
+                    .args([
+                        "exec",
+                        "-e",
+                        &format!("HOME={home}"),
+                        &container,
+                        "sh",
+                        "-c",
+                        "test -f \"$HOME/drop-upload-ack\" && rm -- \"$HOME/drop-upload-ack\"",
+                    ])
+                    .status()
+                    .await
+                    .unwrap()
+                    .success();
+            }
             if command.contains("check_id=") {
                 drop_ack |= tokio::process::Command::new("docker")
                     .args([
@@ -397,9 +420,10 @@ impl russh::server::Handler for JournalServer {
                     .unwrap()
                     .success();
             }
-            let output = tokio::process::Command::new("docker")
+            let mut child = tokio::process::Command::new("docker")
                 .args([
                     "exec",
+                    "-i",
                     "-e",
                     &format!("HOME={home}"),
                     &container,
@@ -407,9 +431,21 @@ impl russh::server::Handler for JournalServer {
                     "-c",
                     &command,
                 ])
-                .output()
-                .await
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
                 .unwrap();
+            let mut stdin = child.stdin.take().unwrap();
+            tokio::spawn(async move {
+                use tokio::io::AsyncWriteExt;
+                while let Some(bytes) = input.recv().await {
+                    if stdin.write_all(&bytes).await.is_err() {
+                        break;
+                    }
+                }
+            });
+            let output = child.wait_with_output().await.unwrap();
             if !output.stdout.is_empty() {
                 let _ = handle.data(channel, output.stdout).await;
             }
@@ -423,6 +459,33 @@ impl russh::server::Handler for JournalServer {
             }
             let _ = handle.close(channel).await;
         });
+        Ok(())
+    }
+    async fn data(
+        &mut self,
+        channel: russh::ChannelId,
+        data: &[u8],
+        _: &mut russh::server::Session,
+    ) -> std::result::Result<(), Self::Error> {
+        if let Some(sender) = self.inputs.get(&channel) {
+            let _ = sender.send(data.to_vec()).await;
+        }
+        Ok(())
+    }
+    async fn channel_eof(
+        &mut self,
+        channel: russh::ChannelId,
+        _: &mut russh::server::Session,
+    ) -> std::result::Result<(), Self::Error> {
+        self.inputs.remove(&channel);
+        Ok(())
+    }
+    async fn channel_close(
+        &mut self,
+        channel: russh::ChannelId,
+        _: &mut russh::server::Session,
+    ) -> std::result::Result<(), Self::Error> {
+        self.inputs.remove(&channel);
         Ok(())
     }
 }
@@ -463,6 +526,7 @@ async fn actual_ssh_response_loss_keeps_intent_and_exact_remote_receipt_without_
     let handler = JournalServer {
         container: linux.container.clone(),
         home: linux.home.clone(),
+        inputs: Default::default(),
     };
     let server = tokio::spawn(async move {
         russh::server::run_stream(config, server_io, handler)
@@ -500,6 +564,48 @@ async fn actual_ssh_response_loss_keeps_intent_and_exact_remote_receipt_without_
         endpoint: endpoint.clone(),
     };
     let pool = crate::db::test_pool_with_max_connections(3).await;
+    let mut tx = pool.begin().await.unwrap();
+    let upload_lease = execution::acquire(&mut tx, "node:upload", "owner", "upload-work")
+        .await
+        .unwrap()
+        .unwrap();
+    tx.commit().await.unwrap();
+    let bytes: Vec<u8> = (0..3_000_000).map(|i| (i % 256) as u8).collect();
+    let path = format!("{}/streamed-file", linux.home);
+    let error = execution::supervise(pool.clone(), vec![upload_lease], async {
+        session.upload(&path, &bytes).await?;
+        assert_eq!(
+            linux.run(&format!("sha256sum -- {}", quote(&path))).stdout,
+            format!("{}  {path}\n", hash(&bytes)).as_bytes()
+        );
+        assert!(
+            linux
+                .run("touch \"$HOME/drop-upload-ack\"")
+                .status
+                .success()
+        );
+        session.upload(&path, b"replacement").await
+    })
+    .await
+    .unwrap()
+    .unwrap_err();
+    assert!(format!("{error:#}").contains("completion was not acknowledged"));
+    let uploads = sqlx::query("SELECT state,intent FROM execution_operations WHERE work_id='upload-work' ORDER BY created_at").fetch_all(&pool).await.unwrap();
+    assert_eq!(uploads.len(), 2);
+    assert_eq!(uploads[0].get::<String, _>("state"), "verified");
+    assert_eq!(uploads[1].get::<String, _>("state"), "dispatching");
+    let intent: Value = uploads[1].get("intent");
+    assert_eq!(intent["verification"]["remote_path"], path);
+    assert_eq!(
+        intent["verification"]["content_sha256"],
+        hash(b"replacement")
+    );
+    assert!(!intent.to_string().contains("replacement"));
+    assert_eq!(
+        linux.run(&format!("cat -- {}", quote(&path))).stdout,
+        b"replacement"
+    );
+
     let mut tx = pool.begin().await.unwrap();
     let lease = execution::acquire(&mut tx, "node:lost-ssh", "owner", "lost-work")
         .await
@@ -861,4 +967,229 @@ fn linux_journal_preserves_payload_umask_while_receipt_files_remain_private() {
         assert!(private.status.success());
         assert_eq!(private.stdout, b"700\n700\n600\n600\n600\n600\n");
     }
+}
+
+#[test]
+#[ignore = "requires an owned Linux Docker fixture via TEST_SSH_JOURNAL_CONTAINER"]
+fn linux_upload_is_atomic_and_lost_ack_can_be_fenced_without_replaying_bytes() {
+    use std::io::Write;
+    use std::process::Stdio;
+    let linux = Linux {
+        container: std::env::var("TEST_SSH_JOURNAL_CONTAINER").unwrap(),
+        home: format!("/tmp/hx-upload-{}", uuid::Uuid::new_v4()),
+    };
+    assert!(linux.run("mkdir -m 700 \"$HOME\"").status.success());
+    let path = format!("{}/file 'quoted", linux.home);
+    let payload: Vec<u8> = (0..300_000).map(|i| (i % 256) as u8).collect();
+    let mut previous = step();
+    for bytes in [&payload[..], b"".as_slice(), b"small".as_slice()] {
+        let transfer = crate::ssh::upload::Transfer::new(&path, bytes, 10).unwrap();
+        let mut upload = previous.clone();
+        upload.kind = "ssh-upload".into();
+        upload.operation_id = uuid::Uuid::new_v4().to_string();
+        upload.step = "ssh-upload:1".into();
+        let script = linux.script(&mut upload, &transfer.command, 4096);
+        let mut child = std::process::Command::new("docker")
+            .args([
+                "exec",
+                "-i",
+                "-e",
+                &format!("HOME={}", linux.home),
+                &linux.container,
+                "sh",
+                "-c",
+                &script,
+            ])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child.stdin.take().unwrap().write_all(bytes).unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(output.status.success(), "{:?}", output);
+        let actual = linux.run(&format!("cat -- {}", quote(&path)));
+        assert_eq!(actual.stdout, bytes);
+        assert_eq!(
+            linux
+                .run(&format!("stat -c '%a' -- {}", quote(&path)))
+                .stdout,
+            b"600\n"
+        );
+        // Treat the original SSH acknowledgement as lost. Only the receiver's
+        // exact completion receipt plus a newer remote fence authorizes release.
+        let completion = linux.read(&upload, 4096).unwrap();
+        assert_eq!(completion.exit_code, 0);
+        let request = recheck::Request {
+            id: uuid::Uuid::new_v4().to_string(),
+            original: upload.clone(),
+            receipt_sha256: recheck::digest(&completion).unwrap(),
+            target_epoch: upload.epoch.clone(),
+            target_generation: upload.generation + 1,
+        };
+        let output = linux.run(&recheck::render(&request).unwrap());
+        assert!(output.status.success());
+        recheck::parse(&output.stdout, &request).unwrap();
+        assert_eq!(
+            linux
+                .run(&wrap(&upload, &transfer.command, 4096).unwrap())
+                .status
+                .code(),
+            Some(125)
+        );
+        previous = upload;
+        previous.generation = request.target_generation + 1;
+    }
+    let original = linux.run(&format!("cat -- {}", quote(&path))).stdout;
+    // Short EOF, same-length corruption, and extra data must never replace the
+    // previous complete file, but do leave a completed failure receipt.
+    for bytes in [
+        b"abc".as_slice(),
+        b"bad!!".as_slice(),
+        b"small-extra".as_slice(),
+    ] {
+        let transfer = crate::ssh::upload::Transfer::new(&path, b"small", 10).unwrap();
+        let mut upload = previous.clone();
+        upload.operation_id = uuid::Uuid::new_v4().to_string();
+        upload.generation += 1;
+        let script = linux.script(&mut upload, &transfer.command, 4096);
+        let mut child = std::process::Command::new("docker")
+            .args([
+                "exec",
+                "-i",
+                "-e",
+                &format!("HOME={}", linux.home),
+                &linux.container,
+                "sh",
+                "-c",
+                &script,
+            ])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child.stdin.take().unwrap().write_all(bytes).unwrap();
+        assert!(!child.wait_with_output().unwrap().status.success());
+        assert_ne!(linux.read(&upload, 4096).unwrap().exit_code, 0);
+        assert_eq!(
+            linux.run(&format!("cat -- {}", quote(&path))).stdout,
+            original
+        );
+        previous = upload;
+    }
+}
+
+#[test]
+#[ignore = "requires an owned Linux Docker fixture via TEST_SSH_JOURNAL_CONTAINER"]
+fn linux_stalled_upload_holds_fence_until_remote_deadline_and_records_failure() {
+    use std::{
+        io::Write,
+        process::Stdio,
+        time::{Duration, Instant},
+    };
+    let linux = Linux {
+        container: std::env::var("TEST_SSH_JOURNAL_CONTAINER").unwrap(),
+        home: format!("/tmp/hx-upload-timeout-{}", uuid::Uuid::new_v4()),
+    };
+    assert!(linux.run("mkdir -m 700 \"$HOME\"").status.success());
+    let path = format!("{}/stall", linux.home);
+    assert!(
+        linux
+            .run("printf original > \"$HOME/stall\"")
+            .status
+            .success()
+    );
+    let transfer = crate::ssh::upload::Transfer::new(&path, b"longer payload", 2).unwrap();
+    let mut upload = step();
+    upload.kind = "ssh-upload".into();
+    let script = linux.script(&mut upload, &transfer.command, 4096);
+    let script = format!("printf '%s' \"$$\" > \"$HOME/wrapper.pid\"\n{script}");
+    let mut child = std::process::Command::new("docker")
+        .args([
+            "exec",
+            "-i",
+            "-e",
+            &format!("HOME={}", linux.home),
+            &linux.container,
+            "sh",
+            "-c",
+            &script,
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut input = child.stdin.take().unwrap();
+    input.write_all(b"short").unwrap(); // keep stdin open until the receiver deadline
+    let started = Instant::now();
+    while !linux
+        .run("ls \"$HOME\"/stall.upload.* >/dev/null 2>&1")
+        .status
+        .success()
+    {
+        assert!(started.elapsed() < Duration::from_secs(5));
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(linux.read(&upload, 4096).is_err());
+    assert!(
+        linux
+            .run("kill -TERM \"$(cat \"$HOME/wrapper.pid\")\"")
+            .status
+            .success()
+    );
+    assert!(!child.wait_with_output().unwrap().status.success());
+    drop(input);
+    assert!(started.elapsed() < Duration::from_secs(8));
+    let receipt = linux.read(&upload, 4096).unwrap();
+    assert_ne!(receipt.exit_code, 0);
+    assert_eq!(linux.run("cat \"$HOME/stall\"").stdout, b"original");
+}
+
+#[test]
+#[ignore = "requires an owned Linux Docker fixture via TEST_SSH_JOURNAL_CONTAINER"]
+fn installed_release_is_reused_only_after_both_digest_checks_and_atomically_staged() {
+    let linux = Linux {
+        container: std::env::var("TEST_SSH_JOURNAL_CONTAINER").unwrap(),
+        home: format!("/tmp/hx-reuse-{}", uuid::Uuid::new_v4()),
+    };
+    assert!(linux.run("test ! -e /opt/hysteriax/hysteria; mkdir -p /opt/hysteriax; mkdir -m 700 \"$HOME\"; printf pinned > /opt/hysteriax/hysteria").status.success());
+    let target = format!("{}/a 'quoted", linux.home);
+    let command = crate::ssh::upload::reuse_installed_binary(&target, b"pinned").unwrap();
+    let result = linux.run(&command);
+    assert!(result.status.success());
+    assert_eq!(result.stdout, b"reused\n");
+    assert_eq!(
+        linux.run(&format!("cat -- {}", quote(&target))).stdout,
+        b"pinned"
+    );
+    assert_eq!(
+        linux
+            .run(&format!("stat -c '%a' -- {}", quote(&target)))
+            .stdout,
+        b"600\n"
+    );
+    assert!(
+        linux
+            .run("printf changed > /opt/hysteriax/hysteria")
+            .status
+            .success()
+    );
+    assert_eq!(linux.run(&command).stdout, b"upload\n");
+    assert_eq!(
+        linux.run(&format!("cat -- {}", quote(&target))).stdout,
+        b"pinned"
+    );
+    assert!(
+        linux
+            .run(
+                "rm /opt/hysteriax/hysteria; ln -s /usr/local/bin/hysteria /opt/hysteriax/hysteria"
+            )
+            .status
+            .success()
+    );
+    assert_eq!(linux.run(&command).stdout, b"upload\n");
+    assert!(linux.run("rm /opt/hysteriax/hysteria").status.success());
+    assert_eq!(linux.run(&command).stdout, b"upload\n");
 }

@@ -779,3 +779,44 @@ async fn actual_http_listing_never_reuses_an_execution_state_without_a_version()
     );
     server.abort();
 }
+
+#[tokio::test]
+async fn journaled_upload_proof_releases_node_and_job_but_legacy_upload_stays_blocked() {
+    let (state, id, input) = supported_fixture().await;
+    sqlx::query("UPDATE execution_operations SET intent=jsonb_set(intent,'{kind}','\"ssh-upload\"'),step='ssh-upload:2' WHERE operation_id=$1")
+        .bind(&id).execute(&state.pool).await.unwrap();
+    let (p, proof) = completed_preparation(&state, &id, &input, "upload").await;
+    let resource = p.data.original.resource_key.clone();
+    let work = p.data.original.work_id.clone();
+    let result = final_result(
+        &state,
+        identity(&state, "upload"),
+        id,
+        input,
+        Some(p),
+        Some(proof),
+        "verified",
+    )
+    .await
+    .unwrap();
+    let bytes = axum::body::to_bytes(result.into_body(), 65536)
+        .await
+        .unwrap();
+    let value: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(value["resource_blocked"], false);
+    assert_eq!(value["retry_allowed"], true);
+    assert_eq!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM resource_leases WHERE (resource_key=$1 OR work_id=$2) AND (blocked OR owner IS NOT NULL)")
+        .bind(resource).bind(work).fetch_one(&state.pool).await.unwrap(),0);
+
+    let (state, id, input) = supported_fixture().await;
+    sqlx::query("UPDATE execution_operations SET intent=jsonb_build_object('kind','ssh-upload','request_digest','legacy'),step='ssh-upload:2' WHERE operation_id=$1")
+        .bind(&id).execute(&state.pool).await.unwrap();
+    assert!(matches!(
+        prepared(&state, &id, &input, "legacy", "legacy")
+            .await
+            .unwrap(),
+        Preparation::Unsupported
+    ));
+    assert!(sqlx::query_scalar::<_,bool>("SELECT blocked FROM resource_leases WHERE resource_key=(SELECT resource_key FROM execution_operations WHERE operation_id=$1)")
+        .bind(id).fetch_one(&state.pool).await.unwrap());
+}

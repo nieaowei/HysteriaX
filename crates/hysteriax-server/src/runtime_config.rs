@@ -16,6 +16,7 @@ static DB_POOL_MAX_CONNECTIONS: OnceLock<usize> = OnceLock::new();
 static DB_POOL_ACQUIRE_TIMEOUT_SECONDS: OnceLock<usize> = OnceLock::new();
 static DATABASE_TIMEOUTS: OnceLock<DatabaseTimeouts> = OnceLock::new();
 static OPERATION_TIMEOUT_SECONDS: OnceLock<Option<u64>> = OnceLock::new();
+static SSH_UPLOAD_TIMEOUT_SECONDS: OnceLock<u64> = OnceLock::new();
 static BACKGROUND_WORKER_PARALLELISM: OnceLock<usize> = OnceLock::new();
 static SAMPLING_INTERVAL_SECONDS: OnceLock<usize> = OnceLock::new();
 
@@ -118,6 +119,18 @@ pub(crate) fn operation_timeout_seconds(default: u64) -> u64 {
     }).unwrap_or(default)
 }
 
+/// File transfers have their own budget because small management requests and
+/// release assets have very different bandwidth requirements.
+pub(crate) fn ssh_upload_timeout_seconds() -> u64 {
+    *SSH_UPLOAD_TIMEOUT_SECONDS.get_or_init(|| {
+        bounded_usize(
+            "HYSTERIAX_SSH_UPLOAD_TIMEOUT_SECONDS",
+            180,
+            MAX_TIMEOUT_SECONDS,
+        ) as u64
+    })
+}
+
 /// Limit parallel tasks within each durable background work queue. This never
 /// raises the existing default of four; deployments can lower it for a remote DB.
 pub(crate) fn background_worker_parallelism() -> usize {
@@ -153,6 +166,47 @@ fn bounded_usize(name: &'static str, default: usize, max: usize) -> usize {
                 "runtime setting unavailable; using default"
             );
             default
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn upload_timeout_child() {
+        if let Ok(expected) = std::env::var("HYSTERIAX_TEST_EXPECT_UPLOAD_TIMEOUT") {
+            assert_eq!(
+                super::ssh_upload_timeout_seconds(),
+                expected.parse::<u64>().unwrap()
+            );
+            assert_eq!(super::operation_timeout_seconds(15), 60);
+        }
+    }
+
+    #[test]
+    fn upload_timeout_defaults_to_three_minutes_and_is_independent_of_operation_budget() {
+        for (configured, expected) in [
+            (None, 180),
+            (Some("1"), 1),
+            (Some("180"), 180),
+            (Some("3600"), 3600),
+            (Some("0"), 180),
+            (Some("3601"), 180),
+            (Some("invalid"), 180),
+        ] {
+            let mut child = std::process::Command::new(std::env::current_exe().unwrap());
+            child
+                .args(["--exact", "runtime_config::tests::upload_timeout_child"])
+                .env("HYSTERIAX_TEST_EXPECT_UPLOAD_TIMEOUT", expected.to_string())
+                .env("HYSTERIAX_OPERATION_TIMEOUT_SECONDS", "60")
+                .env_remove("HYSTERIAX_SSH_UPLOAD_TIMEOUT_SECONDS");
+            if let Some(value) = configured {
+                child.env("HYSTERIAX_SSH_UPLOAD_TIMEOUT_SECONDS", value);
+            }
+            assert!(
+                child.output().unwrap().status.success(),
+                "configuration {configured:?}"
+            );
         }
     }
 }

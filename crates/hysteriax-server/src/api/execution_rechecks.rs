@@ -255,7 +255,7 @@ async fn prepare(
             if target.get::<Option<bool>,_>("live")==Some(true) {return Err(ApiError::conflict("wait for the previous execution lease to expire"));}
             if target.get::<Option<String>,_>("owner").as_deref()!=Some(op.owner.as_str()) || target.get::<Option<String>,_>("work_id").as_deref()!=Some(op.work_id.as_str()) {return Err(ApiError::conflict("execution resource ownership changed"));}
             if target.get::<i64,_>("generation")<op.generation {return Err(ApiError::conflict("execution generation moved backwards"));}
-            if op.intent["kind"]!="ssh-command" || op.intent["verification"]["protocol"]!="ssh-journal-v2" || op.intent["verification"]["preparation"]=="unverified" || !node_resource.starts_with("node:") {
+            if !matches!(op.intent["kind"].as_str(),Some("ssh-command" | "ssh-upload")) || op.intent["verification"]["protocol"]!="ssh-journal-v2" || op.intent["verification"]["preparation"]=="unverified" || !node_resource.starts_with("node:") {
                 lease.release(tx).await?;return Ok(Preparation::Unsupported);
             }
             let node=node_resource.strip_prefix("node:").unwrap().to_owned();

@@ -9,8 +9,8 @@ use russh::{
     client::{self, Handle},
     keys::{HashAlg, PublicKeyOrCertificate},
 };
-use russh_sftp::client::SftpSession;
 use thiserror::Error;
+#[cfg(test)]
 use tokio::io::AsyncWriteExt;
 
 #[derive(Clone, Debug)]
@@ -41,6 +41,7 @@ pub enum SshError {
 }
 
 pub(crate) mod journal;
+mod upload;
 
 pub struct SshSession {
     handle: Handle<HostKeyHandler>,
@@ -111,6 +112,30 @@ impl client::Handler for HostKeyHandler {
     }
 }
 
+// Prefer the broadly interoperable existing X25519 exchange. Keep the rest
+// of russh's supported algorithms as fallbacks rather than disabling them.
+fn client_config() -> client::Config {
+    let mut config = client::Config {
+        inactivity_timeout: Some(Duration::from_secs(
+            crate::runtime_config::ssh_upload_timeout_seconds().max(60),
+        )),
+        keepalive_interval: Some(Duration::from_secs(15)),
+        keepalive_max: 3,
+        nodelay: true,
+        ..Default::default()
+    };
+    let mut algorithms = config.preferred.kex.clone().into_owned();
+    if let Some(index) = algorithms
+        .iter()
+        .position(|name| *name == russh::kex::CURVE25519)
+    {
+        let curve = algorithms.remove(index);
+        algorithms.insert(0, curve);
+    }
+    config.preferred.kex = std::borrow::Cow::Owned(algorithms);
+    config
+}
+
 pub async fn connect(node: &SshNode) -> Result<FingerprintResult> {
     crate::execution::check_current().await?;
     let observed = Arc::new(Mutex::new(None));
@@ -118,12 +143,7 @@ pub async fn connect(node: &SshNode) -> Result<FingerprintResult> {
         expected: node.host_fingerprint.clone(),
         observed: observed.clone(),
     };
-    let config = client::Config {
-        inactivity_timeout: Some(Duration::from_secs(60)),
-        keepalive_interval: Some(Duration::from_secs(15)),
-        keepalive_max: 3,
-        ..Default::default()
-    };
+    let config = client_config();
     let result = match tokio::time::timeout(
         Duration::from_secs(crate::runtime_config::operation_timeout_seconds(15)),
         connect_transport(Arc::new(config), (node.host.as_str(), node.port), handler),
@@ -236,9 +256,29 @@ impl SshSession {
         timeout: Duration,
         max_output: usize,
     ) -> Result<CommandOutput> {
-        let prepared_head = if let Some(lease) =
-            crate::execution::remote::resource_for("ssh-command")?
-        {
+        self.execute_journaled(
+            "ssh-command",
+            command,
+            None,
+            serde_json::json!({}),
+            (timeout, max_output),
+        )
+        .await
+    }
+
+    async fn execute_journaled(
+        &self,
+        kind: &str,
+        command: &str,
+        input: Option<&[u8]>,
+        mut verification: serde_json::Value,
+        limits: (Duration, usize),
+    ) -> Result<CommandOutput> {
+        let (timeout, max_output) = limits;
+        verification["protocol"] = serde_json::json!("ssh-journal-v2");
+        verification["endpoint"] = serde_json::to_value(&self.endpoint)?;
+        verification["max_output"] = serde_json::json!(max_output);
+        let prepared_head = if let Some(lease) = crate::execution::remote::resource_for(kind)? {
             let observed = async {
                 let text = self
                     .execute_read_only_checked(&journal::head(&lease.resource)?)
@@ -253,24 +293,29 @@ impl SshSession {
                 Err(error) => {
                     // No requested payload is sent when its remote predecessor
                     // is unreadable. Persist the resulting safety barrier.
+                    verification["preparation"] = serde_json::json!("unverified");
                     return crate::execution::remote::with_context(
-                        "ssh-command",crate::security::token_digest(command),
-                        serde_json::json!({"protocol":"ssh-journal-v2","endpoint":self.endpoint,"max_output":max_output,"preparation":"unverified"}),
-                        move |_|async move {Err(error)},|_:&CommandOutput|serde_json::Value::Null,
-                    ).await;
+                        kind,
+                        crate::security::token_digest(command),
+                        verification,
+                        move |_| async move { Err(error) },
+                        |_: &CommandOutput| serde_json::Value::Null,
+                    )
+                    .await;
                 }
             }
         } else {
             None
         };
+        verification["expected_head"] = serde_json::json!(prepared_head);
         crate::execution::remote::with_context(
-            "ssh-command",
+            kind,
             crate::security::token_digest(command),
-            serde_json::json!({"protocol":"ssh-journal-v2","endpoint":self.endpoint,"max_output":max_output,"expected_head":prepared_head}),
+            verification,
             |context| async move {
-                let Some(context)=context else {return self.execute_remote(command,timeout,max_output).await;};
+                let Some(context)=context else {return self.execute_remote_input(command,input,timeout,max_output).await;};
                 let wrapped=journal::wrap(&context,command,max_output)?;
-                let output=self.execute_remote(&wrapped,timeout,max_output).await?;
+                let output=self.execute_remote_input(&wrapped,input,timeout,max_output).await?;
                 let receipt=self.inspect_command(&context,&self.endpoint,max_output).await?;
                 anyhow::ensure!(receipt.exit_code==output.code,"remote command receipt differs from its acknowledgement");
                 Ok(output)
@@ -328,41 +373,68 @@ impl SshSession {
         timeout: Duration,
         max_output: usize,
     ) -> Result<CommandOutput> {
+        self.execute_remote_input(command, None, timeout, max_output)
+            .await
+    }
+
+    async fn execute_remote_input(
+        &self,
+        command: &str,
+        input: Option<&[u8]>,
+        timeout: Duration,
+        max_output: usize,
+    ) -> Result<CommandOutput> {
         let deadline = tokio::time::Instant::now() + timeout;
-        let mut channel = tokio::time::timeout_at(deadline, self.handle.channel_open_session())
+        let channel = tokio::time::timeout_at(deadline, self.handle.channel_open_session())
             .await
             .map_err(|_| SshError::OperationTimedOut)??;
+        let (mut reader, writer) = channel.split();
         let result = tokio::time::timeout_at(deadline, async {
-            channel.exec(true, command).await?;
-            let mut stdout = Vec::new();
-            let mut stderr = Vec::new();
-            let mut exit_code = None;
-            while let Some(message) = channel.wait().await {
-                match message {
-                    ChannelMsg::Data { data } => {
-                        if data.len() > max_output.saturating_sub(stdout.len() + stderr.len()) {
-                            return Err(SshError::OutputLimitExceeded.into());
-                        }
-                        stdout.extend_from_slice(&data);
+            writer.exec(true, command).await?;
+            // Drain acknowledgements while sending so SSH window backpressure
+            // cannot deadlock a large upload or an early remote rejection.
+            let send = async {
+                if let Some(input) = input {
+                    for chunk in input.chunks(32 * 1024) {
+                        writer.data_bytes(chunk.to_vec()).await?;
                     }
-                    ChannelMsg::ExtendedData { data, ext: 1 } => {
-                        if data.len() > max_output.saturating_sub(stdout.len() + stderr.len()) {
-                            return Err(SshError::OutputLimitExceeded.into());
-                        }
-                        stderr.extend_from_slice(&data);
-                    }
-                    ChannelMsg::ExitStatus { exit_status } => exit_code = Some(exit_status),
-                    ChannelMsg::Close => break,
-                    _ => {}
+                    writer.eof().await?;
                 }
-            }
-            Ok(CommandOutput {
-                code: exit_code.context(
-                    "SSH command completion was not acknowledged; verification required",
-                )?,
-                stdout: String::from_utf8_lossy(&stdout).into_owned(),
-                stderr: String::from_utf8_lossy(&stderr).into_owned(),
-            })
+                Ok::<_, anyhow::Error>(())
+            };
+            let receive = async {
+                let mut stdout = Vec::new();
+                let mut stderr = Vec::new();
+                let mut exit_code = None;
+                while let Some(message) = reader.wait().await {
+                    match message {
+                        ChannelMsg::Data { data } => {
+                            if data.len() > max_output.saturating_sub(stdout.len() + stderr.len()) {
+                                return Err(SshError::OutputLimitExceeded.into());
+                            }
+                            stdout.extend_from_slice(&data);
+                        }
+                        ChannelMsg::ExtendedData { data, ext: 1 } => {
+                            if data.len() > max_output.saturating_sub(stdout.len() + stderr.len()) {
+                                return Err(SshError::OutputLimitExceeded.into());
+                            }
+                            stderr.extend_from_slice(&data);
+                        }
+                        ChannelMsg::ExitStatus { exit_status } => exit_code = Some(exit_status),
+                        ChannelMsg::Close => break,
+                        _ => {}
+                    }
+                }
+                Ok(CommandOutput {
+                    code: exit_code.context(
+                        "SSH command completion was not acknowledged; verification required",
+                    )?,
+                    stdout: String::from_utf8_lossy(&stdout).into_owned(),
+                    stderr: String::from_utf8_lossy(&stderr).into_owned(),
+                })
+            };
+            let (_, output) = tokio::try_join!(send, receive)?;
+            Ok(output)
         })
         .await
         .unwrap_or_else(|_| Err(SshError::OperationTimedOut.into()));
@@ -370,8 +442,8 @@ impl SshSession {
             // SSH signals are best effort. Never classify uncertain execution as
             // a retryable transport error: a peer may ignore TERM/close.
             let _ = tokio::time::timeout(Duration::from_secs(1), async {
-                let _ = channel.signal(russh::Sig::TERM).await;
-                let _ = channel.close().await;
+                let _ = writer.signal(russh::Sig::TERM).await;
+                let _ = writer.close().await;
             })
             .await;
         }
@@ -405,30 +477,34 @@ impl SshSession {
         Ok(output.stdout)
     }
 
-    pub async fn upload(&self, remote_path: &str, contents: &[u8]) -> Result<()> {
-        use sha2::{Digest, Sha256};
-        let digest = hex::encode(Sha256::digest(contents));
-        crate::execution::remote("ssh-upload",crate::security::token_digest(&format!("{remote_path}:{digest}")),self.upload_remote(remote_path,contents),
-            |_|serde_json::json!({"remote_path":remote_path,"content_digest":digest,"acknowledged":true})).await
+    pub async fn upload_release_binary(&self, remote_path: &str, contents: &[u8]) -> Result<()> {
+        let outcome = self
+            .execute_checked(&upload::reuse_installed_binary(remote_path, contents)?)
+            .await?;
+        match outcome.trim() {
+            "reused" => Ok(()),
+            "upload" => self.upload(remote_path, contents).await,
+            _ => bail!("remote release staging returned an invalid result"),
+        }
     }
 
-    async fn upload_remote(&self, remote_path: &str, contents: &[u8]) -> Result<()> {
-        tokio::time::timeout(Duration::from_secs(120), async {
-            let channel = self.handle.channel_open_session().await?;
-            channel.request_subsystem(true, "sftp").await?;
-            let sftp = SftpSession::new(channel.into_stream()).await?;
-            let mut file = sftp.create(remote_path).await?;
-            file.write_all(contents).await?;
-            file.close().await?;
-            // `create` returns an open file handle, so close it before closing the
-            // SFTP session to ensure all file data has reached the remote host.
-            // The SFTP session's `write` convenience method only opens existing
-            // files with `WRITE`, which fails for deployment staging files.
-            sftp.close().await?;
-            Ok(())
-        })
-        .await
-        .map_err(|_| SshError::OperationTimedOut)?
+    pub async fn upload(&self, remote_path: &str, contents: &[u8]) -> Result<()> {
+        let timeout = crate::runtime_config::ssh_upload_timeout_seconds();
+        let transfer = upload::Transfer::new(remote_path, contents, timeout)?;
+        let output = self
+            .execute_journaled(
+                "ssh-upload",
+                &transfer.command,
+                Some(contents),
+                transfer.verification,
+                (Duration::from_secs(timeout + 5), 4096),
+            )
+            .await
+            .context(
+                "SSH file upload failed; inspect the upload completion receipt before recovery",
+            )?;
+        Self::check_output(output).context("SSH file upload did not complete")?;
+        Ok(())
     }
 
     pub async fn loopback_http_get(&self, port: u32, path: &str, secret: &str) -> Result<Vec<u8>> {
@@ -588,7 +664,7 @@ fn sanitize_remote_output(value: &str) -> String {
 pub async fn inspect_connected(session: &SshSession) -> Result<RemoteEnvironment> {
     let output = session
         .execute_read_only_checked(
-            "set -eu; for tool in flock head wc sha256sum mkfifo grep; do command -v \"$tool\" >/dev/null; done; . /etc/os-release; printf '%s\\n%s\\n%s\\n' \"$ID\" \"$VERSION_ID\" \"$(uname -m)\"; command -v systemctl >/dev/null; systemctl --version | head -n1; if [ \"$(id -u)\" -eq 0 ]; then printf 'root\\n'; else sudo -n true && printf 'sudo\\n'; fi; df -Pk / | tail -n1",
+            "set -eu; for tool in flock head wc sha256sum mkfifo grep timeout mktemp mv; do command -v \"$tool\" >/dev/null; done; . /etc/os-release; printf '%s\\n%s\\n%s\\n' \"$ID\" \"$VERSION_ID\" \"$(uname -m)\"; command -v systemctl >/dev/null; systemctl --version | head -n1; if [ \"$(id -u)\" -eq 0 ]; then printf 'root\\n'; else sudo -n true && printf 'sudo\\n'; fi; df -Pk / | tail -n1",
         )
         .await?;
     let lines: Vec<&str> = output.lines().collect();
@@ -656,6 +732,21 @@ mod tests {
     fn normalizes_supported_linux_architectures() {
         assert_eq!(normalize_arch("x86_64"), "amd64");
         assert_eq!(normalize_arch("aarch64"), "arm64");
+    }
+
+    #[test]
+    fn client_prefers_x25519_without_removing_supported_exchanges() {
+        let configured = super::client_config();
+        let defaults = russh::client::Config::default();
+        assert_eq!(
+            configured.preferred.kex.first(),
+            Some(&russh::kex::CURVE25519)
+        );
+        assert_eq!(configured.preferred.kex.len(), defaults.preferred.kex.len());
+        for algorithm in defaults.preferred.kex.iter() {
+            assert!(configured.preferred.kex.contains(algorithm));
+        }
+        assert!(configured.nodelay);
     }
 
     #[test]

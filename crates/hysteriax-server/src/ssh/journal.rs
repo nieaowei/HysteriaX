@@ -59,7 +59,7 @@ fn validate(step: &RemoteStep) -> Result<()> {
         "invalid remote execution identifier"
     );
     ensure!(
-        step.generation > 0 && step.kind == "ssh-command",
+        step.generation > 0 && matches!(step.kind.as_str(), "ssh-command" | "ssh-upload"),
         "invalid remote execution incarnation"
     );
     for value in [
@@ -107,11 +107,12 @@ pub(crate) fn wrap(step: &RemoteStep, command: &str, cap: usize) -> Result<Strin
         "remote command digest differs from its intent"
     );
     Ok(format!(
-        "{}intent={}\ncommand={}\ncap={}\n{}",
+        "{}intent={}\ncommand={}\ncap={}\npayload_lock={}\n{}",
         prefix(step)?,
         quote(&serde_json::to_string(step)?),
         quote(command),
         cap,
+        if step.kind == "ssh-upload" { 1 } else { 0 },
         include_str!("journal.sh")
     ))
 }
