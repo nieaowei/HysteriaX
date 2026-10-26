@@ -15,4 +15,5 @@ temp.cloud.md
 /hysteriax-server.tar.gz
 __pycache__/
 *.py[cod]
+production/
 PRODUCTION.md
