@@ -44,8 +44,34 @@ pub(crate) mod journal;
 
 pub struct SshSession {
     handle: Handle<HostKeyHandler>,
+    // The library spawns its protocol loop independently of connect_stream.
+    // Closing the socket also wakes a loop still waiting for key exchange.
+    _socket: Option<SocketGuard>,
     pub fingerprint: String,
     pub(crate) endpoint: journal::Endpoint,
+}
+
+struct SocketGuard(std::net::TcpStream);
+
+impl Drop for SocketGuard {
+    fn drop(&mut self) {
+        let _ = self.0.shutdown(std::net::Shutdown::Both);
+    }
+}
+
+async fn connect_transport(
+    config: Arc<client::Config>,
+    address: (&str, u16),
+    handler: HostKeyHandler,
+) -> Result<(Handle<HostKeyHandler>, SocketGuard)> {
+    let socket = tokio::net::TcpStream::connect(address).await?.into_std()?;
+    let guard = SocketGuard(socket.try_clone()?);
+    let stream = tokio::net::TcpStream::from_std(socket)?;
+    if config.nodelay {
+        stream.set_nodelay(true)?;
+    }
+    let handle = client::connect_stream(config, stream, handler).await?;
+    Ok((handle, guard))
 }
 
 #[derive(Clone, Debug)]
@@ -99,8 +125,8 @@ pub async fn connect(node: &SshNode) -> Result<FingerprintResult> {
         ..Default::default()
     };
     let result = match tokio::time::timeout(
-        Duration::from_secs(15),
-        client::connect(Arc::new(config), (node.host.as_str(), node.port), handler),
+        Duration::from_secs(crate::runtime_config::operation_timeout_seconds(15)),
+        connect_transport(Arc::new(config), (node.host.as_str(), node.port), handler),
     )
     .await
     {
@@ -108,8 +134,8 @@ pub async fn connect(node: &SshNode) -> Result<FingerprintResult> {
         Err(_) => return Err(SshError::Transport("SSH connection timed out".to_owned()).into()),
     };
 
-    let mut handle = match result {
-        Ok(handle) => handle,
+    let (mut handle, socket) = match result {
+        Ok(connection) => connection,
         Err(error) => {
             let fingerprint = observed.lock().ok().and_then(|value| value.clone());
             if let Some(observed) = fingerprint {
@@ -139,7 +165,7 @@ pub async fn connect(node: &SshNode) -> Result<FingerprintResult> {
 
     let auth = if node.auth_type == "password" {
         tokio::time::timeout(
-            Duration::from_secs(15),
+            Duration::from_secs(crate::runtime_config::operation_timeout_seconds(15)),
             handle.authenticate_password(node.username.clone(), node.secret.clone()),
         )
         .await
@@ -147,14 +173,17 @@ pub async fn connect(node: &SshNode) -> Result<FingerprintResult> {
     } else {
         let key = russh::keys::decode_secret_key(&node.secret, node.passphrase.as_deref())
             .context("decode SSH private key; check its format and passphrase")?;
-        let hash = handle
-            .best_supported_rsa_hash()
-            .await
-            .map_err(|error| SshError::Transport(error.to_string()))?
-            .flatten();
+        let hash = tokio::time::timeout(
+            Duration::from_secs(crate::runtime_config::operation_timeout_seconds(15)),
+            handle.best_supported_rsa_hash(),
+        )
+        .await
+        .map_err(|_| SshError::Transport("SSH signature negotiation timed out".to_owned()))?
+        .map_err(|error| SshError::Transport(error.to_string()))?
+        .flatten();
         let key = russh::keys::key::PrivateKeyWithHashAlg::new(Arc::new(key), hash);
         tokio::time::timeout(
-            Duration::from_secs(15),
+            Duration::from_secs(crate::runtime_config::operation_timeout_seconds(15)),
             handle.authenticate_publickey(node.username.clone(), key),
         )
         .await
@@ -166,6 +195,7 @@ pub async fn connect(node: &SshNode) -> Result<FingerprintResult> {
     }
     Ok(FingerprintResult::Trusted(SshSession {
         handle,
+        _socket: Some(socket),
         endpoint: journal::Endpoint {
             host: node.host.clone(),
             port: node.port,
@@ -178,16 +208,24 @@ pub async fn connect(node: &SshNode) -> Result<FingerprintResult> {
 
 impl SshSession {
     pub async fn execute(&self, command: &str) -> Result<CommandOutput> {
-        self.execute_with_limits(command, Duration::from_secs(60), 4 * 1024 * 1024)
-            .await
+        self.execute_with_limits(
+            command,
+            Duration::from_secs(crate::runtime_config::operation_timeout_seconds(60)),
+            4 * 1024 * 1024,
+        )
+        .await
     }
 
     /// Only for fixed observation commands that cannot change the remote node.
     /// These reads may be retried after ownership loss; mutations use execute.
     pub async fn execute_read_only(&self, command: &str) -> Result<CommandOutput> {
         crate::execution::check_current().await?;
-        self.execute_remote(command, Duration::from_secs(60), 4 * 1024 * 1024)
-            .await
+        self.execute_remote(
+            command,
+            Duration::from_secs(crate::runtime_config::operation_timeout_seconds(60)),
+            4 * 1024 * 1024,
+        )
+        .await
     }
     pub async fn execute_read_only_checked(&self, command: &str) -> Result<String> {
         Self::check_output(self.execute_read_only(command).await?)
@@ -255,7 +293,7 @@ impl SshSession {
         let output = self
             .execute_remote(
                 &journal::inspect(step)?,
-                Duration::from_secs(10),
+                Duration::from_secs(crate::runtime_config::operation_timeout_seconds(10)),
                 journal::RECEIPT_LIMIT,
             )
             .await?;
@@ -276,7 +314,7 @@ impl SshSession {
         let output = self
             .execute_remote(
                 &journal::recheck::render(request)?,
-                Duration::from_secs(15),
+                Duration::from_secs(crate::runtime_config::operation_timeout_seconds(15)),
                 journal::RECEIPT_LIMIT,
             )
             .await?;
@@ -455,7 +493,7 @@ impl SshSession {
         body: Option<&[u8]>,
     ) -> Result<Vec<u8>> {
         let body = body.unwrap_or_default();
-        let response = tokio::time::timeout(Duration::from_secs(5), async {
+        let response = tokio::time::timeout(Duration::from_secs(crate::runtime_config::operation_timeout_seconds(5)), async {
             let mut channel = self
                 .handle
                 .channel_open_direct_tcpip("127.0.0.1", port, "127.0.0.1", 0)
@@ -634,3 +672,7 @@ mod tests {
 #[cfg(test)]
 #[path = "ssh_execution_tests.rs"]
 mod execution_tests;
+
+#[cfg(test)]
+#[path = "ssh_lifecycle_tests.rs"]
+mod lifecycle_tests;

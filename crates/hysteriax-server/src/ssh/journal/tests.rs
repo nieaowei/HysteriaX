@@ -495,6 +495,7 @@ async fn actual_ssh_response_loss_keeps_intent_and_exact_remote_receipt_without_
     };
     let session = SshSession {
         handle,
+        _socket: None,
         fingerprint,
         endpoint: endpoint.clone(),
     };
