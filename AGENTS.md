@@ -1,9 +1,9 @@
 # HysteriaX
 
 
-## 测试服务器信息
+## 生产服务器部署与维护
 
-参考 `temp.cloud.md` 文件
+参考 `production` 文件夹。
 
 ## 必须做
 

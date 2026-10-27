@@ -693,7 +693,7 @@ fn build_node(
     SubscriptionNode {
         id: id.to_owned(),
         display_name: name.to_owned(),
-        name: format!("{name}：{}", id.chars().take(8).collect::<String>()),
+        name: format!("{name}:{}", id.chars().take(8).collect::<String>()),
         server: server.to_owned(),
         port,
         ports,
@@ -810,10 +810,7 @@ mod tests {
         );
         let yaml = serde_yaml::to_string(&proxy.to_mihomo()).unwrap();
         let value: serde_yaml::Value = serde_yaml::from_str(&yaml).unwrap();
-        assert_eq!(
-            value["name"].as_str(),
-            Some("東京: edge：7ed8a6e1")
-        );
+        assert_eq!(value["name"].as_str(), Some("東京: edge:7ed8a6e1"));
         assert_eq!(value["server"].as_str(), Some("2001:db8::1"));
         assert_eq!(value["password"].as_str(), Some("pass:word/with?symbols"));
         assert_eq!(value["ports"].as_str(), Some("443,445-446"));
