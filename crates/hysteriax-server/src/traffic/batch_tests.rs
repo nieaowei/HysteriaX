@@ -2,6 +2,9 @@ use super::batches::{self, Progress};
 use serde_json::{Map, Value, json};
 use sqlx::{PgPool, Row};
 
+#[path = "bulk_tests.rs"]
+mod bulk_tests;
+
 async fn fixture(users: usize) -> PgPool {
     fixture_through(users, i64::MAX).await
 }

@@ -54,17 +54,27 @@ pub async fn initialize(pool: &PgPool) -> Result<()> {
 }
 
 pub async fn admit_on(tx: &mut Transaction<'static, Postgres>, user: &str) -> Result<()> {
-    let marker:Option<DateTime<Utc>>=sqlx::query_scalar("UPDATE users SET access_kick_enqueued_at=clock_timestamp(),updated_at=clock_timestamp() WHERE id=$1 AND access_kick_enqueued_at IS NULL AND (NOT enabled OR expires_at<=clock_timestamp() OR usage_bytes>=quota_bytes) RETURNING access_kick_enqueued_at")
-        .bind(user).fetch_optional(&mut **tx).await?;
-    if let Some(marker) = marker {
-        let generation: i64 = sqlx::query_scalar(
-            "SELECT generation FROM user_access_restriction_epochs WHERE user_id=$1",
-        )
-        .bind(user)
-        .fetch_one(&mut **tx)
-        .await?;
-        sqlx::query("INSERT INTO background_work(id,kind,payload) VALUES('access-restriction:'||gen_random_uuid()::text,$1,$2)")
-            .bind(KIND).bind(json!({"user_id":user,"restriction_marker":marker,"restriction_generation":generation,"after_node":null})).execute(&mut **tx).await?;
+    admit_many_on(tx, &[user.to_owned()]).await
+}
+
+/// Call after locking every user parent. Only newly marked restrictions receive
+/// work, and the next statement sees the generation written by AFTER triggers.
+pub async fn admit_many_on(
+    tx: &mut Transaction<'static, Postgres>,
+    users: &[String],
+) -> Result<()> {
+    if users.is_empty() {
+        return Ok(());
+    }
+    let marked:Vec<String>=sqlx::query_scalar("UPDATE users SET access_kick_enqueued_at=clock_timestamp(),updated_at=clock_timestamp() WHERE id=ANY($1::text[]) AND access_kick_enqueued_at IS NULL AND (NOT enabled OR expires_at<=clock_timestamp() OR usage_bytes>=quota_bytes) RETURNING id")
+        .bind(users).fetch_all(&mut **tx).await?;
+    if !marked.is_empty() {
+        let inserted=sqlx::query("INSERT INTO background_work(id,kind,payload) SELECT 'access-restriction:'||gen_random_uuid()::text,$1,jsonb_build_object('user_id',u.id,'restriction_marker',u.access_kick_enqueued_at,'restriction_generation',e.generation,'after_node',NULL) FROM users u JOIN user_access_restriction_epochs e ON e.user_id=u.id WHERE u.id=ANY($2::text[]) ORDER BY u.id")
+            .bind(KIND).bind(&marked).execute(&mut **tx).await?.rows_affected();
+        anyhow::ensure!(
+            inserted == marked.len() as u64,
+            "restriction generation is missing for a marked user"
+        );
     }
     Ok(())
 }

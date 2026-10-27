@@ -1,6 +1,7 @@
 //! Durable, bounded billing. A captured response survives process death; each
 //! item's checkpoint, baseline, ledger row, usage and revocation commit together.
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::time::Instant;
 
 use anyhow::{Result, ensure};
 use chrono::{DateTime, Utc};
@@ -17,6 +18,19 @@ pub enum Progress {
     Committed { items: usize, complete: bool },
     Finished,
     Waiting,
+}
+
+#[derive(serde::Serialize)]
+struct BilledCounter {
+    record_id: String,
+    user_id: String,
+    tx_total: i64,
+    rx_total: i64,
+    delta_tx: i64,
+    delta_rx: i64,
+    delta_bytes: i64,
+    gap_reason: Option<&'static str>,
+    baseline_only: bool,
 }
 
 /// Reserve ordering before the remote read. Retrying with the same ID never
@@ -123,10 +137,13 @@ pub async fn expire_captures(pool: &PgPool) -> Result<()> {
 /// A quota reset locks the same user row and therefore divides billing by
 /// database admission order without clearing per-node counter baselines.
 pub async fn process(pool: &PgPool, id: &str) -> Result<Progress> {
-    let id = id.to_owned();
-    db::write(pool,move |tx| {
+    let sample_id = id.to_owned();
+    let started = Instant::now();
+    let id = sample_id.clone();
+    let result = db::write(pool,move |tx| {
         let id=id.clone();
         Box::pin(async move {
+            let attempt_started=Instant::now();
             let Some(node)=sqlx::query_scalar::<_,String>("SELECT node_id FROM traffic_sample_batches WHERE sample_id=$1")
                 .bind(&id).fetch_optional(&mut **tx).await? else {return Ok(Progress::Finished);};
             let node_state:Option<String>=sqlx::query_scalar("SELECT state FROM nodes WHERE id=$1 FOR NO KEY UPDATE SKIP LOCKED")
@@ -149,33 +166,52 @@ pub async fn process(pool: &PgPool, id: &str) -> Result<Progress> {
                 .bind(&id).bind(CHUNK_SIZE).fetch_all(&mut **tx).await?;
             let ids:Vec<String>=items.iter().map(|item|item.get("user_id")).collect();
             // Explicitly lock users in ID order before touching any counter.
+            let user_lock_started=Instant::now();
             sqlx::query("SELECT id FROM users WHERE id=ANY($1::text[]) ORDER BY id FOR NO KEY UPDATE")
                 .bind(&ids).fetch_all(&mut **tx).await?;
+            let user_lock_ms=user_lock_started.elapsed().as_millis() as u64;
             // Read membership once per page, after acquiring the same user locks
             // as before. Stale counters still advance their item checkpoints.
             let assigned:HashSet<String>=sqlx::query_scalar::<_,String>("SELECT user_id FROM node_assignments WHERE node_id=$1 AND user_id=ANY($2::text[])")
                 .bind(&node).bind(&ids).fetch_all(&mut **tx).await?.into_iter().collect();
+            let assigned_ids:Vec<&str>=ids.iter().filter(|user|assigned.contains(*user)).map(String::as_str).collect();
+            let baselines:HashMap<String,_>=sqlx::query("SELECT user_id,instance_id,tx_total,rx_total,sample_order FROM traffic_baselines WHERE node_id=$1 AND user_id=ANY($2::text[]) ORDER BY user_id FOR UPDATE")
+                .bind(&node).bind(&assigned_ids).fetch_all(&mut **tx).await?.into_iter().map(|row|(row.get("user_id"),row)).collect();
+            let mut billed=Vec::with_capacity(assigned.len());
             for item in &items {
                 let user:String=item.get("user_id");
                 if !assigned.contains(&user) {continue;}
                 let current_tx:i64=item.get("tx_total");
                 let current_rx:i64=item.get("rx_total");
-                let baseline=sqlx::query("SELECT instance_id,tx_total,rx_total,sample_order FROM traffic_baselines WHERE node_id=$1 AND user_id=$2 FOR UPDATE")
-                    .bind(&node).bind(&user).fetch_optional(&mut **tx).await?;
-                if baseline.as_ref().is_some_and(|baseline|baseline.get::<i64,_>("sample_order")>=order) {continue;}
-                let previous=baseline.as_ref().map(|row|(row.get::<String,_>("instance_id"),row.get::<i64,_>("tx_total") as u64,row.get::<i64,_>("rx_total") as u64));
+                let baseline=baselines.get(&user);
+                if baseline.is_some_and(|baseline|baseline.get::<i64,_>("sample_order")>=order) {continue;}
+                let previous=baseline.map(|row|(row.get::<String,_>("instance_id"),row.get::<i64,_>("tx_total") as u64,row.get::<i64,_>("rx_total") as u64));
                 let delta=super::counter_delta(previous.as_ref().map(|(instance,tx,rx)|(instance.as_str(),*tx,*rx)),&instance,current_tx as u64,current_rx as u64);
                 let delta_tx=delta.tx as i64;
                 let delta_rx=delta.rx as i64;
-                let delta_bytes=delta_tx.saturating_add(delta_rx);
-                sqlx::query("INSERT INTO traffic_baselines(node_id,user_id,instance_id,tx_total,rx_total,sampled_at,sample_order) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(node_id,user_id) DO UPDATE SET instance_id=EXCLUDED.instance_id,tx_total=EXCLUDED.tx_total,rx_total=EXCLUDED.rx_total,sampled_at=EXCLUDED.sampled_at,sample_order=EXCLUDED.sample_order")
-                    .bind(&node).bind(&user).bind(&instance).bind(current_tx).bind(current_rx).bind(sampled_at).bind(order).execute(&mut **tx).await?;
-                sqlx::query("INSERT INTO traffic_records(id,node_id,user_id,instance_id,baseline_tx,baseline_rx,delta_tx,delta_rx,gap_reason,sampled_at,baseline_only,sample_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)")
-                    .bind(Uuid::new_v4().to_string()).bind(&node).bind(&user).bind(&instance).bind(current_tx).bind(current_rx).bind(delta_tx).bind(delta_rx).bind(delta.gap_reason).bind(sampled_at).bind(previous.is_none()).bind(&id).execute(&mut **tx).await?;
-                sqlx::query("UPDATE users SET usage_bytes=usage_bytes+least($1,9223372036854775807-usage_bytes),updated_at=clock_timestamp() WHERE id=$2")
-                    .bind(delta_bytes).bind(&user).execute(&mut **tx).await?;
-                enforce_user(tx,&user).await?;
-                if let Some(reason)=delta.gap_reason {super::record_gap_in_tx(tx,&node,reason,&sampled_at).await?;}
+                billed.push(BilledCounter {
+                    record_id:Uuid::new_v4().to_string(),user_id:user,tx_total:current_tx,rx_total:current_rx,
+                    delta_tx,delta_rx,delta_bytes:delta_tx.saturating_add(delta_rx),
+                    gap_reason:delta.gap_reason,baseline_only:previous.is_none(),
+                });
+            }
+            if !billed.is_empty() {
+                // All input rows are unique and in user-ID order. Keep calculation
+                // in Rust, but cross the database boundary only once per operation.
+                let payload=serde_json::to_value(&billed)?;
+                sqlx::query("INSERT INTO traffic_baselines(node_id,user_id,instance_id,tx_total,rx_total,sampled_at,sample_order) SELECT $1,b.user_id,$2,b.tx_total,b.rx_total,$3,$4 FROM jsonb_to_recordset($5::jsonb) AS b(user_id text,tx_total bigint,rx_total bigint) ORDER BY b.user_id ON CONFLICT(node_id,user_id) DO UPDATE SET instance_id=EXCLUDED.instance_id,tx_total=EXCLUDED.tx_total,rx_total=EXCLUDED.rx_total,sampled_at=EXCLUDED.sampled_at,sample_order=EXCLUDED.sample_order")
+                    .bind(&node).bind(&instance).bind(sampled_at).bind(order).bind(&payload).execute(&mut **tx).await?;
+                sqlx::query("INSERT INTO traffic_records(id,node_id,user_id,instance_id,baseline_tx,baseline_rx,delta_tx,delta_rx,gap_reason,sampled_at,baseline_only,sample_id) SELECT b.record_id,$1,b.user_id,$2,b.tx_total,b.rx_total,b.delta_tx,b.delta_rx,b.gap_reason,$3,b.baseline_only,$4 FROM jsonb_to_recordset($5::jsonb) AS b(record_id text,user_id text,tx_total bigint,rx_total bigint,delta_tx bigint,delta_rx bigint,gap_reason text,baseline_only boolean) ORDER BY b.user_id")
+                    .bind(&node).bind(&instance).bind(sampled_at).bind(&id).bind(&payload).execute(&mut **tx).await?;
+                sqlx::query("UPDATE users u SET usage_bytes=u.usage_bytes+least(b.delta_bytes,9223372036854775807-u.usage_bytes),updated_at=clock_timestamp() FROM jsonb_to_recordset($1::jsonb) AS b(user_id text,delta_bytes bigint) WHERE u.id=b.user_id")
+                    .bind(&payload).execute(&mut **tx).await?;
+                let billed_ids:Vec<String>=billed.iter().map(|counter|counter.user_id.clone()).collect();
+                super::access::admit_many_on(tx,&billed_ids).await?;
+                // The first gap in user order opens the node's single gap, just
+                // as in the per-user path; further gaps need no database reads.
+                if let Some(reason)=billed.iter().find_map(|counter|counter.gap_reason) {
+                    super::record_gap_in_tx(tx,&node,reason,&sampled_at).await?;
+                }
             }
             sqlx::query("UPDATE traffic_sample_items SET processed_at=clock_timestamp() WHERE sample_id=$1 AND user_id=ANY($2::text[]) AND processed_at IS NULL")
                 .bind(&id).bind(&ids).execute(&mut **tx).await?;
@@ -191,16 +227,14 @@ pub async fn process(pool: &PgPool, id: &str) -> Result<Progress> {
                 sqlx::query("UPDATE data_gaps SET resolved_at=clock_timestamp() WHERE node_id=$1 AND resolved_at IS NULL AND opened_at<=$2")
                     .bind(&node).bind(sampled_at).execute(&mut **tx).await?;
             }
+            tracing::debug!(sample_id=%id,node_id=%node,items=items.len(),billed_items=billed.len(),user_lock_ms,attempt_ms=attempt_started.elapsed().as_millis() as u64,"traffic billing page prepared");
             Ok(Progress::Committed{items:items.len(),complete})
         })
-    }).await
-}
-
-pub async fn enforce_user(
-    tx: &mut sqlx::Transaction<'static, sqlx::Postgres>,
-    user: &str,
-) -> Result<()> {
-    super::access::admit_on(tx, user).await
+    }).await;
+    if let Ok(Progress::Committed { items, complete }) = &result {
+        tracing::info!(%sample_id,items,complete,elapsed_ms=started.elapsed().as_millis() as u64,"traffic billing page committed");
+    }
+    result
 }
 
 pub async fn drain(pool: &PgPool, id: &str) -> Result<bool> {
