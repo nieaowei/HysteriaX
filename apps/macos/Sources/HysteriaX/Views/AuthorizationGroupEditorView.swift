@@ -207,7 +207,7 @@ struct AuthorizationGroupEditorView: View {
             VStack(alignment: .leading, spacing: 10) {
                 Text(L10n.text("新增 {0} 条连接授权 · 移除 {1} 条连接授权", String(preview.additionsCount), String(preview.removalsCount)))
                     .font(.callout.weight(.medium))
-                Text(L10n.text("新增访问涉及 {0} 人 · 撤权涉及 {1} 人", String(Set(preview.additions.map(\.userId)).count), String(Set(preview.removals.map(\.userId)).count)))
+                Text(L10n.text("新增访问涉及 {0} 人 · 撤权涉及 {1} 人", String(preview.additionsUserCount ?? Set(preview.additions.map(\.userId)).count), String(preview.removalsUserCount ?? Set(preview.removals.map(\.userId)).count)))
                     .font(.caption).foregroundStyle(.secondary)
                 if intent == .users, !memberChanges.removed.isEmpty {
                     let revoked = memberChanges.removed.intersection(preview.removals.map(\.userId)).count

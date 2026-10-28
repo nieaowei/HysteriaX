@@ -18,6 +18,8 @@ use crate::{
     state::AppState,
 };
 
+mod preview_storage;
+
 const PREVIEW_TTL_MINUTES: i64 = 10;
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -435,6 +437,8 @@ fn diff_json(additions: &[Pair], removals: &[Pair]) -> Value {
     json!({
         "additions_count": additions.len(),
         "removals_count": removals.len(),
+        "additions_user_count": additions.iter().map(|(user, _)| user).collect::<HashSet<_>>().len(),
+        "removals_user_count": removals.iter().map(|(user, _)| user).collect::<HashSet<_>>().len(),
         "additions": pairs_json(additions),
         "removals": pairs_json(removals),
     })
@@ -451,6 +455,15 @@ fn preview_json(action: &str, token: String, mut result: Value) -> Value {
     result["managed_identities"] = plan["identities"].clone();
     result
 }
+// Wire responses are independent of the compact database representation.
+fn node_change_preview_json(action: &str, token: String, result: Value) -> Value {
+    let mut response = preview_json(action, token, result);
+    for field in ["additions", "removals", "managed_identities"] {
+        response[field] = json!([]);
+    }
+    response
+}
+
 fn with_plan(mut result: Value, plan: crate::credentials::authorization::Plan) -> Value {
     result["automatic_issue_count"] = json!(plan.automatic_issue_count);
     result["pending_issue_count"] = json!(plan.pending_issue_count);
@@ -459,9 +472,7 @@ fn with_plan(mut result: Value, plan: crate::credentials::authorization::Plan) -
 }
 fn diff_matches(result: &Value, additions: &[Pair], removals: &[Pair]) -> bool {
     let expected = diff_json(additions, removals);
-    ["additions_count", "removals_count", "additions", "removals"]
-        .iter()
-        .all(|key| result[*key] == expected[*key])
+    preview_storage::compact_diff_matches(result, &expected)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -607,9 +618,9 @@ async fn store_preview(
         .bind(action)
         .bind(group_id)
         .bind(user_id)
-        .bind(request_json)
-        .bind(guard_json)
-        .bind(result_json)
+        .bind(preview_storage::digest(&request_json))
+        .bind(preview_storage::digest(&guard_json))
+        .bind(preview_storage::compact_result(result_json))
         .bind(timestamp)
         .bind(timestamp + Duration::minutes(PREVIEW_TTL_MINUTES))
         .execute(&mut **tx)
@@ -665,13 +676,13 @@ fn ensure_preview_matches(
     if preview.action != action
         || preview.group_id.as_deref() != group_id
         || preview.user_id.as_deref() != user_id
-        || preview.request_json != *request
+        || !preview_storage::matches(&preview.request_json, request)
     {
         return Err(ApiError::conflict(
             "preview does not match this change; preview the change again",
         ));
     }
-    if preview.guard_json != *guard {
+    if !preview_storage::matches(&preview.guard_json, guard) {
         return Err(ApiError::conflict(
             "related users, groups, nodes, or credentials changed after preview; refresh the preview",
         ));
@@ -1558,6 +1569,137 @@ mod tests {
                 .unwrap(),
             0
         );
+    }
+
+    #[tokio::test]
+    async fn compact_preview_storage_size_for_large_connection_lists() {
+        let state = fixture().await;
+        let pairs: Vec<Pair> = (0..10_000)
+            .map(|n| (format!("user-{n:05}"), "node".into()))
+            .collect();
+        let mut result = diff_json(&pairs, &[]);
+        result["mtls_plan"] =
+            json!({"identities":[], "automatic_issue_count":0, "pending_issue_count":0});
+        let request =
+            json!({"action":"update", "user_ids":pairs.iter().map(|p| &p.0).collect::<Vec<_>>()});
+        let guard = json!({"assignments": pairs_json(&pairs)});
+        let full = json!([request, guard, result]);
+        let compact = json!([
+            preview_storage::digest(&full[0]),
+            preview_storage::digest(&full[1]),
+            preview_storage::compact_result(&full[2])
+        ]);
+        let sizes: (i32, i32) =
+            sqlx::query_as("SELECT pg_column_size($1::jsonb),pg_column_size($2::jsonb)")
+                .bind(full)
+                .bind(compact)
+                .fetch_one(&state.pool)
+                .await
+                .unwrap();
+        println!(
+            "10,000 connections: JSONB value size {} -> {} bytes",
+            sizes.0, sizes.1
+        );
+        assert!(sizes.1 * 10 < sizes.0);
+    }
+
+    #[tokio::test]
+    async fn node_change_summary_keeps_compact_preview_and_can_commit() {
+        let state = fixture().await;
+        let created = create_group(&state, "Group").await;
+        let id = created["group"]["id"].as_str().unwrap();
+        // A member-only change still exposes the full affected connections.
+        let Json(members) = preview_group(
+            State(state.clone()),
+            Path(id.into()),
+            Json(
+                serde_json::from_value(json!({
+                    "action":"update", "expected_revision":1, "name":"Group",
+                    "user_ids":[], "node_ids":["node"]
+                }))
+                .unwrap(),
+            ),
+        )
+        .await
+        .unwrap();
+        assert_eq!(members["removals"].as_array().unwrap().len(), 1);
+        let Json(summary) = preview_group(
+            State(state.clone()),
+            Path(id.into()),
+            Json(
+                serde_json::from_value(json!({
+                    "action":"update", "expected_revision":1, "name":"Group",
+                    "user_ids":["user"], "node_ids":[]
+                }))
+                .unwrap(),
+            ),
+        )
+        .await
+        .unwrap();
+        assert_eq!(summary["removals_count"], 1);
+        assert_eq!(summary["removals_user_count"], 1);
+        assert_eq!(summary["removals"], json!([]));
+        let token = summary["preview_token"].as_str().unwrap();
+        let stored: Value = sqlx::query_scalar(
+            "SELECT result_json FROM authorization_group_previews WHERE token=$1",
+        )
+        .bind(token)
+        .fetch_one(&state.pool)
+        .await
+        .unwrap();
+        assert!(stored.get("removals").is_none());
+        assert!(stored.get("additions").is_none());
+        assert!(stored.get("mtls_plan").is_some());
+        assert_eq!(stored["removals_count"], 1);
+        let Json(receipt) = update(
+            State(state.clone()),
+            Path(id.into()),
+            Json(UpdateGroupRequest {
+                expected_revision: 1,
+                name: "Group".into(),
+                user_ids: vec!["user".into()],
+                node_ids: vec![],
+                preview_token: token.into(),
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(receipt["removals_count"], 1);
+        assert!(!receipt["revocation_job_ids"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn node_change_preview_returns_counts_without_connection_or_identity_details() {
+        let additions = vec![
+            ("alice".into(), "node-a".into()),
+            ("alice".into(), "node-b".into()),
+            ("bob".into(), "node-a".into()),
+        ];
+        let removals = vec![("alice".into(), "node-c".into())];
+        let mut stored = diff_json(&additions, &removals);
+        stored["automatic_issue_count"] = json!(2);
+        stored["pending_issue_count"] = json!(1);
+        stored["mtls_plan"] = json!({"identities": [{"user_id": "alice"}]});
+        let response = node_change_preview_json("update", "token".into(), stored.clone());
+        assert_eq!(response["preview_token"], "token");
+        assert_eq!(response["additions_count"], 3);
+        assert_eq!(response["removals_count"], 1);
+        assert_eq!(response["additions_user_count"], 2);
+        assert_eq!(response["removals_user_count"], 1);
+        assert_eq!(response["automatic_issue_count"], 2);
+        assert_eq!(response["pending_issue_count"], 1);
+        for field in ["additions", "removals", "managed_identities"] {
+            assert_eq!(response[field], json!([]));
+        }
+        assert!(response.get("mtls_plan").is_none());
+        assert!(diff_matches(
+            &preview_storage::compact_result(&stored),
+            &additions,
+            &removals
+        ));
+        let full = preview_json("update", "token".into(), stored);
+        assert_eq!(full["additions"].as_array().unwrap().len(), 3);
+        assert_eq!(full["managed_identities"].as_array().unwrap().len(), 1);
     }
 
     #[test]

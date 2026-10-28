@@ -397,6 +397,8 @@ struct AuthorizationChangePreview: Codable, Sendable {
     let previewToken: String
     let additionsCount: Int
     let removalsCount: Int
+    let additionsUserCount: Int?
+    let removalsUserCount: Int?
     let additions: [AuthorizationPair]
     let removals: [AuthorizationPair]
 
@@ -408,6 +410,8 @@ struct AuthorizationChangePreview: Codable, Sendable {
         case previewToken = "preview_token"
         case additionsCount = "additions_count"
         case removalsCount = "removals_count"
+        case additionsUserCount = "additions_user_count"
+        case removalsUserCount = "removals_user_count"
         case additions
         case removals
     }

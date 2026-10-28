@@ -76,6 +76,10 @@ struct AuthorizationGroupClientChecks {
         precondition(GroupFixtureProtocol.state.requests.contains { $0.1 == "/api/v2/authorization-groups" })
         let preview = try await store.previewAuthorizationGroup(group:nil,name:"Test",userIDs:["user"],nodeIDs:["node"])
         precondition(preview.automaticIssueCount == 1 && preview.pendingIssueCount == 0 && preview.previewToken == "guard-1")
+        let summary = try JSONDecoder().decode(AuthorizationChangePreview.self, from: Data(#"{"action":"update","preview_token":"summary","additions_count":100,"removals_count":50,"additions_user_count":20,"removals_user_count":10,"additions":[],"removals":[],"automatic_issue_count":5,"pending_issue_count":2,"managed_identities":[]}"#.utf8))
+        precondition(summary.additions.isEmpty && summary.removals.isEmpty)
+        precondition(summary.additionsUserCount == 20 && summary.removalsUserCount == 10)
+        precondition(preview.additionsUserCount == nil, "older full previews remain decodable")
         let sent = try JSONSerialization.jsonObject(with: GroupFixtureProtocol.state.requests.last!.2) as! [String:Any]
         precondition(sent["mtls_bindings"] == nil)
         precondition(sent["user_ids"] as? [String] == ["user"])

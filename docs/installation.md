@@ -31,11 +31,11 @@ For local Docker acceptance with a PostgreSQL dump from this baseline, use `pyth
 
 ## Database baseline
 
-This release replaces the former 0001–0074 migration chain with `0001_baseline.sql` and supports a new, empty PostgreSQL database. It does not upgrade databases or restore backups created with the former chain. Even an old database reporting version 1 has a different checksum and is incompatible. Do not edit `_sqlx_migrations` to bypass this boundary.
+This release replaces the former 0001–0074 migration chain with `0001_baseline.sql`. New installations initialize an empty PostgreSQL database. There is no automatic upgrade or import from the former chain; an old version-1 record also has a different checksum and fails startup validation. Do not clear migration history or replay the baseline against an existing database.
 
-Existing installations must retain the matching old image, database, configuration and master key to continue using or recovering their original data. Installing this release requires a separate empty database and recreating the service configuration. No automatic data importer is provided.
+Existing installations must retain a matching image, metadata backup, configuration and master key. On 2026-10-28, the current production database was explicitly normalized after logical schema verification and a tested metadata rollback: its 74 migration records were replaced with the baseline record, and `runtime_contract.schema_version` became 1. No baseline SQL or business-data migration ran. This controlled registration applies only to that verified database; this was a verified production maintenance operation. Other legacy databases require separate validation or a fresh installation.
 
-Run `--migrate-only` before the first API startup. It applies the baseline and completes administrator, credential, template, reference-index and work-queue initialization without starting workers or contacting nodes. Ordinary startup checks the exact migration history, protocol and master key. Management API requests use `/api/v2`, and administrative writes require a stable `Idempotency-Key` for retries.
+For a new empty database, run `--migrate-only` before the first API startup. It applies the baseline and completes administrator, credential, template, reference-index and work-queue initialization without starting workers or contacting nodes. Ordinary startup checks the exact migration history, protocol and master key. Management API requests use `/api/v2`, and administrative writes require a stable `Idempotency-Key` for retries.
 
 Future migrations start at `0002` and extend this new baseline. For subsequent compatible upgrades, stop every API replica, retain a recoverable backup and matching old image, run maintenance once, then start the corresponding server and macOS client. See [migration maintenance](../crates/hysteriax-server/migrations/README.md).
 

@@ -95,7 +95,7 @@ flowchart LR
 | `authorization_groups` | `id` | 授权组名称和修订，是批量管理用户与节点可见性的主实体。 | 删除会级联组成员关系和关联预览；需通过业务流程协调有效授权及撤销。 |
 | `authorization_group_users` | `(group_id, user_id)` | 授权组的用户成员。 | 两端均有级联外键；与组节点集合共同决定授权结果。 |
 | `authorization_group_nodes` | `(group_id, node_id)` | 授权组的节点成员。 | 两端均有级联外键；多个组授予同一节点时不能只凭一组移除就撤销实际授权。 |
-| `authorization_group_previews` | `token` | 保存组创建/更新/删除及用户成员变更的预览请求、状态守卫、结果、到期和消费时间。 | 用于将提交绑定到已展示状态；会过期，不能作为长期授权来源。 |
+| `authorization_group_previews` | `token` | 保存组创建/更新/删除及用户成员变更的请求摘要、状态守卫摘要、变更摘要、统计、必要签发计划、到期和消费时间；新预览不保存完整请求、快照和连接清单。 | 用于将提交绑定到已展示状态；会过期，不能作为长期授权来源。 |
 | `user_access_checks` | `user_id` | 用户访问限制的到期检查索引，保存 `next_action_at`，避免反复扫描所有禁用、过期或超额用户。 | 派生调度状态；触发器随用户条件更新，维护模式负责初始化。 |
 | `user_access_restriction_epochs` | `user_id` | 用户访问撤销事件的单调代次，供分页撤销工作识别自己是否已经过时。 | 独立于时间戳和用户修订；随用户删除，不能重置后继续旧工作。 |
 | `node_limit_epochs` | `node_id` | 节点整机受限事件的单调代次，防止编辑套餐时误使未完成撤销分页失效。 | 独立于套餐计量/配置代次；随节点删除。 |
@@ -279,7 +279,7 @@ DNS 连接凭据轮换还使用前述 [`dns_credential_batch_items`](#凭据分�
 
 | 表 | 键 | 用途与关键关联 | 维护边界 |
 | --- | --- | --- | --- |
-| `_sqlx_migrations` | `version` | SQLx 自动建立的迁移历史，记录版本、描述、执行时间、成功状态和 checksum。 | 不在项目 `CREATE TABLE` 清单内。`bootstrap::check_schema` 将完整版本及 checksum 与镜像内嵌迁移逐项校验；不能手改记录来跳过迁移。 |
+| `_sqlx_migrations` | `version` | SQLx 自动建立的迁移历史，记录版本、描述、执行时间、成功状态和 checksum。 | 不在项目 `CREATE TABLE` 清单内。`bootstrap::check_schema` 将完整版本及 checksum 与镜像内嵌迁移逐项校验；不能伪造记录跳过尚未完成的迁移。当前生产经结构核验完成了[单基线元数据登记](installation.md#database-baseline)，没有重跑基线 SQL。 |
 
 运行入口见 [db.rs](../crates/hysteriax-server/src/db.rs) 和 [bootstrap.rs](../crates/hysteriax-server/src/bootstrap.rs)。SQLx 历史记录和 `runtime_contract`、各初始化标记共同说明数据库是否可被当前服务安全使用。
 

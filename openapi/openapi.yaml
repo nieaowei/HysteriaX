@@ -2977,6 +2977,7 @@ components:
         issued: { type: boolean }
         pending: { type: boolean }
     AuthorizationChangePreview:
+      description: "Group updates that change nodes return statistics only; additions, removals and managed_identities are empty. Server-side commit validation uses stored digests and the required issuance plan."
       type: object
       required: [action, preview_token, additions_count, removals_count, additions, removals, automatic_issue_count, pending_issue_count, managed_identities]
       properties:
@@ -2987,6 +2988,8 @@ components:
         preview_token: { type: string }
         additions_count: { type: integer, minimum: 0 }
         removals_count: { type: integer, minimum: 0 }
+        additions_user_count: { type: integer, minimum: 0, description: Number of distinct users gaining access. }
+        removals_user_count: { type: integer, minimum: 0, description: Number of distinct users losing access. }
         additions:
           type: array
           items: { $ref: '#/components/schemas/AuthorizationPair' }

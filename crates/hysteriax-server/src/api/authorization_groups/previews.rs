@@ -86,6 +86,9 @@ pub(super) async fn preview_group_on(
     if let Some(proposal) = &proposal {
         validate_proposal_entities(tx, proposal).await?;
     }
+    let nodes_changed = proposal
+        .as_ref()
+        .is_some_and(|proposal| proposal.node_ids != current.node_ids);
     let mut affected = current.user_ids.clone();
     if let Some(proposal) = &proposal {
         affected.extend(proposal.user_ids.clone());
@@ -124,7 +127,11 @@ pub(super) async fn preview_group_on(
         &token,
     )
     .await?;
-    Ok(Json(preview_json(&action, token, result)))
+    Ok(Json(if nodes_changed {
+        node_change_preview_json(&action, token, result)
+    } else {
+        preview_json(&action, token, result)
+    }))
 }
 
 pub(super) fn preview_memberships_input(
