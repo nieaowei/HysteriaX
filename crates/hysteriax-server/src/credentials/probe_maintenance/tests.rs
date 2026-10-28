@@ -9,10 +9,7 @@ use axum::{
 };
 
 async fn fixture(n: i32) -> (AppState, String) {
-    fixture_through(n, i64::MAX).await
-}
-async fn fixture_through(n: i32, version: i64) -> (AppState, String) {
-    let pool = db::test_pool_through_version(8, version).await;
+    let pool = db::test_pool_with_max_connections(8).await;
     let state = AppState::new(
         pool,
         SecretBox::from_base64("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA").unwrap(),
@@ -504,9 +501,8 @@ async fn empty_due_range_uses_the_due_index_with_many_future_probes() {
 }
 
 #[tokio::test]
-async fn index_upgrade_and_repeat_migration_preserve_existing_certificates_nodes_and_current_probe_bytes()
- {
-    let (state, _) = fixture_through(1, 55).await;
+async fn repeat_migration_preserves_existing_certificates_nodes_and_current_probe_bytes() {
+    let (state, _) = fixture(1).await;
     let snapshot = "SELECT jsonb_build_object('nodes',(SELECT jsonb_agg(to_jsonb(n)-'traffic_capture_mode' ORDER BY id) FROM nodes n),'credentials',(SELECT jsonb_agg(to_jsonb(c) ORDER BY id) FROM credentials c),'material',(SELECT jsonb_agg(to_jsonb(v) ORDER BY credential_id,version) FROM credential_versions v),'probes',(SELECT jsonb_agg(to_jsonb(p) ORDER BY node_id,credential_id,credential_version) FROM mtls_probe_versions p),'active',(SELECT jsonb_agg(to_jsonb(a) ORDER BY node_id) FROM mtls_active_probes a),'trust',(SELECT jsonb_agg(to_jsonb(t) ORDER BY node_id,ca_id,ca_version) FROM mtls_node_trust t))";
     let before: serde_json::Value = sqlx::query_scalar(snapshot)
         .fetch_one(&state.pool)

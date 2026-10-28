@@ -292,8 +292,8 @@ mod tests {
     };
     use serde_json::json;
     #[tokio::test]
-    async fn maintenance_upgrade_backfills_bounded_batches_without_changing_ciphertext() {
-        let pool = crate::db::test_pool_through_version(2, 46).await;
+    async fn maintenance_initialization_backfills_bounded_batches_without_changing_ciphertext() {
+        let pool = crate::db::test_pool_with_max_connections(2).await;
         let secrets =
             SecretBox::from_base64("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA").unwrap();
         super::super::migration::migrate(&pool, &secrets)

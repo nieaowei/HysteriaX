@@ -520,49 +520,6 @@ async fn source_change_does_not_cancel_another_target_and_repeat_admission_prese
     assert_eq!(count(&state,"SELECT count(*) FROM background_work WHERE kind='mtls-superseded-node-jobs' AND state='complete' AND error_code='superseded_job_source_changed'").await,1);
 }
 
-#[tokio::test]
-async fn migration_0060_to_0061_backfills_only_derived_flags_and_keeps_all_job_history() {
-    let pool = db::test_pool_through_version(8, 60).await;
-    let (state, ca, rotation) = super::super::trust::tests::fixture_with_pool(pool, 3).await;
-    sqlx::query("INSERT INTO jobs(id,kind,node_id,target_revision,status,stage,available_at,created_at,updated_at) SELECT 'old-'||id,'deploy',id,1,CASE WHEN id='member-0001' THEN 'queued' WHEN id='member-0002' THEN 'waiting_confirmation' ELSE 'succeeded' END,'history',now(),now(),now() FROM nodes").execute(&state.pool).await.unwrap();
-    sqlx::query("INSERT INTO mtls_node_operations(job_id,node_id,ca_id,ca_version,rotation_id,stage,desired_revision,created_at) SELECT id,node_id,$1,2,$2,'trust',1,now() FROM jobs").bind(&ca).bind(&rotation).execute(&state.pool).await.unwrap();
-    let snapshot = format!(
-        "SELECT jsonb_build_object('sources',({SNAPSHOTS}),'jobs',(SELECT jsonb_agg(to_jsonb(j) ORDER BY id) FROM jobs j),'events',(SELECT jsonb_agg(to_jsonb(e) ORDER BY id) FROM job_events e))"
-    );
-    let snapshot = snapshot.replace("to_jsonb(n)", "(to_jsonb(n)-'traffic_capture_mode')");
-    let before: Value = sqlx::query_scalar(sqlx::AssertSqlSafe(snapshot.as_str()))
-        .fetch_one(&state.pool)
-        .await
-        .unwrap();
-    db::run_migrations_through(&state.pool, 72).await.unwrap();
-    sqlx::query("UPDATE nodes SET traffic_capture_mode='interval'")
-        .execute(&state.pool)
-        .await
-        .unwrap();
-    for _ in 0..2 {
-        db::run_migrations(&state.pool).await.unwrap();
-        assert_eq!(
-            before,
-            sqlx::query_scalar::<_, Value>(sqlx::AssertSqlSafe(snapshot.as_str()))
-                .fetch_one(&state.pool)
-                .await
-                .unwrap()
-        );
-        assert_eq!(
-            count(
-                &state,
-                "SELECT count(*) FROM mtls_node_operations WHERE pending_job"
-            )
-            .await,
-            2
-        );
-        assert_eq!(
-            count(&state, "SELECT count(*) FROM mtls_superseded_node_jobs").await,
-            0
-        );
-    }
-}
-
 async fn blocked_by(state: &AppState, blocker: i32) -> i32 {
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
     loop {

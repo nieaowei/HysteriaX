@@ -2,9 +2,9 @@
 
 本文按业务模块说明每张表存什么、由谁使用，以及关联和维护边界，供开发、排障和备份恢复时查阅。
 
-核对日期：2026-10-28。范围为当前工作区 `crates/hysteriax-server/migrations/0001` 至 `0074`，以及维护初始化代码。最终包含 **105 张应用持久表、1 张 SQLx 管理表、6 个普通视图**。迁移曾创建的 4 张旧缓存表及两张历史清理进度表已删除，不计入当前表数；迁移中的临时表和测试专用表也不计入。
+核对日期：2026-10-28。范围为当前 `0001_baseline.sql` 和维护初始化代码，包含 **105 张应用持久表、1 张 SQLx 管理表、6 个普通视图**。
 
-**版本边界：**当前工作区 0071 至 0074 尚未提交。生产已于 2026-10-28 应用至 0074。0073 调整区间采集默认值与约束、移除切换字段；0074 按用户要求删除两张历史清理进度表及其记录，不归档。本次发布未备份。字段及用途应以部署镜像对应版本和实际迁移状态为准。
+**版本边界：**基线合并原 0001～0074 SQL 迁移的最终结构，仅支持新建空库；原迁移链数据库不兼容，不支持原地升级。生产数据库仍属于原迁移链，本次代码整理不改变生产状态。SQL 基线与 Rust 维护初始化分开执行，正常 API 启动继续只校验就绪状态。
 
 ## 阅读约定与目录
 
@@ -61,7 +61,7 @@ flowchart LR
 
 ## 管理鉴权与幂等
 
-结构来源：[0001](../crates/hysteriax-server/migrations/0001_initial.sql)、[0066](../crates/hysteriax-server/migrations/0066_management_receipts.sql)。主要代码：[管理员令牌](../crates/hysteriax-server/src/api/admin_tokens.rs)、[管理写请求幂等](../crates/hysteriax-server/src/api/idempotency.rs)。
+结构来源：[基线](../crates/hysteriax-server/migrations/0001_baseline.sql)。主要代码：[管理员令牌](../crates/hysteriax-server/src/api/admin_tokens.rs)、[管理写请求幂等](../crates/hysteriax-server/src/api/idempotency.rs)。
 
 | 表 | 键 | 用途与关键关联 | 维护边界 |
 | --- | --- | --- | --- |
@@ -70,7 +70,7 @@ flowchart LR
 
 ## 节点、配置与套餐
 
-结构来源：[0001](../crates/hysteriax-server/migrations/0001_initial.sql)、[0003](../crates/hysteriax-server/migrations/0003_node_packages.sql)、[0036](../crates/hysteriax-server/migrations/0036_node_acme_observations.sql)、[0048](../crates/hysteriax-server/migrations/0048_transactional_resource_references.sql)。主要代码：[节点 API](../crates/hysteriax-server/src/api/nodes.rs)、[部署](../crates/hysteriax-server/src/deployment.rs)、[资源 API](../crates/hysteriax-server/src/api/resources.rs)、[节点限额](../crates/hysteriax-server/src/node_limits.rs)、[ACME 观测](../crates/hysteriax-server/src/node_acme.rs)。
+结构来源：[基线](../crates/hysteriax-server/migrations/0001_baseline.sql)。主要代码：[节点 API](../crates/hysteriax-server/src/api/nodes.rs)、[部署](../crates/hysteriax-server/src/deployment.rs)、[资源 API](../crates/hysteriax-server/src/api/resources.rs)、[节点限额](../crates/hysteriax-server/src/node_limits.rs)、[ACME 观测](../crates/hysteriax-server/src/node_acme.rs)。
 
 | 表 | 键 | 用途与关键关联 | 维护边界 |
 | --- | --- | --- | --- |
@@ -85,7 +85,7 @@ flowchart LR
 
 ## 用户、授权与撤销
 
-结构来源：[0001](../crates/hysteriax-server/migrations/0001_initial.sql)、[0008](../crates/hysteriax-server/migrations/0008_kick_requests.sql)、[0010](../crates/hysteriax-server/migrations/0010_authorization_groups.sql)、[0054](../crates/hysteriax-server/migrations/0054_user_access_checks.sql)、[0055](../crates/hysteriax-server/migrations/0055_node_limit_work.sql)、[0067](../crates/hysteriax-server/migrations/0067_node_authorization_versions.sql)。主要代码：[用户 API](../crates/hysteriax-server/src/api/users.rs)、[授权组](../crates/hysteriax-server/src/api/authorization_groups.rs)、[撤销调度](../crates/hysteriax-server/src/traffic/access.rs)、[断连请求](../crates/hysteriax-server/src/kick_requests.rs)。
+结构来源：[基线](../crates/hysteriax-server/migrations/0001_baseline.sql)。主要代码：[用户 API](../crates/hysteriax-server/src/api/users.rs)、[授权组](../crates/hysteriax-server/src/api/authorization_groups.rs)、[撤销调度](../crates/hysteriax-server/src/traffic/access.rs)、[断连请求](../crates/hysteriax-server/src/kick_requests.rs)。
 
 | 表 | 键 | 用途与关键关联 | 维护边界 |
 | --- | --- | --- | --- |
@@ -104,7 +104,7 @@ flowchart LR
 
 ## 凭据、分发与引用
 
-结构来源：[0006](../crates/hysteriax-server/migrations/0006_credentials.sql)、[0017](../crates/hysteriax-server/migrations/0017_credential_reference_index.sql)、[0047](../crates/hysteriax-server/migrations/0047_transactional_credential_references.sql)、[0064](../crates/hysteriax-server/migrations/0064_credential_application_receipts.sql)。主要代码：[凭据模块](../crates/hysteriax-server/src/credentials/mod.rs)、[维护转换](../crates/hysteriax-server/src/credentials/migration.rs)、[引用索引](../crates/hysteriax-server/src/credentials/reference_index.rs)、[应用持久化](../crates/hysteriax-server/src/credentials/worker/persistence.rs)。
+结构来源：[基线](../crates/hysteriax-server/migrations/0001_baseline.sql)。主要代码：[凭据模块](../crates/hysteriax-server/src/credentials/mod.rs)、[维护转换](../crates/hysteriax-server/src/credentials/migration.rs)、[引用索引](../crates/hysteriax-server/src/credentials/reference_index.rs)、[应用持久化](../crates/hysteriax-server/src/credentials/worker/persistence.rs)。
 
 | 表 | 键 | 用途与关键关联 | 维护边界 |
 | --- | --- | --- | --- |
@@ -122,7 +122,7 @@ flowchart LR
 
 ## 托管 mTLS
 
-结构来源：[0032](../crates/hysteriax-server/migrations/0032_managed_mtls.sql)、[0033](../crates/hysteriax-server/migrations/0033_mtls_activation.sql)、[0034](../crates/hysteriax-server/migrations/0034_mtls_rotation_operations.sql)，后续 [0058](../crates/hysteriax-server/migrations/0058_identity_publication_state.sql) 至 [0061](../crates/hysteriax-server/migrations/0061_superseded_job_queue.sql) 调整发布与替代语义。主要代码：[CA](../crates/hysteriax-server/src/credentials/ca.rs)、[身份](../crates/hysteriax-server/src/credentials/identities.rs)、[激活](../crates/hysteriax-server/src/credentials/activation.rs)、[轮换](../crates/hysteriax-server/src/credentials/rotations.rs)。
+结构来源：[基线](../crates/hysteriax-server/migrations/0001_baseline.sql)。主要代码：[CA](../crates/hysteriax-server/src/credentials/ca.rs)、[身份](../crates/hysteriax-server/src/credentials/identities.rs)、[激活](../crates/hysteriax-server/src/credentials/activation.rs)、[轮换](../crates/hysteriax-server/src/credentials/rotations.rs)。
 
 | 表 | 键 | 用途与关键关联 | 维护边界 |
 | --- | --- | --- | --- |
@@ -147,7 +147,7 @@ flowchart LR
 
 ## DNS
 
-结构来源：[0009](../crates/hysteriax-server/migrations/0009_dns_management.sql)。主要代码：[DNS API](../crates/hysteriax-server/src/api/dns.rs)、[提供商](../crates/hysteriax-server/src/dns/provider.rs)、[执行](../crates/hysteriax-server/src/dns/execution.rs)、[凭据轮换](../crates/hysteriax-server/src/dns/rotation.rs)。
+结构来源：[基线](../crates/hysteriax-server/migrations/0001_baseline.sql)。主要代码：[DNS API](../crates/hysteriax-server/src/api/dns.rs)、[提供商](../crates/hysteriax-server/src/dns/provider.rs)、[执行](../crates/hysteriax-server/src/dns/execution.rs)、[凭据轮换](../crates/hysteriax-server/src/dns/rotation.rs)。
 
 | 表 | 键 | 用途与关键关联 | 维护边界 |
 | --- | --- | --- | --- |
@@ -161,7 +161,7 @@ DNS 连接凭据轮换还使用前述 [`dns_credential_batch_items`](#凭据分�
 
 ## 订阅模板
 
-结构来源：[0037](../crates/hysteriax-server/migrations/0037_subscription_templates.sql)。主要代码：[模板存储](../crates/hysteriax-server/src/api/subscriptions/templates/store.rs)、[模板渲染](../crates/hysteriax-server/src/api/subscriptions/templates/render.rs)。
+结构来源：[基线](../crates/hysteriax-server/migrations/0001_baseline.sql)。主要代码：[模板存储](../crates/hysteriax-server/src/api/subscriptions/templates/store.rs)、[模板渲染](../crates/hysteriax-server/src/api/subscriptions/templates/render.rs)。
 
 | 表 | 键 | 用途与关键关联 | 维护边界 |
 | --- | --- | --- | --- |
@@ -173,7 +173,7 @@ DNS 连接凭据轮换还使用前述 [`dns_credential_batch_items`](#凭据分�
 
 ## 流量账本与捕获
 
-结构来源：[0001](../crates/hysteriax-server/migrations/0001_initial.sql)、[0044](../crates/hysteriax-server/migrations/0044_durable_traffic_batches.sql)、[0071](../crates/hysteriax-server/migrations/0071_traffic_clear_capture.sql)、[0072](../crates/hysteriax-server/migrations/0072_traffic_clear_instance_verification.sql)、[0073](../crates/hysteriax-server/migrations/0073_interval_traffic_only.sql)。主要代码：[计费](../crates/hysteriax-server/src/traffic.rs)、[批次处理](../crates/hysteriax-server/src/traffic/batches.rs)、[清零采集](../crates/hysteriax-server/src/traffic/clear.rs)。
+结构来源：[基线](../crates/hysteriax-server/migrations/0001_baseline.sql)。主要代码：[计费](../crates/hysteriax-server/src/traffic.rs)、[批次处理](../crates/hysteriax-server/src/traffic/batches.rs)、[清零采集](../crates/hysteriax-server/src/traffic/clear.rs)。
 
 | 表 | 键 | 用途与关键关联 | 维护边界 |
 | --- | --- | --- | --- |
@@ -187,7 +187,7 @@ DNS 连接凭据轮换还使用前述 [`dns_credential_batch_items`](#凭据分�
 
 ## 监控采样
 
-结构来源：[0004](../crates/hysteriax-server/migrations/0004_overview_monitoring.sql)、[0062](../crates/hysteriax-server/migrations/0062_deployment_probe_ownership.sql)、[0063](../crates/hysteriax-server/migrations/0063_monitoring_probe_ownership.sql)、[0069](../crates/hysteriax-server/migrations/0069_probe_execution_epoch.sql)。主要代码：[代理监控](../crates/hysteriax-server/src/proxy_monitor.rs)、[部署探测令牌](../crates/hysteriax-server/src/deployment/probe_tokens.rs)。
+结构来源：[基线](../crates/hysteriax-server/migrations/0001_baseline.sql)。主要代码：[代理监控](../crates/hysteriax-server/src/proxy_monitor.rs)、[部署探测令牌](../crates/hysteriax-server/src/deployment/probe_tokens.rs)。
 
 | 表 | 键 | 用途与关键关联 | 维护边界 |
 | --- | --- | --- | --- |
@@ -201,7 +201,7 @@ DNS 连接凭据轮换还使用前述 [`dns_credential_batch_items`](#凭据分�
 
 ## 统计读模型与刷新队列
 
-结构来源：[0018](../crates/hysteriax-server/migrations/0018_analytics_read_models.sql)、[0019](../crates/hysteriax-server/migrations/0019_probe_minute_totals.sql)、[0021](../crates/hysteriax-server/migrations/0021_history_rollups.sql)、[0022](../crates/hysteriax-server/migrations/0022_job_read_models.sql)、[0023](../crates/hysteriax-server/migrations/0023_retry_chain_state.sql)、[0046](../crates/hysteriax-server/migrations/0046_versioned_dirty_queues.sql)。主要代码：[统计](../crates/hysteriax-server/src/analytics.rs)、[周期刷新 SQL](../crates/hysteriax-server/src/analytics/refresh_cycles.sql)、[汇总刷新 SQL](../crates/hysteriax-server/src/analytics/refresh_rollups.sql)、[重试链刷新 SQL](../crates/hysteriax-server/src/analytics/refresh_retries.sql)。
+结构来源：[基线](../crates/hysteriax-server/migrations/0001_baseline.sql)。主要代码：[统计](../crates/hysteriax-server/src/analytics.rs)、[周期刷新 SQL](../crates/hysteriax-server/src/analytics/refresh_cycles.sql)、[汇总刷新 SQL](../crates/hysteriax-server/src/analytics/refresh_rollups.sql)、[重试链刷新 SQL](../crates/hysteriax-server/src/analytics/refresh_retries.sql)。
 
 | 表 | 键 | 用途与关键关联 | 更新方式/边界 |
 | --- | --- | --- | --- |
@@ -225,7 +225,7 @@ DNS 连接凭据轮换还使用前述 [`dns_credential_batch_items`](#凭据分�
 
 ## 任务、事件与审计
 
-结构来源：[0001](../crates/hysteriax-server/migrations/0001_initial.sql)、[0002](../crates/hysteriax-server/migrations/0002_job_node_snapshot.sql)、[0005](../crates/hysteriax-server/migrations/0005_job_retry_links.sql)、[0008](../crates/hysteriax-server/migrations/0008_kick_requests.sql)、[0025](../crates/hysteriax-server/migrations/0025_query_indexes_and_audit_totals.sql)、[0041](../crates/hysteriax-server/migrations/0041_event_publications.sql)。主要代码：[任务](../crates/hysteriax-server/src/jobs.rs)、[任务持久化](../crates/hysteriax-server/src/jobs/persistence.rs)、[事件发布](../crates/hysteriax-server/src/events.rs)。
+结构来源：[基线](../crates/hysteriax-server/migrations/0001_baseline.sql)。主要代码：[任务](../crates/hysteriax-server/src/jobs.rs)、[任务持久化](../crates/hysteriax-server/src/jobs/persistence.rs)、[事件发布](../crates/hysteriax-server/src/events.rs)。
 
 | 表 | 键 | 用途与关键关联 | 维护边界 |
 | --- | --- | --- | --- |
@@ -240,7 +240,7 @@ DNS 连接凭据轮换还使用前述 [`dns_credential_batch_items`](#凭据分�
 
 ## 后台调度、执行与维护
 
-结构来源：[0042](../crates/hysteriax-server/migrations/0042_resource_leases.sql)、[0043](../crates/hysteriax-server/migrations/0043_runtime_contract.sql)、[0046](../crates/hysteriax-server/migrations/0046_versioned_dirty_queues.sql)、[0050](../crates/hysteriax-server/migrations/0050_background_sampling_work.sql)、[0052](../crates/hysteriax-server/migrations/0052_traffic_work_initialization.sql)、[0067](../crates/hysteriax-server/migrations/0067_node_authorization_versions.sql)、[0068](../crates/hysteriax-server/migrations/0068_execution_epoch.sql)、[0070](../crates/hysteriax-server/migrations/0070_execution_rechecks.sql)。主要代码：[后台调度](../crates/hysteriax-server/src/background.rs)、[维护工作](../crates/hysteriax-server/src/background/maintenance.rs)、[执行租约](../crates/hysteriax-server/src/execution.rs)、[远端执行](../crates/hysteriax-server/src/execution/remote.rs)、[复核 API](../crates/hysteriax-server/src/api/execution_rechecks.rs)、[启动契约](../crates/hysteriax-server/src/bootstrap.rs)。
+结构来源：[基线](../crates/hysteriax-server/migrations/0001_baseline.sql)。主要代码：[后台调度](../crates/hysteriax-server/src/background.rs)、[维护工作](../crates/hysteriax-server/src/background/maintenance.rs)、[执行租约](../crates/hysteriax-server/src/execution.rs)、[远端执行](../crates/hysteriax-server/src/execution/remote.rs)、[复核 API](../crates/hysteriax-server/src/api/execution_rechecks.rs)、[启动契约](../crates/hysteriax-server/src/bootstrap.rs)。
 
 | 表 | 键 | 用途与关键关联 | 维护边界 |
 | --- | --- | --- | --- |
@@ -258,11 +258,11 @@ DNS 连接凭据轮换还使用前述 [`dns_credential_batch_items`](#凭据分�
 | `analytics_retry_guards` | `root_id` | 重试链根级互斥锁行，协调同链刷新和脏数据读取。 | 派生并发控制元数据；不是任务状态表。 |
 | `monitoring_leases` | `node_id` | 0004 创建的旧监控 owner/到期租约表。 | 当前运行时代码未发现读写，表仍保留；现有采样由 `background_work + resource_leases` 协调。不能仅凭此文认定可从生产删除。 |
 
-正常运行没有全局业务写锁：0065 已删除旧的 `hysteriax_serialize_writes` 触发器及函数。SQLx 维护迁移互斥、资源租约、行锁、约束和事务重试继续生效。流程见 [架构](architecture.md)。
+基线不包含全局业务写锁：没有 `hysteriax_serialize_writes` 触发器及函数。SQLx 维护迁移互斥、资源租约、行锁、约束和事务重试继续生效。流程见 [架构](architecture.md)。
 
 ## 缓存版本
 
-结构来源：[0045](../crates/hysteriax-server/migrations/0045_bucketed_cache_versions.sql)、[0068](../crates/hysteriax-server/migrations/0068_execution_epoch.sql)。主要代码：[缓存](../crates/hysteriax-server/src/cache.rs)、[缓存域](../crates/hysteriax-server/src/cache_domains.rs)、[配额排行](../crates/hysteriax-server/src/quota_rank.rs)。
+结构来源：[基线](../crates/hysteriax-server/migrations/0001_baseline.sql)。主要代码：[缓存](../crates/hysteriax-server/src/cache.rs)、[缓存域](../crates/hysteriax-server/src/cache_domains.rs)、[配额排行](../crates/hysteriax-server/src/quota_rank.rs)。
 
 | 表 | 键 | 用途与关键关联 | 维护边界 |
 | --- | --- | --- | --- |
@@ -289,12 +289,12 @@ DNS 连接凭据轮换还使用前述 [`dns_credential_batch_items`](#凭据分�
 
 | 视图 | 来源/用途 | 定义 |
 | --- | --- | --- |
-| `credential_directory` | 将受管凭据、管理员令牌、订阅令牌和用户节点凭据合并为统一目录；CA 使用已发布版本计算状态。 | [0026](../crates/hysteriax-server/migrations/0026_credential_directory.sql)，由 [0035](../crates/hysteriax-server/migrations/0035_published_ca_directory.sql) 更新。 |
-| `mtls_live_activation_trust` | 列出仍可能在远端生效的不确定激活信任；只有更晚已提交激活才排除旧不确定状态。 | [0034](../crates/hysteriax-server/migrations/0034_mtls_rotation_operations.sql)。 |
-| `job_cache_versions` | `cache_entity_versions` 中 `kind='jobs'` 的兼容投影。 | [0045](../crates/hysteriax-server/migrations/0045_bucketed_cache_versions.sql)。 |
-| `batch_cache_versions` | `cache_entity_versions` 中 `kind='credential_batches'` 的兼容投影。 | [0045](../crates/hysteriax-server/migrations/0045_bucketed_cache_versions.sql)。 |
-| `mtls_user_version_publication` | 在物理标记之上合成 CA 发布后的可见 released，以及从未发布即退役代的 discarded 状态。 | [0058](../crates/hysteriax-server/migrations/0058_identity_publication_state.sql)，由 [0060](../crates/hysteriax-server/migrations/0060_superseded_identity_visibility.sql) 更新。 |
-| `mtls_superseded_node_jobs` | 已有轮换 outcome 的节点任务；分页物化取消状态前，先用已提交替代事实阻止执行。 | [0061](../crates/hysteriax-server/migrations/0061_superseded_job_queue.sql)。 |
+| `credential_directory` | 将受管凭据、管理员令牌、订阅令牌和用户节点凭据合并为统一目录；CA 使用已发布版本计算状态。 | [基线](../crates/hysteriax-server/migrations/0001_baseline.sql)。 |
+| `mtls_live_activation_trust` | 列出仍可能在远端生效的不确定激活信任；只有更晚已提交激活才排除旧不确定状态。 | [基线](../crates/hysteriax-server/migrations/0001_baseline.sql)。 |
+| `job_cache_versions` | `cache_entity_versions` 中 `kind='jobs'` 的兼容投影。 | [基线](../crates/hysteriax-server/migrations/0001_baseline.sql)。 |
+| `batch_cache_versions` | `cache_entity_versions` 中 `kind='credential_batches'` 的兼容投影。 | [基线](../crates/hysteriax-server/migrations/0001_baseline.sql)。 |
+| `mtls_user_version_publication` | 在物理标记之上合成 CA 发布后的可见 released，以及从未发布即退役代的 discarded 状态。 | [基线](../crates/hysteriax-server/migrations/0001_baseline.sql)。 |
+| `mtls_superseded_node_jobs` | 已有轮换 outcome 的节点任务；分页物化取消状态前，先用已提交替代事实阻止执行。 | [基线](../crates/hysteriax-server/migrations/0001_baseline.sql)。 |
 
 ## 已移除表与临时表
 
@@ -304,9 +304,9 @@ DNS 连接凭据轮换还使用前述 [`dns_credential_batch_items`](#凭据分�
 | `cache_domain_versions` | 单行每域缓存版本。 | 0045 删除，改用每域 64 桶版本。 |
 | `job_cache_versions`（旧表） | 每任务缓存版本。 | 0045 删除实体表后，同名创建兼容视图。 |
 | `batch_cache_versions`（旧表） | 每凭据批次缓存版本。 | 0045 删除实体表后，同名创建兼容视图。 |
-| `traffic_history_cleanup_nodes` | 一次性历史清理的节点高水位、游标和删除进度。 | [0074](../crates/hysteriax-server/migrations/0074_remove_traffic_cleanup_tables.sql) 删除，不归档。 |
-| `traffic_history_cleanup_runs` | 一次性历史清理的运行记录与候选计数。 | 0074 在节点进度表之后删除，不归档。 |
-| `cache_source_domains`（临时表） | 0045 迁移时暂存旧触发器的缓存域映射。 | `CREATE TEMP TABLE ... ON COMMIT DROP`，迁移提交后不存在。 |
+| `traffic_history_cleanup_nodes` | 一次性历史清理的节点高水位、游标和删除进度。 | 原 0074 删除；当前基线不创建。 |
+| `traffic_history_cleanup_runs` | 一次性历史清理的运行记录与候选计数。 | 原 0074 删除；当前基线不创建。 |
+| `cache_source_domains`（临时表） | 原迁移链曾暂存旧触发器的缓存域映射，当前基线不创建。 | `CREATE TEMP TABLE ... ON COMMIT DROP`，基线不创建此临时表。 |
 
 测试中的 `retry_counter`、`guarded_progress` 等仅在隔离测试 schema 内创建，不属于应用正式表。
 

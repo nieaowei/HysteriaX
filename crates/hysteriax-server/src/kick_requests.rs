@@ -490,46 +490,6 @@ pub(crate) mod tests {
         assert_eq!(reply.0, again.0);
     }
 
-    #[tokio::test]
-    async fn migration_consolidates_exhausted_deleted_user_jobs_and_keeps_events() {
-        let state = fixture().await;
-        sqlx::raw_sql("DROP TABLE kick_requests; DROP INDEX jobs_active_kick_idx;")
-            .execute(&state.pool)
-            .await
-            .unwrap();
-        sqlx::query("DELETE FROM users")
-            .execute(&state.pool)
-            .await
-            .unwrap();
-        for id in ["one", "two", "three"] {
-            sqlx::query("INSERT INTO jobs(id,kind,node_id,payload_json,status,stage,attempts,error_message,available_at,created_at,updated_at) VALUES($1,'kick','node',$2,'queued','retry_wait',115,'SSH connection failed: SSH connection timed out',now(),now(),now())")
-                .bind(id).bind(json!({"user_id":"user"})).execute(&state.pool).await.unwrap();
-        }
-        let mut tx = state.pool.begin().await.unwrap();
-        sqlx::raw_sql(include_str!("../migrations/0008_kick_requests.sql"))
-            .execute(&mut *tx)
-            .await
-            .unwrap();
-        tx.commit().await.unwrap();
-        let states: Vec<String> = sqlx::query_scalar("SELECT status FROM jobs ORDER BY id")
-            .fetch_all(&state.pool)
-            .await
-            .unwrap();
-        assert_eq!(states.iter().filter(|s| *s == "failed").count(), 1);
-        assert_eq!(states.iter().filter(|s| *s == "cancelled").count(), 2);
-        let r: (String, Value) = sqlx::query_as("SELECT state,reasons FROM kick_requests")
-            .fetch_one(&state.pool)
-            .await
-            .unwrap();
-        assert_eq!(r.0, "waiting_recovery");
-        assert_eq!(r.1, json!({"legacy_revocation":true}));
-        let events: i64 = sqlx::query_scalar("SELECT count(*) FROM job_events")
-            .fetch_one(&state.pool)
-            .await
-            .unwrap();
-        assert_eq!(events, 3);
-    }
-
     #[test]
     fn retry_budget_and_error_classification() {
         assert_eq!(

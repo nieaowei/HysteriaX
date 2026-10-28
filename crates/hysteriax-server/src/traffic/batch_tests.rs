@@ -5,12 +5,8 @@ use sqlx::{PgPool, Row};
 #[path = "bulk_tests.rs"]
 mod bulk_tests;
 
-async fn fixture(users: usize) -> PgPool {
-    fixture_through(users, i64::MAX).await
-}
-
-pub(super) async fn fixture_through(users: usize, version: i64) -> PgPool {
-    let pool = crate::db::test_pool_through_version(8, version).await;
+pub(super) async fn fixture(users: usize) -> PgPool {
+    let pool = crate::db::test_pool_with_max_connections(8).await;
     sqlx::query("INSERT INTO nodes(id,name,ssh_host,ssh_port,ssh_username,ssh_auth_type,ssh_secret_enc,public_host,public_port,listen_addr,node_token_hash,node_token_enc,traffic_stats_secret_enc,desired_config_enc,created_at,updated_at) SELECT id,id,'127.0.0.1',22,'root','password','secret','example.test',443,':443',id,id,'stats','{}',now(),now() FROM unnest(ARRAY['a','b']) id")
         .execute(&pool).await.unwrap();
     sqlx::query("INSERT INTO users(id,name,created_at,updated_at) SELECT 'user-'||lpad(n::text,4,'0'),'User '||n,now(),now() FROM generate_series(1,$1) n")

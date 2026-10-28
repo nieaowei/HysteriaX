@@ -42,7 +42,6 @@ def main():
     parser.add_argument('--api-memory-mib', type=int, default=128)
     parser.add_argument('--replicas', type=int, choices=[1,2,3], default=2)
     parser.add_argument('--database-disconnect-check', action='store_true')
-    parser.add_argument('--rollback-image', help='verify a full old/new/old release recovery on this offline clone')
     parser.add_argument('--report', type=Path, required=True)
     args = parser.parse_args()
     if args.database_disconnect_check and args.replicas != 3:
@@ -226,15 +225,6 @@ def main():
             (gate/'go').touch(mode=0o644)
             return name, assets
 
-        recovery = None
-        if args.rollback_image:
-            from snapshot_release_recovery import ReleaseRecovery
-            token_hash = base64.urlsafe_b64encode(hashlib.sha256(environment['HYSTERIAX_ADMIN_TOKEN'].encode()).digest()).decode().rstrip('=')
-            sql("INSERT INTO admin_tokens(id,token_hash,label,created_at) VALUES ('capacity-fixture','"+token_hash+"','isolated release fixture',now())")
-            recovery = ReleaseRecovery(pg=pg,redis=redis,owner=owner,image=args.rollback_image,
-                private=private,docker=docker,sql=sql,gated=gated,wait=wait)
-            print('checking old release and making full maintenance backup',flush=True)
-            recovery.before_upgrade()
         print('migrating behind verified outbound guard',flush=True)
         migration, assets = gated('migration',True)
         wait(lambda: (assets/'exit').exists(),600,'migration')
@@ -244,8 +234,7 @@ def main():
         docker('rm','-f',migration)
         containers.remove(migration)
         token_hash = base64.urlsafe_b64encode(hashlib.sha256(environment['HYSTERIAX_ADMIN_TOKEN'].encode()).digest()).decode().rstrip('=')
-        if not recovery:
-            sql("INSERT INTO admin_tokens(id,token_hash,label,created_at) VALUES ('capacity-fixture','"+token_hash+"','isolated capacity fixture',now())")
+        sql("INSERT INTO admin_tokens(id,token_hash,label,created_at) VALUES ('capacity-fixture','"+token_hash+"','isolated capacity fixture',now())")
         before_users = int(sql('SELECT count(*) FROM users'))
         apis = [gated('api'+str(index))[0] for index in range(args.replicas)]
         for name in apis:
@@ -335,9 +324,6 @@ def main():
             raise RuntimeError('memory pressure killed or restarted a service')
         if report['granted_advisory_lock_count_after_migration']:
             raise RuntimeError('unexpected runtime advisory lock observed')
-        if recovery:
-            print('stopping all new replicas and restoring complete old release backup',flush=True)
-            report['release_recovery'] = recovery.rollback(apis)
         report['passed'] = True
     except Exception as error:
         report['failure_category'] = type(error).__name__

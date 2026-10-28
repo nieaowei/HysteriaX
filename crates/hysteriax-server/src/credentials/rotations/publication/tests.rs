@@ -1,8 +1,5 @@
 use super::*;
-use crate::credentials::{
-    ca::{Authority, Policy},
-    identities,
-};
+use crate::credentials::identities;
 
 async fn fixture(n: i32) -> (AppState, String, String) {
     let (state, ca, rotation) = super::super::trust::tests::fixture(0).await;
@@ -546,89 +543,6 @@ async fn completed_schedule_markers_use_an_empty_index_range_instead_of_revisiti
         "{plan}"
     );
     assert_eq!(plan[0]["Plan"]["Actual Rows"].as_f64(), Some(0.0));
-}
-
-#[tokio::test]
-async fn migration_0057_to_0058_preserves_old_release_flags_encrypted_history_and_identity_state() {
-    let pool = db::test_pool_through_version(8, 57).await;
-    let (state, ca, _) = super::super::trust::tests::fixture_with_pool(pool, 0).await;
-    users(&state, &ca, 1).await;
-    sqlx::query("UPDATE users SET enabled=true")
-        .execute(&state.pool)
-        .await
-        .unwrap();
-    let identity: String =
-        sqlx::query_scalar("SELECT id FROM mtls_user_identities WHERE user_id='user-0001'")
-            .fetch_one(&state.pool)
-            .await
-            .unwrap();
-    let now: DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
-        .fetch_one(&state.pool)
-        .await
-        .unwrap();
-    sqlx::query("INSERT INTO credentials(id,name,kind,owner_user_id,latest_version,created_at,updated_at) VALUES('retained-client','Client','tls_identity','user-0001',2,$1,$1)").bind(now).execute(&state.pool).await.unwrap();
-    sqlx::query("UPDATE mtls_user_identities SET credential_id='retained-client' WHERE id=$1")
-        .bind(&identity)
-        .execute(&state.pool)
-        .await
-        .unwrap();
-    for version in [1_i64, 2] {
-        let (_, _, _, payload, _) =
-            crate::credentials::load(&state.pool, &state.secrets, &ca, version)
-                .await
-                .unwrap();
-        let authority = Authority::from_payload(&payload, now).unwrap();
-        let issued = authority
-            .sign_user(
-                &uuid::Uuid::parse_str(&identity).unwrap(),
-                Policy {
-                    client_validity_days: 180,
-                    renew_before_hours: 720,
-                },
-                now,
-            )
-            .unwrap();
-        let payload = issued.material.payload();
-        let metadata = crate::credentials::validate_payload("tls_identity", &payload).unwrap();
-        sqlx::query("INSERT INTO credential_versions(credential_id,version,payload_enc,metadata,created_at) VALUES('retained-client',$1,$2,$3,$4)").bind(version).bind(state.secrets.encrypt(&payload.to_string()).unwrap()).bind(metadata).bind(now).execute(&state.pool).await.unwrap();
-        sqlx::query("INSERT INTO mtls_user_versions(identity_id,credential_id,credential_version,ca_id,ca_version,not_before,expires_at,next_action_at,released,created_at) VALUES($1,'retained-client',$2,$3,$2,$4,$5,$6,$7,$8)").bind(&identity).bind(version).bind(&ca).bind(issued.not_before).bind(issued.expires_at).bind(issued.next_action_at).bind(version==1).bind(now).execute(&state.pool).await.unwrap();
-    }
-    sqlx::query("UPDATE mtls_user_identities SET credential_id='retained-client' WHERE id=$1")
-        .bind(identity)
-        .execute(&state.pool)
-        .await
-        .unwrap();
-    let snapshot = "SELECT jsonb_build_object('versions',(SELECT jsonb_agg(to_jsonb(v) ORDER BY credential_id,version) FROM credential_versions v),'leaves',(SELECT jsonb_agg(to_jsonb(v) ORDER BY identity_id,credential_version) FROM mtls_user_versions v),'identities',(SELECT jsonb_agg(to_jsonb(i)-'scheduled_ca_version' ORDER BY id) FROM mtls_user_identities i),'authorities',(SELECT jsonb_agg(to_jsonb(a) ORDER BY credential_id) FROM mtls_authorities a),'generations',(SELECT jsonb_agg(to_jsonb(g) ORDER BY ca_id,ca_version) FROM mtls_ca_generations g))";
-    let before: Value = sqlx::query_scalar(snapshot)
-        .fetch_one(&state.pool)
-        .await
-        .unwrap();
-    for _ in 0..2 {
-        db::run_migrations(&state.pool).await.unwrap();
-        assert!(
-            before
-                == sqlx::query_scalar::<_, Value>(snapshot)
-                    .fetch_one(&state.pool)
-                    .await
-                    .unwrap(),
-            "publication migration must preserve historical source bytes and release flags"
-        );
-        let flags: Vec<bool> = sqlx::query_scalar(
-            "SELECT released FROM mtls_user_version_publication ORDER BY credential_version",
-        )
-        .fetch_all(&state.pool)
-        .await
-        .unwrap();
-        assert_eq!(flags, vec![true, false]);
-    }
-    assert_eq!(
-        count(
-            &state,
-            "SELECT count(*) FROM mtls_user_identities WHERE scheduled_ca_version IS NOT NULL"
-        )
-        .await,
-        0
-    );
 }
 
 #[tokio::test]

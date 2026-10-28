@@ -1,5 +1,5 @@
 use super::*;
-use crate::traffic::{batch_tests::fixture_through, batches};
+use crate::traffic::{batch_tests::fixture, batches};
 use serde_json::{Map, json};
 
 async fn seal_clear_test(
@@ -22,7 +22,7 @@ async fn bill(pool: &PgPool, id: &str, instance: &str, tx: i64) {
 
 #[tokio::test]
 async fn payload_digest_covers_full_original_response_including_filtered_identities() {
-    let pool = fixture_through(1, i64::MAX).await;
+    let pool = fixture(1).await;
     batches::reserve(&pool, "raw", "a", None).await.unwrap();
     let first = br#"{"user-0001":{"tx":10,"rx":0,"extra":"first"},"missing":{"tx":2,"rx":0}}"#;
     let counters = crate::traffic::parse_response(first).unwrap();
@@ -49,7 +49,7 @@ async fn payload_digest_covers_full_original_response_including_filtered_identit
 
 #[tokio::test]
 async fn interval_after_service_restart_bills_received_bytes_and_exposes_gap() {
-    let pool = fixture_through(1, i64::MAX).await;
+    let pool = fixture(1).await;
     bill(&pool, "switch", "old-instance", 100).await;
     bill(&pool, "restart", "new-instance", 40).await;
     assert_eq!(
@@ -78,7 +78,7 @@ async fn interval_after_service_restart_bills_received_bytes_and_exposes_gap() {
 
 #[tokio::test]
 async fn changing_probe_identities_do_not_accumulate_in_captured_details() {
-    let pool = fixture_through(1000, i64::MAX).await;
+    let pool = fixture(1000).await;
     for round in 0..2 {
         let mut values: Map<String, serde_json::Value> = (1..=1000)
             .map(|n| (format!("user-{n:04}"), json!({"tx":10,"rx":5})))
@@ -127,7 +127,7 @@ async fn changing_probe_identities_do_not_accumulate_in_captured_details() {
 
 #[tokio::test]
 async fn interval_billing_respects_quota_reset_between_pages() {
-    let pool = fixture_through(501, i64::MAX).await;
+    let pool = fixture(501).await;
     let first: Map<String, serde_json::Value> = (1..=501)
         .map(|n| (format!("user-{n:04}"), json!({"tx":100,"rx":0})))
         .collect();
@@ -171,7 +171,7 @@ async fn interval_billing_respects_quota_reset_between_pages() {
 
 #[tokio::test]
 async fn request_admission_is_single_shot_and_fenced_by_both_leases_and_slot() {
-    let pool = fixture_through(0, i64::MAX).await;
+    let pool = fixture(0).await;
     sqlx::query("UPDATE nodes SET deployed_revision=1 WHERE id='a'")
         .execute(&pool)
         .await
@@ -258,7 +258,7 @@ async fn request_admission_is_single_shot_and_fenced_by_both_leases_and_slot() {
 
 #[tokio::test]
 async fn uncertain_interval_preserves_capture_mode_and_node_lease() {
-    let pool = fixture_through(0, i64::MAX).await;
+    let pool = fixture(0).await;
     sqlx::query("UPDATE nodes SET deployed_revision=1 WHERE id='a'")
         .execute(&pool)
         .await
@@ -284,7 +284,7 @@ async fn uncertain_interval_preserves_capture_mode_and_node_lease() {
 
 #[tokio::test]
 async fn clear_response_seals_after_slot_expiry_but_only_under_original_leases() {
-    let pool = fixture_through(1, i64::MAX).await;
+    let pool = fixture(1).await;
     sqlx::query("UPDATE nodes SET deployed_revision=1 WHERE id='a'")
         .execute(&pool)
         .await
@@ -351,7 +351,7 @@ async fn clear_response_seals_after_slot_expiry_but_only_under_original_leases()
 
 #[tokio::test]
 async fn abandoned_request_is_recorded_as_uncertain_by_capture_expiry() {
-    let pool = fixture_through(0, i64::MAX).await;
+    let pool = fixture(0).await;
     sqlx::query("UPDATE nodes SET deployed_revision=1 WHERE id='a'")
         .execute(&pool)
         .await
@@ -382,7 +382,7 @@ async fn abandoned_request_is_recorded_as_uncertain_by_capture_expiry() {
 
 #[tokio::test]
 async fn takeover_of_requested_capture_records_gap_without_another_remote_read() {
-    let pool = fixture_through(0, i64::MAX).await;
+    let pool = fixture(0).await;
     sqlx::query("UPDATE nodes SET deployed_revision=1 WHERE id='a'")
         .execute(&pool)
         .await
@@ -439,7 +439,7 @@ async fn takeover_of_requested_capture_records_gap_without_another_remote_read()
 
 #[tokio::test]
 async fn database_lock_timeout_retries_the_same_received_response() {
-    let pool = fixture_through(1, i64::MAX).await;
+    let pool = fixture(1).await;
     sqlx::query("UPDATE nodes SET deployed_revision=1 WHERE id='a'")
         .execute(&pool)
         .await

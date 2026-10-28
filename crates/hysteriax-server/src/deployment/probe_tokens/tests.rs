@@ -365,45 +365,6 @@ fn cleanup_checks_the_configuration_path_before_signalling_a_pid_and_removes_onl
 }
 
 #[tokio::test]
-async fn migration_keeps_existing_credentials_and_business_rows_but_requires_fresh_execution_proof()
-{
-    let pool = db::test_pool_through_version(8, 61).await;
-    let (state, job) = seed_on(pool).await;
-    sqlx::query("INSERT INTO resource_leases(resource_key,owner,work_id,generation,expires_at) SELECT key,'owner','one',1,clock_timestamp()+interval '1 minute' FROM unnest(ARRAY['job:one','node:a'])key")
-        .execute(&state.pool).await.unwrap();
-    sqlx::query("INSERT INTO deployment_probe_tokens(node_id,token_hash,expires_at,job_id) VALUES('a',$1,clock_timestamp()+interval '15 minutes','one')").bind(token_digest("legacy")).execute(&state.pool).await.unwrap();
-    let old = row(&state.pool).await;
-    let q = "SELECT jsonb_build_object('nodes',(SELECT jsonb_agg(to_jsonb(n)-'traffic_capture_mode' ORDER BY id) FROM nodes n),'jobs',(SELECT jsonb_agg(to_jsonb(j) ORDER BY id) FROM jobs j),'leases',(SELECT jsonb_agg(to_jsonb(l)-'epoch' ORDER BY resource_key) FROM resource_leases l))";
-    let before: Value = sqlx::query_scalar(q).fetch_one(&state.pool).await.unwrap();
-    db::run_migrations(&state.pool).await.unwrap();
-    db::run_migrations(&state.pool).await.unwrap();
-    assert_eq!(
-        before,
-        sqlx::query_scalar::<_, Value>(q)
-            .fetch_one(&state.pool)
-            .await
-            .unwrap()
-    );
-    assert_eq!(old,sqlx::query_scalar::<_,Value>("SELECT to_jsonb(p)-'owner'-'node_generation'-'job_generation'-'epoch' FROM deployment_probe_tokens p WHERE node_id='a'").fetch_one(&state.pool).await.unwrap());
-    assert_eq!(auth(&state, "legacy").await["ok"], false);
-    let leases = sqlx::query("SELECT resource_key,owner,generation,epoch,work_id FROM resource_leases ORDER BY resource_key")
-        .fetch_all(&state.pool).await.unwrap().into_iter().map(|r| execution::Execution {
-            resource:r.get("resource_key"), owner:r.get("owner"), generation:r.get("generation"),
-            epoch:r.get("epoch"), work:r.get("work_id"),
-        }).collect();
-    execution::supervise(
-        state.pool.clone(),
-        leases,
-        install(&state.pool, &job, &token_digest("fresh")),
-    )
-    .await
-    .unwrap()
-    .unwrap();
-    assert_eq!(auth(&state, "fresh").await["ok"], true);
-    assert_eq!(auth(&state, "legacy").await["ok"], false);
-}
-
-#[tokio::test]
 async fn restored_counter_collision_cannot_authenticate_or_clean_up_another_epochs_probe() {
     let (state, job, old) = fixture().await;
     let hash = token_digest("old");
@@ -468,42 +429,4 @@ async fn restored_counter_collision_cannot_authenticate_or_clean_up_another_epoc
     .unwrap()
     .unwrap();
     assert_eq!(auth(&state, "fresh").await["ok"], false);
-}
-
-#[tokio::test]
-async fn epoch_migration_keeps_a_complete_old_probe_row_but_requires_new_issuance() {
-    let (state, job, leases) = fixture_on(db::test_pool_through_version(8, 68).await).await;
-    sqlx::query("INSERT INTO deployment_probe_tokens(node_id,token_hash,expires_at,job_id,owner,node_generation,job_generation) VALUES('a',$1,clock_timestamp()+interval '15 minutes','one','owner',1,1)")
-        .bind(token_digest("legacy")).execute(&state.pool).await.unwrap();
-    let before = row(&state.pool).await;
-    let q = "SELECT jsonb_build_object('nodes',(SELECT jsonb_agg(to_jsonb(n)-'traffic_capture_mode' ORDER BY id) FROM nodes n),'jobs',(SELECT jsonb_agg(to_jsonb(j) ORDER BY id) FROM jobs j),'leases',(SELECT jsonb_agg(to_jsonb(l) ORDER BY resource_key) FROM resource_leases l))";
-    let business: Value = sqlx::query_scalar(q).fetch_one(&state.pool).await.unwrap();
-    db::run_migrations(&state.pool).await.unwrap();
-    assert_eq!(
-        business,
-        sqlx::query_scalar::<_, Value>(q)
-            .fetch_one(&state.pool)
-            .await
-            .unwrap()
-    );
-    assert_eq!(
-        before,
-        sqlx::query_scalar::<_, Value>(
-            "SELECT to_jsonb(p)-'epoch' FROM deployment_probe_tokens p WHERE node_id='a'"
-        )
-        .fetch_one(&state.pool)
-        .await
-        .unwrap()
-    );
-    assert!(row(&state.pool).await["epoch"].is_null());
-    assert_eq!(auth(&state, "legacy").await["ok"], false);
-    execution::supervise(
-        state.pool.clone(),
-        leases,
-        install(&state.pool, &job, &token_digest("fresh")),
-    )
-    .await
-    .unwrap()
-    .unwrap();
-    assert_eq!(auth(&state, "fresh").await["ok"], true);
 }

@@ -16,6 +16,8 @@ The archive is a database snapshot. Caddy's named certificate volumes are separa
 
 ## Restore
 
+Only backups from the new `0001_baseline.sql` history and its compatible successors are supported by this release. Former 0001–0074 databases require their matching old image and master key; they cannot be migrated or restored into this baseline. Version numbers alone do not establish compatibility: ordinary startup verifies checksums too.
+
 Restore with the matching encryption key already set in `.env`:
 
 ```sh
@@ -41,14 +43,7 @@ The integration uses three full API containers, restores a real PostgreSQL dump,
 
 ## Credential version recovery
 
-Backups include encrypted credential versions, batch items, application completion markers and pinned configuration snapshots. Keep the matching master key outside the database. The credentials upgrade removes legacy secret columns after transactional conversion; downgrade recovery requires the pre-upgrade database backup and original image together. The migration-only mode is suitable for validating a restored copy without starting SSH, quota or deployment workers. Work that never dispatched an external mutation can recover after lease expiry. Uncertain external work remains quarantined for explicit verification; already committed applications acknowledge their completion marker instead of changing bindings again.
-
-The [managed mTLS upgrade](managed-mtls.md) removes old user certificate bindings
-and invalidates old mTLS rollback snapshots. Restore the pre-upgrade database and
-matching image to return to that protocol. Migration-only mode does not perform
-remote disconnects or deployments; those durable tasks run only when the service
-starts normally. Nodes requiring reconfiguration remain inaccessible until an
-explicit off/managed configuration has been deployed successfully.
+Backups include encrypted credential versions, batch items, application completion markers and pinned configuration snapshots. Keep the matching master key outside the database. The migration-only mode is suitable for validating a restored copy without starting SSH, quota or deployment workers. Work that never dispatched an external mutation can recover after lease expiry. Uncertain external work remains quarantined for explicit verification; already committed applications acknowledge their completion marker instead of changing bindings again.
 
 ## 节点 ACME 账户与私钥
 
@@ -56,4 +51,4 @@ explicit off/managed configuration has been deployed successfully.
 
 恢复后先检查目录所有权与有效期，再执行显式同步。不要将私钥、DNS 秘密或 EAB 附在诊断日志中。仅恢复管理数据库不会自动修改既有节点，也不会自动迁移内置 ACME。
 
-Subscription templates, encrypted drafts, immutable publication history, default pointers, and the initialization marker are included in the whole-database backup (migration 0037). Preserve the same master key when restoring. A restart must restore existing publication state rather than re-seed or publish drafts. See [subscription upgrade](subscriptions.md).
+Subscription templates, encrypted drafts, immutable publication history, default pointers, and the initialization marker are included in the whole-database backup (the current baseline). Preserve the same master key when restoring. A restart must restore existing publication state rather than re-seed or publish drafts. See [subscription upgrade](subscriptions.md).

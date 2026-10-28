@@ -1,8 +1,8 @@
 # Subscription templates and formats
 
-## Upgrade contract
+## Initialization and compatibility
 
-Server and Mac client must upgrade together. Migration **0037** creates encrypted drafts and immutable published versions, then initializes one published default template per native format using the master key. Existing users, node assignments, and subscription tokens are retained.
+Server and Mac client must use compatible versions. The current SQL baseline creates encrypted drafts and immutable published versions; explicit maintenance initialization creates one published default template per native format using the master key. Former migration-chain databases are not supported by this baseline; see [installation](installation.md#database-baseline).
 
 The only public subscription route is `GET /sub/{token}`. The old `/sub/{token}/clash.yaml` route returns **404**. Management responses return one canonical `url`; `auto_url` and Mac legacy fallbacks are removed. Replace saved legacy links with a template/platform link from the upgraded Mac app or selection page. This feature does not deploy a server or change deployed nodes.
 

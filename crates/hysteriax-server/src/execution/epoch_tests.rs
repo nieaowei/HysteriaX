@@ -192,49 +192,6 @@ async fn maintenance_waits_for_guarded_result_transaction_before_epoch_publicati
 }
 
 #[tokio::test]
-async fn migration_backfills_epoch_without_rewriting_existing_lease_or_intent() {
-    let pool = crate::db::test_pool_through_version(3, 67).await;
-    sqlx::query("INSERT INTO resource_leases(resource_key,owner,generation,work_id,expires_at) VALUES('epoch-test:legacy','legacy',91,'legacy-work',clock_timestamp()+interval '1 minute')").execute(&pool).await.unwrap();
-    sqlx::query("INSERT INTO execution_operations(operation_id,resource_key,owner,generation,work_id,step,state,intent) VALUES('legacy-op','epoch-test:legacy','legacy',91,'legacy-work','step','dispatching','{}')").execute(&pool).await.unwrap();
-    let lease: Value = sqlx::query_scalar("SELECT to_jsonb(r) FROM resource_leases r")
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-    let intent: Value = sqlx::query_scalar("SELECT to_jsonb(e) FROM execution_operations e")
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-    crate::db::run_migrations(&pool).await.unwrap();
-    assert_eq!(
-        lease,
-        sqlx::query_scalar::<_, Value>("SELECT to_jsonb(r)-'epoch' FROM resource_leases r")
-            .fetch_one(&pool)
-            .await
-            .unwrap()
-    );
-    assert_eq!(
-        intent,
-        sqlx::query_scalar::<_, Value>("SELECT to_jsonb(e)-'epoch' FROM execution_operations e")
-            .fetch_one(&pool)
-            .await
-            .unwrap()
-    );
-    let restored: Execution = Execution {
-        resource: "epoch-test:legacy".into(),
-        owner: "legacy".into(),
-        generation: 91,
-        work: "legacy-work".into(),
-        epoch: sqlx::query_scalar("SELECT hysteriax_execution_epoch()")
-            .fetch_one(&pool)
-            .await
-            .unwrap(),
-    };
-    let mut tx = pool.begin().await.unwrap();
-    restored.guard(&mut tx).await.unwrap();
-    tx.rollback().await.unwrap();
-}
-
-#[tokio::test]
 async fn rejected_maintenance_contract_rolls_back_epoch_and_lease_expiry_together() {
     let (pool, secrets) = initialized().await;
     let old = claim(&pool, "epoch-test:rollback").await;

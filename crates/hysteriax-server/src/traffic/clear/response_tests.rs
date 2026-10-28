@@ -1,9 +1,9 @@
 use super::*;
-use crate::traffic::{batch_tests::fixture_through, batches, capture_clear_response};
+use crate::traffic::{batch_tests::fixture as batch_fixture, batches, capture_clear_response};
 use serde_json::{Map, Value, json};
 
 async fn fixture(users: usize) -> (PgPool, crate::background::Work) {
-    let pool = fixture_through(users, i64::MAX).await;
+    let pool = batch_fixture(users).await;
     sqlx::query("UPDATE nodes SET deployed_revision=1 WHERE id='a'")
         .execute(&pool)
         .await

@@ -157,32 +157,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn migration_backfills_history_without_renumbering_source_events() {
-        let pool = crate::db::test_pool_through_version(2, 40).await;
-        fixture(&pool).await;
-        sqlx::query("INSERT INTO job_events(id,job_id,event_type,payload_json,created_at) OVERRIDING SYSTEM VALUE VALUES(8,'a','first','{\"retained\":true}',now()),(19,'b','second','{\"retained\":true}',now())")
-            .execute(&pool).await.unwrap();
-        crate::db::run_migrations(&pool).await.unwrap();
-        let events = read_database(&pool, 0).await.unwrap();
-        assert_eq!(
-            events
-                .iter()
-                .map(|event| (event.id, event.source_id))
-                .collect::<Vec<_>>(),
-            vec![(1, 8), (2, 19)]
-        );
-        assert!(events.iter().all(|event| event.data.contains("retained")));
-        assert_eq!(publish_pending(&pool).await.unwrap(), 0);
-        assert_eq!(
-            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM jobs")
-                .fetch_one(&pool)
-                .await
-                .unwrap(),
-            2
-        );
-    }
-
-    #[tokio::test]
     async fn late_commit_with_smaller_source_id_is_published_after_the_head() {
         let pool = crate::db::test_pool_with_max_connections(4).await;
         fixture(&pool).await;

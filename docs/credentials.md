@@ -99,19 +99,8 @@ credential test covers shared TLS updates, pinned rollback, partial failure and
 retry, consecutive publication, unauthorized SSH keys, encrypted SSH-key
 passphrases, and manually prepared shared-password changes.
 
-The TLS-pair upgrade changes v1 directly. Startup consolidates split certificate
-and key references across desired, deployed and historical configuration,
-preserving runtime bytes and artifact filenames. It removes the old standalone
-objects after conversion and retains unused CA certificates as `ca_certificate`.
-A referenced invalid pair aborts migration. Restore the pre-upgrade database and
-matching image for rollback; old private-key objects cannot be recovered through
-the upgraded API.
+## Database baseline
 
-## Managed mTLS upgrade
-
-See [managed mTLS and upgrade](managed-mtls.md) for signing policy, staged CA
-rotation, blocking-node recovery, historical rollback limits, the one-time old
-user-certificate reset and database/image rollback requirements. The reset runs
-inside the `--migrate-only` format-conversion transaction before workers or API access.
+The current release supports a fresh PostgreSQL database initialized from `0001_baseline.sql`. It does not upgrade the former migration chain or import legacy credential stores. Existing backups require their matching old image and master key. See [installation](installation.md#database-baseline) for the compatibility boundary and [managed mTLS](managed-mtls.md) for current signing and recovery behavior.
 
 ACME 节点现在由独立 `hysteriax-acme` 进程读取 DNS 凭据并维护一张覆盖全部域名的 SAN 证书，可同时选择托管 mTLS。公共配置及凭据目录继续保留原有引用方式；部署时解析的秘密只写入证书账号的私有配置，不会进入 Hy2 YAML 预览。节点续期与用户/CA 身份续期相互独立。节点账户与私钥的独立备份要求见 [备份恢复](backup-restore.md)，维护及验证命令见 [节点 ACME](node-acme.md)。

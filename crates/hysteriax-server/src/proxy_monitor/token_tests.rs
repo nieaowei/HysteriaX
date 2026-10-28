@@ -206,65 +206,6 @@ async fn source_and_scope_mismatch_cannot_issue_or_clear_another_attempts_creden
 }
 
 #[tokio::test]
-async fn migration_preserves_legacy_rows_and_requires_fresh_execution_proof() {
-    for through in [62, 68] {
-        let state = fixture_on(crate::db::test_pool_through_version(8, through).await).await;
-        let work = if through == 68 {
-            Some(work_fixture(&state, "a").await)
-        } else {
-            None
-        };
-        sqlx::query("INSERT INTO monitoring_probe_tokens(node_id,token_hash,expires_at) VALUES('a',$1,clock_timestamp()+interval '1 minute')")
-        .bind(token_digest("legacy")).execute(&state.pool).await.unwrap();
-        if let Some(work) = &work {
-            let (primary, node) = token_leases(work).unwrap();
-            sqlx::query("UPDATE monitoring_probe_tokens SET work_id=$1,owner=$2,node_generation=$3,work_generation=$4 WHERE node_id='a'")
-            .bind(&work.id).bind(&primary.owner).bind(node.generation).bind(primary.generation).execute(&state.pool).await.unwrap();
-        }
-        let before = row(&state).await;
-        let nodes: Value = sqlx::query_scalar(
-            "SELECT jsonb_agg(to_jsonb(n)-'traffic_capture_mode' ORDER BY id) FROM nodes n",
-        )
-        .fetch_one(&state.pool)
-        .await
-        .unwrap();
-        crate::db::run_migrations_through(&state.pool, 72)
-            .await
-            .unwrap();
-        sqlx::query("UPDATE nodes SET traffic_capture_mode='interval'")
-            .execute(&state.pool)
-            .await
-            .unwrap();
-        crate::db::run_migrations(&state.pool).await.unwrap();
-        crate::db::run_migrations(&state.pool).await.unwrap();
-        let after = row(&state).await;
-        for (key, value) in before.as_object().unwrap() {
-            assert_eq!(&after[key], value);
-        }
-        assert_eq!(
-            sqlx::query_scalar::<_, Value>(
-                "SELECT jsonb_agg(to_jsonb(n)-'traffic_capture_mode' ORDER BY id) FROM nodes n"
-            )
-            .fetch_one(&state.pool)
-            .await
-            .unwrap(),
-            nodes
-        );
-        assert_eq!(auth(&state, "legacy").await["ok"], false);
-        assert!(after["epoch"].is_null());
-        if let Some(work) = work {
-            install_token(&state, &work, &token_digest("fresh"))
-                .await
-                .unwrap();
-        } else {
-            install_fixture(&state, "a", "fresh").await;
-        }
-        assert_eq!(auth(&state, "fresh").await["ok"], true);
-        assert_eq!(auth(&state, "legacy").await["ok"], false);
-    }
-}
-
-#[tokio::test]
 async fn takeover_fences_late_token_writes_results_and_cleanup_even_with_the_new_hash() {
     let state = fixture().await;
     let old = install_fixture(&state, "a", "old").await;

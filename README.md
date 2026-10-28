@@ -57,7 +57,7 @@ docker compose --profile maintenance run --pull never --rm --no-deps migrate
 docker compose up -d --no-build api caddy
 ```
 
-数据库初始化和升级必须先运行 `migrate`。普通 API 启动只检查 schema、协议和主密钥，不执行初始化改写。已有安装升级前先备份并停止所有 API 实例，完成迁移后再启动。
+数据库初始化和升级必须先运行 `migrate`。普通 API 启动只检查 schema、协议和主密钥，不执行初始化改写。当前 `0001_baseline.sql` 仅支持新建空库，不兼容原 0001～0074 数据库；旧安装需保留匹配的旧镜像和数据库。
 
 Compose 会启动管理 API、PostgreSQL、Redis 和 Caddy。Caddy 自动申请和续期管理域名的 HTTPS 证书；数据库和 Redis 不向宿主机公开端口。
 
@@ -78,7 +78,7 @@ curl --fail https://manage.example.com/readyz
 {"status":"ready","database":"ok","management_protocol":2}
 ```
 
-安装、已有数据库升级和旧 SQLite 安装的处理方式见 [安装指南](docs/installation.md)。
+安装、数据库基线兼容边界和旧 SQLite 安装的处理方式见 [安装指南](docs/installation.md)。
 
 ### 3. 安装并连接 Mac 客户端
 
@@ -138,7 +138,7 @@ curl --fail https://manage.example.com/readyz
 - **查看运行状态**：在概览查看流量和连接趋势，在节点与用户详情确认采样时间；任务失败时先查看「任务」中的具体错误，操作历史可在「审计」中查询。
 - **查看服务日志**：在服务目录运行 `docker compose logs --tail=100 api`；证书或 HTTPS 连接异常时同时检查 `caddy` 日志。
 - **备份与恢复**：按 [备份指南](docs/backup-restore.md) 备份数据库、匹配的主密钥和必要的 Caddy 状态。备份脚本会短暂停止 API 以生成一致快照。
-- **升级**：先备份并停止全部旧实例，完成迁移后更新管理服务与配套 Mac 客户端。管理接口使用 `/api/v2`；升级前查阅 [安装指南](docs/installation.md) 和对应版本说明。
+- **升级**：本次基线重建不支持原迁移链升级；新基线后续兼容升级需先备份并停止全部旧实例，完成迁移后更新管理服务与配套 Mac 客户端。管理接口使用 `/api/v2`；升级前查阅 [安装指南](docs/installation.md) 和对应版本说明。
 
 节点套餐统计所选网卡的整机流量，用户额度统计用户的 Hysteria 用量，两者口径不同。采集和撤权存在延迟，SSH 不可达时可能无法立即断开已有连接，具体边界见 [节点套餐](docs/node-packages.md)。
 

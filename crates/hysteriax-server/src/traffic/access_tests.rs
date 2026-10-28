@@ -10,7 +10,7 @@ use axum::{
 };
 
 async fn fixture(users: usize, nodes: usize) -> AppState {
-    let pool = crate::traffic::batch_tests::fixture_through(users, i64::MAX).await;
+    let pool = crate::traffic::batch_tests::fixture(users).await;
     if nodes > 2 {
         sqlx::query("INSERT INTO nodes(id,name,ssh_host,ssh_port,ssh_username,ssh_auth_type,ssh_secret_enc,public_host,public_port,listen_addr,node_token_hash,node_token_enc,traffic_stats_secret_enc,desired_config_enc,created_at,updated_at) SELECT 'n-'||lpad(i::text,3,'0'),'Node '||i,'127.0.0.1',22,'root','password','unused','example.test',443,':443','hash-n-'||i,'unused','unused','{}',now(),now() FROM generate_series(1,$1)i")
             .bind((nodes-2) as i32).execute(&pool).await.unwrap();
@@ -683,7 +683,7 @@ async fn reused_wall_clock_markers_cannot_reactivate_an_old_restriction_page() {
 
 #[tokio::test]
 async fn maintenance_backfills_the_due_queue_without_changing_existing_user_or_assignment_data() {
-    let pool = crate::traffic::batch_tests::fixture_through(301, 53).await;
+    let pool = crate::traffic::batch_tests::fixture(301).await;
     sqlx::query("UPDATE users SET enabled=split_part(id,'-',2)::int<=100,expires_at=CASE WHEN split_part(id,'-',2)::int<=100 THEN clock_timestamp()+interval '1 hour' END,quota_bytes=CASE WHEN split_part(id,'-',2)::int>200 THEN 1 END,usage_bytes=CASE WHEN split_part(id,'-',2)::int>200 THEN 1 ELSE 0 END").execute(&pool).await.unwrap();
     let snapshot = "SELECT jsonb_build_object('users',(SELECT jsonb_agg(to_jsonb(u) ORDER BY id) FROM users u),'nodes',(SELECT jsonb_agg(to_jsonb(n)-'traffic_capture_mode' ORDER BY id) FROM nodes n),'assignments',(SELECT jsonb_agg(to_jsonb(a) ORDER BY user_id,node_id) FROM node_assignments a))";
     let before: serde_json::Value = sqlx::query_scalar(snapshot).fetch_one(&pool).await.unwrap();

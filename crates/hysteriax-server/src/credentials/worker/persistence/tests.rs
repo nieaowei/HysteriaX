@@ -312,7 +312,7 @@ async fn partial_scope_changed_attempt_and_another_resource_binding_cannot_confi
 }
 
 #[tokio::test]
-async fn migration_adds_receipts_without_rewriting_applied_or_pending_business_history() {
+async fn repeat_migration_preserves_applied_or_pending_business_history() {
     let f = fixture(false).await;
     sqlx::query("UPDATE credential_batch_items SET applied_at=clock_timestamp(),apply_stage='credential_applied'").execute(&f.state.pool).await.unwrap();
     let before = snapshot(&f).await;
@@ -327,16 +327,8 @@ async fn migration_adds_receipts_without_rewriting_applied_or_pending_business_h
     .fetch_one(&f.state.pool)
     .await
     .unwrap();
-    sqlx::raw_sql("DROP TABLE credential_application_receipts")
-        .execute(&f.state.pool)
-        .await
-        .unwrap();
-    sqlx::raw_sql(include_str!(
-        "../../../../migrations/0064_credential_application_receipts.sql"
-    ))
-    .execute(&f.state.pool)
-    .await
-    .unwrap();
+    crate::db::run_migrations(&f.state.pool).await.unwrap();
+    crate::db::run_migrations(&f.state.pool).await.unwrap();
     assert_eq!(snapshot(&f).await, before);
     assert_eq!(
         sqlx::query_scalar::<_, Value>(

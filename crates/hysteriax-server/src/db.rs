@@ -237,11 +237,6 @@ pub async fn test_pool() -> PgPool {
 
 #[cfg(test)]
 pub async fn test_pool_with_max_connections(max_connections: u32) -> PgPool {
-    test_pool_through_version(max_connections, i64::MAX).await
-}
-
-#[cfg(test)]
-pub async fn test_pool_through_version(max_connections: u32, through_version: i64) -> PgPool {
     use uuid::Uuid;
 
     let database_url = std::env::var("TEST_DATABASE_URL")
@@ -280,28 +275,10 @@ pub async fn test_pool_through_version(max_connections: u32, through_version: i6
         .connect(&database_url)
         .await
         .expect("connect to isolated PostgreSQL test schema");
-    run_migrations_through(&pool, through_version)
+    run_migrations(&pool)
         .await
         .expect("run PostgreSQL migrations in isolated test schema");
     pool
-}
-
-/// Build historical fixtures using their own schema before exercising an upgrade.
-#[cfg(test)]
-pub async fn run_migrations_through(pool: &PgPool, through_version: i64) -> Result<()> {
-    let migrator = Migrator {
-        migrations: MIGRATOR
-            .iter()
-            .filter(|migration| migration.version <= through_version)
-            .cloned()
-            .collect::<Vec<_>>()
-            .into(),
-        ignore_missing: false,
-        locking: true,
-        no_tx: false,
-        ..Migrator::DEFAULT
-    };
-    migrate_with(pool, &migrator).await
 }
 
 #[cfg(test)]
@@ -438,6 +415,50 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(json_types, 6);
+
+        let buckets: Vec<(String, i64, i16, i16)> = sqlx::query_as(
+            "SELECT domain,count(*),min(bucket),max(bucket) FROM cache_bucket_versions GROUP BY domain ORDER BY domain",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(buckets.len(), 17);
+        assert!(
+            buckets
+                .iter()
+                .all(|(_, count, min, max)| (*count, *min, *max) == (64, 0, 63))
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT total FROM audit_totals WHERE id")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT head FROM event_publication_stream WHERE id")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            0
+        );
+        assert!(sqlx::query_scalar::<_, bool>(
+            "SELECT to_regclass('traffic_history_cleanup_runs') IS NULL AND to_regclass('traffic_history_cleanup_nodes') IS NULL AND to_regclass('cache_generation') IS NULL AND to_regclass('cache_domain_versions') IS NULL",
+        ).fetch_one(&pool).await.unwrap());
+        let epoch: String = sqlx::query_scalar("SELECT epoch FROM cache_version_epoch WHERE id")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let other = test_pool().await;
+        let other_epoch: String =
+            sqlx::query_scalar("SELECT epoch FROM cache_version_epoch WHERE id")
+                .fetch_one(&other)
+                .await
+                .unwrap();
+        assert_ne!(
+            epoch, other_epoch,
+            "independent installations must not share cache epochs"
+        );
     }
 
     #[tokio::test]
@@ -550,44 +571,6 @@ mod tests {
         first.commit().await.unwrap();
         let second_id = second.await.unwrap();
         assert!(second_id > first_id);
-    }
-
-    #[tokio::test]
-    async fn job_snapshot_migration_backfills_existing_jobs_and_preserves_node_ids() {
-        let pool = test_pool().await;
-        let mut tx = pool.begin().await.unwrap();
-        // Recreate the version-one jobs schema to exercise an existing database upgrade.
-        sqlx::raw_sql("ALTER TABLE jobs DROP COLUMN node_name; ALTER TABLE jobs ADD CONSTRAINT jobs_node_id_fkey FOREIGN KEY (node_id) REFERENCES nodes(id) ON DELETE SET NULL;")
-                .execute(&mut *tx).await.unwrap();
-        sqlx::query("INSERT INTO nodes (id, name, ssh_host, ssh_port, ssh_username, ssh_auth_type, ssh_secret_enc, public_host, public_port, listen_addr, node_token_hash, node_token_enc, traffic_stats_secret_enc, desired_config_enc, created_at, updated_at) VALUES ('migration-node', 'Existing node', '127.0.0.1', 22, 'root', 'private_key', 'ssh-secret', 'node.example.test', 443, ':443', 'node-hash', 'node-token', 'stats-secret', '{}', now(), now())")
-                .execute(&mut *tx).await.unwrap();
-        sqlx::query("INSERT INTO jobs (id, kind, node_id, status, stage, available_at, created_at, updated_at) VALUES ('existing-job', 'sync', 'migration-node', 'succeeded', 'done', now(), now(), now()), ('unlinked-job', 'sync', NULL, 'succeeded', 'done', now(), now(), now())")
-                .execute(&mut *tx).await.unwrap();
-        sqlx::raw_sql(include_str!("../migrations/0002_job_node_snapshot.sql"))
-            .execute(&mut *tx)
-            .await
-            .unwrap();
-        sqlx::query("DELETE FROM nodes WHERE id = 'migration-node'")
-            .execute(&mut *tx)
-            .await
-            .unwrap();
-        let snapshots: Vec<(String, Option<String>, Option<String>)> =
-            sqlx::query_as("SELECT id, node_id, node_name FROM jobs ORDER BY id")
-                .fetch_all(&mut *tx)
-                .await
-                .unwrap();
-        assert_eq!(
-            snapshots,
-            vec![
-                (
-                    "existing-job".into(),
-                    Some("migration-node".into()),
-                    Some("Existing node".into())
-                ),
-                ("unlinked-job".into(), None, None),
-            ]
-        );
-        tx.rollback().await.unwrap();
     }
 }
 

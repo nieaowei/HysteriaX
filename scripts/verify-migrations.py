@@ -2,6 +2,7 @@
 """Verify maintenance initialization, native schema, and concurrent protocol-2 instances."""
 
 import base64
+import hashlib
 import os
 import pathlib
 import secrets
@@ -81,6 +82,9 @@ def main():
                 version = connection.execute(
                     "SELECT MAX(version) FROM _sqlx_migrations WHERE success"
                 ).fetchone()[0]
+                history = connection.execute(
+                    "SELECT version,success,checksum FROM _sqlx_migrations ORDER BY version"
+                ).fetchall()
                 columns = dict(
                     connection.execute(
                         "SELECT column_name, data_type FROM information_schema.columns "
@@ -96,6 +100,12 @@ def main():
                     )
                 }
             expected_version = max(int(path.name.split("_", 1)[0]) for path in (ROOT / "crates/hysteriax-server/migrations").glob("*.sql"))
+            expected_history = [
+                (int(path.name.split("_", 1)[0]), True, hashlib.sha384(path.read_bytes()).digest())
+                for path in sorted((ROOT / "crates/hysteriax-server/migrations").glob("*.sql"))
+            ]
+            if history != expected_history:
+                raise RuntimeError("installed migration history or checksum differs from the embedded SQL")
             if version != expected_version:
                 raise RuntimeError(f"unexpected PostgreSQL schema version: {version}")
             expected = {

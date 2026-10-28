@@ -2,8 +2,8 @@ use super::*;
 use crate::{background, execution, security::SecretBox, state::AppState, traffic::batches};
 use serde_json::{Map, Value};
 
-async fn fixture(users: usize, version: i64) -> AppState {
-    let pool = crate::traffic::batch_tests::fixture_through(users, version).await;
+async fn fixture(users: usize) -> AppState {
+    let pool = crate::traffic::batch_tests::fixture(users).await;
     AppState::new(
         pool,
         SecretBox::from_base64("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA").unwrap(),
@@ -32,7 +32,7 @@ async fn disable_old_sql_lock(pool: &PgPool) {
 #[tokio::test]
 async fn maintenance_adoption_preserves_partial_intervals_and_recovers_original_ids_without_remote_reads()
  {
-    let state = fixture(501, i64::MAX).await;
+    let state = fixture(501).await;
     capture(&state, "old-a", "a", 501, 5).await;
     capture(&state, "old-b", "b", 501, 2).await;
     assert!(matches!(
@@ -129,7 +129,7 @@ async fn maintenance_adoption_preserves_partial_intervals_and_recovers_original_
 }
 #[tokio::test]
 async fn adoption_is_bounded_and_skips_locked_batches_without_claiming_initialization_is_ready() {
-    let state = fixture(0, i64::MAX).await;
+    let state = fixture(0).await;
     sqlx::query("INSERT INTO traffic_sample_batches(sample_id,node_id,state,instance_id,payload_digest) SELECT 'old-'||i,'a','ready','instance','digest' FROM generate_series(1,301)i").execute(&state.pool).await.unwrap();
     let mut held = state.pool.begin().await.unwrap();
     sqlx::query("SELECT sample_id FROM traffic_sample_batches WHERE sample_id='old-1' FOR UPDATE")
@@ -170,7 +170,7 @@ async fn adoption_is_bounded_and_skips_locked_batches_without_claiming_initializ
 }
 #[tokio::test]
 async fn adoption_failure_rolls_back_discarding_and_ownership_and_keeps_startup_read_only() {
-    let state = fixture(1, i64::MAX).await;
+    let state = fixture(1).await;
     let cycle = Uuid::new_v4();
     batches::reserve(&state.pool, "uncaptured", "a", Some(cycle))
         .await
@@ -241,7 +241,7 @@ async fn adoption_failure_rolls_back_discarding_and_ownership_and_keeps_startup_
 }
 #[tokio::test]
 async fn capture_expiry_is_bounded_fenced_and_skips_live_owners_and_locked_rows() {
-    let state = fixture(1, i64::MAX).await;
+    let state = fixture(1).await;
     disable_old_sql_lock(&state.pool).await;
     sqlx::query("INSERT INTO traffic_sample_batches(sample_id,node_id,capture_deadline) SELECT 'expired-'||i,'a',clock_timestamp()-interval '1 minute' FROM generate_series(1,301)i").execute(&state.pool).await.unwrap();
     batches::reserve(&state.pool, "live", "a", None)
@@ -306,7 +306,7 @@ async fn capture_expiry_is_bounded_fenced_and_skips_live_owners_and_locked_rows(
 #[tokio::test]
 async fn capture_expiry_ack_failure_rolls_back_and_a_replaced_owner_cannot_discard() {
     use crate::background::maintenance;
-    let state = fixture(0, i64::MAX).await;
+    let state = fixture(0).await;
     batches::reserve(&state.pool, "old-read", "a", None)
         .await
         .unwrap();

@@ -505,64 +505,6 @@ async fn repeated_admission_preserves_healthy_work_and_empty_pending_range_uses_
 }
 
 #[tokio::test]
-async fn migration_0059_to_0060_preserves_all_history_and_only_changes_logical_staged_visibility() {
-    let pool = db::test_pool_through_version(8, 59).await;
-    let (state, ca, _) = super::super::trust::tests::fixture_with_pool(pool, 0).await;
-    sqlx::query("INSERT INTO users(id,name,enabled,created_at,updated_at) VALUES('user','User',true,now(),now())").execute(&state.pool).await.unwrap();
-    for version in [1, 2] {
-        let p = identities::prepare_user(&state.pool, &state.secrets, "user", &ca, version, false)
-            .await
-            .unwrap();
-        let mut tx = state.pool.begin().await.unwrap();
-        identities::commit_user(&mut tx, &state.secrets, p)
-            .await
-            .unwrap();
-        tx.commit().await.unwrap();
-    }
-    // Simulate a persisted unpublished retirement before the new migration.
-    sqlx::query("UPDATE mtls_ca_generations SET state='retired' WHERE ca_version=2")
-        .execute(&state.pool)
-        .await
-        .unwrap();
-    let snapshot = "SELECT jsonb_build_object('history',(";
-    let snapshot = format!(
-        "{snapshot}{HISTORY}),'leaves',(SELECT jsonb_agg(to_jsonb(v) ORDER BY credential_version) FROM mtls_user_versions v),'generations',(SELECT jsonb_agg(to_jsonb(g) ORDER BY ca_id,ca_version) FROM mtls_ca_generations g),'rotations',(SELECT jsonb_agg(to_jsonb(r) ORDER BY id) FROM mtls_rotations r))"
-    );
-    let before: Value = sqlx::query_scalar(sqlx::AssertSqlSafe(snapshot.as_str()))
-        .fetch_one(&state.pool)
-        .await
-        .unwrap();
-    assert_eq!(
-        count(
-            &state,
-            "SELECT count(*) FROM mtls_user_version_publication WHERE discarded"
-        )
-        .await,
-        0
-    );
-    for _ in 0..2 {
-        db::run_migrations(&state.pool).await.unwrap();
-        assert_eq!(
-            before,
-            sqlx::query_scalar::<_, Value>(sqlx::AssertSqlSafe(snapshot.as_str()))
-                .fetch_one(&state.pool)
-                .await
-                .unwrap()
-        );
-        assert_eq!(count(&state,"SELECT count(*) FROM mtls_user_version_publication WHERE discarded AND NOT released").await,1);
-        assert_eq!(count(&state,"SELECT count(*) FROM mtls_user_version_publication WHERE released AND NOT discarded").await,1);
-        assert_eq!(
-            count(
-                &state,
-                "SELECT count(*) FROM mtls_user_versions WHERE discarded"
-            )
-            .await,
-            0
-        );
-    }
-}
-
-#[tokio::test]
 async fn an_inflight_signature_pins_its_generation_before_retirement_and_is_included_in_retention()
 {
     let (state, ca, rotation) = fixture(1).await;

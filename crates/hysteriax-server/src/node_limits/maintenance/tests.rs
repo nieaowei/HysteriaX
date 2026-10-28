@@ -368,68 +368,6 @@ async fn new_expiry_supersedes_queued_restore_and_removed_node_work_finishes_wit
 }
 
 #[tokio::test]
-async fn migration_preserves_legacy_packages_jobs_events_and_restores_their_conditional_obligations()
- {
-    let pool = db::test_pool_through_version(8, 54).await;
-    nodes(&pool, 2).await;
-    sqlx::query(
-        "INSERT INTO users(id,name,created_at,updated_at) VALUES('legacy','Legacy',now(),now())",
-    )
-    .execute(&pool)
-    .await
-    .unwrap();
-    sqlx::query("INSERT INTO node_packages(node_id,period_id,usage_bytes,restricted,config) VALUES('n-0001','preserved-period',123,true,$1)")
-        .bind(json!(Package{quota_bytes:Some(100),..Package::default()})).execute(&pool).await.unwrap();
-    db::serializable::<_, ApiError, _>(&pool, |tx| {
-        Box::pin(async move {
-            crate::api::enqueue_job_with_payload_in_tx(
-                tx,
-                "kick",
-                Some("n-0001"),
-                None,
-                json!({"user_id":"legacy","node_limit":true}),
-            )
-            .await?;
-            Ok(())
-        })
-    })
-    .await
-    .unwrap();
-    let snapshot = "SELECT jsonb_build_object('nodes',(SELECT jsonb_agg(to_jsonb(n)-'traffic_capture_mode' ORDER BY id) FROM nodes n),'packages',(SELECT jsonb_agg(to_jsonb(p) ORDER BY node_id) FROM node_packages p),'users',(SELECT jsonb_agg(to_jsonb(u) ORDER BY id) FROM users u),'jobs',(SELECT jsonb_agg(to_jsonb(j) ORDER BY id) FROM jobs j),'events',(SELECT jsonb_agg(to_jsonb(e) ORDER BY id) FROM job_events e),'requests',(SELECT jsonb_agg(to_jsonb(r) ORDER BY node_id,user_id) FROM kick_requests r))";
-    let before: Value = sqlx::query_scalar(snapshot).fetch_one(&pool).await.unwrap();
-    db::run_migrations(&pool).await.unwrap();
-    db::run_migrations(&pool).await.unwrap();
-    let after: Value = sqlx::query_scalar(snapshot).fetch_one(&pool).await.unwrap();
-    assert_eq!(before, after);
-    assert_eq!(
-        count(&pool, "SELECT count(*) FROM node_limit_epochs").await,
-        0
-    );
-    package(&pool, "n-0001", false).await;
-    drain_for_test(&pool).await;
-    assert_eq!(
-        count(&pool, "SELECT count(*) FROM jobs WHERE status='cancelled'").await,
-        1
-    );
-    assert_eq!(
-        count(
-            &pool,
-            "SELECT count(*) FROM kick_requests WHERE state='cancelled'"
-        )
-        .await,
-        1
-    );
-    assert_eq!(
-        count(
-            &pool,
-            "SELECT generation FROM node_limit_epochs WHERE node_id='n-0001'"
-        )
-        .await,
-        1
-    );
-}
-
-#[tokio::test]
 async fn scan_ack_failure_rolls_back_alerts_source_transitions_outboxes_and_progress() {
     let pool = fixture(0).await;
     sqlx::query("INSERT INTO node_packages(node_id,period_id,config) SELECT id,id,$1 FROM nodes")
