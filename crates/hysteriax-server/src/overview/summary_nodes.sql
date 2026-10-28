@@ -1,5 +1,15 @@
 WITH node_jobs AS (
-    SELECT node_id,pending AS pending_revocations,pending_limit AS pending_disconnects,failed_limit AS failed_disconnects FROM job_node_kick_totals
+    SELECT COALESCE(j.node_id,r.node_id) AS node_id,
+        COALESCE(j.pending,0) AS pending_revocations,
+        COALESCE(r.pending_disconnects,0) AS pending_disconnects,
+        COALESCE(r.failed_disconnects,0) AS failed_disconnects
+    FROM job_node_kick_totals j
+    FULL JOIN (
+        SELECT node_id,count(*) FILTER(WHERE state='active') AS pending_disconnects,
+            count(*) FILTER(WHERE state IN ('waiting_recovery','needs_attention')) AS failed_disconnects
+        FROM kick_requests WHERE reasons ? 'node_limit' AND state NOT IN ('completed','cancelled')
+        GROUP BY node_id
+    ) r ON r.node_id=j.node_id
 ), gaps AS (
     SELECT node_id, count(*)::bigint AS open_gaps
     FROM data_gaps WHERE resolved_at IS NULL GROUP BY node_id

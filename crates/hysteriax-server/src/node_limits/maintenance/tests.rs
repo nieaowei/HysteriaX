@@ -85,7 +85,7 @@ async fn restriction_pages_survive_takeover_and_meter_edits_without_duplicate_jo
     assert_eq!(count(&pool, "SELECT count(*) FROM jobs").await, 0);
     let old = claim(&pool, "old").await;
     dispatch_work(&pool, &old).await.unwrap();
-    assert_eq!(count(&pool, "SELECT count(*) FROM jobs").await, 128);
+    assert_eq!(count(&pool, "SELECT count(*) FROM jobs").await, 1);
     // Still blocked: changing meter/config generation must keep this episode.
     package(&pool, "n-0001", true).await;
     assert_eq!(
@@ -103,9 +103,9 @@ async fn restriction_pages_survive_takeover_and_meter_edits_without_duplicate_jo
     assert!(next.leases[0].generation > paused.leases[0].generation);
     assert!(dispatch_work(&pool, &paused).await.is_err());
     dispatch_work(&pool, &next).await.unwrap();
-    assert_eq!(count(&pool, "SELECT count(*) FROM jobs").await, 256);
+    assert_eq!(count(&pool, "SELECT count(*) FROM jobs").await, 1);
     drain_for_test(&pool).await;
-    assert_eq!(count(&pool, "SELECT count(*) FROM jobs").await, 257);
+    assert_eq!(count(&pool, "SELECT count(*) FROM jobs").await, 1);
     assert_eq!(
         count(
             &pool,
@@ -114,7 +114,7 @@ async fn restriction_pages_survive_takeover_and_meter_edits_without_duplicate_jo
         .await,
         257
     );
-    assert_eq!(count(&pool, "SELECT count(*) FROM job_events").await, 257);
+    assert_eq!(count(&pool, "SELECT count(*) FROM job_events").await, 1);
     assert_eq!(
         count(&pool, "SELECT count(*) FROM execution_operations").await,
         0
@@ -148,7 +148,7 @@ async fn restored_pages_preserve_permanent_reasons_and_old_restore_cannot_clear_
     assert_eq!(count(&pool,"SELECT count(*) FROM kick_requests WHERE reasons ? 'credentials_revoked' AND state NOT IN ('completed','cancelled')").await,1);
     assert_eq!(
         count(&pool, "SELECT count(*) FROM jobs WHERE status='queued'").await,
-        130
+        1
     );
     // Restore remaining pages after re-blocking would incorrectly remove new
     // obligations. The independent episode generation rejects them instead.
@@ -231,7 +231,7 @@ async fn busy_node_only_defers_its_work_and_deleting_node_keeps_obligations_with
     dispatch_work(&pool, &second).await.unwrap();
     assert_eq!(
         count(&pool, "SELECT count(*) FROM jobs WHERE node_id='n-0002'").await,
-        2
+        1
     );
     held.rollback().await.unwrap();
     sqlx::query("UPDATE nodes SET state='deleting' WHERE id='n-0001'")
@@ -270,8 +270,8 @@ async fn fanout_ack_failure_rolls_back_jobs_events_and_cursor_and_native_conflic
         count(&pool, "SELECT last_value FROM retry_node_limit").await,
         2
     );
-    assert_eq!(count(&pool, "SELECT count(*) FROM jobs").await, 2);
-    assert_eq!(count(&pool, "SELECT count(*) FROM job_events").await, 2);
+    assert_eq!(count(&pool, "SELECT count(*) FROM jobs").await, 1);
+    assert_eq!(count(&pool, "SELECT count(*) FROM job_events").await, 1);
     assert_eq!(
         count(&pool, "SELECT max(generation) FROM kick_requests").await,
         1

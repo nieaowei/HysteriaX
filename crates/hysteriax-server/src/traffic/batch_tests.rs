@@ -158,7 +158,7 @@ async fn duplicate_captures_and_parallel_processors_preserve_every_user_and_quot
             .fetch_one(&pool)
             .await
             .unwrap(),
-        6
+        2
     );
 }
 

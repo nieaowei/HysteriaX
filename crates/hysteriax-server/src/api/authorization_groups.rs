@@ -12,7 +12,7 @@ use sqlx::{Postgres, Row, Transaction};
 use uuid::Uuid;
 
 use crate::{
-    api::{enqueue_job_with_payload_in_tx, generate_token, now},
+    api::{generate_token, now},
     error::ApiError,
     security::token_digest,
     state::AppState,
@@ -1117,22 +1117,20 @@ async fn reconcile_assignments(
         touched.insert(user_id);
     }
     let mut jobs = BTreeSet::new();
-    for (user_id, node_id) in removals {
-        sqlx::query("DELETE FROM node_assignments WHERE user_id=$1 AND node_id=$2")
-            .bind(&user_id)
-            .bind(&node_id)
-            .execute(&mut **tx)
-            .await?;
-        let job_id = enqueue_job_with_payload_in_tx(
-            tx,
-            "kick",
-            Some(&node_id),
-            None,
-            json!({"user_id":user_id,"kick_reason":"authorization_group_removed"}),
-        )
-        .await?;
-        jobs.insert(job_id);
-        touched.insert(user_id);
+    let users: Vec<_> = removals.iter().map(|(u, _)| u.clone()).collect();
+    let nodes: Vec<_> = removals.iter().map(|(_, n)| n.clone()).collect();
+    sqlx::query("DELETE FROM node_assignments a USING unnest($1::text[],$2::text[]) r(user_id,node_id) WHERE a.user_id=r.user_id AND a.node_id=r.node_id")
+        .bind(&users).bind(&nodes).execute(&mut **tx).await?;
+    let mut by_node = std::collections::BTreeMap::<String, Vec<String>>::new();
+    for (user, node) in removals {
+        touched.insert(user.clone());
+        by_node.entry(node).or_default().push(user);
+    }
+    for (node, users) in by_node {
+        jobs.insert(
+            crate::kick_requests::enqueue_many(tx, &node, &users, "authorization_group_removed")
+                .await?,
+        );
     }
     crate::credentials::authorization::reconcile_on(tx, affected_users, &changed_pairs, None)
         .await?;
@@ -1601,6 +1599,36 @@ mod tests {
             sizes.0, sizes.1
         );
         assert!(sizes.1 * 10 < sizes.0);
+    }
+
+    #[tokio::test]
+    async fn bulk_revocations_create_one_job_per_node() {
+        let state = fixture().await;
+        let users: Vec<String> = (0..1000).map(|i| format!("bulk-{i:05}")).collect();
+        sqlx::query("INSERT INTO users(id,name,created_at,updated_at) SELECT u,u,now(),now() FROM unnest($1::text[]) u")
+            .bind(&users).execute(&state.pool).await.unwrap();
+        sqlx::query("INSERT INTO node_assignments(user_id,node_id,credential_hash,credential_enc,created_at) SELECT u,'node',u,'unused',now() FROM unnest($1::text[]) u")
+            .bind(&users).execute(&state.pool).await.unwrap();
+        let proposal = GroupProposal {
+            name: "Group".into(),
+            user_ids: users.clone(),
+            node_ids: vec![],
+        };
+        let prepared = prepare_group_assignments(&state, "update", None, &proposal)
+            .await
+            .unwrap();
+        let mut tx = state.pool.begin().await.unwrap();
+        let (created, jobs, touched) =
+            reconcile_assignments(&mut tx, &users, &HashSet::new(), &prepared)
+                .await
+                .unwrap();
+        assert!(created.is_empty());
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(touched.len(), 1000);
+        tx.commit().await.unwrap();
+        let counts:(i64,i64,i64)=sqlx::query_as("SELECT (SELECT count(*) FROM node_assignments),(SELECT count(*) FROM jobs WHERE kind='kick'),(SELECT count(*) FROM kick_requests WHERE state='active')")
+            .fetch_one(&state.pool).await.unwrap();
+        assert_eq!(counts, (0, 1, 1000));
     }
 
     #[tokio::test]

@@ -17,3 +17,4 @@ __pycache__/
 *.py[cod]
 production/
 PRODUCTION.md
+AGENTS.md

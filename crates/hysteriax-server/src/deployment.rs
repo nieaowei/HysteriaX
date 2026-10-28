@@ -1,3 +1,5 @@
+mod kick;
+use kick::kick;
 mod drift;
 use crate::db;
 pub(crate) mod probe_tokens;
@@ -72,7 +74,7 @@ pub async fn run_job(pool: &PgPool, secrets: &SecretBox, job: &JobInput) -> Resu
         "credential-apply" => crate::credentials::worker::apply(pool, secrets, job).await,
         "ssh-test" => ssh_test(pool, secrets, job).await,
         "deploy" | "sync" | "rollback" => deploy(pool, secrets, job).await,
-        "kick" => kick(pool, secrets, job).await,
+        "kick" => Box::pin(kick(pool, secrets, job)).await,
         "uninstall" => uninstall(pool, secrets, job).await,
         other => bail!("unsupported job type: {other}"),
     }
@@ -1929,135 +1931,6 @@ fn shell_quote(value: &str) -> String {
 fn primary_listener_port(listen_addr: &str) -> Option<u16> {
     let (_, ports) = listen_addr.rsplit_once(':')?;
     ports.split([',', '-']).next()?.parse().ok()
-}
-
-async fn kick(pool: &PgPool, secrets: &SecretBox, job: &JobInput) -> Result<JobOutput> {
-    let node_id = job
-        .node_id
-        .as_deref()
-        .context("kick job is missing node_id")?;
-    let user_id = job
-        .payload
-        .get("user_id")
-        .and_then(Value::as_str)
-        .context("kick job is missing user_id")?;
-    if !crate::kick_requests::still_required(pool, job).await? {
-        return Ok(restriction_cleared_output(node_id, user_id));
-    }
-    let node = load_ssh_node(pool, secrets, node_id).await?;
-    let session = match ssh::connect(&node).await? {
-        FingerprintResult::Trusted(session) => session,
-        FingerprintResult::NeedsConfirmation { fingerprint } => {
-            bail!("confirm this SSH host fingerprint before kicking clients: {fingerprint}")
-        }
-        FingerprintResult::Changed { expected, observed } => {
-            bail!("SSH host key changed: expected {expected}; observed {observed}")
-        }
-    };
-    let stats_secret_enc: String =
-        sqlx::query_scalar("SELECT traffic_stats_secret_enc FROM nodes WHERE id = $1")
-            .bind(node_id)
-            .fetch_one(pool)
-            .await?;
-    let stats_secret = secrets.decrypt(&stats_secret_enc)?;
-    let traffic_stats_port = load_deployed_traffic_stats_port(pool, secrets, node_id).await?;
-    let request_body = format!("[\"{user_id}\"]");
-    report_progress(
-        pool,
-        job,
-        "kicking_clients",
-        "Requesting that the node disconnect the user's active client devices.",
-    )
-    .await?;
-    let mut remaining = 0_u64;
-    for attempt in 0..6 {
-        if !crate::kick_requests::still_required(pool, job).await? {
-            return Ok(restriction_cleared_output(node_id, user_id));
-        }
-        // Hysteria stores kick IDs until the next traffic callback. Check online first
-        // so an already-offline user does not leave a stale kick marker for a later login.
-        let online_before = session
-            .loopback_http_get(u32::from(traffic_stats_port), "/online", &stats_secret)
-            .await?;
-        let online_before: Value = serde_json::from_slice(&online_before)
-            .context("Hysteria online API returned invalid JSON")?;
-        remaining = online_before
-            .get(user_id)
-            .and_then(Value::as_u64)
-            .unwrap_or_default();
-        if remaining == 0 {
-            report_progress(
-                pool,
-                job,
-                "clients_offline",
-                "The node reports no active client devices for this user.",
-            )
-            .await?;
-            return Ok(clients_offline_output(node_id, user_id));
-        }
-        // The online query can block while a renewal or billing reset commits.
-        if !crate::kick_requests::still_required(pool, job).await? {
-            return Ok(restriction_cleared_output(node_id, user_id));
-        }
-        session
-            .loopback_http_post(
-                u32::from(traffic_stats_port),
-                "/kick",
-                &stats_secret,
-                request_body.as_bytes(),
-            )
-            .await?;
-        let online_body = session
-            .loopback_http_get(u32::from(traffic_stats_port), "/online", &stats_secret)
-            .await?;
-        let online: Value = serde_json::from_slice(&online_body)
-            .context("Hysteria online API returned invalid JSON")?;
-        remaining = online
-            .get(user_id)
-            .and_then(Value::as_u64)
-            .unwrap_or_default();
-        if remaining == 0 {
-            report_progress(
-                pool,
-                job,
-                "clients_offline",
-                "The node reports no active client devices for this user.",
-            )
-            .await?;
-            return Ok(clients_offline_output(node_id, user_id));
-        }
-        report_progress(
-            pool,
-            job,
-            "checking_clients",
-            &format!("{remaining} client device(s) remain online; requesting another kick."),
-        )
-        .await?;
-        if attempt < 5 {
-            tokio::time::sleep(Duration::from_secs(1)).await;
-        }
-    }
-    Err(ssh::SshError::ClientsStillOnline { remaining }.into())
-}
-
-fn restriction_cleared_output(node_id: &str, user_id: &str) -> JobOutput {
-    let mut output = clients_offline_output(node_id, user_id);
-    output.stage = "restriction_cleared".into();
-    output.result = json!({"node_id": node_id, "user_id": user_id, "skipped": true, "reason": "restriction_cleared"});
-    output
-}
-
-fn clients_offline_output(node_id: &str, user_id: &str) -> JobOutput {
-    JobOutput {
-        stage: "clients_offline".to_owned(),
-        result: json!({"node_id": node_id, "user_id": user_id, "remaining_connections": 0}),
-        node_state: None,
-        deployed_revision: None,
-        deployed_config: None,
-        deployed_sha256: None,
-        published_connection: None,
-        delete_node: false,
-    }
 }
 
 /// Publish only the connection settings from the revision that passed deployment.

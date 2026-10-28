@@ -409,7 +409,7 @@ pub async fn usage(
         || user
             .get::<Option<i64>, _>("quota_bytes")
             .is_some_and(|quota| user.get::<i64, _>("usage_bytes") >= quota);
-    let pending_rows = sqlx::query("SELECT id, node_id, status, stage, updated_at FROM jobs WHERE kind = 'kick' AND node_id IS NOT NULL AND (status IN ('queued', 'running') OR (status = 'failed' AND $1 = TRUE)) AND payload_json->>'user_id' = $2 ORDER BY created_at")
+    let pending_rows = sqlx::query("SELECT j.id,j.node_id,j.status,j.stage,j.updated_at FROM kick_requests r JOIN jobs j ON j.id=r.latest_job_id WHERE r.user_id=$2 AND r.state NOT IN ('completed','cancelled') AND j.kind='kick' AND (j.status IN ('queued','running') OR (j.status='failed' AND $1)) ORDER BY j.created_at")
         .bind(is_restricted)
         .bind(&user_id)
         .fetch_all(&mut *crate::read_snapshot::begin(&state.pool).await?)

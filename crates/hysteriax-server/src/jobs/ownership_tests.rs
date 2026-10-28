@@ -576,8 +576,13 @@ async fn uncertain_kick_obligations_commit_with_quarantine_and_never_acknowledge
     for newer in [false, true] {
         let pool = fixture().await;
         enqueue(&pool, "one", Some("node-a"), None).await;
-        sqlx::query("UPDATE jobs SET kind='kick',payload_json='{\"user_id\":\"deleted-user\",\"kick_generation\":1,\"kick_reasons\":{\"user_deleted\":true}}' WHERE id='one'").execute(&pool).await.unwrap();
-        sqlx::query("INSERT INTO kick_requests(node_id,user_id,reasons,state,latest_job_id) VALUES('node-a','deleted-user','{\"user_deleted\":true}','active','one')").execute(&pool).await.unwrap();
+        sqlx::query(
+            "UPDATE jobs SET kind='kick',payload_json='{\"scope\":\"node\"}' WHERE id='one'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO kick_requests(node_id,user_id,reasons,state,latest_job_id,execution_generation) VALUES('node-a','deleted-user','{\"user_deleted\":true}','active','one',1)").execute(&pool).await.unwrap();
         let one = claim(&pool, "owner").await;
         operation(&pool, &one).await;
         if newer {

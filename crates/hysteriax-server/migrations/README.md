@@ -18,10 +18,14 @@ cargo run -p hysteriax-server -- --migrate-only
 
 ## 后续迁移
 
-- 从 `0002_<description>.sql` 继续递增；已发布的 SQL 不再修改、重命名或重排。
+- 从 `0003_<description>.sql` 继续递增；已发布的 SQL 不再修改、重命名或重排。
 - SQLx 内嵌 SQL 并记录 SHA-384 checksum；启动逐项验证完整历史，重复执行维护不会重新应用已成功迁移。
 - 应用对象使用相对 schema 名称，以支持隔离测试 schema。`pg_trgm` 仍安装到 `public`，索引显式引用 `public.gin_trgm_ops`。
 - 新增或移除对象时同步更新 [数据库表用途](../../../docs/database-tables.md)，并验证当前基线上的后续升级。
+
+## 0002 节点级批量撤权
+
+`0002_node_kick_batches.sql` 将每个节点限制为一个活跃 kick 任务，并增加用户执行代次和分页索引。按用户要求，迁移会直接删除旧撤权需求、kick 任务及相关执行/事件/重试链历史，不转换旧载荷；新执行器不支持旧格式。2026-10-29 已按流程停止 API 并通过 `--migrate-only` 在生产应用 0002，未执行基线 SQL。迁移后 `runtime_contract.schema_version=2`，旧撤权需求与 kick 任务历史已清空；本机发布目录保存了配置和迁移前数据库快照。以后新增迁移从 0003 开始。
 
 ## 验证
 

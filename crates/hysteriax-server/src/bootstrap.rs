@@ -264,6 +264,11 @@ mod tests {
         let pool = crate::db::test_pool().await;
         sqlx::raw_sql("UPDATE _sqlx_migrations SET checksum='legacy checksum'::bytea; INSERT INTO _sqlx_migrations(version,description,success,checksum,execution_time) VALUES(74,'legacy schema',true,'legacy checksum'::bytea,0)")
             .execute(&pool).await.unwrap();
+        let before: Vec<(i64, Vec<u8>)> =
+            sqlx::query_as("SELECT version,checksum FROM _sqlx_migrations ORDER BY version")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
         assert!(check_schema(&pool).await.is_err());
         assert!(crate::db::run_migrations(&pool).await.is_err());
         let history: Vec<(i64, Vec<u8>)> =
@@ -271,13 +276,7 @@ mod tests {
                 .fetch_all(&pool)
                 .await
                 .unwrap();
-        assert_eq!(
-            history,
-            vec![
-                (1, b"legacy checksum".to_vec()),
-                (74, b"legacy checksum".to_vec())
-            ]
-        );
+        assert_eq!(history, before);
         assert_eq!(
             sqlx::query_scalar::<_, i64>("SELECT count(*) FROM audit_totals WHERE total=0")
                 .fetch_one(&pool)

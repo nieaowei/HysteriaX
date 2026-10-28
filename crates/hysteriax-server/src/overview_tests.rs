@@ -1028,7 +1028,9 @@ async fn summary_batches_latest_monitoring_and_preserves_package_and_warning_rul
         .bind(second).execute(&state.pool).await.unwrap();
     sqlx::query("INSERT INTO node_alerts(id,node_id,kind,scope,active,created_at) VALUES('a',$1,'expired','test',true,'2000-01-01'),('b',$2,'traffic_warning','test',true,'2000-01-02'),('c',$2,'expiry_warning','test',true,'2000-01-03'),('inactive',$1,'expiring','test',false,'2000-01-01')")
         .bind(first).bind(second).execute(&state.pool).await.unwrap();
-    sqlx::query("INSERT INTO jobs(id,node_id,kind,status,stage,payload_json,available_at,created_at,updated_at) VALUES('limit-failed',$1,'kick','failed','failed','{\"node_limit\":true}',now(),now(),now()),('other-failed',$1,'kick','failed','failed','{}',now(),now(),now()),('limit-pending',$1,'kick','queued','queued','{\"node_limit\":true}',now(),now(),now()),('other-pending',$1,'kick','queued','queued','{}',now(),now(),now())")
+    sqlx::query("INSERT INTO jobs(id,node_id,kind,status,stage,payload_json,available_at,created_at,updated_at) VALUES('limit-failed',$1,'kick','failed','failed','{\"node_limit\":true}',now(),now(),now()),('other-failed',$1,'kick','failed','failed','{}',now(),now(),now()),('limit-pending',$1,'kick','queued','queued','{\"node_limit\":true}',now(),now(),now()),('other-pending',$1,'ssh-test','queued','queued','{}',now(),now(),now())")
+        .bind(first).execute(&state.pool).await.unwrap();
+    sqlx::query("INSERT INTO kick_requests(node_id,user_id,reasons,state,latest_job_id) VALUES($1,'limit-failed-user','{\"node_limit\":true}','needs_attention','limit-failed'),($1,'limit-pending-user','{\"node_limit\":true}','active','limit-pending')")
         .bind(first).execute(&state.pool).await.unwrap();
     sqlx::query("INSERT INTO data_gaps(id,node_id,opened_at,reason,resolved_at) VALUES('open',$1,now(),'test',NULL),('closed',$1,now(),'test',now())")
         .bind(first).execute(&state.pool).await.unwrap();

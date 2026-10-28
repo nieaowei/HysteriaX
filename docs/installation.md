@@ -37,7 +37,7 @@ Existing installations must retain a matching image, metadata backup, configurat
 
 For a new empty database, run `--migrate-only` before the first API startup. It applies the baseline and completes administrator, credential, template, reference-index and work-queue initialization without starting workers or contacting nodes. Ordinary startup checks the exact migration history, protocol and master key. Management API requests use `/api/v2`, and administrative writes require a stable `Idempotency-Key` for retries.
 
-Future migrations start at `0002` and extend this new baseline. For subsequent compatible upgrades, stop every API replica, retain a recoverable backup and matching old image, run maintenance once, then start the corresponding server and macOS client. See [migration maintenance](../crates/hysteriax-server/migrations/README.md).
+On 2026-10-29, production applied migration 0002 through `--migrate-only`; it cleared old kick requirements and task history without running the baseline SQL. Production now uses schema version 2. Future migrations start at `0003`. For subsequent compatible upgrades, stop every API replica, retain a recoverable backup and matching old image, run maintenance once, then start the corresponding server and macOS client. See [migration maintenance](../crates/hysteriax-server/migrations/README.md).
 
 ## Local development and tests
 

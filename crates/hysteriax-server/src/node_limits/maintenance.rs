@@ -79,17 +79,14 @@ pub async fn dispatch_work(pool: &PgPool, work: &Work) -> Result<()> {
             // then per-user obligations/jobs. Never skip a user and pass it.
             sqlx::query("SELECT id FROM users WHERE id=ANY($1::text[]) ORDER BY id FOR NO KEY UPDATE")
                 .bind(&users).fetch_all(&mut **tx).await?;
-            for user in &users {
-                if blocked {
-                    let payload=json!({"user_id":user,"node_limit":true});
-                    if matches!(status.as_str(),"deleting"|"delete_failed") {
-                        crate::kick_requests::prepare(tx,node,&payload).await?;
-                    } else {
-                        crate::api::enqueue_job_with_payload_in_tx(tx,"kick",Some(node),None,payload).await?;
-                    }
+            if blocked && !users.is_empty() {
+                if matches!(status.as_str(),"deleting"|"delete_failed") {
+                    crate::kick_requests::record_many(tx,node,&users,"node_limit").await?;
                 } else {
-                    crate::kick_requests::clear_reason(tx,Some(node),Some(user),"node_limit").await?;
+                    crate::kick_requests::enqueue_many(tx,node,&users,"node_limit").await?;
                 }
+            } else {
+                for user in &users {crate::kick_requests::clear_reason(tx,Some(node),Some(user),"node_limit").await?;}
             }
             let more=users.len()==USER_BATCH as usize;
             if let Some(last)=users.last() {

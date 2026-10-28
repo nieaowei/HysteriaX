@@ -238,7 +238,7 @@ async fn claim_next_for(
         .fetch_one(&mut **tx).await?;
     sqlx::query("SAVEPOINT job_claim").execute(&mut **tx).await?;
     let mut leases = Vec::new();
-    let row = sqlx::query("UPDATE jobs SET status = 'running', stage = 'starting', attempts = attempts + CASE WHEN stage='fingerprint_confirmed' THEN 0 ELSE 1 END, started_at = COALESCE(started_at, $1), updated_at = $2 WHERE id = (SELECT candidate.id FROM jobs AS candidate WHERE candidate.status = 'queued' AND candidate.available_at <= $3 AND NOT EXISTS(SELECT 1 FROM mtls_superseded_node_jobs s WHERE s.job_id=candidate.id) AND (candidate.node_id IS NULL OR NOT EXISTS (SELECT 1 FROM jobs AS active WHERE active.node_id = candidate.node_id AND active.status = 'running')) AND (candidate.kind NOT IN ('deploy','sync','rollback') OR NOT EXISTS (SELECT 1 FROM jobs AS dependency WHERE dependency.node_id=candidate.node_id AND dependency.kind LIKE 'dns-%' AND dependency.status IN ('queued','running'))) AND (candidate.resource_key IS NULL OR NOT EXISTS (SELECT 1 FROM jobs AS resource_active WHERE resource_active.resource_key=candidate.resource_key AND resource_active.status='running')) AND NOT EXISTS(SELECT 1 FROM resource_leases l WHERE l.resource_key=ANY(ARRAY['job:'||candidate.id,'node:'||candidate.node_id,candidate.resource_key]) AND (l.blocked OR (l.owner IS NOT NULL AND l.expires_at>clock_timestamp()) OR EXISTS(SELECT 1 FROM execution_operations o WHERE o.resource_key=l.resource_key AND o.state IN ('dispatching','reconciling','needs_attention')))) ORDER BY candidate.available_at, candidate.created_at, candidate.id LIMIT 1 FOR UPDATE OF candidate SKIP LOCKED) RETURNING id, kind, node_id, target_revision, payload_json, attempts, resource_key")
+    let row = sqlx::query("UPDATE jobs SET status = 'running', stage = 'starting', attempts = attempts + CASE WHEN stage IN ('fingerprint_confirmed','batch_continue') THEN 0 ELSE 1 END, started_at = COALESCE(started_at, $1), updated_at = $2 WHERE id = (SELECT candidate.id FROM jobs AS candidate WHERE candidate.status = 'queued' AND candidate.available_at <= $3 AND NOT EXISTS(SELECT 1 FROM mtls_superseded_node_jobs s WHERE s.job_id=candidate.id) AND (candidate.node_id IS NULL OR NOT EXISTS (SELECT 1 FROM jobs AS active WHERE active.node_id = candidate.node_id AND active.status = 'running')) AND (candidate.kind NOT IN ('deploy','sync','rollback') OR NOT EXISTS (SELECT 1 FROM jobs AS dependency WHERE dependency.node_id=candidate.node_id AND dependency.kind LIKE 'dns-%' AND dependency.status IN ('queued','running'))) AND (candidate.resource_key IS NULL OR NOT EXISTS (SELECT 1 FROM jobs AS resource_active WHERE resource_active.resource_key=candidate.resource_key AND resource_active.status='running')) AND NOT EXISTS(SELECT 1 FROM resource_leases l WHERE l.resource_key=ANY(ARRAY['job:'||candidate.id,'node:'||candidate.node_id,candidate.resource_key]) AND (l.blocked OR (l.owner IS NOT NULL AND l.expires_at>clock_timestamp()) OR EXISTS(SELECT 1 FROM execution_operations o WHERE o.resource_key=l.resource_key AND o.state IN ('dispatching','reconciling','needs_attention')))) ORDER BY candidate.available_at, candidate.created_at, candidate.id LIMIT 1 FOR UPDATE OF candidate SKIP LOCKED) RETURNING id, kind, node_id, target_revision, payload_json, attempts, resource_key")
         .bind(timestamp).bind(timestamp).bind(timestamp).fetch_optional(&mut **tx).await?;
     let job = if let Some(row) = row {
         let job = JobInput {
@@ -739,6 +739,16 @@ async fn succeed_on(
             if changed.rows_affected() == 1 {
                 crate::kick_requests::event(tx,&job.id,"job.cancelled",json!({"id":job.id,"kind":job.kind,"node_id":job.node_id,"status":"cancelled","stage":"superseded"})).await?;
             }
+            return Ok(());
+        }
+    }
+    if job.kind == "kick" {
+        let pending:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM kick_requests WHERE node_id=$1 AND latest_job_id=$2 AND state='active')")
+            .bind(&job.node_id).bind(&job.id).fetch_one(&mut **tx).await?;
+        if pending {
+            sqlx::query("UPDATE jobs SET status='queued',stage='batch_continue',result_json=$2,available_at=clock_timestamp(),updated_at=clock_timestamp(),finished_at=NULL,error_message=NULL WHERE id=$1 AND status='running'")
+                .bind(&job.id).bind(&result).execute(&mut **tx).await?;
+            crate::kick_requests::event(tx,&job.id,"job.batch_continue",json!({"id":job.id,"kind":"kick","node_id":job.node_id,"status":"queued","stage":"batch_continue","result":output.result})).await?;
             return Ok(());
         }
     }
@@ -1485,10 +1495,62 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn kick_continuation_reuses_id_releases_leases_and_does_not_spend_retry_budget() {
+        let state = crate::kick_requests::tests::fixture().await;
+        let users: Vec<String> = (0..2200).map(|i| format!("user-{i:05}")).collect();
+        let mut tx = state.pool.begin().await.unwrap();
+        let id = crate::kick_requests::enqueue_many(&mut tx, "node", &users, "access_restricted")
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        let first = super::claim_next_for(&state.pool, Some("batch-owner"))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(first.job.attempts, 1);
+        Box::pin(super::execute_claimed(state.clone(), first)).await;
+        let row: (String, String, i64) =
+            sqlx::query_as("SELECT status,stage,attempts FROM jobs WHERE id=$1")
+                .bind(&id)
+                .fetch_one(&state.pool)
+                .await
+                .unwrap();
+        assert_eq!(row, ("queued".into(), "batch_continue".into(), 1));
+        let held: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM resource_leases WHERE owner IS NOT NULL OR blocked",
+        )
+        .fetch_one(&state.pool)
+        .await
+        .unwrap();
+        assert_eq!(held, 0);
+        let second = super::claim_next_for(&state.pool, Some("batch-owner"))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(second.job.id, id);
+        assert_eq!(second.job.attempts, 1);
+        Box::pin(super::execute_claimed(state.clone(), second)).await;
+        let row: (String, i64) = sqlx::query_as("SELECT status,attempts FROM jobs WHERE id=$1")
+            .bind(&id)
+            .fetch_one(&state.pool)
+            .await
+            .unwrap();
+        assert_eq!(row, ("succeeded".into(), 1));
+        let counts:(i64,i64)=sqlx::query_as("SELECT (SELECT count(*) FROM jobs WHERE kind='kick'),(SELECT count(*) FROM kick_requests WHERE state='cancelled')").fetch_one(&state.pool).await.unwrap();
+        assert_eq!(counts, (1, 2200));
+    }
+
+    #[tokio::test]
     async fn successful_kick_commits_result_and_completes_durable_request() {
         let state = crate::kick_requests::tests::fixture().await;
         let id = crate::kick_requests::tests::enqueue(&state, "user_deleted").await;
         let job = super::claim_next(&state.pool).await.unwrap().unwrap();
+        let batch = crate::kick_requests::batch(&state.pool, &job, None)
+            .await
+            .unwrap();
+        crate::kick_requests::acknowledge(&state.pool, &job, &batch, "completed")
+            .await
+            .unwrap();
         let output = crate::deployment::JobOutput {
             stage: "clients_offline".into(),
             result: json!({"remaining_connections":0}),

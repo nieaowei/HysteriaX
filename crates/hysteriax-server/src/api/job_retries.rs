@@ -200,16 +200,14 @@ async fn retry_on(
         return Err(ApiError::conflict("node is being deleted"));
     }
     if retry_kind == "kick" {
-        let changed = sqlx::query("UPDATE kick_requests SET state='active',updated_at=now() WHERE node_id=$1 AND latest_job_id=$2 AND state IN ('waiting_recovery','needs_attention')")
+        let changed = sqlx::query("UPDATE kick_requests SET state='active',updated_at=now() WHERE node_id=$1 AND latest_job_id=$2 AND state IN ('active','waiting_recovery','needs_attention')")
             .bind(&node).bind(&id).execute(&mut **tx).await?;
-        if changed.rows_affected() != 1 {
+        if changed.rows_affected() == 0 {
             return Err(ApiError::conflict(
                 "kick request is completed, cancelled or superseded; open the latest attempt",
             ));
         }
-        crate::kick_requests::schedule(tx, Some(&node), false).await?;
-        let child: String = sqlx::query_scalar("SELECT latest_job_id FROM kick_requests WHERE node_id=$1 AND latest_job_id IN (SELECT id FROM jobs WHERE retry_of_job_id=$2)")
-            .bind(&node).bind(&id).fetch_one(&mut **tx).await?;
+        let child = crate::kick_requests::ensure_job(tx, &node, Some(&id)).await?;
         audit_retry_on(tx, &actor, &id, &child, json!({"node_id":node})).await?;
         return Ok((
             StatusCode::ACCEPTED,
@@ -286,14 +284,6 @@ async fn lock_retry_parents_on(
             .ok_or_else(|| ApiError::not_found("node"))?;
     }
     let payload: Value = original.get("payload_json");
-    if original.get::<String, _>("kind") == "kick"
-        && let Some(user) = payload["user_id"].as_str()
-    {
-        sqlx::query("SELECT id FROM users WHERE id=$1 FOR NO KEY UPDATE")
-            .bind(user)
-            .fetch_optional(&mut **tx)
-            .await?;
-    }
     if let Some(operation) = payload["dns_operation_id"].as_str() {
         let operation=sqlx::query("SELECT o.connection_id,CASE WHEN o.resource_type='dns_zone' THEN o.resource_id WHEN o.resource_type='dns_record' THEN (SELECT r.zone_id FROM dns_records r WHERE r.id=o.resource_id) END AS zone_id,o.resource_type,o.resource_id FROM dns_operations o WHERE o.id=$1").bind(operation).fetch_optional(&mut **tx).await?.ok_or_else(|| ApiError::not_found("DNS operation"))?;
         sqlx::query("SELECT id FROM dns_connections WHERE id=$1 FOR NO KEY UPDATE")

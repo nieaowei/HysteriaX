@@ -30,6 +30,8 @@ Traffic sampling uses stable captured batches, applies at most 500 user items pe
 
 Cache validity comes from committed entity versions and per-domain vectors of 64 bucket versions. Fill operations read one consistent snapshot and respect time-dependent expiry. Notifications accelerate invalidation; they are not authoritative. Redis ranking versions and deletion tombstones reject stale updates. Authorization and quota decisions read authoritative state.
 
+Revocation uses one active `kick` job per node. Per-user obligations and generation checkpoints live in `kick_requests`, and the task payload contains only node scope. Each remote request includes at most 200 users; after ten batches, the same job yields its leases and resumes without consuming a retry attempt. Checkpoints require the current job execution and matching user generation. Pending user status joins the obligation to its node job.
+
 ## API and event contract
 
 Management API 2.0.0 uses `/api/v2` with Bearer administrator authentication and stable `Idempotency-Key` headers for writes. Subscription and node authentication URLs retain their contracts. The source contract is [OpenAPI](../openapi/openapi.yaml); JSON timestamps use UTC RFC 3339.

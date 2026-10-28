@@ -456,7 +456,7 @@ async fn a_busy_parent_defers_only_its_user_without_skipping_the_node_cursor() {
     assert_eq!(
         count(
             &state,
-            "SELECT count(*) FROM jobs WHERE node_id='b' AND payload_json->>'user_id'='user-0002'"
+            "SELECT count(*) FROM kick_requests r JOIN jobs j ON j.id=r.latest_job_id WHERE r.node_id='b' AND r.user_id='user-0002'"
         )
         .await,
         1

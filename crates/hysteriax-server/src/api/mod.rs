@@ -785,16 +785,10 @@ pub(crate) async fn enqueue_job_with_payload_in_tx(
     {
         ssh_fingerprint::cancel_waiting(tx, node).await?;
     }
-    let job_payload = if kind == "kick" {
+    if kind == "kick" {
         let node = node_id.ok_or_else(|| ApiError::bad_request("kick requires node_id"))?;
-        let (existing, payload) = crate::kick_requests::prepare(tx, node, &job_payload).await?;
-        if let Some(id) = existing {
-            return Ok(id);
-        }
-        payload
-    } else {
-        job_payload
-    };
+        return crate::kick_requests::enqueue(tx, node, &job_payload).await;
+    }
     let id = Uuid::new_v4().to_string();
     let timestamp = now();
     let node_name: Option<String> = if let Some(node_id) = node_id {
@@ -813,15 +807,6 @@ pub(crate) async fn enqueue_job_with_payload_in_tx(
         .bind(&id).bind(kind).bind(node_id).bind(node_name).bind(revision).bind(&job_payload).bind(timestamp).bind(timestamp).bind(timestamp).execute(&mut **tx).await?;
     sqlx::query("INSERT INTO job_events (job_id, event_type, payload_json, created_at) VALUES ($1, 'job.queued', $2, $3)")
         .bind(&id).bind(payload).bind(timestamp).execute(&mut **tx).await?;
-    if kind == "kick" {
-        crate::kick_requests::attach(
-            tx,
-            node_id.unwrap(),
-            job_payload["user_id"].as_str().unwrap(),
-            &id,
-        )
-        .await?;
-    }
     Ok(id)
 }
 

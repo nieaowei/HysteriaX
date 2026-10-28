@@ -78,6 +78,7 @@ enum JobDisplayText {
             "fingerprint_confirmation_required": L10n.text("等待确认 SSH 指纹"),
             "environment_checked": L10n.text("环境检查通过"),
             "kicking_clients": L10n.text("断开客户端"),
+            "batch_continue": L10n.text("等待处理下一批客户端"),
             "checking_clients": L10n.text("检查客户端状态"),
             "clients_offline": L10n.text("客户端已下线"),
             "uninstalling_service": L10n.text("卸载系统服务"),
@@ -106,6 +107,7 @@ enum JobDisplayText {
             return L10n.text("正在等待流量统计和在线状态接口就绪（包括证书签发），最长等待 {0} 秒。", String(describing: (captures[0])))
         }
         let messages = [
+            "A batch of at most 200 users has been checked and checkpointed.": L10n.text("已完成一批用户的断连检查并保存进度。"),
             "SSH host fingerprint observed; waiting for explicit trust.": L10n.text("已读取 SSH 主机指纹，等待核对并信任。"),
             "SSH test superseded by a node change.": L10n.text("节点信息已变化，请重新运行 SSH 测试。"),
             "SSH host fingerprint trusted; continuing the original operation.": L10n.text("SSH 主机指纹已信任，继续原任务。"),

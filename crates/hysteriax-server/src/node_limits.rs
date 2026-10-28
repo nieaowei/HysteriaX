@@ -284,13 +284,13 @@ pub async fn snapshot(pool: &PgPool, id: &str) -> Result<(Value, Value)> {
     let alerts = sqlx::query("SELECT id, kind, created_at FROM node_alerts WHERE node_id = $1 AND active ORDER BY created_at, id").bind(id).fetch_all(&mut *crate::read_snapshot::begin(pool).await?).await?;
     let alerts: Vec<Value> = alerts.iter().map(|r| json!({"id": r.get::<String,_>("id"), "kind": r.get::<String,_>("kind"), "created_at": r.get::<DateTime<Utc>,_>("created_at")})).collect();
     let failed: i64 = sqlx::query_scalar(
-        "SELECT coalesce((SELECT failed_limit FROM job_node_kick_totals WHERE node_id=$1),0)",
+        "SELECT count(*) FROM kick_requests WHERE node_id=$1 AND reasons ? 'node_limit' AND state IN ('waiting_recovery','needs_attention')",
     )
     .bind(id)
     .fetch_one(&mut *crate::read_snapshot::begin(pool).await?)
     .await?;
     let pending: i64 = sqlx::query_scalar(
-        "SELECT coalesce((SELECT pending_limit FROM job_node_kick_totals WHERE node_id=$1),0)",
+        "SELECT count(*) FROM kick_requests WHERE node_id=$1 AND reasons ? 'node_limit' AND state='active'",
     )
     .bind(id)
     .fetch_one(&mut *crate::read_snapshot::begin(pool).await?)
@@ -1044,19 +1044,6 @@ mod tests {
         set_package(&state, &id, &Package::default()).await;
         maintenance::drain_for_test(&state.pool).await;
         assert!(!restricted(&state.pool, &id).await.unwrap());
-        let stale = crate::deployment::JobInput {
-            id: "stale".into(),
-            kind: "kick".into(),
-            node_id: Some(id.clone()),
-            target_revision: None,
-            payload: json!({"user_id":"user","node_limit":true}),
-            attempts: 1,
-        };
-        let skipped = crate::deployment::run_job(&state.pool, &state.secrets, &stale)
-            .await
-            .unwrap();
-        assert_eq!(skipped.stage, "restriction_cleared");
-        assert_eq!(skipped.result["skipped"], true);
         let status: String = sqlx::query_scalar("SELECT status FROM jobs WHERE node_id=$1")
             .bind(&id)
             .fetch_one(&state.pool)

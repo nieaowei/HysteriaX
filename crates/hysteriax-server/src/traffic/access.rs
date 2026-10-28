@@ -137,7 +137,7 @@ pub async fn dispatch_work(pool: &PgPool, work: &maintenance::Work) -> Result<()
                 let id:String=node.get("id");
                 let payload=json!({"user_id":user,"kick_reason":"access_restricted"});
                 if node.get::<String,_>("state")=="deleting" {
-                    crate::kick_requests::prepare(tx,&id,&payload).await?;
+                    crate::kick_requests::record_many(tx,&id,&[user.to_owned()],"access_restricted").await?;
                 } else {
                     crate::api::enqueue_job_with_payload_in_tx(tx,"kick",Some(&id),None,payload).await?;
                 }

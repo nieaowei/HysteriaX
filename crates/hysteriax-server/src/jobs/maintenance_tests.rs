@@ -211,7 +211,7 @@ async fn claimed_recovery_quarantines_uncertain_and_legacy_remote_work_without_r
     );
 }
 #[tokio::test]
-async fn kick_pages_skip_busy_nodes_and_obligations_and_resume_the_persisted_cursor() {
+async fn kick_pages_skip_busy_nodes_and_schedule_one_job_per_node() {
     let state = fixture().await;
     sqlx::query("INSERT INTO kick_requests(node_id,user_id,reasons,state) SELECT 'a','user-'||lpad(i::text,3,'0'),'{\"user_deleted\":true}','active' FROM generate_series(1,205)i").execute(&state.pool).await.unwrap();
     sqlx::query("INSERT INTO kick_requests(node_id,user_id,reasons,state) VALUES('b','deleted-user','{\"credentials_revoked\":true}','active')").execute(&state.pool).await.unwrap();
@@ -238,30 +238,21 @@ async fn kick_pages_skip_busy_nodes_and_obligations_and_resume_the_persisted_cur
     .unwrap();
     assert_eq!(cursor.as_deref(), Some("b"));
     node.rollback().await.unwrap();
-    let mut obligations = state.pool.begin().await.unwrap();
-    sqlx::query(
-        "SELECT user_id FROM kick_requests WHERE node_id='a' AND user_id<='user-100' FOR UPDATE",
-    )
-    .fetch_all(&mut *obligations)
-    .await
-    .unwrap();
     let wrap = claim(&state, "kick_schedule", "wrap").await;
     maintenance_work(&state, &wrap).await.unwrap();
     let work = claim(&state, "kick_schedule", "two").await;
     maintenance_work(&state, &work).await.unwrap();
     assert_eq!(
         number(&state, "SELECT count(*) FROM jobs WHERE node_id='a'").await,
-        100,
-        "locked first 100 obligations must be skipped before LIMIT"
+        1
     );
-    obligations.rollback().await.unwrap();
     for _ in 0..8 {
         let work = claim(&state, "kick_schedule", "later").await;
         maintenance_work(&state, &work).await.unwrap();
     }
     assert_eq!(
         number(&state, "SELECT count(*) FROM jobs WHERE kind='kick'").await,
-        206
+        2
     );
     assert_eq!(
         number(
@@ -269,9 +260,9 @@ async fn kick_pages_skip_busy_nodes_and_obligations_and_resume_the_persisted_cur
             "SELECT count(*) FROM job_events WHERE event_type='job.queued'"
         )
         .await,
-        206
+        2
     );
-    assert_eq!(number(&state,"SELECT count(*) FROM kick_requests r JOIN jobs j ON j.id=r.latest_job_id AND j.node_id=r.node_id AND j.payload_json->>'user_id'=r.user_id").await,206);
+    assert_eq!(number(&state,"SELECT count(*) FROM kick_requests r JOIN jobs j ON j.id=r.latest_job_id AND j.node_id=r.node_id").await,206);
 }
 #[tokio::test]
 async fn kick_schedule_retry_commits_one_child_event_pointer_and_cursor() {
@@ -350,5 +341,5 @@ async fn concurrent_trusted_recovery_schedules_one_active_child_without_legacy_s
         .await,
         1
     );
-    assert_eq!(number(&state,"SELECT count(*) FROM kick_requests r JOIN jobs j ON j.id=r.latest_job_id WHERE r.generation=1 AND r.state='active' AND j.payload_json->>'kick_generation'='1'").await,1);
+    assert_eq!(number(&state,"SELECT count(*) FROM kick_requests r JOIN jobs j ON j.id=r.latest_job_id WHERE r.generation=1 AND r.state='active' AND j.payload_json->>'scope'='node'").await,1);
 }
