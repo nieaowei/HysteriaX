@@ -53,7 +53,6 @@ async fn fixture() -> Fixture {
         .fetch_one(&state.pool)
         .await
         .unwrap();
-    sqlx::raw_sql("DO $$ DECLARE r record; BEGIN FOR r IN SELECT c.relname,t.tgname FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_proc p ON p.oid=t.tgfoid WHERE c.relnamespace=current_schema()::regnamespace AND p.proname='hysteriax_serialize_writes' LOOP EXECUTE format('ALTER TABLE %I DISABLE TRIGGER %I',r.relname,r.tgname); END LOOP; END $$").execute(&state.pool).await.unwrap();
     let mut tx = state.pool.begin().await.unwrap();
     let mut keys = vec![
         format!("job:{}", job.id),
@@ -126,12 +125,9 @@ async fn count(f: &Fixture, q: &str) -> i64 {
 }
 
 #[tokio::test]
-async fn record_receipt_check_and_audit_commit_once_without_the_old_global_lock() {
+async fn record_receipt_check_and_audit_commit_once() {
     let f = fixture().await;
     let s = source(&f).await;
-    let legacy = db::hold_retired_global_write_lock(&f.state.pool)
-        .await
-        .unwrap();
     let before: i64 = sqlx::query_scalar("SELECT revision FROM dns_records WHERE id=$1")
         .bind(&f.id)
         .fetch_one(&f.state.pool)
@@ -164,7 +160,6 @@ async fn record_receipt_check_and_audit_commit_once_without_the_old_global_lock(
     assert_eq!(save(&f, &s, &result(&f)).await.unwrap().unwrap(), receipt);
     assert_eq!(snapshot(&f).await, saved);
     assert!(matches!(prepared(&f).await.unwrap(), Prepared::Applied(_)));
-    legacy.rollback().await.unwrap();
 }
 
 #[tokio::test]

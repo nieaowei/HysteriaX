@@ -3,7 +3,6 @@ use super::*;
 pub(super) async fn fixture() -> PgPool {
     let pool = db::test_pool_with_max_connections(8).await;
     sqlx::query("INSERT INTO nodes(id,name,ssh_host,ssh_port,ssh_username,ssh_auth_type,ssh_secret_enc,public_host,public_port,listen_addr,node_token_hash,node_token_enc,traffic_stats_secret_enc,desired_config_enc,created_at,updated_at) SELECT id,id,'127.0.0.1',22,'root','password','unused','example.test',443,':443',id,'unused','unused','unused',now(),now() FROM unnest(ARRAY['node-a','node-b'])id").execute(&pool).await.unwrap();
-    sqlx::raw_sql("DO $$ DECLARE r record; BEGIN FOR r IN SELECT c.relname,t.tgname FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_proc p ON p.oid=t.tgfoid WHERE c.relnamespace=current_schema()::regnamespace AND p.proname='hysteriax_serialize_writes' LOOP EXECUTE format('ALTER TABLE %I DISABLE TRIGGER %I',r.relname,r.tgname); END LOOP; END $$").execute(&pool).await.unwrap();
     pool
 }
 pub(super) async fn enqueue(pool: &PgPool, id: &str, node: Option<&str>, resource: Option<&str>) {

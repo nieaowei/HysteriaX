@@ -61,13 +61,9 @@ async fn leases(state: &AppState, job: &JobInput, owner: &str) -> Vec<execution:
 }
 
 #[tokio::test]
-async fn configuration_binds_only_its_operation_without_waiting_for_the_old_global_lock_or_another_node()
- {
+async fn configuration_binds_only_its_operation_without_waiting_for_another_node() {
     let (state, ca, _) = fixture(2).await;
     let job = input(&state, "old-member-0001").await;
-    let legacy = db::hold_retired_global_write_lock(&state.pool)
-        .await
-        .unwrap();
     let mut held = state.pool.begin().await.unwrap();
     sqlx::query("SELECT id FROM nodes WHERE id='member-0002' FOR UPDATE")
         .fetch_one(&mut *held)
@@ -94,7 +90,6 @@ async fn configuration_binds_only_its_operation_without_waiting_for_the_old_glob
     assert_eq!(effective(&state, &job.id).await, Some(1));
     assert_eq!(effective(&state, "old-member-0002").await, None);
     held.rollback().await.unwrap();
-    legacy.rollback().await.unwrap();
 }
 
 #[tokio::test]

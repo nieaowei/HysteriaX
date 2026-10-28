@@ -784,20 +784,13 @@ async fn failed_ssh_auth_after_confirmation_preserves_existing_deployment_warnin
     }
 }
 
-async fn disable_confirmation_legacy_lock(state: &AppState) {
-    sqlx::raw_sql("DO $$ DECLARE entry record; BEGIN FOR entry IN SELECT c.relname,tr.tgname FROM pg_trigger tr JOIN pg_class c ON c.oid=tr.tgrelid JOIN pg_proc p ON p.oid=tr.tgfoid WHERE c.relnamespace=current_schema()::regnamespace AND p.proname='hysteriax_serialize_writes' LOOP EXECUTE format('ALTER TABLE %I DISABLE TRIGGER %I',entry.relname,entry.tgname); END LOOP; END $$").execute(&state.pool).await.unwrap();
-}
 #[tokio::test]
-async fn concurrent_confirmations_commit_one_trust_revision_without_legacy_lock() {
+async fn concurrent_confirmations_commit_one_trust_revision() {
     let (state, node, auth, server) = fixture(false).await;
     let id = start(&state, &node).await;
     let fp = fingerprint(&row(&state, &id).await);
-    disable_confirmation_legacy_lock(&state).await;
-    let legacy = db::hold_retired_global_write_lock(&state.pool)
-        .await
-        .unwrap();
+
     let (a, b) = tokio::join!(confirm(&state, &id, 1, &fp), confirm(&state, &id, 1, &fp));
-    legacy.rollback().await.unwrap();
     assert_eq!([&a, &b].iter().filter(|result| result.is_ok()).count(), 1);
     assert_eq!(
         [&a, &b]
@@ -834,7 +827,6 @@ async fn confirmation_audit_failure_rolls_back_and_native_conflict_retries_atomi
     let (state, node, auth, server) = fixture(false).await;
     let id = start(&state, &node).await;
     let fp = fingerprint(&row(&state, &id).await);
-    disable_confirmation_legacy_lock(&state).await;
     sqlx::raw_sql("CREATE FUNCTION reject_trust_audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.action='node.ssh_fingerprint_confirmed' THEN RAISE EXCEPTION 'injected failure'; END IF; RETURN NEW; END $$; CREATE TRIGGER reject_trust_audit BEFORE INSERT ON audit_records FOR EACH ROW EXECUTE FUNCTION reject_trust_audit();").execute(&state.pool).await.unwrap();
     assert!(confirm(&state, &id, 1, &fp).await.is_err());
     assert_eq!(

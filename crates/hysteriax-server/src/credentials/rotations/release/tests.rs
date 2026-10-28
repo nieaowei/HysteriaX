@@ -44,12 +44,9 @@ async fn published(state: &AppState) -> i64 {
 }
 
 #[tokio::test]
-async fn publication_is_independent_of_the_old_global_lock_and_confirms_all_outboxes_atomically() {
+async fn publication_confirms_all_outboxes_atomically() {
     let (state, ca, rotation) = fixture().await;
     let w = work(&state, &ca, &rotation, "owner").await;
-    let held = db::hold_retired_global_write_lock(&state.pool)
-        .await
-        .unwrap();
     assert!(
         tokio::time::timeout(
             std::time::Duration::from_secs(2),
@@ -86,7 +83,6 @@ async fn publication_is_independent_of_the_old_global_lock_and_confirms_all_outb
         .await,
         1
     );
-    held.rollback().await.unwrap();
 }
 
 #[tokio::test]

@@ -72,12 +72,9 @@ async fn done(state: &AppState, ca: &str) -> bool {
 }
 
 #[tokio::test]
-async fn empty_retention_uses_database_time_and_cleanup_finishes_without_the_old_global_lock() {
+async fn empty_retention_uses_database_time_and_cleanup_finishes() {
     let (state, ca) = fixture(0).await;
     let w = work(&state, &ca, "owner").await;
-    let held = db::hold_retired_global_write_lock(&state.pool)
-        .await
-        .unwrap();
     tokio::time::timeout(std::time::Duration::from_secs(2), page(&state.pool, &w))
         .await
         .unwrap()
@@ -85,7 +82,6 @@ async fn empty_retention_uses_database_time_and_cleanup_finishes_without_the_old
     assert!(done(&state, &ca).await);
     assert_eq!(count(&state, "SELECT count(*) FROM jobs").await, 0);
     assert!(page(&state.pool, &w).await.is_err());
-    held.rollback().await.unwrap();
 }
 
 #[tokio::test]

@@ -57,8 +57,6 @@ async fn work_fixture(state: &AppState, node: &str) -> Work {
 async fn fixture_on(pool: sqlx::PgPool) -> AppState {
     sqlx::query("INSERT INTO nodes(id,name,ssh_host,ssh_port,ssh_username,ssh_auth_type,ssh_secret_enc,public_host,public_port,listen_addr,node_token_hash,node_token_enc,traffic_stats_secret_enc,desired_config_enc,deployed_revision,created_at,updated_at) SELECT id,id,'127.0.0.1',22,'root','password','unused','example.test',443,':443',CASE WHEN id='a' THEN $1 ELSE id END,'unused','unused','{}',1,clock_timestamp(),clock_timestamp() FROM unnest(ARRAY['a','b'])id")
         .bind(token_digest("node-auth")).execute(&pool).await.unwrap();
-    sqlx::raw_sql("DO $$ DECLARE r record; BEGIN FOR r IN SELECT c.relname,t.tgname FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_proc p ON p.oid=t.tgfoid WHERE c.relnamespace=current_schema()::regnamespace AND p.proname='hysteriax_serialize_writes' LOOP EXECUTE format('ALTER TABLE %I DISABLE TRIGGER %I',r.relname,r.tgname); END LOOP; END $$")
-        .execute(&pool).await.unwrap();
     AppState::new(
         pool,
         crate::security::SecretBox::from_base64("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
@@ -115,11 +113,8 @@ async fn callback_requires_both_live_incarnations_and_exact_current_work_and_nod
 }
 
 #[tokio::test]
-async fn token_is_database_timed_and_independent_of_legacy_and_other_node_locks() {
+async fn token_is_database_timed_and_independent_of_other_node_locks() {
     let state = fixture().await;
-    let legacy = crate::db::hold_retired_global_write_lock(&state.pool)
-        .await
-        .unwrap();
     let mut other = state.pool.begin().await.unwrap();
     sqlx::query("SELECT id FROM nodes WHERE id='b' FOR UPDATE")
         .fetch_one(&mut *other)
@@ -145,7 +140,6 @@ async fn token_is_database_timed_and_independent_of_legacy_and_other_node_locks(
     assert_eq!(auth(&state, "probe").await["ok"], false);
     assert_ne!(first, auth(&state, "next").await["id"]);
     other.rollback().await.unwrap();
-    legacy.rollback().await.unwrap();
 }
 
 #[tokio::test]

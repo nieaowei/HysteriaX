@@ -652,7 +652,6 @@ mod tests {
         let key = base64::engine::general_purpose::STANDARD_NO_PAD.encode([8_u8; 32]);
         let state = AppState::new(pool, crate::security::SecretBox::from_base64(&key).unwrap());
         let (_,axum::Json(created))=crate::api::nodes::create(axum::extract::State(state.clone()),axum::Json(crate::credentials::test_node_request(&state,json!({"name":"Probe test","ssh_host":"127.0.0.1","ssh_port":22,"ssh_username":"root","ssh_auth_type":"password","ssh_secret":"unused","public_host":"example.test","public_port":443,"listen_addr":":443"})).await)).await.unwrap();
-        sqlx::raw_sql("DO $$ DECLARE entry record; BEGIN FOR entry IN SELECT c.relname,tr.tgname FROM pg_trigger tr JOIN pg_class c ON c.oid=tr.tgrelid JOIN pg_proc p ON p.oid=tr.tgfoid WHERE c.relnamespace=current_schema()::regnamespace AND p.proname='hysteriax_serialize_writes' LOOP EXECUTE format('ALTER TABLE %I DISABLE TRIGGER %I',entry.relname,entry.tgname); END LOOP; END $$").execute(&state.pool).await.unwrap();
         (state, created["node"]["id"].as_str().unwrap().into())
     }
     async fn proxy_work(state: &AppState, node: &str) -> crate::background::Work {
@@ -997,9 +996,6 @@ mod tests {
         let mut tx = state.pool.begin().await.unwrap();
         job.release(&mut tx).await.unwrap();
         tx.commit().await.unwrap();
-        let legacy = crate::db::hold_retired_global_write_lock(&state.pool)
-            .await
-            .unwrap();
         let (a, b) = tokio::join!(
             crate::background::claim(&state.pool, "proxy", "a"),
             crate::background::claim(&state.pool, "proxy", "b")
@@ -1025,16 +1021,12 @@ mod tests {
                 .unwrap()
                 .is_some()
         );
-        legacy.rollback().await.unwrap();
     }
 
     #[tokio::test]
     async fn proxy_result_commit_is_idempotent_and_preserves_another_attempts_token() {
         let (state, node) = fixture().await;
         let work = proxy_work(&state, &node).await;
-        let legacy = crate::db::hold_retired_global_write_lock(&state.pool)
-            .await
-            .unwrap();
         crate::execution::supervise(state.pool.clone(), work.leases.clone(), async {
             install_token(&state, &work, "new-token").await.unwrap();
             save_result(&state, &work, success(), "old-token")
@@ -1082,7 +1074,6 @@ mod tests {
         })
         .await
         .unwrap();
-        legacy.rollback().await.unwrap();
     }
 
     #[tokio::test]

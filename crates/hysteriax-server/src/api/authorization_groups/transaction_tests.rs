@@ -1,9 +1,5 @@
+use super::tests::fixture;
 use super::*;
-async fn fixture() -> AppState {
-    let state = super::tests::fixture().await;
-    sqlx::raw_sql("DO $$ DECLARE entry record; BEGIN FOR entry IN SELECT c.relname,tr.tgname FROM pg_trigger tr JOIN pg_class c ON c.oid=tr.tgrelid JOIN pg_proc p ON p.oid=tr.tgfoid WHERE c.relnamespace=current_schema()::regnamespace AND p.proname='hysteriax_serialize_writes' LOOP EXECUTE format('ALTER TABLE %I DISABLE TRIGGER %I',entry.relname,entry.tgname); END LOOP; END $$").execute(&state.pool).await.unwrap();
-    state
-}
 async fn preview(state: &AppState) -> Result<Json<Value>, ApiError> {
     preview_create(
         State(state.clone()),
@@ -26,13 +22,9 @@ async fn count(state: &AppState, sql: &str) -> i64 {
 async fn concurrent_previews_are_independent_and_do_not_change_authorization() {
     let state = fixture().await;
     let assignments = count(&state, "SELECT count(*) FROM node_assignments").await;
-    let legacy = db::hold_retired_global_write_lock(&state.pool)
-        .await
-        .unwrap();
     let (a, b) = tokio::join!(preview(&state), preview(&state));
     let Json(a) = a.unwrap();
     let Json(b) = b.unwrap();
-    legacy.rollback().await.unwrap();
     assert_ne!(a["preview_token"], b["preview_token"]);
     assert_eq!(a["additions"], b["additions"]);
     assert_eq!(
@@ -213,14 +205,10 @@ async fn retried_grant_returns_the_final_assignment_secret_and_one_audit() {
     let state = clean_fixture().await;
     let input = grant_input(&state).await;
     sqlx::raw_sql("CREATE SEQUENCE grant_attempts; CREATE FUNCTION retry_grant_audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.action='authorization_group.created' AND nextval('grant_attempts')=1 THEN RAISE EXCEPTION 'injected conflict' USING ERRCODE='40001'; END IF; RETURN NEW; END $$; CREATE TRIGGER retry_grant_audit BEFORE INSERT ON audit_records FOR EACH ROW EXECUTE FUNCTION retry_grant_audit();").execute(&state.pool).await.unwrap();
-    let legacy = db::hold_retired_global_write_lock(&state.pool)
-        .await
-        .unwrap();
     let receipt = super::super::AUDIT_ACTOR_ID
         .scope("group-operator".into(), grant(&state, input))
         .await
         .unwrap();
-    legacy.rollback().await.unwrap();
     let secret = receipt["created_credentials"][0]["hy2_credential"]
         .as_str()
         .unwrap();

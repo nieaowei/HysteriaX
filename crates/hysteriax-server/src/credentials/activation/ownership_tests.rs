@@ -5,7 +5,6 @@ async fn fixture() -> (PgPool, SecretBox, Vec<Execution>) {
     let pool = db::test_pool_with_max_connections(8).await;
     sqlx::query("INSERT INTO nodes(id,name,ssh_host,ssh_port,ssh_username,ssh_auth_type,ssh_secret_enc,public_host,public_port,listen_addr,node_token_hash,node_token_enc,traffic_stats_secret_enc,desired_config_enc,created_at,updated_at) SELECT id,id,'127.0.0.1',22,'root','password','unused','example.test',443,':443',id,'unused','unused','{}',clock_timestamp(),clock_timestamp() FROM unnest(ARRAY['a','b'])id").execute(&pool).await.unwrap();
     sqlx::query("INSERT INTO jobs(id,kind,node_id,target_revision,status,stage,attempts,available_at,created_at,updated_at) VALUES('one','deploy','a',1,'running','starting',1,clock_timestamp(),clock_timestamp(),clock_timestamp()),('two','deploy','b',1,'running','starting',1,clock_timestamp(),clock_timestamp(),clock_timestamp())").execute(&pool).await.unwrap();
-    sqlx::raw_sql("DO $$ DECLARE r record; BEGIN FOR r IN SELECT c.relname,t.tgname FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_proc p ON p.oid=t.tgfoid WHERE c.relnamespace=current_schema()::regnamespace AND p.proname='hysteriax_serialize_writes' LOOP EXECUTE format('ALTER TABLE %I DISABLE TRIGGER %I',r.relname,r.tgname); END LOOP; END $$").execute(&pool).await.unwrap();
     let mut tx = pool.begin().await.unwrap();
     let mut leases = vec![];
     for key in ["job:one", "node:a"] {
@@ -91,9 +90,8 @@ async fn native_begin_retry_reuses_the_exact_prepared_id_cipher_and_single_datab
 }
 
 #[tokio::test]
-async fn begin_and_transition_do_not_wait_for_the_old_global_lock_or_an_unrelated_node() {
+async fn begin_and_transition_do_not_wait_for_unrelated_nodes() {
     let (pool, secrets, leases) = fixture().await;
-    let legacy = db::hold_retired_global_write_lock(&pool).await.unwrap();
     let mut held = pool.begin().await.unwrap();
     sqlx::query("SELECT id FROM nodes WHERE id='b' FOR UPDATE")
         .fetch_one(&mut *held)
@@ -122,7 +120,6 @@ async fn begin_and_transition_do_not_wait_for_the_old_global_lock_or_an_unrelate
         1
     );
     held.rollback().await.unwrap();
-    legacy.rollback().await.unwrap();
 }
 
 #[tokio::test]

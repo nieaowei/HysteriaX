@@ -25,7 +25,6 @@ async fn fixture() -> Fixture {
         .await
         .unwrap();
     tx.commit().await.unwrap();
-    sqlx::raw_sql("DO $$ DECLARE r record; BEGIN FOR r IN SELECT c.relname,t.tgname FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_proc p ON p.oid=t.tgfoid WHERE c.relnamespace=current_schema()::regnamespace AND p.proname='hysteriax_serialize_writes' LOOP EXECUTE format('ALTER TABLE %I DISABLE TRIGGER %I',r.relname,r.tgname); END LOOP; END $$").execute(&state.pool).await.unwrap();
     let (job, leases) = crate::jobs::claim_for_test(&state.pool, &state.instance_id)
         .await
         .unwrap();
@@ -43,11 +42,8 @@ async fn snapshot(f: &Fixture) -> Value {
     sqlx::query_scalar("SELECT jsonb_build_object('nodes',(SELECT jsonb_agg(to_jsonb(n) ORDER BY id) FROM nodes n),'jobs',(SELECT jsonb_agg(to_jsonb(j) ORDER BY id) FROM jobs j),'events',(SELECT jsonb_agg(to_jsonb(e) ORDER BY id) FROM job_events e))").fetch_one(&f.state.pool).await.unwrap()
 }
 #[tokio::test]
-async fn drift_state_progress_and_event_commit_once_without_the_old_lock() {
+async fn drift_state_progress_and_event_commit_once() {
     let f = fixture().await;
-    let legacy = db::hold_retired_global_write_lock(&f.state.pool)
-        .await
-        .unwrap();
     save(&f, &f.job).await.unwrap().unwrap();
     assert_eq!(
         sqlx::query_scalar::<_, i64>("SELECT count(*) FROM nodes WHERE state='drift'")
@@ -66,7 +62,6 @@ async fn drift_state_progress_and_event_commit_once_without_the_old_lock() {
     let before = snapshot(&f).await;
     save(&f, &f.job).await.unwrap().unwrap();
     assert_eq!(snapshot(&f).await, before);
-    legacy.rollback().await.unwrap();
 }
 #[tokio::test]
 async fn event_failure_rolls_back_node_and_progress_then_native_retry_commits_one_observation() {

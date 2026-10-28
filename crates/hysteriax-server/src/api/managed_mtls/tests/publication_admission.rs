@@ -1,8 +1,5 @@
 use super::*;
 
-async fn unlock(state: &AppState) {
-    sqlx::raw_sql("DO $$ DECLARE r record; BEGIN FOR r IN SELECT c.relname,t.tgname FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_proc p ON p.oid=t.tgfoid WHERE c.relnamespace=current_schema()::regnamespace AND p.proname='hysteriax_serialize_writes' LOOP EXECUTE format('ALTER TABLE %I DISABLE TRIGGER %I',r.relname,r.tgname); END LOOP; END $$").execute(&state.pool).await.unwrap();
-}
 async fn count(state: &AppState, query: &str) -> i64 {
     sqlx::query_scalar(sqlx::AssertSqlSafe(query))
         .fetch_one(&state.pool)
@@ -50,7 +47,6 @@ async fn prepared(state: &AppState, ca: &str, key: &str) -> PreparedAuthorityPub
 async fn ordinary_publication_does_not_lock_or_rewrite_a_large_bound_node_and_user_graph() {
     let state = state().await;
     let ca = generated(&state).await;
-    unlock(&state).await;
     // Every parent is locked to expose any hidden whole-graph lock or fan-out.
     for i in 0..301 {
         node(&state, &format!("member-{i:04}")).await;
@@ -120,7 +116,6 @@ async fn a_binding_waiting_behind_publication_cannot_commit_the_now_retired_ca_v
     let ca = generated(&state).await;
     let input = node_flow::node_request(&state, &ca, 1).await;
     let p = prepared(&state, &ca, "publish-before-binding").await;
-    unlock(&state).await;
     barrier_timeouts(&state).await;
     let mut publisher = state.pool.begin().await.unwrap();
     sqlx::query("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
@@ -177,7 +172,6 @@ async fn a_publication_with_an_old_snapshot_retries_into_the_committed_binding_t
     let ca = generated(&state).await;
     let input = node_flow::node_request(&state, &ca, 1).await;
     let p = prepared(&state, &ca, "binding-before-publication").await;
-    unlock(&state).await;
     barrier_timeouts(&state).await;
     let mut publisher = state.pool.begin().await.unwrap();
     sqlx::query("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")

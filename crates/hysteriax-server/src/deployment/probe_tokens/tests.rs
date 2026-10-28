@@ -7,7 +7,6 @@ async fn fixture() -> (AppState, JobInput, Vec<execution::Execution>) {
 async fn seed_on(pool: PgPool) -> (AppState, JobInput) {
     sqlx::query("INSERT INTO nodes(id,name,ssh_host,ssh_port,ssh_username,ssh_auth_type,ssh_secret_enc,public_host,public_port,listen_addr,node_token_hash,node_token_enc,traffic_stats_secret_enc,desired_config_enc,created_at,updated_at) SELECT id,id,'127.0.0.1',22,'root','password','unused','example.test',443,':443',CASE WHEN id='a' THEN $1 ELSE id END,'unused','unused','{}',clock_timestamp(),clock_timestamp() FROM unnest(ARRAY['a','b'])id").bind(token_digest("node-auth")).execute(&pool).await.unwrap();
     sqlx::query("INSERT INTO jobs(id,kind,node_id,target_revision,status,stage,attempts,available_at,created_at,updated_at) VALUES('one','deploy','a',1,'running','starting',1,clock_timestamp(),clock_timestamp(),clock_timestamp()),('two','deploy','b',1,'running','starting',1,clock_timestamp(),clock_timestamp(),clock_timestamp())").execute(&pool).await.unwrap();
-    sqlx::raw_sql("DO $$ DECLARE r record; BEGIN FOR r IN SELECT c.relname,t.tgname FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_proc p ON p.oid=t.tgfoid WHERE c.relnamespace=current_schema()::regnamespace AND p.proname='hysteriax_serialize_writes' LOOP EXECUTE format('ALTER TABLE %I DISABLE TRIGGER %I',r.relname,r.tgname); END LOOP; END $$").execute(&pool).await.unwrap();
     let state = AppState::new(
         pool,
         SecretBox::from_base64("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA").unwrap(),
@@ -58,13 +57,9 @@ async fn row(pool: &PgPool) -> Value {
 }
 
 #[tokio::test]
-async fn leased_token_uses_database_time_and_authenticates_a_unique_identity_without_the_old_lock()
-{
+async fn leased_token_uses_database_time_and_authenticates_a_unique_identity() {
     let (state, job, leases) = fixture().await;
     let hash = token_digest("first");
-    let legacy = db::hold_retired_global_write_lock(&state.pool)
-        .await
-        .unwrap();
     let mut held = state.pool.begin().await.unwrap();
     sqlx::query("SELECT id FROM nodes WHERE id='b' FOR UPDATE")
         .fetch_one(&mut *held)
@@ -94,7 +89,6 @@ async fn leased_token_uses_database_time_and_authenticates_a_unique_identity_wit
         .unwrap();
     assert_eq!(row(&state.pool).await, Value::Null);
     held.rollback().await.unwrap();
-    legacy.rollback().await.unwrap();
 }
 
 #[tokio::test]

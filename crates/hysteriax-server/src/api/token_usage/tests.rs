@@ -5,7 +5,6 @@ async fn fixture() -> PgPool {
     let pool = db::test_pool_with_max_connections(8).await;
     sqlx::query("INSERT INTO admin_tokens(id,token_hash,label,created_at) VALUES('one',$1,'one',clock_timestamp()),('two',$2,'two',clock_timestamp())")
         .bind(token_digest("one")).bind(token_digest("two")).execute(&pool).await.unwrap();
-    sqlx::raw_sql("DO $$ DECLARE r record; BEGIN FOR r IN SELECT c.relname,t.tgname FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_proc p ON p.oid=t.tgfoid WHERE c.relnamespace=current_schema()::regnamespace AND p.proname='hysteriax_serialize_writes' LOOP EXECUTE format('ALTER TABLE %I DISABLE TRIGGER %I',r.relname,r.tgname); END LOOP; END $$").execute(&pool).await.unwrap();
     pool
 }
 async fn used(pool: &PgPool, id: &str) -> Option<DateTime<Utc>> {
@@ -17,9 +16,8 @@ async fn used(pool: &PgPool, id: &str) -> Option<DateTime<Utc>> {
 }
 
 #[tokio::test]
-async fn token_usage_is_independent_of_the_legacy_lock_and_throttles_with_database_time() {
+async fn token_usage_throttles_with_database_time() {
     let pool = fixture().await;
-    let legacy = db::hold_retired_global_write_lock(&pool).await.unwrap();
     touch(&pool, "one", &token_digest("one")).await.unwrap();
     let first = used(&pool, "one").await.unwrap();
     touch(&pool, "one", &token_digest("one")).await.unwrap();
@@ -27,7 +25,6 @@ async fn token_usage_is_independent_of_the_legacy_lock_and_throttles_with_databa
     sqlx::query("UPDATE admin_tokens SET last_used_at=clock_timestamp()-interval '61 seconds' WHERE id='one'").execute(&pool).await.unwrap();
     touch(&pool, "one", &token_digest("one")).await.unwrap();
     assert!(used(&pool, "one").await.unwrap() > first);
-    legacy.rollback().await.unwrap();
 }
 
 #[tokio::test]

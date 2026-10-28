@@ -260,16 +260,13 @@ async fn concurrent_previews_do_not_duplicate_current_identity() {
 }
 
 #[tokio::test]
-async fn signatures_are_prepared_while_another_transaction_holds_the_global_write_lock() {
+async fn signatures_are_prepared_before_the_authorization_commit() {
     let state = state().await;
     let ca = generated(&state).await;
     user(&state, "alice", true).await;
     let node = managed_node(&state, &ca).await;
     let n = node["id"].as_str().unwrap();
     let p = preview(&state, "Outside lock", &["alice"], &[n]).await;
-    let tx = db::hold_retired_global_write_lock(&state.pool)
-        .await
-        .unwrap();
     let candidate = tokio::time::timeout(
         std::time::Duration::from_secs(5),
         credentials::authorization::prepare_preview(
@@ -283,7 +280,6 @@ async fn signatures_are_prepared_while_another_transaction_holds_the_global_writ
     .unwrap();
     assert_eq!(candidate.plan.automatic_issue_count, 1);
     assert_eq!(version_count(&state).await, 0);
-    tx.rollback().await.unwrap();
 }
 
 #[tokio::test]
@@ -478,7 +474,7 @@ async fn retried_grant_preserves_one_prepared_managed_identity_and_version() {
     let node = managed_node(&state, &ca).await;
     let n = node["id"].as_str().unwrap();
     let p = preview(&state, "Retry grant", &["alice"], &[n]).await;
-    sqlx::raw_sql("DO $$ DECLARE entry record; BEGIN FOR entry IN SELECT c.relname,tr.tgname FROM pg_trigger tr JOIN pg_class c ON c.oid=tr.tgrelid JOIN pg_proc p ON p.oid=tr.tgfoid WHERE c.relnamespace=current_schema()::regnamespace AND p.proname='hysteriax_serialize_writes' LOOP EXECUTE format('ALTER TABLE %I DISABLE TRIGGER %I',entry.relname,entry.tgname); END LOOP; END $$; CREATE SEQUENCE managed_grant_attempts; CREATE FUNCTION retry_managed_grant_audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.action='authorization_group.created' AND nextval('managed_grant_attempts')=1 THEN RAISE EXCEPTION 'injected conflict' USING ERRCODE='40001'; END IF; RETURN NEW; END $$; CREATE TRIGGER retry_managed_grant_audit BEFORE INSERT ON audit_records FOR EACH ROW EXECUTE FUNCTION retry_managed_grant_audit();").execute(&state.pool).await.unwrap();
+    sqlx::raw_sql("CREATE SEQUENCE managed_grant_attempts; CREATE FUNCTION retry_managed_grant_audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.action='authorization_group.created' AND nextval('managed_grant_attempts')=1 THEN RAISE EXCEPTION 'injected conflict' USING ERRCODE='40001'; END IF; RETURN NEW; END $$; CREATE TRIGGER retry_managed_grant_audit BEFORE INSERT ON audit_records FOR EACH ROW EXECUTE FUNCTION retry_managed_grant_audit();").execute(&state.pool).await.unwrap();
     let result = commit(&state, "Retry grant", &["alice"], &[n], &p)
         .await
         .unwrap();

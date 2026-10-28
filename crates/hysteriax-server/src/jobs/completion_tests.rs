@@ -37,13 +37,12 @@ async fn snapshot(pool: &PgPool) -> Value {
 }
 
 #[tokio::test]
-async fn success_uses_database_time_without_the_global_lock_or_another_job_row() {
+async fn success_uses_database_time_without_waiting_for_unrelated_jobs() {
     let pool = fixture().await;
     let state = app(&pool);
     enqueue(&pool, "one", Some("node-a"), None).await;
     let one = claim(&pool, "owner").await;
     enqueue(&pool, "two", Some("node-b"), None).await;
-    let legacy = db::hold_retired_global_write_lock(&pool).await.unwrap();
     let mut held = pool.begin().await.unwrap();
     sqlx::query("SELECT id FROM jobs WHERE id='two' FOR UPDATE")
         .fetch_one(&mut *held)
@@ -56,7 +55,6 @@ async fn success_uses_database_time_without_the_global_lock_or_another_job_row()
         .unwrap();
     assert!(sqlx::query_scalar::<_,bool>("SELECT status='succeeded' AND finished_at=updated_at AND updated_at=(SELECT created_at FROM job_events WHERE job_id='one' AND event_type='job.succeeded') FROM jobs WHERE id='one'").fetch_one(&pool).await.unwrap());
     held.rollback().await.unwrap();
-    legacy.rollback().await.unwrap();
 }
 
 #[tokio::test]

@@ -35,9 +35,6 @@ async fn assign(state: &AppState, user: &str) -> String {
     sqlx::query("INSERT INTO node_assignments(user_id,node_id,credential_hash,credential_enc,created_at) VALUES($1,$2,'old-hash',$3,now())").bind(user).bind(&node).bind(state.secrets.encrypt("old-secret").unwrap()).execute(&state.pool).await.unwrap();
     node
 }
-async fn disable_legacy_lock(state: &AppState) {
-    sqlx::raw_sql("DO $$ DECLARE entry record; BEGIN FOR entry IN SELECT c.relname,tr.tgname FROM pg_trigger tr JOIN pg_class c ON c.oid=tr.tgrelid JOIN pg_proc p ON p.oid=tr.tgfoid WHERE c.relnamespace=current_schema()::regnamespace AND p.proname='hysteriax_serialize_writes' LOOP EXECUTE format('ALTER TABLE %I DISABLE TRIGGER %I',entry.relname,entry.tgname); END LOOP; END $$").execute(&state.pool).await.unwrap();
-}
 fn edit(name: &str) -> PatchUser {
     PatchUser {
         expected_revision: 1,
@@ -88,10 +85,9 @@ async fn failed_creation_audit_does_not_leave_an_unacknowledged_user() {
     );
 }
 #[tokio::test]
-async fn concurrent_user_edits_allow_only_one_revision_without_the_global_lock() {
+async fn concurrent_user_edits_allow_only_one_revision() {
     let (state, user) = fixture().await;
     assign(&state, &user).await;
-    disable_legacy_lock(&state).await;
     let (a, b) = tokio::join!(
         patch(State(state.clone()), Path(user.clone()), Json(edit("A"))),
         patch(State(state.clone()), Path(user.clone()), Json(edit("B")))
@@ -129,7 +125,6 @@ async fn concurrent_user_edits_allow_only_one_revision_without_the_global_lock()
 async fn a_patch_waiting_on_billing_retries_with_current_usage_and_keeps_the_revocation() {
     let (state, user) = fixture().await;
     let node = assign(&state, &user).await;
-    disable_legacy_lock(&state).await;
     let mut billing = state.pool.begin().await.unwrap();
     sqlx::query("SELECT id FROM nodes WHERE id=$1 FOR NO KEY UPDATE")
         .bind(&node)

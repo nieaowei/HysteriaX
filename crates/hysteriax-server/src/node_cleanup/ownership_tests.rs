@@ -9,7 +9,6 @@ async fn fixture() -> (PgPool, JobInput, Vec<execution::Execution>) {
     sqlx::query("INSERT INTO nodes(id,name,ssh_host,ssh_port,ssh_username,ssh_auth_type,ssh_secret_enc,public_host,public_port,listen_addr,node_token_hash,node_token_enc,traffic_stats_secret_enc,desired_config_enc,state,created_at,updated_at) VALUES('node','node','127.0.0.1',22,'root','password','unused','example.test',443,':443','hash','unused','unused','{}','deleting',now(),now())").execute(&pool).await.unwrap();
     sqlx::query("INSERT INTO jobs(id,kind,node_id,target_revision,status,stage,attempts,available_at,created_at,updated_at) VALUES('job','record-remove','node',1,'running','starting',1,now(),now(),now())").execute(&pool).await.unwrap();
     sqlx::query("INSERT INTO traffic_records(id,node_id,user_id,instance_id,baseline_tx,baseline_rx,delta_tx,delta_rx,sampled_at) SELECT i::text,'node','historical-user','instance',0,0,10,20,now()+make_interval(secs=>i) FROM generate_series(1,5)i").execute(&pool).await.unwrap();
-    sqlx::raw_sql("DO $$ DECLARE r record; BEGIN FOR r IN SELECT c.relname,t.tgname FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_proc p ON p.oid=t.tgfoid WHERE c.relnamespace=current_schema()::regnamespace AND p.proname='hysteriax_serialize_writes' LOOP EXECUTE format('ALTER TABLE %I DISABLE TRIGGER %I',r.relname,r.tgname); END LOOP; END $$").execute(&pool).await.unwrap();
     let job = JobInput {
         id: "job".into(),
         kind: "record-remove".into(),
@@ -48,9 +47,8 @@ async fn snapshot(pool: &PgPool) -> Value {
 }
 
 #[tokio::test]
-async fn batch_checkpoint_is_bounded_and_commits_without_the_old_global_lock() {
+async fn batch_checkpoint_is_bounded_and_commits_progress() {
     let (pool, job, leases) = fixture().await;
-    let legacy = db::hold_retired_global_write_lock(&pool).await.unwrap();
     let (removed, cursor) =
         tokio::time::timeout(std::time::Duration::from_secs(2), page(&pool, &job, leases))
             .await
@@ -72,7 +70,6 @@ async fn batch_checkpoint_is_bounded_and_commits_without_the_old_global_lock() {
             .unwrap(),
         3
     );
-    legacy.rollback().await.unwrap();
 }
 
 #[tokio::test]

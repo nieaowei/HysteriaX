@@ -21,7 +21,6 @@ pub(super) async fn fixture() -> Fixture {
             .await
             .unwrap();
     let _receipt=api::credentials::publish(State(state.clone()),Extension(api::AdminActor{id:"fixture".into()}),Path(credential),Json(api::credentials::PublishVersion{expected_revision:1,payload:json!({"provider":"cloudflare","config":{"cloudflare_api_token":"new-fixture-token"}})})).await.unwrap();
-    sqlx::raw_sql("DO $$ DECLARE r record; BEGIN FOR r IN SELECT c.relname,t.tgname FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_proc p ON p.oid=t.tgfoid WHERE c.relnamespace=current_schema()::regnamespace AND p.proname='hysteriax_serialize_writes' LOOP EXECUTE format('ALTER TABLE %I DISABLE TRIGGER %I',r.relname,r.tgname); END LOOP; END $$").execute(&state.pool).await.unwrap();
     let (job, leases) = crate::jobs::claim_for_test(&state.pool, &state.instance_id)
         .await
         .unwrap();
@@ -75,13 +74,9 @@ pub(super) async fn count(f: &Fixture, query: &str) -> i64 {
 }
 
 #[tokio::test]
-async fn publication_receipt_batch_and_audit_are_atomic_and_replay_is_readonly_without_the_old_lock()
- {
+async fn publication_receipt_batch_and_audit_are_atomic_and_replay_is_readonly() {
     let f = fixture().await;
     let s = source(&f).await;
-    let legacy = crate::db::hold_retired_global_write_lock(&f.state.pool)
-        .await
-        .unwrap();
     let receipt = save(&f, &s).await.unwrap().unwrap();
     assert_eq!(receipt["credential_version"], 2);
     assert_eq!(count(&f,"SELECT count(*) FROM dns_connections WHERE credential_version=2 AND revision=2 AND status='verified'").await,1);
@@ -109,7 +104,6 @@ async fn publication_receipt_batch_and_audit_are_atomic_and_replay_is_readonly_w
         Prepared::Applied(_)
     ));
     assert_eq!(snapshot(&f).await, before);
-    legacy.rollback().await.unwrap();
 }
 
 #[tokio::test]

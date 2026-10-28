@@ -37,9 +37,6 @@ pub(super) async fn connection(
     )
     .await
 }
-pub(super) async fn disable_legacy_lock(state: &AppState) {
-    sqlx::raw_sql("DO $$ DECLARE entry record; BEGIN FOR entry IN SELECT c.relname,tr.tgname FROM pg_trigger tr JOIN pg_class c ON c.oid=tr.tgrelid JOIN pg_proc p ON p.oid=tr.tgfoid WHERE c.relnamespace=current_schema()::regnamespace AND p.proname='hysteriax_serialize_writes' LOOP EXECUTE format('ALTER TABLE %I DISABLE TRIGGER %I',entry.relname,entry.tgname); END LOOP; END $$").execute(&state.pool).await.unwrap();
-}
 pub(super) async fn waiting(state: &AppState, prefix: &str) {
     tokio::time::timeout(std::time::Duration::from_secs(2),async {
         loop {
@@ -94,14 +91,10 @@ async fn connection_mutations_and_audits_roll_back_together() {
     );
 }
 #[tokio::test]
-async fn concurrent_connection_edits_only_commit_one_revision_without_the_old_locks() {
+async fn concurrent_connection_edits_only_commit_one_revision() {
     let (state, credential) = fixture().await;
     let (_, Json(created)) = connection(&state, &credential).await.unwrap();
     let id = created["id"].as_str().unwrap();
-    disable_legacy_lock(&state).await;
-    let holder = db::hold_retired_global_write_lock(&state.pool)
-        .await
-        .unwrap();
     let edit = || {
         Json(ConnectionPatch {
             expected_revision: 1,
@@ -116,7 +109,6 @@ async fn concurrent_connection_edits_only_commit_one_revision_without_the_old_lo
     })
     .await
     .unwrap();
-    holder.rollback().await.unwrap();
     let results = [a, b];
     assert_eq!(results.iter().filter(|r| r.is_ok()).count(), 1);
     assert_eq!(
@@ -140,7 +132,6 @@ async fn concurrent_connection_edits_only_commit_one_revision_without_the_old_lo
 #[tokio::test]
 async fn a_connection_waiting_for_credential_archival_revalidates_before_insert() {
     let (state, credential) = fixture().await;
-    disable_legacy_lock(&state).await;
     let mut archive = state.pool.begin().await.unwrap();
     sqlx::query("SELECT id FROM credentials WHERE id=$1 FOR UPDATE")
         .bind(&credential)
@@ -178,7 +169,6 @@ async fn connection_deletion_rejects_a_zone_committed_after_its_snapshot() {
     let (state, credential) = fixture().await;
     let (_, Json(created)) = connection(&state, &credential).await.unwrap();
     let id = created["id"].as_str().unwrap().to_owned();
-    disable_legacy_lock(&state).await;
     let mut zone = state.pool.begin().await.unwrap();
     sqlx::query("INSERT INTO dns_zones(id,connection_id,provider_zone_id,name) VALUES('zone',$1,'remote-zone','example.com')").bind(&id).execute(&mut *zone).await.unwrap();
     let target = state.clone();

@@ -45,10 +45,6 @@ async fn history(pool: &PgPool, start: DateTime<Utc>, end: DateTime<Utc>) -> Vec
         .await
         .unwrap()
 }
-async fn disable_legacy_lock(pool: &PgPool) {
-    // Prove the new queue protocol independently of the old application lock.
-    sqlx::raw_sql("DO $$ DECLARE entry record; BEGIN FOR entry IN SELECT c.relname,tr.tgname FROM pg_trigger tr JOIN pg_class c ON c.oid=tr.tgrelid JOIN pg_proc p ON p.oid=tr.tgfoid WHERE c.relnamespace=current_schema()::regnamespace AND p.proname='hysteriax_serialize_writes' LOOP EXECUTE format('ALTER TABLE %I DISABLE TRIGGER %I',entry.relname,entry.tgname); END LOOP; END $$").execute(pool).await.unwrap();
-}
 
 #[tokio::test]
 async fn generations_are_monotonic_across_ack_and_source_rollbacks() {
@@ -129,7 +125,6 @@ async fn statistics_queues_are_bounded_and_acknowledgements_roll_back_with_resul
 #[tokio::test]
 async fn another_refresher_skips_claimed_keys_and_history_overlays_the_held_source() {
     let pool = fixture().await;
-    disable_legacy_lock(&pool).await;
     let (a, b) = (uuid::Uuid::from_u128(1), uuid::Uuid::from_u128(2));
     let start: DateTime<Utc> = "2026-01-01T12:00:00Z".parse().unwrap();
     cycle(&pool, a, start + Duration::seconds(10), 1).await;
@@ -168,7 +163,6 @@ async fn another_refresher_skips_claimed_keys_and_history_overlays_the_held_sour
 #[tokio::test]
 async fn a_source_change_waiting_on_a_claim_survives_the_old_ack() {
     let pool = fixture().await;
-    disable_legacy_lock(&pool).await;
     let id = uuid::Uuid::new_v4();
     let start: DateTime<Utc> = "2026-01-01T12:00:00Z".parse().unwrap();
     cycle(&pool, id, start + Duration::seconds(10), 1).await;

@@ -45,7 +45,6 @@ async fn fixture(n: i32) -> (AppState, String) {
         .unwrap();
     // Native constraints and domain triggers remain active; only the old global
     // SQL lock is disabled to exercise independent node/resource ownership.
-    sqlx::raw_sql("DO $$ DECLARE r record; BEGIN FOR r IN SELECT c.relname,t.tgname FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_proc p ON p.oid=t.tgfoid WHERE c.relnamespace=current_schema()::regnamespace AND p.proname='hysteriax_serialize_writes' LOOP EXECUTE format('ALTER TABLE %I DISABLE TRIGGER %I',r.relname,r.tgname); END LOOP; END $$").execute(&state.pool).await.unwrap();
     for i in 1..=n {
         let node = format!("00000000-0000-4000-8000-{i:012}");
         sqlx::query("INSERT INTO nodes(id,name,ssh_host,ssh_port,ssh_username,ssh_credential_id,ssh_credential_version,public_host,public_port,listen_addr,node_token_hash,node_token_enc,traffic_stats_secret_enc,desired_config_enc,mtls_state,created_at,updated_at) VALUES($1,'Node','127.0.0.1',22,'root',$3,$4,'example.test',443,':443',$1,'unused','unused',$2,'ready',now(),now())")

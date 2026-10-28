@@ -1,8 +1,5 @@
 use super::node_flow::managed_node;
 use super::*;
-async fn unlock(state: &AppState) {
-    sqlx::raw_sql("DO $$ DECLARE entry record; BEGIN FOR entry IN SELECT c.relname,tr.tgname FROM pg_trigger tr JOIN pg_class c ON c.oid=tr.tgrelid JOIN pg_proc p ON p.oid=tr.tgfoid WHERE c.relnamespace=current_schema()::regnamespace AND p.proname='hysteriax_serialize_writes' LOOP EXECUTE format('ALTER TABLE %I DISABLE TRIGGER %I',entry.relname,entry.tgname); END LOOP; END $$").execute(&state.pool).await.unwrap();
-}
 async fn count(state: &AppState, sql: &str) -> i64 {
     sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
         .fetch_one(&state.pool)
@@ -12,7 +9,6 @@ async fn count(state: &AppState, sql: &str) -> i64 {
 #[tokio::test]
 async fn ca_creation_audit_failure_leaves_no_authority_material_or_receipt() {
     let state = state().await;
-    unlock(&state).await;
     sqlx::raw_sql("CREATE FUNCTION reject_ca_audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.action='ca.created' THEN RAISE EXCEPTION 'injected failure'; END IF; RETURN NEW; END $$; CREATE TRIGGER reject_ca_audit BEFORE INSERT ON audit_records FOR EACH ROW EXECUTE FUNCTION reject_ca_audit();").execute(&state.pool).await.unwrap();
     assert!(
         create(State(state.clone()), actor(), Json(request("failed")))
@@ -44,15 +40,10 @@ async fn ca_creation_audit_failure_leaves_no_authority_material_or_receipt() {
 #[tokio::test]
 async fn ca_creation_native_conflict_commits_one_material_and_receipt() {
     let state = state().await;
-    unlock(&state).await;
     sqlx::raw_sql("CREATE SEQUENCE create_ca_attempts; CREATE FUNCTION retry_ca_audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.action='ca.created' AND nextval('create_ca_attempts')=1 THEN RAISE EXCEPTION 'injected conflict' USING ERRCODE='40001'; END IF; RETURN NEW; END $$; CREATE TRIGGER retry_ca_audit BEFORE INSERT ON audit_records FOR EACH ROW EXECUTE FUNCTION retry_ca_audit();").execute(&state.pool).await.unwrap();
-    let legacy = db::hold_retired_global_write_lock(&state.pool)
-        .await
-        .unwrap();
     let (_, Json(receipt)) = create(State(state.clone()), actor(), Json(request("retry-ca")))
         .await
         .unwrap();
-    legacy.rollback().await.unwrap();
     let (id, cipher): (String, String) =
         sqlx::query_as("SELECT credential_id,payload_enc FROM credential_versions")
             .fetch_one(&state.pool)
@@ -81,7 +72,6 @@ async fn ca_creation_native_conflict_commits_one_material_and_receipt() {
 #[tokio::test]
 async fn concurrent_ca_creation_rolls_back_the_duplicate_authority() {
     let state = state().await;
-    unlock(&state).await;
     sqlx::raw_sql("CREATE SEQUENCE ca_arrivals; CREATE FUNCTION await_ca_peer() RETURNS trigger LANGUAGE plpgsql AS $$ DECLARE arrived bigint; deadline timestamptz:=clock_timestamp()+interval '3 seconds'; BEGIN IF NEW.kind='ca_identity' THEN PERFORM nextval('ca_arrivals'); LOOP SELECT last_value INTO arrived FROM ca_arrivals; EXIT WHEN arrived>=2; IF clock_timestamp()>deadline THEN RAISE EXCEPTION 'CA barrier timeout'; END IF; PERFORM pg_sleep(0.01); END LOOP; END IF; RETURN NEW; END $$; CREATE TRIGGER await_ca_peer BEFORE INSERT ON credentials FOR EACH ROW EXECUTE FUNCTION await_ca_peer();").execute(&state.pool).await.unwrap();
     let (a, b) = tokio::join!(
         create(State(state.clone()), actor(), Json(request("same-ca"))),
@@ -156,10 +146,9 @@ async fn native_receipt_collision_replays_after_rollback_without_reexecuting_wor
     );
 }
 #[tokio::test]
-async fn policy_conflict_changes_one_revision_without_old_locks() {
+async fn policy_conflict_changes_one_revision() {
     let state = state().await;
     let ca = generated(&state).await;
-    unlock(&state).await;
     let a = UpdatePolicy {
         expected_revision: 1,
         policy: Policy {
@@ -176,14 +165,10 @@ async fn policy_conflict_changes_one_revision_without_old_locks() {
         },
         idempotency_key: "policy-b".into(),
     };
-    let legacy = db::hold_retired_global_write_lock(&state.pool)
-        .await
-        .unwrap();
     let (a, b) = tokio::join!(
         update_policy(State(state.clone()), actor(), Path(ca.clone()), Json(a)),
         update_policy(State(state.clone()), actor(), Path(ca.clone()), Json(b))
     );
-    legacy.rollback().await.unwrap();
     assert_eq!([&a, &b].iter().filter(|r| r.is_ok()).count(), 1);
     assert_eq!(
         [&a, &b]
@@ -213,7 +198,6 @@ async fn referenced_publication_native_conflict_commits_one_rotation_and_batch()
     let state = state().await;
     let ca = generated(&state).await;
     let _ = managed_node(&state, &ca).await;
-    unlock(&state).await;
     sqlx::raw_sql("CREATE SEQUENCE publication_attempts; CREATE FUNCTION retry_publication_audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.action='ca.version_prepared' AND nextval('publication_attempts')=1 THEN RAISE EXCEPTION 'injected conflict' USING ERRCODE='40001'; END IF; RETURN NEW; END $$; CREATE TRIGGER retry_publication_audit BEFORE INSERT ON audit_records FOR EACH ROW EXECUTE FUNCTION retry_publication_audit();").execute(&state.pool).await.unwrap();
     let (_, Json(receipt)) = publish(
         State(state.clone()),
@@ -263,7 +247,6 @@ async fn reissue_audit_failure_rolls_back_then_native_conflict_keeps_one_new_ver
     let ca = generated(&state).await;
     user(&state, "alice", true).await;
     let (identity, _) = issue(&state, "alice", &ca, false).await;
-    unlock(&state).await;
     let revision: i64 = sqlx::query_scalar("SELECT revision FROM mtls_user_identities WHERE id=$1")
         .bind(identity)
         .fetch_one(&state.pool)
@@ -334,7 +317,6 @@ async fn reissue_audit_failure_rolls_back_then_native_conflict_keeps_one_new_ver
 async fn policy_and_publication_audit_failures_preserve_authority_history_and_receipts() {
     let state = state().await;
     let ca = generated(&state).await;
-    unlock(&state).await;
     let query = "SELECT jsonb_build_object('credential',(SELECT to_jsonb(c) FROM credentials c WHERE id=$1),'authority',(SELECT to_jsonb(a) FROM mtls_authorities a WHERE credential_id=$1),'versions',(SELECT jsonb_agg(to_jsonb(v) ORDER BY version) FROM credential_versions v WHERE credential_id=$1),'generations',(SELECT jsonb_agg(to_jsonb(g) ORDER BY ca_version) FROM mtls_ca_generations g WHERE ca_id=$1))";
     let before: Value = sqlx::query_scalar(query)
         .bind(&ca)
@@ -396,7 +378,6 @@ async fn concurrent_same_key_reissues_return_one_version_and_receipt() {
     let ca = generated(&state).await;
     user(&state, "alice", true).await;
     let (identity, _) = issue(&state, "alice", &ca, false).await;
-    unlock(&state).await;
     let revision: i64 = sqlx::query_scalar("SELECT revision FROM mtls_user_identities WHERE id=$1")
         .bind(identity)
         .fetch_one(&state.pool)

@@ -18,6 +18,14 @@ python3 -m unittest discover -s tests -p 'test_backup_restore.py'
 
 Rust 数据库测试需要可丢弃 PostgreSQL 的 `TEST_DATABASE_URL`；Redis 专项另需 `TEST_REDIS_URL`。保留测试输出中的忽略项和失败，不把部分完成记为全量通过。上述是运行入口，不代表本次已经执行或通过。
 
+执行计划性能专项单独运行：
+
+```sh
+TEST_DATABASE_URL=postgresql://... bash scripts/verify-query-plans.sh
+```
+
+该入口串行执行 3 个显式忽略的重型测试，检查搜索/分页索引、在线历史扫描路径和聚合脏区间扫描规模。常规 `cargo test --workspace` 保留业务结果和事务正确性回归，不默认运行这 3 项。脚本只选择这些性能用例，不会执行需要 SSH 或真实快照的其他忽略项。
+
 ## 全进程与部署专项
 
 | 入口 | 验证范围 |

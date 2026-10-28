@@ -32,7 +32,6 @@ async fn fixture(n: i32) -> (AppState, String) {
     let ca = ca["id"].as_str().unwrap().to_owned();
     sqlx::query("INSERT INTO users(id,name,created_at,updated_at) SELECT 'u-'||lpad(i::text,4,'0'),'User',now(),now() FROM generate_series(1,$1)i").bind(n).execute(&state.pool).await.unwrap();
     sqlx::query("INSERT INTO mtls_user_identities(id,user_id,ca_id,created_at,updated_at) SELECT gen_random_uuid()::text,id,$1,now(),now() FROM users").bind(&ca).execute(&state.pool).await.unwrap();
-    sqlx::raw_sql("DO $$ DECLARE r record; BEGIN FOR r IN SELECT c.relname,t.tgname FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_proc p ON p.oid=t.tgfoid WHERE c.relnamespace=current_schema()::regnamespace AND p.proname='hysteriax_serialize_writes' LOOP EXECUTE format('ALTER TABLE %I DISABLE TRIGGER %I',r.relname,r.tgname); END LOOP; END $$").execute(&state.pool).await.unwrap();
     (state, ca)
 }
 async fn count(state: &AppState, query: &str) -> i64 {

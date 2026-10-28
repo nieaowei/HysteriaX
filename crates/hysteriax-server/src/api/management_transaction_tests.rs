@@ -90,11 +90,11 @@ async fn token_creation_retries_the_transaction_with_one_valid_secret_and_audit(
 }
 
 #[tokio::test]
-async fn concurrent_cross_revocations_preserve_one_administrator_without_global_lock() {
+async fn concurrent_cross_revocations_preserve_one_administrator() {
     let state = state().await;
     sqlx::query("INSERT INTO admin_tokens(id,token_hash,label,created_at) VALUES('a','hash-a','A',now()),('b','hash-b','B',now())").execute(&state.pool).await.unwrap();
-    // Only this isolated schema: expose write skew without the old SQL lock.
-    sqlx::raw_sql("DO $$ DECLARE entry record; BEGIN FOR entry IN SELECT c.relname,tr.tgname FROM pg_trigger tr JOIN pg_class c ON c.oid=tr.tgrelid JOIN pg_proc p ON p.oid=tr.tgfoid WHERE c.relnamespace=current_schema()::regnamespace AND p.proname='hysteriax_serialize_writes' LOOP EXECUTE format('ALTER TABLE %I DISABLE TRIGGER %I',entry.relname,entry.tgname); END LOOP; END $$; CREATE SEQUENCE cross_revoke_arrival; CREATE FUNCTION pause_token_revoke() RETURNS trigger LANGUAGE plpgsql AS $$ DECLARE arrivals bigint; deadline timestamptz:=clock_timestamp()+interval '3 seconds'; BEGIN PERFORM nextval('cross_revoke_arrival'); LOOP SELECT last_value INTO arrivals FROM cross_revoke_arrival; EXIT WHEN arrivals>=2; IF clock_timestamp()>deadline THEN RAISE EXCEPTION 'concurrent revoke barrier timed out'; END IF; PERFORM pg_sleep(0.01); END LOOP; RETURN NEW; END $$; CREATE TRIGGER pause_token_revoke BEFORE UPDATE ON admin_tokens FOR EACH ROW EXECUTE FUNCTION pause_token_revoke();")
+    // Synchronize both revocations before either can commit.
+    sqlx::raw_sql("CREATE SEQUENCE cross_revoke_arrival; CREATE FUNCTION pause_token_revoke() RETURNS trigger LANGUAGE plpgsql AS $$ DECLARE arrivals bigint; deadline timestamptz:=clock_timestamp()+interval '3 seconds'; BEGIN PERFORM nextval('cross_revoke_arrival'); LOOP SELECT last_value INTO arrivals FROM cross_revoke_arrival; EXIT WHEN arrivals>=2; IF clock_timestamp()>deadline THEN RAISE EXCEPTION 'concurrent revoke barrier timed out'; END IF; PERFORM pg_sleep(0.01); END LOOP; RETURN NEW; END $$; CREATE TRIGGER pause_token_revoke BEFORE UPDATE ON admin_tokens FOR EACH ROW EXECUTE FUNCTION pause_token_revoke();")
         .execute(&state.pool).await.unwrap();
     let (a, b) = tokio::join!(
         revoke_admin_token(

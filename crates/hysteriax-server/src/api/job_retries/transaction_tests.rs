@@ -27,7 +27,6 @@ async fn fixture() -> (AppState, String, String) {
         .await
         .unwrap();
     tx.commit().await.unwrap();
-    sqlx::raw_sql("DO $$ DECLARE entry record; BEGIN FOR entry IN SELECT c.relname,tr.tgname FROM pg_trigger tr JOIN pg_class c ON c.oid=tr.tgrelid JOIN pg_proc p ON p.oid=tr.tgfoid WHERE c.relnamespace=current_schema()::regnamespace AND p.proname='hysteriax_serialize_writes' LOOP EXECUTE format('ALTER TABLE %I DISABLE TRIGGER %I',entry.relname,entry.tgname); END LOOP; END $$").execute(&state.pool).await.unwrap();
     (state, node, job)
 }
 async fn submit(state: &AppState, job: &str) -> Result<(StatusCode, Json<Value>), ApiError> {
@@ -47,13 +46,9 @@ async fn count(state: &AppState, sql: &str) -> i64 {
         .unwrap()
 }
 #[tokio::test]
-async fn concurrent_retries_share_one_child_and_audit_without_legacy_lock() {
+async fn concurrent_retries_share_one_child_and_audit() {
     let (state, _, job) = fixture().await;
-    let legacy = db::hold_retired_global_write_lock(&state.pool)
-        .await
-        .unwrap();
     let (a, b) = tokio::join!(submit(&state, &job), submit(&state, &job));
-    legacy.rollback().await.unwrap();
     let (_, Json(a)) = a.unwrap();
     let (_, Json(b)) = b.unwrap();
     assert_eq!(a, b);

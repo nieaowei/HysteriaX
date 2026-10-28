@@ -99,9 +99,6 @@ async fn replacement_does_not_lock_any_node_or_job_and_cancellation_is_atomic_in
     );
     assert_eq!(count(&state,"SELECT count(*) FROM background_work WHERE kind='mtls-superseded-node-jobs' AND state='complete'").await,0);
     held.rollback().await.unwrap();
-    let legacy = db::hold_retired_global_write_lock(&state.pool)
-        .await
-        .unwrap();
     for expected in [100, 200, 201, 301] {
         let work = claim(&state, "cancel").await;
         page(&state.pool, &work).await.unwrap();
@@ -123,7 +120,6 @@ async fn replacement_does_not_lock_any_node_or_job_and_cancellation_is_atomic_in
             301 - expected
         );
     }
-    legacy.rollback().await.unwrap();
     assert_eq!(
         before,
         sqlx::query_scalar::<_, Value>(SNAPSHOTS)

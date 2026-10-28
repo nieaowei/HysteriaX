@@ -10,7 +10,6 @@ use serde_json::Value;
 async fn empty() -> AppState {
     let pool = db::test_pool_with_max_connections(5).await;
     let secrets = SecretBox::from_base64("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA").unwrap();
-    sqlx::raw_sql("DO $$ DECLARE entry record; BEGIN FOR entry IN SELECT c.relname,tr.tgname FROM pg_trigger tr JOIN pg_class c ON c.oid=tr.tgrelid JOIN pg_proc p ON p.oid=tr.tgfoid WHERE c.relnamespace=current_schema()::regnamespace AND p.proname='hysteriax_serialize_writes' LOOP EXECUTE format('ALTER TABLE %I DISABLE TRIGGER %I',entry.relname,entry.tgname); END LOOP; END $$").execute(&pool).await.unwrap();
     AppState::new(pool, secrets)
 }
 async fn fixture() -> AppState {
@@ -62,18 +61,14 @@ fn default_patch(revision: i64) -> Patch {
     }
 }
 #[tokio::test]
-async fn concurrent_initialization_creates_exactly_one_seed_set_without_old_locks() {
+async fn concurrent_initialization_creates_exactly_one_seed_set() {
     let state = empty().await;
-    let legacy = db::hold_retired_global_write_lock(&state.pool)
-        .await
-        .unwrap();
     let (a, b) = tokio::join!(
         initialize(&state.pool, &state.secrets),
         initialize(&state.pool, &state.secrets)
     );
     a.unwrap();
     b.unwrap();
-    legacy.rollback().await.unwrap();
     assert_eq!(
         count(&state, "SELECT count(*) FROM subscription_templates").await,
         2
@@ -211,9 +206,6 @@ async fn publication_retries_keep_one_version_cipher_and_success_audit() {
 #[tokio::test]
 async fn same_revision_publications_commit_only_one_new_version() {
     let state = fixture().await;
-    let legacy = db::hold_retired_global_write_lock(&state.pool)
-        .await
-        .unwrap();
     let (a, b) = tokio::join!(
         publish(
             State(state.clone()),
@@ -230,7 +222,6 @@ async fn same_revision_publications_commit_only_one_new_version() {
             })
         )
     );
-    legacy.rollback().await.unwrap();
     assert_eq!([&a, &b].iter().filter(|r| r.is_ok()).count(), 1);
     assert_eq!(
         [&a, &b]

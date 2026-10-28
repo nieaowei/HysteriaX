@@ -26,9 +26,6 @@ async fn number(state: &AppState, sql: &str) -> i64 {
         .await
         .unwrap()
 }
-async fn disable_old_sql_lock(pool: &PgPool) {
-    sqlx::raw_sql("DO $$ DECLARE entry record; BEGIN FOR entry IN SELECT c.relname,tr.tgname FROM pg_trigger tr JOIN pg_class c ON c.oid=tr.tgrelid JOIN pg_proc p ON p.oid=tr.tgfoid WHERE c.relnamespace=current_schema()::regnamespace AND p.proname='hysteriax_serialize_writes' LOOP EXECUTE format('ALTER TABLE %I DISABLE TRIGGER %I',entry.relname,entry.tgname); END LOOP; END $$").execute(pool).await.unwrap();
-}
 #[tokio::test]
 async fn maintenance_adoption_preserves_partial_intervals_and_recovers_original_ids_without_remote_reads()
  {
@@ -71,10 +68,7 @@ async fn maintenance_adoption_preserves_partial_intervals_and_recovers_original_
         number(&state, "SELECT count(*) FROM sampling_cycles").await,
         2
     );
-    disable_old_sql_lock(&state.pool).await;
-    let legacy = db::hold_retired_global_write_lock(&state.pool)
-        .await
-        .unwrap();
+
     for _ in 0..2 {
         let work = background::claim(&state.pool, "traffic", &state.instance_id)
             .await
@@ -99,7 +93,6 @@ async fn maintenance_adoption_preserves_partial_intervals_and_recovers_original_
             work.id
         );
     }
-    legacy.rollback().await.unwrap();
     assert_eq!(
         number(&state, "SELECT count(*) FROM users WHERE usage_bytes=7").await,
         501
@@ -242,7 +235,6 @@ async fn adoption_failure_rolls_back_discarding_and_ownership_and_keeps_startup_
 #[tokio::test]
 async fn capture_expiry_is_bounded_fenced_and_skips_live_owners_and_locked_rows() {
     let state = fixture(1).await;
-    disable_old_sql_lock(&state.pool).await;
     sqlx::query("INSERT INTO traffic_sample_batches(sample_id,node_id,capture_deadline) SELECT 'expired-'||i,'a',clock_timestamp()-interval '1 minute' FROM generate_series(1,301)i").execute(&state.pool).await.unwrap();
     batches::reserve(&state.pool, "live", "a", None)
         .await

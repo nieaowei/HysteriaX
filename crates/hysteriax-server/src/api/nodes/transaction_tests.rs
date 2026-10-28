@@ -15,7 +15,6 @@ pub(super) async fn fixture() -> (AppState, String) {
     let request = crate::credentials::test_node_request(&state, json!({"name":"Node","ssh_host":"8.8.8.8","ssh_port":22,"ssh_username":"root","ssh_auth_type":"password","ssh_secret":"test","public_host":"8.8.8.8","public_port":443,"listen_addr":":443"})).await;
     let (_, Json(receipt)) = create(State(state.clone()), Json(request)).await.unwrap();
     let node = receipt["node"]["id"].as_str().unwrap().to_owned();
-    sqlx::raw_sql("DO $$ DECLARE entry record; BEGIN FOR entry IN SELECT c.relname,tr.tgname FROM pg_trigger tr JOIN pg_class c ON c.oid=tr.tgrelid JOIN pg_proc p ON p.oid=tr.tgfoid WHERE c.relnamespace=current_schema()::regnamespace AND p.proname='hysteriax_serialize_writes' LOOP EXECUTE format('ALTER TABLE %I DISABLE TRIGGER %I',entry.relname,entry.tgname); END LOOP; END $$").execute(&state.pool).await.unwrap();
     (state, node)
 }
 async fn count(state: &AppState, sql: &str) -> i64 {
@@ -68,15 +67,10 @@ async fn action_audit_failure_rolls_back_jobs_and_outbox_events() {
 async fn retried_action_commits_one_job_event_and_actual_actor() {
     let (state, node) = fixture().await;
     sqlx::raw_sql("CREATE SEQUENCE action_attempts; CREATE FUNCTION retry_action_audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.action='node.deploy' AND nextval('action_attempts')=1 THEN RAISE EXCEPTION 'injected conflict' USING ERRCODE='40001'; END IF; RETURN NEW; END $$; CREATE TRIGGER retry_action_audit BEFORE INSERT ON audit_records FOR EACH ROW EXECUTE FUNCTION retry_action_audit();").execute(&state.pool).await.unwrap();
-    // A converted entry point must not wait on the legacy application lock.
-    let legacy = db::hold_retired_global_write_lock(&state.pool)
-        .await
-        .unwrap();
     let (_, Json(receipt)) = super::super::AUDIT_ACTOR_ID
         .scope("node-operator".into(), action(&state, &node, 1, "deploy"))
         .await
         .unwrap();
-    legacy.rollback().await.unwrap();
     let (job, revision): (String, i64) = sqlx::query_as("SELECT id,target_revision FROM jobs")
         .fetch_one(&state.pool)
         .await
@@ -221,14 +215,10 @@ async fn retried_deletion_notifies_only_after_the_one_committed_removal() {
     let (state, node) = fixture().await;
     let mut notifications = state.removed_nodes.subscribe();
     sqlx::raw_sql("CREATE SEQUENCE deletion_attempts; CREATE FUNCTION retry_deletion_audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.action='node.deleted' AND nextval('deletion_attempts')=1 THEN RAISE EXCEPTION 'injected conflict' USING ERRCODE='40001'; END IF; RETURN NEW; END $$; CREATE TRIGGER retry_deletion_audit BEFORE INSERT ON audit_records FOR EACH ROW EXECUTE FUNCTION retry_deletion_audit();").execute(&state.pool).await.unwrap();
-    let legacy = db::hold_retired_global_write_lock(&state.pool)
-        .await
-        .unwrap();
     assert_eq!(
         delete_node(&state, &node).await.unwrap().0,
         StatusCode::NO_CONTENT
     );
-    legacy.rollback().await.unwrap();
     assert_eq!(notifications.try_recv().unwrap(), node);
     assert!(matches!(
         notifications.try_recv(),
@@ -352,15 +342,11 @@ async fn editing_audit_failure_rolls_back_revision_history_jobs_and_references()
 #[tokio::test]
 async fn concurrent_edits_of_one_revision_commit_one_history_and_sync() {
     let (state, node) = fixture().await;
-    let legacy = db::hold_retired_global_write_lock(&state.pool)
-        .await
-        .unwrap();
     let input = json!({"expected_revision":1,"traffic_stats_port":12000});
     let (a, b) = tokio::join!(
         edit(&state, &node, input.clone()),
         edit(&state, &node, input)
     );
-    legacy.rollback().await.unwrap();
     assert_eq!([&a, &b].iter().filter(|result| result.is_ok()).count(), 1);
     assert_eq!(
         [&a, &b]

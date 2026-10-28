@@ -114,9 +114,6 @@ async fn set_reference(
         .unwrap();
     cipher
 }
-async fn disable_legacy_lock(pool: &PgPool) {
-    sqlx::raw_sql("DO $$ DECLARE entry record; BEGIN FOR entry IN SELECT c.relname,tr.tgname FROM pg_trigger tr JOIN pg_class c ON c.oid=tr.tgrelid JOIN pg_proc p ON p.oid=tr.tgfoid WHERE c.relnamespace=current_schema()::regnamespace AND p.proname='hysteriax_serialize_writes' LOOP EXECUTE format('ALTER TABLE %I DISABLE TRIGGER %I',entry.relname,entry.tgname); END LOOP; END $$").execute(pool).await.unwrap();
-}
 async fn wait_for_lock(pool: &PgPool, pid: i32) {
     tokio::time::timeout(std::time::Duration::from_secs(2),async {
         loop {
@@ -223,7 +220,6 @@ async fn a_missing_version_rolls_back_the_configuration_and_existing_edges() {
 #[tokio::test]
 async fn publishing_a_reference_first_blocks_concurrent_version_deletion() {
     let (state, node, id) = fixture().await;
-    disable_legacy_lock(&state.pool).await;
     let mut source = state.pool.begin().await.unwrap();
     set_reference(&mut source, &state, &node, &id, 1).await;
     reference_index::flush_node_on(&mut source, &state.secrets, &node)
@@ -264,7 +260,6 @@ async fn publishing_a_reference_first_blocks_concurrent_version_deletion() {
 #[tokio::test]
 async fn deleting_a_version_first_rejects_a_late_reference_without_dangling_data() {
     let (state, node, id) = fixture().await;
-    disable_legacy_lock(&state.pool).await;
     let mut deletion = state.pool.begin().await.unwrap();
     sqlx::query("DELETE FROM credential_versions WHERE credential_id=$1 AND version=1")
         .bind(&id)

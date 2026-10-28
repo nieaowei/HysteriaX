@@ -337,9 +337,6 @@ async fn retry_after_history_is_empty_keeps_the_durable_background_path() {
 #[tokio::test]
 async fn large_record_removal_is_queued_idempotent_and_completes_without_ssh() {
     let state = fixture(3000).await;
-    // A separate fixture's holder reproduces the parallel-suite interference
-    // without consuming any of the three application pool connections.
-    let other = crate::db::test_pool().await;
     sqlx::raw_sql("INSERT INTO node_network_samples(node_id,period_id,delta_tx,delta_rx,sampled_at)
         SELECT n,'period',10,20,'2026-01-01'::timestamptz+(i/100)*interval '1 second' FROM unnest(ARRAY['n1','n2'])n CROSS JOIN generate_series(1,3000)i;
         INSERT INTO proxy_probe_samples(node_id,revision,status,sampled_at)
@@ -366,7 +363,6 @@ async fn large_record_removal_is_queued_idempotent_and_completes_without_ssh() {
     assert_eq!(job.kind, "record-remove");
     let worker_state = state.clone();
     let worker = tokio::spawn(async move { execute_one(worker_state, job).await });
-    let legacy = db::hold_retired_global_write_lock(&other).await.unwrap();
     for _ in 0..10 {
         tokio::time::timeout(Duration::from_secs(2), write_probe(&state.pool))
             .await
@@ -374,7 +370,6 @@ async fn large_record_removal_is_queued_idempotent_and_completes_without_ssh() {
             .unwrap();
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    legacy.rollback().await.unwrap();
     assert_eq!(
         sqlx::query_scalar::<_, i64>("SELECT count(*) FROM node_cleanup_writer_probe")
             .fetch_one(&state.pool)
@@ -581,14 +576,11 @@ async fn old_node_cleanup_seeks_its_own_index_despite_newer_other_node_history()
 }
 
 #[tokio::test]
-async fn retired_global_write_lock_does_not_block_cleanup_or_consume_an_attempt() {
+async fn cleanup_completes_in_one_attempt_while_reads_continue() {
     let state = fixture(1200).await;
     assert_eq!(request(&state).await, StatusCode::ACCEPTED);
     let job = claim_next(&state.pool).await.unwrap().unwrap();
     let id = job.id.clone();
-    let holder = db::hold_retired_global_write_lock(&state.pool)
-        .await
-        .unwrap();
     let worker_state = state.clone();
     let worker = tokio::spawn(async move { execute_one(worker_state, job).await });
     assert_eq!(
@@ -602,7 +594,6 @@ async fn retired_global_write_lock_does_not_block_cleanup_or_consume_an_attempt(
         .await
         .unwrap()
         .unwrap();
-    holder.rollback().await.unwrap();
     let (status, attempts): (String, i64) =
         sqlx::query_as("SELECT status,attempts FROM jobs WHERE id=$1")
             .bind(id)

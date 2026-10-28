@@ -32,7 +32,6 @@ async fn failure_and_retry_deadline_share_database_time_without_the_global_or_un
     enqueue(&pool, "one", Some("node-a"), None).await;
     let one = claim(&pool, "a").await;
     enqueue(&pool, "two", Some("node-b"), None).await;
-    let legacy = db::hold_retired_global_write_lock(&pool).await.unwrap();
     let mut held = pool.begin().await.unwrap();
     sqlx::query("SELECT id FROM jobs WHERE id='two' FOR UPDATE")
         .fetch_one(&mut *held)
@@ -53,7 +52,6 @@ async fn failure_and_retry_deadline_share_database_time_without_the_global_or_un
         1
     );
     held.rollback().await.unwrap();
-    legacy.rollback().await.unwrap();
 }
 
 #[tokio::test]
@@ -293,7 +291,6 @@ async fn dns_fixture() -> (PgPool, ClaimedJob, String) {
     )
     .await
     .unwrap();
-    sqlx::raw_sql("DO $$ DECLARE r record; BEGIN FOR r IN SELECT c.relname,t.tgname FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_proc p ON p.oid=t.tgfoid WHERE c.relnamespace=current_schema()::regnamespace AND p.proname='hysteriax_serialize_writes' LOOP EXECUTE format('ALTER TABLE %I DISABLE TRIGGER %I',r.relname,r.tgname); END LOOP; END $$").execute(&state.pool).await.unwrap();
     let claimed = claim(&state.pool, "dns-owner").await;
     assert_eq!(claimed.job.id, receipt["job_id"].as_str().unwrap());
     let record: String =

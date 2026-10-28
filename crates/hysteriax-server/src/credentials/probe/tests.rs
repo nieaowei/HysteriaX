@@ -35,7 +35,6 @@ async fn fixture() -> (AppState, String, String) {
     let node = node["node"]["id"].as_str().unwrap().to_owned();
     sqlx::query("UPDATE nodes SET mtls_state='ready',mtls_error='Probe certificate renewal failed: previous failure' WHERE id=$1").bind(&node).execute(&state.pool).await.unwrap();
     sqlx::query("INSERT INTO mtls_node_trust(node_id,ca_id,ca_version,desired,deployed) VALUES($1,$2,1,true,true)").bind(&node).bind(&ca).execute(&state.pool).await.unwrap();
-    sqlx::raw_sql("DO $$ DECLARE r record; BEGIN FOR r IN SELECT c.relname,t.tgname FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_proc p ON p.oid=t.tgfoid WHERE c.relnamespace=current_schema()::regnamespace AND p.proname='hysteriax_serialize_writes' LOOP EXECUTE format('ALTER TABLE %I DISABLE TRIGGER %I',r.relname,r.tgname); END LOOP; END $$").execute(&state.pool).await.unwrap();
     (state, node, ca)
 }
 async fn count(state: &AppState, query: &str) -> i64 {

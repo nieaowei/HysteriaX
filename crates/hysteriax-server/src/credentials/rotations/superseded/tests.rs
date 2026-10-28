@@ -427,9 +427,6 @@ async fn archived_or_deleted_identity_owners_do_not_prevent_bounded_compatibilit
         .execute(&state.pool)
         .await
         .unwrap();
-    let legacy = db::hold_retired_global_write_lock(&state.pool)
-        .await
-        .unwrap();
     for expected in [100, 101] {
         let work = claim(&state, "materializer").await;
         tokio::time::timeout(std::time::Duration::from_secs(2), page(&state.pool, &work))
@@ -445,7 +442,6 @@ async fn archived_or_deleted_identity_owners_do_not_prevent_bounded_compatibilit
             expected
         );
     }
-    legacy.rollback().await.unwrap();
     assert_eq!(
         count(
             &state,

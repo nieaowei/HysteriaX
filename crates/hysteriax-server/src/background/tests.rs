@@ -25,7 +25,6 @@ async fn fixture() -> (AppState, String) {
         .unwrap();
     let state = AppState::new(pool, secrets);
     let id = node(&state).await;
-    sqlx::raw_sql("DO $$ DECLARE entry record; BEGIN FOR entry IN SELECT c.relname,tr.tgname FROM pg_trigger tr JOIN pg_class c ON c.oid=tr.tgrelid JOIN pg_proc p ON p.oid=tr.tgfoid WHERE c.relnamespace=current_schema()::regnamespace AND p.proname='hysteriax_serialize_writes' LOOP EXECUTE format('ALTER TABLE %I DISABLE TRIGGER %I',entry.relname,entry.tgname); END LOOP; END $$").execute(&state.pool).await.unwrap();
     (state, id)
 }
 async fn freeze(state: &AppState, kind: &str) -> Uuid {
@@ -113,9 +112,6 @@ async fn claims_share_node_leases_with_jobs_and_skip_unrelated_busy_nodes() {
         .unwrap()
         .unwrap();
     tx.commit().await.unwrap();
-    let legacy = db::hold_retired_global_write_lock(&state.pool)
-        .await
-        .unwrap();
     let work = claim(&state.pool, "traffic", "one").await.unwrap().unwrap();
     assert_eq!(work.node, second);
     assert!(
@@ -124,7 +120,6 @@ async fn claims_share_node_leases_with_jobs_and_skip_unrelated_busy_nodes() {
             .unwrap()
             .is_none()
     );
-    legacy.rollback().await.unwrap();
     let mut tx = state.pool.begin().await.unwrap();
     assert!(job.release(&mut tx).await.unwrap());
     tx.commit().await.unwrap();

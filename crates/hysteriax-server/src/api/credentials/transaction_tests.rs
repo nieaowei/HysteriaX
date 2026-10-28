@@ -46,9 +46,6 @@ async fn publish_once(state: &AppState, id: &str) -> Result<(StatusCode, Json<Va
     )
     .await
 }
-async fn disable_legacy_lock(state: &AppState) {
-    sqlx::raw_sql("DO $$ DECLARE entry record; BEGIN FOR entry IN SELECT c.relname,tr.tgname FROM pg_trigger tr JOIN pg_class c ON c.oid=tr.tgrelid JOIN pg_proc p ON p.oid=tr.tgfoid WHERE c.relnamespace=current_schema()::regnamespace AND p.proname='hysteriax_serialize_writes' LOOP EXECUTE format('ALTER TABLE %I DISABLE TRIGGER %I',entry.relname,entry.tgname); END LOOP; END $$").execute(&state.pool).await.unwrap();
-}
 async fn reject_audit(state: &AppState, action: &str) {
     assert!(
         action
@@ -79,12 +76,9 @@ async fn creation_audit_failure_rolls_back_both_parent_and_encrypted_version() {
     );
 }
 #[tokio::test]
-async fn concurrent_edits_commit_one_revision_without_either_old_global_lock() {
+async fn concurrent_edits_commit_one_revision() {
     let (state, id) = fixture().await;
-    disable_legacy_lock(&state).await;
-    let holder = db::hold_retired_global_write_lock(&state.pool)
-        .await
-        .unwrap();
+
     let edit = || {
         Json(PatchCredential {
             expected_revision: 1,
@@ -101,7 +95,6 @@ async fn concurrent_edits_commit_one_revision_without_either_old_global_lock() {
     })
     .await
     .unwrap();
-    holder.rollback().await.unwrap();
     let results = [a, b];
     assert_eq!(results.iter().filter(|r| r.is_ok()).count(), 1);
     assert_eq!(
@@ -219,7 +212,6 @@ async fn publication_skips_deployed_and_history_only_references_and_unrelated_no
         .await
         .unwrap();
     tx.commit().await.unwrap();
-    disable_legacy_lock(&state).await;
     let mut blocker = state.pool.begin().await.unwrap();
     sqlx::query("SELECT id FROM nodes WHERE id=$1 FOR NO KEY UPDATE")
         .bind(other)
@@ -251,7 +243,6 @@ async fn concurrent_batch_retries_enqueue_one_replacement_job() {
         .execute(&state.pool)
         .await
         .unwrap();
-    disable_legacy_lock(&state).await;
     let (a, b) = tokio::join!(
         retry(State(state.clone()), actor(), Path(batch.into())),
         retry(State(state.clone()), actor(), Path(batch.into()))

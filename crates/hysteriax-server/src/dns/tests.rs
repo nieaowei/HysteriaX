@@ -73,21 +73,6 @@ async fn fixture_from_state(state: AppState) -> (AppState, String, String, Strin
     (state, ssh, connection, "zone".into())
 }
 
-#[tokio::test]
-async fn fixture_preparation_does_not_acquire_the_retired_global_write_lock() {
-    let state = AppState::new(
-        db::test_pool_with_max_connections(4).await,
-        SecretBox::from_base64("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA").unwrap(),
-    );
-    let other = db::test_pool().await;
-    let held = db::hold_retired_global_write_lock(&other).await.unwrap();
-    let (_, _, _, zone) =
-        tokio::time::timeout(std::time::Duration::from_secs(2), fixture_from_state(state))
-            .await
-            .expect("normal fixture preparation must not depend on the retired key");
-    assert_eq!(zone, "zone");
-    held.rollback().await.unwrap();
-}
 pub(crate) fn node_request(ssh: &str, allocation: Option<Value>) -> api::nodes::CreateNode {
     serde_json::from_value(json!({"name":"DNS node","ssh_host":"127.0.0.1","ssh_port":22,"ssh_username":"root","ssh_credential_id":ssh,"ssh_credential_version":1,"public_host":"old.example.test","public_port":443,"listen_addr":":443","config":{},"dns_allocation":allocation})).unwrap()
 }

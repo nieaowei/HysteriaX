@@ -34,7 +34,6 @@ async fn fixture(cname: bool, expired: bool) -> Fixture {
     if expired {
         sqlx::query("UPDATE dns_operations SET created_at=clock_timestamp()-interval '11 minutes' WHERE id=$1").bind(&operation).execute(&state.pool).await.unwrap();
     }
-    sqlx::raw_sql("DO $$ DECLARE r record; BEGIN FOR r IN SELECT c.relname,t.tgname FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_proc p ON p.oid=t.tgfoid WHERE c.relnamespace=current_schema()::regnamespace AND p.proname='hysteriax_serialize_writes' LOOP EXECUTE format('ALTER TABLE %I DISABLE TRIGGER %I',r.relname,r.tgname); END LOOP; END $$").execute(&state.pool).await.unwrap();
     let (job, leases) = crate::jobs::claim_for_test(&state.pool, &state.instance_id)
         .await
         .unwrap();
@@ -92,13 +91,10 @@ async fn snapshot(f: &Fixture) -> Value {
 }
 
 #[tokio::test]
-async fn verified_observation_receipt_and_audit_commit_once_without_the_old_global_lock() {
+async fn verified_observation_receipt_and_audit_commit_once() {
     let f = fixture(false, false).await;
     let w = work(&f).await;
     assert_eq!(w.expected["payload"]["source_revision"], 1);
-    let legacy = db::hold_retired_global_write_lock(&f.state.pool)
-        .await
-        .unwrap();
     save(&f, &w, "verified").await.unwrap().unwrap();
     assert_eq!(count(&f,"SELECT count(*) FROM dns_records WHERE id='record' AND revision=1 AND resolution_status='verified' AND checked_at IS NOT NULL").await,1);
     assert_eq!(
@@ -124,7 +120,6 @@ async fn verified_observation_receipt_and_audit_commit_once_without_the_old_glob
         prepared(&f).await.unwrap().unwrap(),
         Prepared::Applied(_)
     ));
-    legacy.rollback().await.unwrap();
 }
 
 #[tokio::test]

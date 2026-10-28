@@ -36,9 +36,6 @@ fn upload(name: &str) -> CreateResource {
         content_base64: STANDARD.encode("direct(all)"),
     }
 }
-async fn disable_legacy_lock(pool: &PgPool) {
-    sqlx::raw_sql("DO $$ DECLARE entry record; BEGIN FOR entry IN SELECT c.relname,tr.tgname FROM pg_trigger tr JOIN pg_class c ON c.oid=tr.tgrelid JOIN pg_proc p ON p.oid=tr.tgfoid WHERE c.relnamespace=current_schema()::regnamespace AND p.proname='hysteriax_serialize_writes' LOOP EXECUTE format('ALTER TABLE %I DISABLE TRIGGER %I',entry.relname,entry.tgname); END LOOP; END $$").execute(pool).await.unwrap();
-}
 async fn pin(
     connection: &mut PgConnection,
     state: &AppState,
@@ -71,9 +68,8 @@ async fn wait_for_lock(pool: &PgPool, pid: i32) {
 }
 
 #[tokio::test]
-async fn duplicate_uploads_commit_one_resource_and_one_audit_without_global_lock() {
+async fn duplicate_uploads_commit_one_resource_and_one_audit() {
     let (state, node, _) = fixture().await;
-    disable_legacy_lock(&state.pool).await;
     let (a, b) = tokio::join!(
         create(
             State(state.clone()),
@@ -259,7 +255,6 @@ async fn wrong_node_resource_pin_rolls_back_the_source_and_existing_edges() {
 #[tokio::test]
 async fn a_committed_pin_rejects_a_concurrent_delete_at_the_native_foreign_key() {
     let (state, node, resource) = fixture().await;
-    disable_legacy_lock(&state.pool).await;
     let mut source = state.pool.begin().await.unwrap();
     pin(&mut source, &state, &node, &resource).await;
     reference_index::flush_node_on(&mut source, &state.secrets, &node)
@@ -295,7 +290,6 @@ async fn a_committed_pin_rejects_a_concurrent_delete_at_the_native_foreign_key()
 #[tokio::test]
 async fn deletion_before_a_late_pin_rejects_and_rolls_back_that_pin() {
     let (state, node, resource) = fixture().await;
-    disable_legacy_lock(&state.pool).await;
     let before: String = sqlx::query_scalar("SELECT desired_config_enc FROM nodes WHERE id=$1")
         .bind(&node)
         .fetch_one(&state.pool)

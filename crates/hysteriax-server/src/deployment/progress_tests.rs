@@ -4,7 +4,6 @@ use crate::execution;
 async fn fixture() -> PgPool {
     let pool = db::test_pool_with_max_connections(8).await;
     sqlx::query("INSERT INTO jobs(id,kind,target_revision,status,stage,attempts,available_at,created_at,updated_at) SELECT id,'sync',1,'running','starting',1,now(),now(),now() FROM unnest(ARRAY['one','two'])id").execute(&pool).await.unwrap();
-    sqlx::raw_sql("DO $$ DECLARE r record; BEGIN FOR r IN SELECT c.relname,t.tgname FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_proc p ON p.oid=t.tgfoid WHERE c.relnamespace=current_schema()::regnamespace AND p.proname='hysteriax_serialize_writes' LOOP EXECUTE format('ALTER TABLE %I DISABLE TRIGGER %I',r.relname,r.tgname); END LOOP; END $$").execute(&pool).await.unwrap();
     pool
 }
 fn job(id: &str) -> JobInput {
@@ -41,10 +40,9 @@ async fn logs(pool: &PgPool, id: &str) -> Value {
 }
 
 #[tokio::test]
-async fn leased_progress_does_not_wait_for_the_old_global_lock_or_an_unrelated_job_row() {
+async fn leased_progress_does_not_wait_for_unrelated_jobs() {
     let pool = fixture().await;
     let leases = owner(&pool, "one", "instance").await;
-    let legacy = db::hold_retired_global_write_lock(&pool).await.unwrap();
     let mut held = pool.begin().await.unwrap();
     sqlx::query("SELECT id FROM jobs WHERE id='two' FOR UPDATE")
         .fetch_one(&mut *held)
@@ -67,7 +65,6 @@ async fn leased_progress_does_not_wait_for_the_old_global_lock_or_an_unrelated_j
     assert_eq!(logs(&pool, "two").await, json!([]));
     assert_eq!(count(&pool, "SELECT count(*) FROM job_events").await, 1);
     held.rollback().await.unwrap();
-    legacy.rollback().await.unwrap();
 }
 
 #[tokio::test]

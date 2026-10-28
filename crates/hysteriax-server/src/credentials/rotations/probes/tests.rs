@@ -56,13 +56,10 @@ async fn active(state: &AppState, node: &str) -> i64 {
 }
 
 #[tokio::test]
-async fn real_probe_switch_and_completion_are_fenced_and_do_not_use_the_old_global_lock() {
+async fn real_probe_switch_and_completion_are_fenced() {
     let (state, _, r, node) = fixture().await;
     assert_eq!(active(&state, &node).await, 1);
     let w = parent(&state).await;
-    let held = db::hold_retired_global_write_lock(&state.pool)
-        .await
-        .unwrap();
     page(&state.pool, &w, "not-complete").await.unwrap();
     assert_eq!(phase(&state, &r).await, "probes");
     let child = claim(&state, CHILD, "switch").await;
@@ -81,7 +78,6 @@ async fn real_probe_switch_and_completion_are_fenced_and_do_not_use_the_old_glob
         1
     );
     assert!(page(&state.pool, &w, "duplicate-audit").await.is_err());
-    held.rollback().await.unwrap();
 }
 
 #[tokio::test]

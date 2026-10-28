@@ -29,20 +29,15 @@ fn candidate(p: Preparation) -> Candidate {
 }
 
 #[tokio::test]
-async fn preparation_has_zero_writes_while_the_old_lock_is_held_and_commits_the_exact_prepared_snapshot()
- {
+async fn preparation_has_zero_writes_and_commits_the_exact_prepared_snapshot() {
     let (state, ca, rotation, id) = fixture(false).await;
     let work = claim(&state, "owner").await;
     let before = node(&state, &id).await;
     let total = count(&state, "SELECT count(*) FROM config_versions").await;
-    let held = db::hold_retired_global_write_lock(&state.pool)
-        .await
-        .unwrap();
     let p = tokio::time::timeout(std::time::Duration::from_secs(2), prepare(&state, &work))
         .await
         .unwrap()
         .unwrap();
-    held.rollback().await.unwrap();
     assert!(node(&state, &id).await == before);
     assert_eq!(
         count(&state, "SELECT count(*) FROM config_versions").await,

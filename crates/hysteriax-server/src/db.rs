@@ -283,10 +283,7 @@ pub async fn test_pool_with_max_connections(max_connections: u32) -> PgPool {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        MIGRATOR, hold_retired_global_write_lock, serializable, test_pool,
-        test_pool_with_max_connections,
-    };
+    use super::{MIGRATOR, serializable, test_pool, test_pool_with_max_connections};
     use std::time::Duration;
 
     #[tokio::test]
@@ -462,44 +459,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn legacy_fixture_waiters_leave_connections_available_for_reads() {
-        let pool = test_pool_with_max_connections(3).await;
-        let holder = hold_retired_global_write_lock(&pool).await.unwrap();
-        let mut writers = tokio::task::JoinSet::new();
-        let barrier = std::sync::Arc::new(tokio::sync::Barrier::new(13));
-        for _ in 0..12 {
-            let pool = pool.clone();
-            let barrier = barrier.clone();
-            writers.spawn(async move {
-                barrier.wait().await;
-                hold_retired_global_write_lock(&pool)
-                    .await
-                    .unwrap()
-                    .commit()
-                    .await
-                    .unwrap();
-            });
-        }
-        barrier.wait().await;
-        tokio::time::sleep(Duration::from_millis(100)).await;
-        for _ in 0..10 {
-            let value = tokio::time::timeout(
-                Duration::from_millis(500),
-                sqlx::query_scalar::<_, i64>("SELECT 1::bigint").fetch_one(&pool),
-            )
-            .await
-            .expect("waiting writers must not starve readiness queries")
-            .unwrap();
-            assert_eq!(value, 1);
-        }
-        assert_eq!(writers.len(), 12);
-        holder.commit().await.unwrap();
-        while let Some(result) = writers.join_next().await {
-            result.unwrap();
-        }
-    }
-
-    #[tokio::test]
     async fn direct_writes_have_bounded_lock_waits() {
         let pool = test_pool_with_max_connections(2).await;
         let mut holder = pool.begin().await.unwrap();
@@ -528,49 +487,6 @@ mod tests {
                 .unwrap(),
             1
         );
-    }
-
-    #[tokio::test]
-    async fn legacy_fixture_serializes_its_own_events() {
-        let pool = test_pool_with_max_connections(2).await;
-        let timestamp = chrono::Utc::now();
-        sqlx::query("INSERT INTO jobs (id, kind, status, stage, available_at, created_at, updated_at) VALUES ('serialized-job', 'sync', 'queued', 'queued', $1, $2, $3)")
-            .bind(timestamp)
-            .bind(timestamp)
-            .bind(timestamp)
-            .execute(&pool)
-            .await
-            .unwrap();
-
-        let mut first = hold_retired_global_write_lock(&pool).await.unwrap();
-        let first_id: i64 = sqlx::query_scalar("INSERT INTO job_events (job_id, event_type, payload_json, created_at) VALUES ('serialized-job', 'first', $1, $2) RETURNING id")
-            .bind(serde_json::json!({}))
-            .bind(timestamp)
-            .fetch_one(&mut *first)
-            .await
-            .unwrap();
-
-        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
-        let worker_pool = pool.clone();
-        let second = tokio::spawn(async move {
-            let _ = started_tx.send(());
-            let mut transaction = hold_retired_global_write_lock(&worker_pool).await.unwrap();
-            let id: i64 = sqlx::query_scalar("INSERT INTO job_events (job_id, event_type, payload_json, created_at) VALUES ('serialized-job', 'second', $1, $2) RETURNING id")
-                .bind(serde_json::json!({}))
-                .bind(timestamp)
-                .fetch_one(&mut *transaction)
-                .await
-                .unwrap();
-            transaction.commit().await.unwrap();
-            id
-        });
-        let _ = started_rx.await;
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        assert!(!second.is_finished());
-
-        first.commit().await.unwrap();
-        let second_id = second.await.unwrap();
-        assert!(second_id > first_id);
     }
 }
 

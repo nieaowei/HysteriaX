@@ -1,4 +1,4 @@
-use super::transaction_tests::{connection, disable_legacy_lock, fixture, waiting};
+use super::transaction_tests::{connection, fixture, waiting};
 use super::*;
 use std::sync::{
     Arc,
@@ -65,7 +65,6 @@ async fn count(state: &AppState, sql: &str) -> i64 {
 #[tokio::test]
 async fn a_unique_key_collision_replays_after_rollback_without_rerunning_business_writes() {
     let state = zone().await;
-    disable_legacy_lock(&state).await;
     let id: String = sqlx::query_scalar("SELECT id FROM dns_connections")
         .fetch_one(&state.pool)
         .await
@@ -106,7 +105,6 @@ async fn a_unique_key_collision_replays_after_rollback_without_rerunning_busines
 #[tokio::test]
 async fn concurrent_duplicate_record_requests_share_one_record_job_and_operation() {
     let state = zone().await;
-    disable_legacy_lock(&state).await;
     let input = CreateRecord {
         zone_id: "zone".into(),
         idempotency_key: "record-key".into(),
@@ -135,7 +133,6 @@ async fn concurrent_duplicate_record_requests_share_one_record_job_and_operation
 #[tokio::test]
 async fn competing_requests_for_one_record_name_preserve_one_logical_record() {
     let state = zone().await;
-    disable_legacy_lock(&state).await;
     let first = CreateRecord {
         zone_id: "zone".into(),
         idempotency_key: "first".into(),
@@ -172,7 +169,6 @@ async fn competing_requests_for_one_record_name_preserve_one_logical_record() {
 async fn concurrent_node_creation_with_one_allocation_key_preserves_one_node_and_secret() {
     let state = zone().await;
     let request = node_request(&state, Some(allocation("create-key"))).await;
-    disable_legacy_lock(&state).await;
     // Both source transactions reach INSERT with an earlier empty operation
     // snapshot. The loser must roll back its node and recover the winner.
     sqlx::raw_sql("CREATE SEQUENCE node_arrivals; CREATE FUNCTION await_node_peer() RETURNS trigger LANGUAGE plpgsql AS $$ DECLARE arrived bigint; deadline timestamptz:=clock_timestamp()+interval '3 seconds'; BEGIN PERFORM nextval('node_arrivals'); LOOP SELECT last_value INTO arrived FROM node_arrivals; EXIT WHEN arrived>=2; IF clock_timestamp()>deadline THEN RAISE EXCEPTION 'node barrier timeout'; END IF; PERFORM pg_sleep(0.01); END LOOP; RETURN NEW; END $$; CREATE TRIGGER await_node_peer BEFORE INSERT ON nodes FOR EACH ROW EXECUTE FUNCTION await_node_peer();").execute(&state.pool).await.unwrap();
@@ -223,7 +219,6 @@ async fn concurrent_node_creation_with_one_allocation_key_preserves_one_node_and
 async fn a_binding_waiting_for_zone_disable_rolls_back_its_node_edit() {
     let state = zone().await;
     let node = plain_node(&state).await;
-    disable_legacy_lock(&state).await;
     let mut disabling = state.pool.begin().await.unwrap();
     sqlx::query("SELECT id FROM dns_zones WHERE id='zone' FOR UPDATE")
         .fetch_one(&mut *disabling)
@@ -273,7 +268,6 @@ async fn a_binding_waiting_for_zone_disable_rolls_back_its_node_edit() {
 async fn zone_disable_retries_and_sees_a_binding_committed_after_its_snapshot() {
     let state = zone().await;
     let node = plain_node(&state).await;
-    disable_legacy_lock(&state).await;
     let allocation = allocation("bind-key");
     let prepared = crate::dns::binding::prepare(&state, &node, &allocation)
         .await
@@ -394,7 +388,6 @@ async fn concurrent_bindings_of_an_existing_hostname_preserve_one_owner_and_roll
     let first = plain_node(&state).await;
     let second = plain_node(&state).await;
     sqlx::query("INSERT INTO dns_records(id,zone_id,name,record_type,content,ttl,proxied,origin,state) VALUES('existing','zone','shared.example.com','A','8.8.8.8',1,false,'external','synced')").execute(&state.pool).await.unwrap();
-    disable_legacy_lock(&state).await;
     sqlx::raw_sql("CREATE SEQUENCE binding_arrivals; CREATE FUNCTION await_binding_peer() RETURNS trigger LANGUAGE plpgsql AS $$ DECLARE arrived bigint; deadline timestamptz:=clock_timestamp()+interval '3 seconds'; BEGIN PERFORM nextval('binding_arrivals'); LOOP SELECT last_value INTO arrived FROM binding_arrivals; EXIT WHEN arrived>=2; IF clock_timestamp()>deadline THEN RAISE EXCEPTION 'binding barrier timeout'; END IF; PERFORM pg_sleep(0.01); END LOOP; RETURN NEW; END $$; CREATE TRIGGER await_binding_peer BEFORE INSERT ON dns_bindings FOR EACH ROW EXECUTE FUNCTION await_binding_peer();").execute(&state.pool).await.unwrap();
     let input = |key: &str| {
         Json(SetBinding {
@@ -459,7 +452,6 @@ async fn concurrent_bindings_of_an_existing_hostname_preserve_one_owner_and_roll
 async fn concurrent_duplicate_bindings_advance_the_node_only_once() {
     let state = zone().await;
     let node = plain_node(&state).await;
-    disable_legacy_lock(&state).await;
     let input = SetBinding {
         expected_revision: 1,
         allocation: allocation("duplicate-binding"),

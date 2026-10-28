@@ -17,7 +17,6 @@ async fn fixture(users: usize, nodes: usize) -> AppState {
         sqlx::query("INSERT INTO node_assignments(user_id,node_id,credential_hash,credential_enc,created_at) SELECT u.id,n.id,u.id||n.id,'unused',now() FROM users u CROSS JOIN nodes n WHERE n.id LIKE 'n-%'")
             .execute(&pool).await.unwrap();
     }
-    sqlx::raw_sql("DO $$ DECLARE entry record; BEGIN FOR entry IN SELECT c.relname,tr.tgname FROM pg_trigger tr JOIN pg_class c ON c.oid=tr.tgrelid JOIN pg_proc p ON p.oid=tr.tgfoid WHERE c.relnamespace=current_schema()::regnamespace AND p.proname='hysteriax_serialize_writes' LOOP EXECUTE format('ALTER TABLE %I DISABLE TRIGGER %I',entry.relname,entry.tgname); END LOOP; END $$").execute(&pool).await.unwrap();
     AppState::new(
         pool,
         SecretBox::from_base64("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA").unwrap(),
@@ -95,9 +94,6 @@ async fn due_user_scans_are_bounded_skip_locked_rows_and_do_not_duplicate_admiss
         .fetch_one(&mut *held)
         .await
         .unwrap();
-    let legacy = db::hold_retired_global_write_lock(&state.pool)
-        .await
-        .unwrap();
     for expected in [128, 256, 300] {
         let work = scan_claim(&state).await;
         scan_work(&state.pool, &work).await.unwrap();
@@ -115,7 +111,6 @@ async fn due_user_scans_are_bounded_skip_locked_rows_and_do_not_duplicate_admiss
     scan_work(&state.pool, &work).await.unwrap();
     let work = scan_claim(&state).await;
     scan_work(&state.pool, &work).await.unwrap();
-    legacy.rollback().await.unwrap();
     assert_eq!(
         count(
             &state,

@@ -1,9 +1,6 @@
 use super::*;
 use crate::background::maintenance;
 
-async fn unlock(state: &AppState) {
-    sqlx::raw_sql("DO $$ DECLARE r record; BEGIN FOR r IN SELECT c.relname,t.tgname FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_proc p ON p.oid=t.tgfoid WHERE c.relnamespace=current_schema()::regnamespace AND p.proname='hysteriax_serialize_writes' LOOP EXECUTE format('ALTER TABLE %I DISABLE TRIGGER %I',r.relname,r.tgname); END LOOP; END $$").execute(&state.pool).await.unwrap();
-}
 async fn count(state: &AppState, query: &str) -> i64 {
     sqlx::query_scalar(sqlx::AssertSqlSafe(query))
         .fetch_one(&state.pool)
@@ -67,12 +64,9 @@ async fn commit_work(
 }
 
 #[tokio::test]
-async fn preparation_has_no_writes_and_does_not_wait_for_the_old_global_lock() {
+async fn preparation_has_no_writes() {
     let state = state().await;
     let ca = generated(&state).await;
-    let legacy = db::hold_retired_global_write_lock(&state.pool)
-        .await
-        .unwrap();
     let p = tokio::time::timeout(
         std::time::Duration::from_secs(5),
         prepare(&state, &ca, "prepare-only"),
@@ -103,7 +97,6 @@ async fn preparation_has_no_writes_and_does_not_wait_for_the_old_global_lock() {
         .await,
         0
     );
-    legacy.rollback().await.unwrap();
 }
 
 #[tokio::test]
@@ -111,7 +104,6 @@ async fn native_retry_preserves_the_exact_prepared_cipher_batch_and_rotation_ide
     let state = state().await;
     let ca = generated(&state).await;
     let _ = node_flow::managed_node(&state, &ca).await;
-    unlock(&state).await;
     let p = prepare(&state, &ca, "retry-prepared").await;
     let m = p.material.as_ref().unwrap().clone();
     sqlx::raw_sql("CREATE SEQUENCE prepared_publication_attempts; CREATE FUNCTION retry_prepared_publication() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.action='ca.version_prepared' AND nextval('prepared_publication_attempts')=1 THEN RAISE EXCEPTION USING ERRCODE='40001',MESSAGE='native conflict'; END IF; RETURN NEW; END $$; CREATE TRIGGER retry_prepared_publication BEFORE INSERT ON audit_records FOR EACH ROW EXECUTE FUNCTION retry_prepared_publication();").execute(&state.pool).await.unwrap();
@@ -156,7 +148,6 @@ async fn native_retry_preserves_the_exact_prepared_cipher_batch_and_rotation_ide
 async fn publication_and_receipt_roll_back_with_work_confirmation_then_commit_together() {
     let state = state().await;
     let ca = generated(&state).await;
-    unlock(&state).await;
     let p = prepare(&state, &ca, "atomic-ack").await;
     let m = p.material.as_ref().unwrap().clone();
     let work = work(&state, &ca, "owner").await;
@@ -228,7 +219,6 @@ async fn publication_and_receipt_roll_back_with_work_confirmation_then_commit_to
 async fn same_key_prepared_racers_publish_one_winning_material_and_replay_one_receipt() {
     let state = state().await;
     let ca = generated(&state).await;
-    unlock(&state).await;
     let (a, b) = tokio::join!(
         prepare(&state, &ca, "same-prepared"),
         prepare(&state, &ca, "same-prepared")
@@ -279,7 +269,6 @@ async fn same_key_prepared_racers_publish_one_winning_material_and_replay_one_re
 async fn replaced_execution_and_expired_material_cannot_publish() {
     let state = state().await;
     let ca = generated(&state).await;
-    unlock(&state).await;
     let p = prepare(&state, &ca, "old-owner").await;
     let old = work(&state, &ca, "old").await;
     sqlx::query("UPDATE resource_leases SET expires_at=clock_timestamp()-interval '1 second' WHERE work_id=$1").bind(&old.id).execute(&state.pool).await.unwrap();
@@ -314,7 +303,6 @@ async fn replaced_execution_and_expired_material_cannot_publish() {
 async fn replay_needs_no_new_material_and_keeps_the_original_receipt_after_the_ca_changes() {
     let state = state().await;
     let ca = generated(&state).await;
-    unlock(&state).await;
     let p = prepare(&state, &ca, "replay-prepared").await;
     let result = commit(&state, p).await.unwrap();
     sqlx::query("UPDATE credentials SET archived=true WHERE id=$1")

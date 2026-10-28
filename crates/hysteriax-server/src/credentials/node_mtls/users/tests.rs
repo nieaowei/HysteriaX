@@ -16,7 +16,6 @@ async fn fixture() -> Fixture {
         .await
         .unwrap();
     tx.commit().await.unwrap();
-    sqlx::raw_sql("DO $$ DECLARE r record; BEGIN FOR r IN SELECT c.relname,t.tgname FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_proc p ON p.oid=t.tgfoid WHERE c.relnamespace=current_schema()::regnamespace AND p.proname='hysteriax_serialize_writes' LOOP EXECUTE format('ALTER TABLE %I DISABLE TRIGGER %I',r.relname,r.tgname); END LOOP; END $$").execute(&state.pool).await.unwrap();
     let (job, leases) = crate::jobs::claim_for_test(&state.pool, &state.instance_id)
         .await
         .unwrap();
@@ -70,16 +69,12 @@ async fn snapshot(f: &Fixture) -> Value {
 }
 
 #[tokio::test]
-async fn preparation_and_final_source_check_do_not_wait_for_the_old_global_lock() {
+async fn preparation_and_final_source_check_preserve_sources() {
     let f = fixture().await;
-    let legacy = db::hold_retired_global_write_lock(&f.state.pool)
-        .await
-        .unwrap();
     let before = snapshot(&f).await;
     let s = source(&f).await;
     save(&f, &s).await.unwrap();
     assert_eq!(snapshot(&f).await, before);
-    legacy.rollback().await.unwrap();
 }
 
 #[tokio::test]
@@ -211,11 +206,7 @@ async fn signed_candidates_roll_back_together_and_native_retry_reuses_the_prepar
     assert_eq!(snapshot(&f).await, before);
     sqlx::raw_sql("DROP TRIGGER reject_deployment_identity ON credentials; ALTER SEQUENCE deployment_identity_attempt RESTART WITH 1; CREATE FUNCTION retry_deployment_identity() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.owner_user_id IS NOT NULL AND nextval('deployment_identity_attempt')=2 THEN RAISE EXCEPTION 'retry' USING ERRCODE='40001'; END IF; RETURN NEW; END $$; CREATE TRIGGER retry_deployment_identity BEFORE INSERT ON credentials FOR EACH ROW EXECUTE FUNCTION retry_deployment_identity()")
         .execute(&f.state.pool).await.unwrap();
-    let legacy = db::hold_retired_global_write_lock(&f.state.pool)
-        .await
-        .unwrap();
     save_candidates(&f, &s, candidates).await.unwrap();
-    legacy.rollback().await.unwrap();
     assert_eq!(
         sqlx::query_scalar::<_, i64>("SELECT last_value FROM deployment_identity_attempt")
             .fetch_one(&f.state.pool)
