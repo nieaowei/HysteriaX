@@ -12,6 +12,7 @@ WORKDIR /src
 COPY Cargo.toml Cargo.lock* ./
 COPY crates/hysteriax-template-validator crates/hysteriax-template-validator
 COPY crates/hysteriax-server/Cargo.toml crates/hysteriax-server/Cargo.toml
+COPY crates/hysteriax-server/build.rs crates/hysteriax-server/build.rs
 COPY crates/hysteriax-server/migrations crates/hysteriax-server/migrations
 COPY crates/hysteriax-server/src crates/hysteriax-server/src
 COPY openapi/openapi.yaml openapi/openapi.yaml

@@ -124,7 +124,7 @@ async fn billing_commands_are_bounded_for_small_large_and_restricted_pages() {
     for (id, users, tx) in [
         ("small", 100, 10),
         ("large", 500, 20),
-        ("restricted", 500, 30),
+        ("restricted", 500, 10),
     ] {
         if id == "restricted" {
             sqlx::query("UPDATE users SET quota_bytes=25")
@@ -132,7 +132,13 @@ async fn billing_commands_are_bounded_for_small_large_and_restricted_pages() {
                 .await
                 .unwrap();
         }
-        capture(&pool, id, "a", &counters(users, tx, 0)).await;
+        let mut intervals = counters(users, tx, 0);
+        if id == "large" {
+            for n in 1..=100 {
+                intervals.insert(format!("user-{n:04}"), json!({"tx":10,"rx":0}));
+            }
+        }
+        capture(&pool, id, "a", &intervals).await;
         let (progress, _, commands) = relay.measure(id).await;
         assert_eq!(
             progress,
@@ -167,11 +173,11 @@ async fn billing_commands_are_bounded_for_small_large_and_restricted_pages() {
 }
 
 #[tokio::test]
-async fn mixed_page_preserves_counter_rules_membership_and_first_gap() {
+async fn mixed_page_preserves_interval_bytes_membership_and_restart_gap() {
     let pool = fixture(8).await;
     capture(&pool, "initial", "a", &counters(8, 100, 50)).await;
     batches::drain(&pool, "initial").await.unwrap();
-    sqlx::raw_sql("UPDATE users SET quota_bytes=200 WHERE id='user-0001'; UPDATE users SET enabled=false WHERE id='user-0002'; UPDATE users SET expires_at=clock_timestamp()-interval '1 second' WHERE id='user-0003'; UPDATE users SET quota_bytes=100 WHERE id='user-0004'; UPDATE users SET usage_bytes=9223372036854775800 WHERE id='user-0005'; UPDATE traffic_baselines SET instance_id='previous-instance' WHERE node_id='a' AND user_id='user-0002'; DELETE FROM node_assignments WHERE node_id='a' AND user_id='user-0007'")
+    sqlx::raw_sql("UPDATE users SET quota_bytes=200 WHERE id='user-0001'; UPDATE users SET enabled=false WHERE id='user-0002'; UPDATE users SET expires_at=clock_timestamp()-interval '1 second' WHERE id='user-0003'; UPDATE users SET quota_bytes=100 WHERE id='user-0004'; UPDATE users SET usage_bytes=9223372036854775800 WHERE id='user-0005'; UPDATE traffic_sample_batches SET instance_id='previous-instance' WHERE sample_id='initial'; DELETE FROM node_assignments WHERE node_id='a' AND user_id='user-0007'")
         .execute(&pool).await.unwrap();
     crate::db::write(&pool, |tx| {
         Box::pin(async move { super::super::access::admit_on(tx, "user-0004").await })
@@ -188,7 +194,7 @@ async fn mixed_page_preserves_counter_rules_membership_and_first_gap() {
     batches::drain(&pool, "mixed").await.unwrap();
     assert_eq!(
         usage(&pool).await,
-        vec![300, 320, 300, 300, i64::MAX, 150, 150, 150]
+        vec![450, 320, 450, 450, i64::MAX, 280, 150, 150]
     );
     let rows:Vec<(String,i64,i64,Option<String>)>=sqlx::query_as("SELECT user_id,delta_tx,delta_rx,gap_reason FROM traffic_records WHERE sample_id='mixed' ORDER BY user_id")
         .fetch_all(&pool).await.unwrap();
@@ -206,9 +212,9 @@ async fn mixed_page_preserves_counter_rules_membership_and_first_gap() {
         rows[5],
         (
             "user-0006".into(),
-            0,
-            0,
-            Some("counter_decreased_without_instance_change".into())
+            90,
+            40,
+            Some("node_restarted_between_samples".into())
         )
     );
     let gap: String = sqlx::query_scalar("SELECT reason FROM data_gaps WHERE node_id='a'")
@@ -218,7 +224,7 @@ async fn mixed_page_preserves_counter_rules_membership_and_first_gap() {
     assert_eq!(gap, "node_restarted_between_samples");
     let counts:(i64,i64)=sqlx::query_as("SELECT (SELECT count(*) FROM background_work WHERE kind='access-revocation'),(SELECT processed_count FROM traffic_sample_batches WHERE sample_id='mixed')")
         .fetch_one(&pool).await.unwrap();
-    assert_eq!(counts, (4, 8));
+    assert_eq!(counts, (4, 7));
     // Clearing and readmitting an existing restriction must use the new epoch,
     // not the generation visible before the marker's AFTER trigger ran.
     sqlx::query("UPDATE users SET access_kick_enqueued_at=NULL WHERE id='user-0004'")

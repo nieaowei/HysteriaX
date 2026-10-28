@@ -30,9 +30,9 @@ async fn disable_old_sql_lock(pool: &PgPool) {
     sqlx::raw_sql("DO $$ DECLARE entry record; BEGIN FOR entry IN SELECT c.relname,tr.tgname FROM pg_trigger tr JOIN pg_class c ON c.oid=tr.tgrelid JOIN pg_proc p ON p.oid=tr.tgfoid WHERE c.relnamespace=current_schema()::regnamespace AND p.proname='hysteriax_serialize_writes' LOOP EXECUTE format('ALTER TABLE %I DISABLE TRIGGER %I',entry.relname,entry.tgname); END LOOP; END $$").execute(pool).await.unwrap();
 }
 #[tokio::test]
-async fn maintenance_upgrade_preserves_partial_captures_and_recovers_original_ids_without_remote_reads()
+async fn maintenance_adoption_preserves_partial_intervals_and_recovers_original_ids_without_remote_reads()
  {
-    let state = fixture(501, 51).await;
+    let state = fixture(501, i64::MAX).await;
     capture(&state, "old-a", "a", 501, 5).await;
     capture(&state, "old-b", "b", 501, 2).await;
     assert!(matches!(

@@ -80,6 +80,7 @@ pub async fn record_online_on(
     Ok(())
 }
 
+#[cfg(test)]
 pub async fn finish_traffic_sample(pool: &PgPool, node: &str, cycle: Uuid, status: &str) {
     let (owned, status) = (node.to_owned(), status.to_owned());
     let result=crate::db::write::<_,anyhow::Error,_>(pool,move |tx| {

@@ -419,7 +419,7 @@ async fn upgrade_requeues_clean_sources_and_preserves_original_resource_and_conf
         .await
         .unwrap();
     tx.commit().await.unwrap();
-    let snapshot = "SELECT jsonb_build_object('nodes',(SELECT jsonb_agg(to_jsonb(n) ORDER BY id) FROM nodes n),'history',(SELECT jsonb_agg(to_jsonb(v) ORDER BY id) FROM config_versions v),'resources',(SELECT jsonb_agg(to_jsonb(r) ORDER BY id) FROM config_resources r))";
+    let snapshot = "SELECT jsonb_build_object('nodes',(SELECT jsonb_agg(to_jsonb(n)-'traffic_capture_mode' ORDER BY id) FROM nodes n),'history',(SELECT jsonb_agg(to_jsonb(v) ORDER BY id) FROM config_versions v),'resources',(SELECT jsonb_agg(to_jsonb(r) ORDER BY id) FROM config_resources r))";
     let before: Value = sqlx::query_scalar(snapshot).fetch_one(&pool).await.unwrap();
     db::run_migrations(&pool).await.unwrap();
     assert_eq!(

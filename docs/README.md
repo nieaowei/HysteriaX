@@ -18,6 +18,7 @@
 | 文档 | 内容 |
 | --- | --- |
 | [架构](architecture.md) | 维护入口、事务、租约、缓存和事件协议。 |
+| [数据库表用途](database-tables.md) | 全部数据库表、视图、关键关联、数据来源及维护边界。 |
 | [凭据](credentials.md) · [托管 mTLS](managed-mtls.md) | 凭据版本、CA 轮换和身份迁移。 |
 | [授权组](authorization-groups.md) · [节点套餐](node-packages.md) | 用户授权及整机配额。 |
 | [订阅](subscriptions.md) · [字段覆盖](field-coverage.md) | 模板发布、平台选择及配置支持。 |

@@ -45,10 +45,13 @@ def wait_for(predicate, label, timeout=210):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--restart-only", action="store_true")
+    parser.add_argument("--server-image", help="test a locally built server image instead of the host debug binary")
     parser.add_argument("--keep-on-failure", action="store_true", help="keep the disposable lab alive until interrupted for diagnosis")
     args = parser.parse_args()
-    subprocess.run(["cargo", "build", "-p", "hysteriax-server"], cwd=ROOT, check=True)
+    if not args.server_image:
+        subprocess.run(["cargo", "build", "-p", "hysteriax-server"], cwd=ROOT, check=True)
     container = "hysteriax-overview-" + uuid.uuid4().hex[:10]
+    api_container = container + "-api"
     service = client = target = None
     class Target(http.server.BaseHTTPRequestHandler):
         healthy = True
@@ -77,8 +80,16 @@ def main():
             admin = secrets.token_urlsafe(48)
             base = f"http://127.0.0.1:{api_port}"
             environment = os.environ | {"DATABASE_URL": database.url, "HYSTERIAX_LISTEN_ADDR": f"0.0.0.0:{api_port}", "HYSTERIAX_PUBLIC_URL": f"http://{callback}:{api_port}", "HYSTERIAX_ADMIN_TOKEN": admin, "HYSTERIAX_MASTER_KEY": base64.b64encode(secrets.token_bytes(32)).decode().rstrip("="), "HYSTERIAX_PROBE_BINARY": str(binary), "RUST_LOG": "warn"}
+            node_host = "127.0.0.1"
+            command = [str(ROOT / "target/debug/hysteriax-server")]
+            if args.server_image:
+                environment["DATABASE_URL"] = database.url.replace("127.0.0.1", "host.docker.internal")
+                environment["HYSTERIAX_PROBE_BINARY"] = "/usr/local/bin/hysteria"
+                node_host = "host.docker.internal"
+                env_keys = ["DATABASE_URL", "HYSTERIAX_LISTEN_ADDR", "HYSTERIAX_PUBLIC_URL", "HYSTERIAX_ADMIN_TOKEN", "HYSTERIAX_MASTER_KEY", "HYSTERIAX_PROBE_BINARY", "RUST_LOG"]
+                command = ["docker", "run", "--rm", "--name", api_container, "-p", f"127.0.0.1:{api_port}:{api_port}"] + [part for key in env_keys for part in ("-e", key)] + [args.server_image]
             with open(temp / "server.log", "wb") as log:
-                service = start_test_server([str(ROOT / "target/debug/hysteriax-server")], env=environment, stdout=log, stderr=log)
+                service = start_test_server(command, env=environment, stdout=log, stderr=log)
                 def api(path, method="GET", payload=None, expected=(200, 201, 202)):
                     status, body = matrix.request(base, path, admin, method, payload)
                     if status not in expected:
@@ -86,7 +97,7 @@ def main():
                     return json.loads(body) if body else None
                 wait_for(lambda: matrix.request(base, "/readyz")[0] == 200, "service readiness", 30)
                 assert matrix.request(base, "/api/v2/overview")[0] == 401
-                created = api("/api/v2/nodes", "POST", {"name": "Overview live node", "ssh_host": "127.0.0.1", "ssh_port": ssh_port, "ssh_username": "root", "ssh_auth_type": "private_key", "ssh_secret": key.read_text(), "public_host": "127.0.0.1", "public_port": udp_port, "listen_addr": ":443", "tls_skip_verify": True, "proxy_probe_url": "" if args.restart_only else target_url})
+                created = api("/api/v2/nodes", "POST", {"name": "Overview live node", "ssh_host": node_host, "ssh_port": ssh_port, "ssh_username": "root", "ssh_auth_type": "private_key", "ssh_secret": key.read_text(), "public_host": node_host, "public_port": udp_port, "listen_addr": ":443", "tls_skip_verify": True, "proxy_probe_url": "" if args.restart_only else target_url})
                 node = created["node"]["id"]
                 path = f"/api/v2/nodes/{node}"
                 def detail(): return api(path)
@@ -120,7 +131,12 @@ def main():
                     wait_for(lambda: api("/api/v2/overview")["online_users"] == 1, "real user online count", 45)
                     matrix.run(["curl", "--noproxy", "", "--fail", "--silent", "--socks5-hostname", f"127.0.0.1:{client_port}", target_url])
                     assert api("/api/v2/overview")["connections"] == 1
-                    wait_for(lambda: api(f"/api/v2/users/{user}")["usage_bytes"] > 0, "real user traffic accounting", 45)
+                    first_usage = wait_for(lambda: api(f"/api/v2/users/{user}")["usage_bytes"], "real user traffic accounting", 45)
+                    # Keep the same Hysteria client running across at least one
+                    # clear and prove subsequent traffic is still metered.
+                    matrix.run(["curl", "--noproxy", "", "--fail", "--silent", "--socks5-hostname", f"127.0.0.1:{client_port}", target_url])
+                    wait_for(lambda: api(f"/api/v2/users/{user}")["usage_bytes"] > first_usage, "continued connection traffic accounting", 45)
+                    assert api("/api/v2/overview")["connections"] == 1
                     if not args.restart_only:
                         Target.healthy = False
                         failed = wait_for(lambda: (v if (v := monitor())["probe_status"] == "failed" else None), "three failed external probes", 210)
@@ -152,6 +168,10 @@ def main():
                     matrix.run(["docker", "restart", container])
                     matrix.wait_for_systemd(container)
                     wait_for(lambda: monitor()["probe_status"] == "healthy", "entrypoint recovery", 160)
+                    def restart_gap():
+                        with database.connect() as connection:
+                            return connection.execute("SELECT count(*) FROM data_gaps WHERE node_id=%s AND reason='node_restarted_between_samples'", (node,)).fetchone()[0]
+                    wait_for(restart_gap, "interval restart gap", 60)
                     print("Actual proxy shutdown and two-sample recovery passed", flush=True)
         except Exception as failure:
             print("Verification failure: " + type(failure).__name__ + ": " + str(failure)[:240], flush=True)
@@ -180,6 +200,7 @@ def main():
                     try: process.wait(timeout=5)
                     except subprocess.TimeoutExpired: process.kill(); process.wait()
             if target: target.shutdown()
+            if args.server_image: matrix.run(["docker", "rm", "-f", api_container], check=False)
             matrix.run(["docker", "rm", "-f", container], check=False)
 
 

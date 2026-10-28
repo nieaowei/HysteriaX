@@ -18,44 +18,8 @@ pub(crate) mod access;
 #[cfg(test)]
 mod batch_tests;
 pub(crate) mod batches;
+pub(crate) mod clear;
 pub mod work;
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct CounterDelta {
-    pub tx: u64,
-    pub rx: u64,
-    pub gap_reason: Option<&'static str>,
-}
-
-pub fn counter_delta(
-    previous: Option<(&str, u64, u64)>,
-    current_instance: &str,
-    current_tx: u64,
-    current_rx: u64,
-) -> CounterDelta {
-    match previous {
-        None => CounterDelta {
-            tx: current_tx,
-            rx: current_rx,
-            gap_reason: None,
-        },
-        Some((instance, _, _)) if instance != current_instance => CounterDelta {
-            tx: current_tx,
-            rx: current_rx,
-            gap_reason: Some("node_restarted_between_samples"),
-        },
-        Some((_, old_tx, old_rx)) if current_tx < old_tx || current_rx < old_rx => CounterDelta {
-            tx: 0,
-            rx: 0,
-            gap_reason: Some("counter_decreased_without_instance_change"),
-        },
-        Some((_, old_tx, old_rx)) => CounterDelta {
-            tx: current_tx - old_tx,
-            rx: current_rx - old_rx,
-            gap_reason: None,
-        },
-    }
-}
 
 pub async fn run(state: AppState) {
     // Pure DB maintenance keeps ticking independently of remote collection.
@@ -153,21 +117,23 @@ pub(crate) async fn sample_work(state: &AppState, work: &crate::background::Work
         batches::drain(&state.pool, &work.id).await?;
         return Ok(());
     }
+    let requested: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM traffic_sample_batches WHERE sample_id=$1 AND clear_requested_at IS NOT NULL AND payload_digest IS NULL AND state='capturing')")
+        .bind(&work.id).fetch_one(&state.pool).await?;
+    if requested {
+        clear::uncertain(&state.pool, work).await?;
+        bail!("traffic clear response was not persisted");
+    }
+    if !crate::runtime_config::traffic_capture_enabled() {
+        return Ok(());
+    }
     crate::background::admit_read(&state.pool, work).await?;
-    let result = tokio::time::timeout(
-        Duration::from_secs(crate::runtime_config::operation_timeout_seconds(45)),
-        sample_node(
-            &state.pool,
-            &state.secrets,
-            &work.node,
-            work.cycle,
-            work.period_start,
-            work.expected,
-        ),
-    )
-    .await
-    .unwrap_or_else(|_| Err(anyhow::anyhow!("traffic sample timed out")));
-    if let Err(error) = &result {
+    // Individual SSH and HTTP operations have bounded budgets. Do not wrap
+    // the whole function in a timeout that could discard a received response
+    // while its database transaction is retrying.
+    let result = sample_node(&state.pool, &state.secrets, work).await;
+    if let Err(error) = &result
+        && !clear::uncertain(&state.pool, work).await?
+    {
         record_failed_sample(
             &state.pool,
             &work.node,
@@ -248,13 +214,14 @@ where
 async fn sample_node(
     pool: &PgPool,
     secrets: &SecretBox,
-    node_id: &str,
-    cycle: Uuid,
-    cycle_started: chrono::DateTime<chrono::Utc>,
-    expected_nodes: i64,
+    work: &crate::background::Work,
 ) -> Result<()> {
+    let node_id = &work.node;
+    let cycle = work.cycle;
+    let cycle_started = work.period_start;
+    let expected_nodes = work.expected;
     let sample_id = format!("{cycle}:{node_id}");
-    let state = batches::reserve(pool, &sample_id, node_id, Some(cycle)).await?;
+    let state = batches::reserve_work(pool, work).await?;
     if state != "capturing" {
         batches::drain(pool, &sample_id).await?;
         return Ok(());
@@ -304,23 +271,53 @@ async fn sample_node(
     {
         tracing::warn!(node_id, %error, "online sample could not be saved");
     }
+    match clear::prepare(pool, work).await? {
+        clear::Admission::Send => {}
+        clear::Admission::AlreadyRequested => bail!("traffic clear response was not persisted"),
+        clear::Admission::Captured => {
+            batches::drain(pool, &sample_id).await?;
+            return Ok(());
+        }
+    };
     let body = session
-        .loopback_http_get(u32::from(traffic_stats_port), "/traffic", &stats_secret)
+        .loopback_traffic_clear(u32::from(traffic_stats_port), &stats_secret)
         .await?;
-    let traffic: Value =
-        serde_json::from_slice(&body).context("Hysteria traffic API returned invalid JSON")?;
-    let after_instance = systemd_instance(&session).await?;
-    if before_instance != after_instance {
-        batches::discard_capture(pool, &sample_id).await?;
-        record_gap(pool, node_id, "hysteria_restarted_during_sample").await?;
-        crate::overview::finish_traffic_sample(pool, node_id, cycle, "failed").await;
-        return Ok(());
-    }
-    let counters = traffic
-        .as_object()
-        .context("Hysteria traffic API returned an invalid response shape")?;
-    batches::seal(pool, &sample_id, &before_instance, counters).await?;
+    let counters = parse_response(&body)?;
+    capture_clear_response(
+        pool,
+        work,
+        &before_instance,
+        &counters,
+        &body,
+        systemd_instance(&session),
+    )
+    .await?;
     batches::drain(pool, &sample_id).await?;
+    Ok(())
+}
+
+async fn capture_clear_response(
+    pool: &PgPool,
+    work: &crate::background::Work,
+    before_instance: &str,
+    counters: &Map<String, Value>,
+    body: &[u8],
+    observe_instance: impl std::future::Future<Output = Result<String>>,
+) -> Result<()> {
+    // The response is already destructive. Make the counters recoverable before
+    // polling another network operation, including across a process crash.
+    batches::seal_clear(pool, work, before_instance, counters, body, false).await?;
+    match observe_instance.await {
+        Ok(after_instance) if after_instance == before_instance => {
+            batches::seal_clear(pool, work, before_instance, counters, body, true).await?;
+        }
+        Ok(_) => {
+            tracing::warn!(node_id=%work.node, "hysteria restarted during clear request; captured counters retained")
+        }
+        Err(error) => {
+            tracing::warn!(node_id=%work.node, %error, "clear instance verification failed; captured counters retained")
+        }
+    }
     Ok(())
 }
 
@@ -359,6 +356,57 @@ async fn apply_sample(
     Ok(())
 }
 
+fn parse_response(body: &[u8]) -> Result<Map<String, Value>> {
+    use serde::de::{Deserialize, Deserializer, MapAccess, Visitor};
+    #[derive(serde::Deserialize)]
+    struct Counter {
+        tx: u64,
+        rx: u64,
+    }
+    struct Response(Map<String, Value>);
+    impl<'de> Deserialize<'de> for Response {
+        fn deserialize<D: Deserializer<'de>>(
+            deserializer: D,
+        ) -> std::result::Result<Self, D::Error> {
+            struct ResponseVisitor;
+            impl<'de> Visitor<'de> for ResponseVisitor {
+                type Value = Response;
+                fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                    f.write_str("a map of unique identities to traffic counters")
+                }
+                fn visit_map<A: MapAccess<'de>>(
+                    self,
+                    mut input: A,
+                ) -> std::result::Result<Response, A::Error> {
+                    let mut counters = Map::new();
+                    while let Some((id, counter)) = input.next_entry::<String, Counter>()? {
+                        if counter.tx > i64::MAX as u64 || counter.rx > i64::MAX as u64 {
+                            return Err(serde::de::Error::custom(
+                                "traffic counter exceeds supported range",
+                            ));
+                        }
+                        if counters
+                            .insert(id, serde_json::json!({"tx":counter.tx,"rx":counter.rx}))
+                            .is_some()
+                        {
+                            return Err(serde::de::Error::custom("duplicate traffic identity"));
+                        }
+                    }
+                    Ok(Response(counters))
+                }
+            }
+            deserializer.deserialize_map(ResponseVisitor)
+        }
+    }
+    let mut decoder = serde_json::Deserializer::from_slice(body);
+    let response = Response::deserialize(&mut decoder)
+        .context("Hysteria traffic API returned invalid counters")?;
+    decoder
+        .end()
+        .context("Hysteria traffic API returned trailing data")?;
+    Ok(response.0)
+}
+
 fn parse_counters(counters: &Map<String, Value>) -> Result<Vec<(String, u64, u64)>> {
     counters
         .iter()
@@ -382,6 +430,7 @@ fn parse_counters(counters: &Map<String, Value>) -> Result<Vec<(String, u64, u64
         .collect()
 }
 
+#[cfg(test)]
 async fn record_gap(pool: &PgPool, node_id: &str, reason: &str) -> Result<()> {
     let (node, reason) = (node_id.to_owned(), reason.to_owned());
     db::write(pool,move |tx| {
@@ -439,7 +488,20 @@ mod tests {
     use serde_json::{Map, Value, json};
     use sqlx::PgPool;
 
-    use super::{apply_sample, counter_delta, record_gap};
+    use super::{apply_sample, record_gap};
+
+    #[test]
+    fn raw_response_rejects_duplicate_or_invalid_filtered_counters() {
+        assert!(super::parse_response(br#"{"u":{"tx":2,"rx":3}}"#).is_ok());
+        for body in [
+            &br#"{"probe":{"tx":"bad","rx":0},"probe":{"tx":1,"rx":0}}"#[..],
+            br#"{"probe":{"tx":1,"tx":2,"rx":0}}"#,
+            br#"{"u":{"tx":9223372036854775808,"rx":0}}"#,
+            br#"{"u":{"tx":1,"rx":0}} trailing"#,
+        ] {
+            assert!(super::parse_response(body).is_err());
+        }
+    }
 
     async fn sample_pool(user_id: &str) -> PgPool {
         let pool = crate::db::test_pool().await;
@@ -533,33 +595,6 @@ mod tests {
         assert_eq!(completed.load(Ordering::SeqCst), 12);
     }
 
-    #[test]
-    fn repeated_samples_add_only_new_counter_bytes() {
-        assert_eq!(counter_delta(Some(("a", 100, 200)), "a", 140, 260).tx, 40);
-        assert_eq!(counter_delta(Some(("a", 100, 200)), "a", 140, 260).rx, 60);
-    }
-
-    #[test]
-    fn a_restart_starts_a_new_counter_baseline_and_records_a_gap() {
-        let delta = counter_delta(
-            Some(("old-instance", 10_000, 20_000)),
-            "new-instance",
-            120,
-            250,
-        );
-        assert_eq!(delta.tx, 120);
-        assert_eq!(delta.rx, 250);
-        assert_eq!(delta.gap_reason, Some("node_restarted_between_samples"));
-    }
-
-    #[test]
-    fn a_decreasing_counter_never_creates_negative_usage() {
-        let delta = counter_delta(Some(("instance", 1_000, 2_000)), "instance", 10, 25);
-        assert_eq!(delta.tx, 0);
-        assert_eq!(delta.rx, 0);
-        assert!(delta.gap_reason.is_some());
-    }
-
     #[tokio::test]
     async fn malformed_sample_is_rejected_before_any_user_is_charged() {
         let pool = sample_pool("user-a").await;
@@ -624,7 +659,7 @@ mod tests {
             &pool,
             "node-one",
             "instance-one",
-            &counters("late-user", 140, 130),
+            &counters("late-user", 40, 30),
         )
         .await
         .unwrap();
@@ -694,7 +729,7 @@ mod tests {
             &pool,
             "node-one",
             "instance-one",
-            &counters(user_id, 120, 60),
+            &counters(user_id, 20, 10),
         )
         .await
         .unwrap();
@@ -702,7 +737,7 @@ mod tests {
             &pool,
             "node-two",
             "instance-two",
-            &counters(user_id, 250, 90),
+            &counters(user_id, 50, 15),
         )
         .await
         .unwrap();
@@ -725,14 +760,9 @@ mod tests {
             2
         );
 
-        apply_sample(
-            &pool,
-            "node-one",
-            "instance-one",
-            &counters(user_id, 120, 60),
-        )
-        .await
-        .unwrap();
+        apply_sample(&pool, "node-one", "instance-one", &counters(user_id, 0, 0))
+            .await
+            .unwrap();
         assert_eq!(
             sqlx::query_scalar::<_, i64>("SELECT usage_bytes FROM users WHERE id = $1")
                 .bind(user_id)

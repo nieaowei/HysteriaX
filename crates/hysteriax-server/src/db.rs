@@ -219,7 +219,10 @@ async fn migrate_with(pool: &PgPool, migrator: &Migrator) -> Result<()> {
     let result = migrator.run(&mut *connection).await;
     let restored = sqlx::query("SELECT set_config('lock_timeout',$1,false),set_config('statement_timeout',$2,false),set_config('idle_in_transaction_session_timeout',$3,false)")
         .bind(previous.0).bind(previous.1).bind(previous.2).execute(&mut *connection).await;
-    if restored.is_err() {
+    // SQLx returns early on a failed migration without releasing its session
+    // advisory lock. Never return that locked connection to the pool: a later
+    // attempt may acquire another connection and wait on its own idle session.
+    if result.is_err() || restored.is_err() {
         connection.close().await?;
     }
     result.context("run PostgreSQL migrations")?;
@@ -277,6 +280,15 @@ pub async fn test_pool_through_version(max_connections: u32, through_version: i6
         .connect(&database_url)
         .await
         .expect("connect to isolated PostgreSQL test schema");
+    run_migrations_through(&pool, through_version)
+        .await
+        .expect("run PostgreSQL migrations in isolated test schema");
+    pool
+}
+
+/// Build historical fixtures using their own schema before exercising an upgrade.
+#[cfg(test)]
+pub async fn run_migrations_through(pool: &PgPool, through_version: i64) -> Result<()> {
     let migrator = Migrator {
         migrations: MIGRATOR
             .iter()
@@ -289,10 +301,7 @@ pub async fn test_pool_through_version(max_connections: u32, through_version: i6
         no_tx: false,
         ..Migrator::DEFAULT
     };
-    migrate_with(&pool, &migrator)
-        .await
-        .expect("run PostgreSQL migrations in isolated test schema");
-    pool
+    migrate_with(pool, &migrator).await
 }
 
 #[cfg(test)]

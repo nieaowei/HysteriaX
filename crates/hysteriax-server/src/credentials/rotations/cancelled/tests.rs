@@ -529,8 +529,14 @@ async fn migration_0060_to_0061_backfills_only_derived_flags_and_keeps_all_job_h
     let snapshot = format!(
         "SELECT jsonb_build_object('sources',({SNAPSHOTS}),'jobs',(SELECT jsonb_agg(to_jsonb(j) ORDER BY id) FROM jobs j),'events',(SELECT jsonb_agg(to_jsonb(e) ORDER BY id) FROM job_events e))"
     );
+    let snapshot = snapshot.replace("to_jsonb(n)", "(to_jsonb(n)-'traffic_capture_mode')");
     let before: Value = sqlx::query_scalar(sqlx::AssertSqlSafe(snapshot.as_str()))
         .fetch_one(&state.pool)
+        .await
+        .unwrap();
+    db::run_migrations_through(&state.pool, 72).await.unwrap();
+    sqlx::query("UPDATE nodes SET traffic_capture_mode='interval'")
+        .execute(&state.pool)
         .await
         .unwrap();
     for _ in 0..2 {

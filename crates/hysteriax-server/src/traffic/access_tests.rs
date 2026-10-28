@@ -685,7 +685,7 @@ async fn reused_wall_clock_markers_cannot_reactivate_an_old_restriction_page() {
 async fn maintenance_backfills_the_due_queue_without_changing_existing_user_or_assignment_data() {
     let pool = crate::traffic::batch_tests::fixture_through(301, 53).await;
     sqlx::query("UPDATE users SET enabled=split_part(id,'-',2)::int<=100,expires_at=CASE WHEN split_part(id,'-',2)::int<=100 THEN clock_timestamp()+interval '1 hour' END,quota_bytes=CASE WHEN split_part(id,'-',2)::int>200 THEN 1 END,usage_bytes=CASE WHEN split_part(id,'-',2)::int>200 THEN 1 ELSE 0 END").execute(&pool).await.unwrap();
-    let snapshot = "SELECT jsonb_build_object('users',(SELECT jsonb_agg(to_jsonb(u) ORDER BY id) FROM users u),'nodes',(SELECT jsonb_agg(to_jsonb(n) ORDER BY id) FROM nodes n),'assignments',(SELECT jsonb_agg(to_jsonb(a) ORDER BY user_id,node_id) FROM node_assignments a))";
+    let snapshot = "SELECT jsonb_build_object('users',(SELECT jsonb_agg(to_jsonb(u) ORDER BY id) FROM users u),'nodes',(SELECT jsonb_agg(to_jsonb(n)-'traffic_capture_mode' ORDER BY id) FROM nodes n),'assignments',(SELECT jsonb_agg(to_jsonb(a) ORDER BY user_id,node_id) FROM node_assignments a))";
     let before: serde_json::Value = sqlx::query_scalar(snapshot).fetch_one(&pool).await.unwrap();
     db::run_migrations(&pool).await.unwrap();
     assert!(assert_ready(&pool).await.is_err());

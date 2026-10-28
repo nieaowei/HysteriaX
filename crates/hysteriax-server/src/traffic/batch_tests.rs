@@ -170,7 +170,7 @@ async fn duplicate_captures_and_parallel_processors_preserve_every_user_and_quot
 async fn later_ready_sample_waits_for_an_earlier_capture_and_expiry_does_not_discard_ready_data() {
     let pool = fixture(1).await;
     batches::reserve(&pool, "early", "a", None).await.unwrap();
-    capture(&pool, "later", "a", &counters(1, 200, 0)).await;
+    capture(&pool, "later", "a", &counters(1, 100, 0)).await;
     assert_eq!(
         batches::process(&pool, "later").await.unwrap(),
         Progress::Waiting
@@ -285,6 +285,76 @@ async fn malformed_or_conflicting_payloads_never_replace_a_captured_batch() {
 }
 
 #[tokio::test]
+async fn capture_filters_unbillable_identities_after_validating_and_hashing_every_counter() {
+    let pool = fixture(3).await;
+    sqlx::query("UPDATE users SET enabled=false WHERE id='user-0001'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM node_assignments WHERE node_id='a' AND user_id='user-0002'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let probe = format!("probe-a-{}", crate::security::token_digest("probe"));
+    sqlx::query("INSERT INTO users(id,name,created_at,updated_at) VALUES($1,'Probe',now(),now())")
+        .bind(&probe)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO node_assignments(user_id,node_id,credential_hash,credential_enc,created_at) VALUES($1,'a','probe','secret',now())")
+        .bind(&probe).execute(&pool).await.unwrap();
+    let mut values = Map::from_iter([
+        ("user-0001".into(), json!({"tx":10,"rx":0})),
+        ("user-0002".into(), json!({"tx":20,"rx":0})),
+        ("deleted".into(), json!({"tx":30,"rx":0})),
+        (probe.clone(), json!({"tx":40,"rx":0})),
+    ]);
+    batches::reserve(&pool, "filtered", "a", None)
+        .await
+        .unwrap();
+    values.insert("deleted".into(), json!({"tx":"bad","rx":0}));
+    assert!(
+        batches::seal(&pool, "filtered", "instance", &values)
+            .await
+            .is_err()
+    );
+    values.insert("deleted".into(), json!({"tx":30,"rx":0}));
+    batches::seal(&pool, "filtered", "instance", &values)
+        .await
+        .unwrap();
+    let ids: Vec<String> =
+        sqlx::query_scalar("SELECT user_id FROM traffic_sample_items WHERE sample_id='filtered'")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert_eq!(ids, vec!["user-0001"]);
+    values.insert("deleted".into(), json!({"tx":31,"rx":0}));
+    assert!(
+        batches::seal(&pool, "filtered", "instance", &values)
+            .await
+            .is_err()
+    );
+    batches::drain(&pool, "filtered").await.unwrap();
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT usage_bytes FROM users WHERE id='user-0001'")
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+        10
+    );
+
+    let empty = Map::from_iter([("deleted".into(), json!({"tx":1,"rx":0}))]);
+    batches::reserve(&pool, "empty", "a", None).await.unwrap();
+    batches::seal(&pool, "empty", "instance", &empty)
+        .await
+        .unwrap();
+    batches::drain(&pool, "empty").await.unwrap();
+    let state: (i64, i64, String) = sqlx::query_as("SELECT item_count,processed_count,state FROM traffic_sample_batches WHERE sample_id='empty'")
+        .fetch_one(&pool).await.unwrap();
+    assert_eq!(state, (0, 0, "complete".into()));
+}
+
+#[tokio::test]
 async fn stale_counters_checkpoint_across_pages_and_membership_is_rechecked_per_page() {
     let pool = fixture(503).await;
     let mut values = counters(503, 7, 3);
@@ -311,7 +381,7 @@ async fn stale_counters_checkpoint_across_pages_and_membership_is_rechecked_per_
     assert_eq!(
         batches::process(&pool, "stale-counters").await.unwrap(),
         Progress::Committed {
-            items: 4,
+            items: 3,
             complete: true
         }
     );
@@ -321,7 +391,7 @@ async fn stale_counters_checkpoint_across_pages_and_membership_is_rechecked_per_
     assert!(final_usage[1..502].iter().all(|value| *value == 0));
     let counts: (i64, i64, i64, i64) = sqlx::query_as("SELECT (SELECT count(*) FROM traffic_records),(SELECT count(*) FROM traffic_baselines),(SELECT count(*) FROM traffic_sample_items WHERE processed_at IS NOT NULL),(SELECT processed_count FROM traffic_sample_batches WHERE sample_id='stale-counters')")
         .fetch_one(&pool).await.unwrap();
-    assert_eq!(counts, (2, 2, 504, 504));
+    assert_eq!(counts, (2, 2, 503, 503));
     assert_eq!(
         batches::process(&pool, "stale-counters").await.unwrap(),
         Progress::Finished
@@ -346,7 +416,7 @@ async fn reset_user(pool: &PgPool) -> Result<(), crate::error::ApiError> {
 }
 
 #[tokio::test]
-async fn reset_between_chunks_preserves_node_baselines_and_charges_future_delta_to_new_period() {
+async fn reset_between_chunks_preserves_checkpoints_and_charges_next_interval_to_new_period() {
     let pool = fixture(501).await;
     capture(&pool, "initial", "a", &counters(501, 100, 0)).await;
     assert_eq!(
@@ -358,7 +428,7 @@ async fn reset_between_chunks_preserves_node_baselines_and_charges_future_delta_
     );
     reset_user(&pool).await.unwrap();
     batches::drain(&pool, "initial").await.unwrap();
-    capture(&pool, "next", "a", &counters(501, 150, 0)).await;
+    capture(&pool, "next", "a", &counters(501, 50, 0)).await;
     batches::drain(&pool, "next").await.unwrap();
     let values = usage(&pool).await;
     assert_eq!(values[0], 50);
@@ -369,7 +439,7 @@ async fn reset_between_chunks_preserves_node_baselines_and_charges_future_delta_
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert_eq!(baseline, 150);
+    assert_eq!(baseline, 50);
 }
 
 async fn await_advisory_waiter(pool: &PgPool, key: i64) {
@@ -389,7 +459,7 @@ async fn contended_resets_follow_node_then_user_admission_order_in_both_directio
         let pool = fixture(1).await;
         capture(&pool, "initial", "a", &counters(1, 100, 0)).await;
         batches::drain(&pool, "initial").await.unwrap();
-        capture(&pool, "next", "a", &counters(1, 200, 0)).await;
+        capture(&pool, "next", "a", &counters(1, 100, 0)).await;
         isolate_source_writes(&pool).await;
         let key = rand::random_range(1_i64..i32::MAX as i64);
         let mut gate = pool.begin().await.unwrap();
@@ -696,51 +766,4 @@ async fn an_unrelated_node_commits_while_another_billing_transaction_is_paused()
     gate.rollback().await.unwrap();
     blocked.await.unwrap().unwrap();
     assert_eq!(usage(&pool).await, vec![10, 10]);
-}
-
-#[tokio::test]
-async fn batch_migration_preserves_existing_ids_usage_records_and_baselines() {
-    let pool = fixture_through(1, 43).await;
-    sqlx::query("UPDATE users SET usage_bytes=350,quota_bytes=1000,revision=7")
-        .execute(&pool)
-        .await
-        .unwrap();
-    sqlx::query("INSERT INTO traffic_baselines(node_id,user_id,instance_id,tx_total,rx_total,sampled_at) VALUES('a','user-0001','legacy-instance',200,150,'2026-01-01T00:00:00Z')").execute(&pool).await.unwrap();
-    sqlx::query("INSERT INTO traffic_records(id,node_id,user_id,instance_id,baseline_tx,baseline_rx,delta_tx,delta_rx,sampled_at) VALUES('preserved-id','a','user-0001','legacy-instance',200,150,200,150,'2026-01-01T00:00:00Z')").execute(&pool).await.unwrap();
-    let snapshot = "SELECT jsonb_build_object('users',(SELECT jsonb_agg(to_jsonb(u) ORDER BY id) FROM users u),'nodes',(SELECT jsonb_agg(to_jsonb(n) ORDER BY id) FROM nodes n),'baselines',(SELECT jsonb_agg(to_jsonb(b)-'sample_order' ORDER BY node_id,user_id) FROM traffic_baselines b),'records',(SELECT jsonb_agg(to_jsonb(r)-'sample_id' ORDER BY id) FROM traffic_records r))";
-    let before: Value = sqlx::query_scalar(snapshot).fetch_one(&pool).await.unwrap();
-    crate::db::run_migrations(&pool).await.unwrap();
-    let after: Value = sqlx::query_scalar(snapshot).fetch_one(&pool).await.unwrap();
-    assert_eq!(before, after);
-    assert_eq!(
-        sqlx::query_scalar::<_, i64>(
-            "SELECT sample_order FROM traffic_baselines WHERE node_id='a'"
-        )
-        .fetch_one(&pool)
-        .await
-        .unwrap(),
-        0
-    );
-    assert!(
-        sqlx::query_scalar::<_, Option<String>>(
-            "SELECT sample_id FROM traffic_records WHERE id='preserved-id'"
-        )
-        .fetch_one(&pool)
-        .await
-        .unwrap()
-        .is_none()
-    );
-    batches::reserve(&pool, "first-v2-capture", "a", None)
-        .await
-        .unwrap();
-    batches::seal(
-        &pool,
-        "first-v2-capture",
-        "legacy-instance",
-        &counters(1, 250, 170),
-    )
-    .await
-    .unwrap();
-    batches::drain(&pool, "first-v2-capture").await.unwrap();
-    assert_eq!(usage(&pool).await, vec![420]);
 }

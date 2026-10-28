@@ -19,6 +19,19 @@ static OPERATION_TIMEOUT_SECONDS: OnceLock<Option<u64>> = OnceLock::new();
 static SSH_UPLOAD_TIMEOUT_SECONDS: OnceLock<u64> = OnceLock::new();
 static BACKGROUND_WORKER_PARALLELISM: OnceLock<usize> = OnceLock::new();
 static SAMPLING_INTERVAL_SECONDS: OnceLock<usize> = OnceLock::new();
+static TRAFFIC_CAPTURE_ENABLED: OnceLock<bool> = OnceLock::new();
+
+pub(crate) fn traffic_capture_enabled() -> bool {
+    *TRAFFIC_CAPTURE_ENABLED.get_or_init(|| match env::var("HYSTERIAX_TRAFFIC_CAPTURE_ENABLED") {
+        Ok(value) if value.eq_ignore_ascii_case("false") || value == "0" => false,
+        Ok(value) if value.eq_ignore_ascii_case("true") || value == "1" => true,
+        Err(env::VarError::NotPresent) => true,
+        _ => {
+            tracing::warn!("invalid HYSTERIAX_TRAFFIC_CAPTURE_ENABLED; traffic capture disabled");
+            false
+        }
+    })
+}
 
 /// Shared cadence for traffic and host-network samples. Existing deployments
 /// retain ten seconds unless they explicitly configure a longer collection slot.
@@ -172,6 +185,40 @@ fn bounded_usize(name: &'static str, default: usize, max: usize) -> usize {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn traffic_capture_setting_child() {
+        if let Ok(expected) = std::env::var("HYSTERIAX_TEST_CAPTURE_EXPECTED") {
+            assert_eq!(super::traffic_capture_enabled(), expected == "true");
+        }
+    }
+
+    #[test]
+    fn traffic_capture_setting_defaults_on_and_can_pause_capture() {
+        for (configured, expected) in [
+            (None, true),
+            (Some("true"), true),
+            (Some("0"), false),
+            (Some("false"), false),
+            (Some("invalid"), false),
+        ] {
+            let mut child = std::process::Command::new(std::env::current_exe().unwrap());
+            child
+                .args([
+                    "--exact",
+                    "runtime_config::tests::traffic_capture_setting_child",
+                ])
+                .env("HYSTERIAX_TEST_CAPTURE_EXPECTED", expected.to_string())
+                .env_remove("HYSTERIAX_TRAFFIC_CAPTURE_ENABLED");
+            if let Some(value) = configured {
+                child.env("HYSTERIAX_TRAFFIC_CAPTURE_ENABLED", value);
+            }
+            assert!(
+                child.output().unwrap().status.success(),
+                "configuration {configured:?}"
+            );
+        }
+    }
+
     #[test]
     fn upload_timeout_child() {
         if let Ok(expected) = std::env::var("HYSTERIAX_TEST_EXPECT_UPLOAD_TIMEOUT") {

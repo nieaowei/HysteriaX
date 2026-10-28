@@ -322,7 +322,7 @@ mod tests {
             .bind(node).bind(&credential).bind(secrets.encrypt("retained-token").unwrap()).bind(&cipher).execute(&mut *tx).await.unwrap();
         sqlx::query("INSERT INTO config_versions(id,node_id,revision,config_enc,content_sha256,created_at) SELECT 'upgrade-'||n,$1,n,$2,'retained-hash',now() FROM generate_series(1,300) n").bind(node).bind(&cipher).execute(&mut *tx).await.unwrap();
         tx.commit().await.unwrap();
-        let snapshot = "SELECT jsonb_build_object('nodes',(SELECT jsonb_agg(to_jsonb(n) ORDER BY id) FROM nodes n),'history',(SELECT jsonb_agg(to_jsonb(v) ORDER BY id) FROM config_versions v),'credentials',(SELECT jsonb_agg(to_jsonb(c) ORDER BY id) FROM credentials c),'versions',(SELECT jsonb_agg(to_jsonb(v) ORDER BY credential_id,version) FROM credential_versions v))";
+        let snapshot = "SELECT jsonb_build_object('nodes',(SELECT jsonb_agg(to_jsonb(n)-'traffic_capture_mode' ORDER BY id) FROM nodes n),'history',(SELECT jsonb_agg(to_jsonb(v) ORDER BY id) FROM config_versions v),'credentials',(SELECT jsonb_agg(to_jsonb(c) ORDER BY id) FROM credentials c),'versions',(SELECT jsonb_agg(to_jsonb(v) ORDER BY credential_id,version) FROM credential_versions v))";
         let before: Value = sqlx::query_scalar(snapshot).fetch_one(&pool).await.unwrap();
         crate::db::run_migrations(&pool).await.unwrap();
         assert!(assert_ready(&pool).await.is_err());

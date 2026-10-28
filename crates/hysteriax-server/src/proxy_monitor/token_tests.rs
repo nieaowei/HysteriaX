@@ -222,11 +222,19 @@ async fn migration_preserves_legacy_rows_and_requires_fresh_execution_proof() {
             .bind(&work.id).bind(&primary.owner).bind(node.generation).bind(primary.generation).execute(&state.pool).await.unwrap();
         }
         let before = row(&state).await;
-        let nodes: Value =
-            sqlx::query_scalar("SELECT jsonb_agg(to_jsonb(n) ORDER BY id) FROM nodes n")
-                .fetch_one(&state.pool)
-                .await
-                .unwrap();
+        let nodes: Value = sqlx::query_scalar(
+            "SELECT jsonb_agg(to_jsonb(n)-'traffic_capture_mode' ORDER BY id) FROM nodes n",
+        )
+        .fetch_one(&state.pool)
+        .await
+        .unwrap();
+        crate::db::run_migrations_through(&state.pool, 72)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE nodes SET traffic_capture_mode='interval'")
+            .execute(&state.pool)
+            .await
+            .unwrap();
         crate::db::run_migrations(&state.pool).await.unwrap();
         crate::db::run_migrations(&state.pool).await.unwrap();
         let after = row(&state).await;
@@ -235,7 +243,7 @@ async fn migration_preserves_legacy_rows_and_requires_fresh_execution_proof() {
         }
         assert_eq!(
             sqlx::query_scalar::<_, Value>(
-                "SELECT jsonb_agg(to_jsonb(n) ORDER BY id) FROM nodes n"
+                "SELECT jsonb_agg(to_jsonb(n)-'traffic_capture_mode' ORDER BY id) FROM nodes n"
             )
             .fetch_one(&state.pool)
             .await

@@ -432,9 +432,15 @@ async fn sampling_migration_preserves_config_ciphertext_usage_and_old_online_his
     let state = AppState::new(pool, secrets);
     let node = node(&state).await;
     sqlx::query("INSERT INTO online_samples(cycle_id,node_id,sampled_at,status,connections,cycle_started_at,expected_nodes,traffic_status) VALUES($1,$2,'2026-01-01T00:00:00Z','ok','{}','2026-01-01T00:00:00Z',1,'ok')").bind(Uuid::new_v4()).bind(node).execute(&state.pool).await.unwrap();
-    let query = "SELECT jsonb_build_object('nodes',(SELECT jsonb_agg(to_jsonb(n) ORDER BY id) FROM nodes n),'configs',(SELECT jsonb_agg(to_jsonb(v) ORDER BY id) FROM config_versions v),'credentials',(SELECT jsonb_agg(to_jsonb(v) ORDER BY credential_id,version) FROM credential_versions v),'packages',(SELECT jsonb_agg(to_jsonb(p) ORDER BY node_id) FROM node_packages p),'online',(SELECT jsonb_agg(to_jsonb(s)-'pending' ORDER BY id) FROM online_samples s))";
+    let query = "SELECT jsonb_build_object('nodes',(SELECT jsonb_agg(to_jsonb(n)-'traffic_capture_mode' ORDER BY id) FROM nodes n),'configs',(SELECT jsonb_agg(to_jsonb(v) ORDER BY id) FROM config_versions v),'credentials',(SELECT jsonb_agg(to_jsonb(v) ORDER BY credential_id,version) FROM credential_versions v),'packages',(SELECT jsonb_agg(to_jsonb(p) ORDER BY node_id) FROM node_packages p),'online',(SELECT jsonb_agg(to_jsonb(s)-'pending' ORDER BY id) FROM online_samples s))";
     let before: Value = sqlx::query_scalar(query)
         .fetch_one(&state.pool)
+        .await
+        .unwrap();
+    db::run_migrations_through(&state.pool, 72).await.unwrap();
+    // Represent the required, already completed production traffic cutover.
+    sqlx::query("UPDATE nodes SET traffic_capture_mode='interval'")
+        .execute(&state.pool)
         .await
         .unwrap();
     db::run_migrations(&state.pool).await.unwrap();

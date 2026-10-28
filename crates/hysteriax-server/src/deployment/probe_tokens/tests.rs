@@ -373,7 +373,7 @@ async fn migration_keeps_existing_credentials_and_business_rows_but_requires_fre
         .execute(&state.pool).await.unwrap();
     sqlx::query("INSERT INTO deployment_probe_tokens(node_id,token_hash,expires_at,job_id) VALUES('a',$1,clock_timestamp()+interval '15 minutes','one')").bind(token_digest("legacy")).execute(&state.pool).await.unwrap();
     let old = row(&state.pool).await;
-    let q = "SELECT jsonb_build_object('nodes',(SELECT jsonb_agg(to_jsonb(n) ORDER BY id) FROM nodes n),'jobs',(SELECT jsonb_agg(to_jsonb(j) ORDER BY id) FROM jobs j),'leases',(SELECT jsonb_agg(to_jsonb(l)-'epoch' ORDER BY resource_key) FROM resource_leases l))";
+    let q = "SELECT jsonb_build_object('nodes',(SELECT jsonb_agg(to_jsonb(n)-'traffic_capture_mode' ORDER BY id) FROM nodes n),'jobs',(SELECT jsonb_agg(to_jsonb(j) ORDER BY id) FROM jobs j),'leases',(SELECT jsonb_agg(to_jsonb(l)-'epoch' ORDER BY resource_key) FROM resource_leases l))";
     let before: Value = sqlx::query_scalar(q).fetch_one(&state.pool).await.unwrap();
     db::run_migrations(&state.pool).await.unwrap();
     db::run_migrations(&state.pool).await.unwrap();
@@ -476,7 +476,7 @@ async fn epoch_migration_keeps_a_complete_old_probe_row_but_requires_new_issuanc
     sqlx::query("INSERT INTO deployment_probe_tokens(node_id,token_hash,expires_at,job_id,owner,node_generation,job_generation) VALUES('a',$1,clock_timestamp()+interval '15 minutes','one','owner',1,1)")
         .bind(token_digest("legacy")).execute(&state.pool).await.unwrap();
     let before = row(&state.pool).await;
-    let q = "SELECT jsonb_build_object('nodes',(SELECT jsonb_agg(to_jsonb(n) ORDER BY id) FROM nodes n),'jobs',(SELECT jsonb_agg(to_jsonb(j) ORDER BY id) FROM jobs j),'leases',(SELECT jsonb_agg(to_jsonb(l) ORDER BY resource_key) FROM resource_leases l))";
+    let q = "SELECT jsonb_build_object('nodes',(SELECT jsonb_agg(to_jsonb(n)-'traffic_capture_mode' ORDER BY id) FROM nodes n),'jobs',(SELECT jsonb_agg(to_jsonb(j) ORDER BY id) FROM jobs j),'leases',(SELECT jsonb_agg(to_jsonb(l) ORDER BY resource_key) FROM resource_leases l))";
     let business: Value = sqlx::query_scalar(q).fetch_one(&state.pool).await.unwrap();
     db::run_migrations(&state.pool).await.unwrap();
     assert_eq!(

@@ -161,6 +161,20 @@ async fn runtime_timeouts_are_disabled_for_migration_and_restored_after_success_
             settings(&runtime).await,
             ("1s".into(), "20s".into(), "20s".into())
         );
+        if fail {
+            assert_eq!(sqlx::query_scalar::<_, i64>("SELECT count(*) FROM pg_locks WHERE pid=pg_backend_pid() AND locktype='advisory'")
+                .fetch_one(&runtime).await.unwrap(), 0,
+                "a failed migration must not return a session advisory lock to the pool");
+            assert!(
+                tokio::time::timeout(
+                    Duration::from_secs(5),
+                    migrate_with(&maintenance, &migrator)
+                )
+                .await
+                .expect("another connection must be able to retry the rejected migration")
+                .is_err()
+            );
+        }
     }
     runtime.close().await;
     maintenance.close().await;

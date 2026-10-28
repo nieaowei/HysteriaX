@@ -703,9 +703,14 @@ async fn migration_0056_to_0057_preserves_source_material_and_pending_work_byte_
             }
         }
     }
-    let snapshot = "SELECT jsonb_build_object('credentials',(SELECT jsonb_agg(to_jsonb(c) ORDER BY id) FROM credentials c),'versions',(SELECT jsonb_agg(to_jsonb(v) ORDER BY credential_id,version) FROM credential_versions v),'authorities',(SELECT jsonb_agg(to_jsonb(a) ORDER BY credential_id) FROM mtls_authorities a),'generations',(SELECT jsonb_agg(to_jsonb(g) ORDER BY ca_id,ca_version) FROM mtls_ca_generations g),'nodes',(SELECT jsonb_agg(to_jsonb(n) ORDER BY id) FROM nodes n),'users',(SELECT jsonb_agg(to_jsonb(u) ORDER BY id) FROM users u),'assignments',(SELECT jsonb_agg(to_jsonb(a) ORDER BY node_id,user_id) FROM node_assignments a),'identities',(SELECT jsonb_agg(to_jsonb(i)-'scheduled_ca_version' ORDER BY id) FROM mtls_user_identities i),'rotations',(SELECT jsonb_agg(to_jsonb(r) ORDER BY id) FROM mtls_rotations r),'work',(SELECT jsonb_agg(to_jsonb(w) ORDER BY id) FROM background_work w),'leases',(SELECT jsonb_agg(to_jsonb(l)-'epoch' ORDER BY resource_key) FROM resource_leases l))";
+    let snapshot = "SELECT jsonb_build_object('credentials',(SELECT jsonb_agg(to_jsonb(c) ORDER BY id) FROM credentials c),'versions',(SELECT jsonb_agg(to_jsonb(v) ORDER BY credential_id,version) FROM credential_versions v),'authorities',(SELECT jsonb_agg(to_jsonb(a) ORDER BY credential_id) FROM mtls_authorities a),'generations',(SELECT jsonb_agg(to_jsonb(g) ORDER BY ca_id,ca_version) FROM mtls_ca_generations g),'nodes',(SELECT jsonb_agg(to_jsonb(n)-'traffic_capture_mode' ORDER BY id) FROM nodes n),'users',(SELECT jsonb_agg(to_jsonb(u) ORDER BY id) FROM users u),'assignments',(SELECT jsonb_agg(to_jsonb(a) ORDER BY node_id,user_id) FROM node_assignments a),'identities',(SELECT jsonb_agg(to_jsonb(i)-'scheduled_ca_version' ORDER BY id) FROM mtls_user_identities i),'rotations',(SELECT jsonb_agg(to_jsonb(r) ORDER BY id) FROM mtls_rotations r),'work',(SELECT jsonb_agg(to_jsonb(w) ORDER BY id) FROM background_work w),'leases',(SELECT jsonb_agg(to_jsonb(l)-'epoch' ORDER BY resource_key) FROM resource_leases l))";
     let before: Value = sqlx::query_scalar(snapshot)
         .fetch_one(&state.pool)
+        .await
+        .unwrap();
+    db::run_migrations_through(&state.pool, 72).await.unwrap();
+    sqlx::query("UPDATE nodes SET traffic_capture_mode='interval'")
+        .execute(&state.pool)
         .await
         .unwrap();
     for _ in 0..2 {

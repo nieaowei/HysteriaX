@@ -3,7 +3,7 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, bail, ensure};
 use russh::{
     ChannelMsg,
     client::{self, Handle},
@@ -512,6 +512,24 @@ impl SshSession {
             .await
     }
 
+    /// Destructive statistics read. The caller must commit its fenced request
+    /// marker first; this path neither journals as a generic remote operation
+    /// nor retries, since a lost response cannot prove the counters survived.
+    pub(crate) async fn loopback_traffic_clear(&self, port: u32, secret: &str) -> Result<Vec<u8>> {
+        crate::execution::check_current().await?;
+        self.loopback_http_remote_with_budget(
+            "GET",
+            port,
+            "/traffic?clear=1",
+            "127.0.0.1",
+            Some(secret),
+            None,
+            Duration::from_secs(10),
+            true,
+        )
+        .await
+    }
+
     pub async fn loopback_http_get_target(
         &self,
         port: u32,
@@ -568,12 +586,41 @@ impl SshSession {
         secret: Option<&str>,
         body: Option<&[u8]>,
     ) -> Result<Vec<u8>> {
+        self.loopback_http_remote_with_budget(
+            method,
+            port,
+            path,
+            host,
+            secret,
+            body,
+            Duration::from_secs(crate::runtime_config::operation_timeout_seconds(5)),
+            false,
+        )
+        .await
+    }
+
+    async fn loopback_http_remote_with_budget(
+        &self,
+        method: &str,
+        port: u32,
+        path: &str,
+        host: &str,
+        secret: Option<&str>,
+        body: Option<&[u8]>,
+        budget: Duration,
+        strict: bool,
+    ) -> Result<Vec<u8>> {
         let body = body.unwrap_or_default();
-        let response = tokio::time::timeout(Duration::from_secs(crate::runtime_config::operation_timeout_seconds(5)), async {
+        let response = tokio::time::timeout(budget, async {
             let mut channel = self
                 .handle
                 .channel_open_direct_tcpip("127.0.0.1", port, "127.0.0.1", 0)
                 .await?;
+            // Opening the channel can outlive the caller's lease. Recheck
+            // ownership immediately before sending the destructive request.
+            if strict {
+                crate::execution::check_current().await?;
+            }
             let authorization = secret
                 .map(|secret| format!("Authorization: {secret}\r\n"))
                 .unwrap_or_default();
@@ -602,7 +649,98 @@ impl SshSession {
         })
         .await
         .context("remote loopback HTTP request timed out")??;
-        parse_http_response(&response)
+        if strict {
+            parse_complete_http_response(&response)
+        } else {
+            parse_http_response(&response)
+        }
+    }
+}
+
+/// A clear response must have explicit framing: a close-delimited or truncated
+/// body can otherwise be mistaken for a complete JSON snapshot.
+fn parse_complete_http_response(response: &[u8]) -> Result<Vec<u8>> {
+    let separator = response
+        .windows(4)
+        .position(|w| w == b"\r\n\r\n")
+        .context("remote stats API returned an invalid HTTP response")?;
+    let headers = std::str::from_utf8(&response[..separator])?;
+    let mut lines = headers.split("\r\n");
+    let mut status = lines.next().unwrap_or_default().split_whitespace();
+    let version = status.next().unwrap_or_default();
+    ensure!(
+        matches!(version, "HTTP/1.0" | "HTTP/1.1") && status.next() == Some("200"),
+        "remote stats API returned a non-success status"
+    );
+    let mut length = None;
+    let mut chunked = false;
+    for line in lines {
+        let (name, value) = line.split_once(':').context("invalid HTTP header")?;
+        let value = value.trim();
+        if name.eq_ignore_ascii_case("content-length") {
+            ensure!(length.is_none(), "duplicate content length");
+            ensure!(
+                !value.is_empty() && value.bytes().all(|b| b.is_ascii_digit()),
+                "invalid content length"
+            );
+            length = Some(value.parse::<usize>()?);
+        } else if name.eq_ignore_ascii_case("transfer-encoding") {
+            ensure!(
+                !chunked && value.eq_ignore_ascii_case("chunked"),
+                "unsupported transfer encoding"
+            );
+            chunked = true;
+        }
+    }
+    ensure!(!(chunked && length.is_some()), "ambiguous HTTP framing");
+    let body = &response[separator + 4..];
+    if chunked {
+        decode_complete_chunked(body)
+    } else {
+        ensure!(length == Some(body.len()), "missing or truncated HTTP body");
+        Ok(body.to_vec())
+    }
+}
+
+fn decode_complete_chunked(mut body: &[u8]) -> Result<Vec<u8>> {
+    let mut output = Vec::new();
+    loop {
+        let end = body
+            .windows(2)
+            .position(|w| w == b"\r\n")
+            .context("invalid chunked response")?;
+        let size = std::str::from_utf8(&body[..end])?
+            .split(';')
+            .next()
+            .unwrap_or_default();
+        ensure!(
+            !size.is_empty() && size.bytes().all(|b| b.is_ascii_hexdigit()),
+            "invalid chunk size"
+        );
+        let size = usize::from_str_radix(size, 16)?;
+        body = &body[end + 2..];
+        if size == 0 {
+            // Validate every trailer line and require the terminal empty line.
+            loop {
+                let end = body
+                    .windows(2)
+                    .position(|w| w == b"\r\n")
+                    .context("truncated chunk trailers")?;
+                if end == 0 {
+                    ensure!(body.len() == 2, "extra bytes after chunked response");
+                    return Ok(output);
+                }
+                let trailer = std::str::from_utf8(&body[..end])?;
+                ensure!(trailer.contains(':'), "invalid chunk trailer");
+                body = &body[end + 2..];
+            }
+        }
+        ensure!(
+            size <= body.len().saturating_sub(2) && body.get(size..size + 2) == Some(b"\r\n"),
+            "truncated HTTP chunk"
+        );
+        output.extend_from_slice(&body[..size]);
+        body = &body[size + 2..];
     }
 }
 
@@ -729,6 +867,35 @@ mod tests {
     use super::{normalize_arch, supported_release};
 
     #[test]
+    fn clear_response_requires_success_and_complete_unambiguous_framing() {
+        use super::parse_complete_http_response as parse;
+        assert_eq!(
+            parse(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}").unwrap(),
+            b"{}"
+        );
+        assert_eq!(
+            parse(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n2\r\n{}\r\n0\r\n\r\n")
+                .unwrap(),
+            b"{}"
+        );
+        for response in [
+            &b"HTTP/1.1 500 Error\r\nContent-Length: 2\r\n\r\n{}"[..],
+            b"HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\n{}",
+            b"HTTP/1.1 200 OK\r\n\r\n{}",
+            b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nContent-Length: 2\r\n\r\n{}",
+            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nContent-Length: 2\r\n\r\n{}",
+            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n2\r\n{}\r\n0\r\n",
+            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n2\r\n{}XX0\r\n\r\n",
+        ] {
+            assert!(
+                parse(response).is_err(),
+                "accepted {:?}",
+                String::from_utf8_lossy(response)
+            );
+        }
+    }
+
+    #[test]
     fn normalizes_supported_linux_architectures() {
         assert_eq!(normalize_arch("x86_64"), "amd64");
         assert_eq!(normalize_arch("aarch64"), "arm64");
@@ -767,3 +934,7 @@ mod execution_tests;
 #[cfg(test)]
 #[path = "ssh_lifecycle_tests.rs"]
 mod lifecycle_tests;
+
+#[cfg(test)]
+#[path = "ssh_clear_tests.rs"]
+mod clear_tests;

@@ -395,7 +395,7 @@ async fn migration_preserves_legacy_packages_jobs_events_and_restores_their_cond
     })
     .await
     .unwrap();
-    let snapshot = "SELECT jsonb_build_object('nodes',(SELECT jsonb_agg(to_jsonb(n) ORDER BY id) FROM nodes n),'packages',(SELECT jsonb_agg(to_jsonb(p) ORDER BY node_id) FROM node_packages p),'users',(SELECT jsonb_agg(to_jsonb(u) ORDER BY id) FROM users u),'jobs',(SELECT jsonb_agg(to_jsonb(j) ORDER BY id) FROM jobs j),'events',(SELECT jsonb_agg(to_jsonb(e) ORDER BY id) FROM job_events e),'requests',(SELECT jsonb_agg(to_jsonb(r) ORDER BY node_id,user_id) FROM kick_requests r))";
+    let snapshot = "SELECT jsonb_build_object('nodes',(SELECT jsonb_agg(to_jsonb(n)-'traffic_capture_mode' ORDER BY id) FROM nodes n),'packages',(SELECT jsonb_agg(to_jsonb(p) ORDER BY node_id) FROM node_packages p),'users',(SELECT jsonb_agg(to_jsonb(u) ORDER BY id) FROM users u),'jobs',(SELECT jsonb_agg(to_jsonb(j) ORDER BY id) FROM jobs j),'events',(SELECT jsonb_agg(to_jsonb(e) ORDER BY id) FROM job_events e),'requests',(SELECT jsonb_agg(to_jsonb(r) ORDER BY node_id,user_id) FROM kick_requests r))";
     let before: Value = sqlx::query_scalar(snapshot).fetch_one(&pool).await.unwrap();
     db::run_migrations(&pool).await.unwrap();
     db::run_migrations(&pool).await.unwrap();
