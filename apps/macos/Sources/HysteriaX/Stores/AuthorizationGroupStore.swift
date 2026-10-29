@@ -16,9 +16,9 @@ extension ManagementStore {
         }
 
         do {
-            let groups: [AuthorizationGroupSummary] = try await client.get(APIEndpoints.listAuthorizationGroups)
+            let groups: AuthorizationGroupsPage = try await client.get(APIEndpoints.listAuthorizationGroups(page: 1, pageSize: 50))
             guard serviceAddress == service, authorizationGroupsRequestID == requestID, !Task.isCancelled else { return false }
-            authorizationGroups = groups
+            authorizationGroups = groups.items
             authorizationGroupsError = nil
             return true
         } catch {
@@ -26,6 +26,20 @@ extension ManagementStore {
             authorizationGroupsError = error.localizedDescription
             return false
         }
+    }
+
+    func authorizationGroupsPage(page: Int, query: String, sort: String = "name", order: String = "asc") async throws -> AuthorizationGroupsPage {
+        try await requireConnectedAPI().get(APIEndpoints.listAuthorizationGroups(page: page, pageSize: 50, q: query, sort: sort, order: order), bypassCache: true)
+    }
+
+    func authorizationRelationPage(groupID: String, users: Bool, page: Int, query: String, member: Bool, sort: String, order: String, enabled: Bool?) async throws -> AuthorizationRelationPage {
+        let client = try requireConnectedAPI()
+        if users {
+            let result = try await client.get(APIEndpoints.listAuthorizationGroupUsers(groupID: groupID, page: page, pageSize: 100, q: query, sort: sort, order: order, member: member, enabled: enabled), bypassCache: true)
+            return AuthorizationRelationPage(rows: result.items.map { .init(id: $0.id, name: $0.name, enabled: $0.enabled, expiresAt: $0.expiresAt, state: nil) }, total: result.total, page: result.page, revision: result.revision)
+        }
+        let result = try await client.get(APIEndpoints.listAuthorizationGroupNodes(groupID: groupID, page: page, pageSize: 100, q: query, sort: sort, order: order, member: member), bypassCache: true)
+        return AuthorizationRelationPage(rows: result.items.map { .init(id: $0.id, name: $0.name, enabled: nil, expiresAt: nil, state: $0.state) }, total: result.total, page: result.page, revision: result.revision)
     }
 
     func authorizationUserDetail(_ userID: String) async throws -> UserSummary {

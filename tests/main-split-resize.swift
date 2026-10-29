@@ -100,7 +100,7 @@ import SwiftUI
             }
             groupStore.users = try JSONDecoder().decode([UserSummary].self, from: JSONSerialization.data(withJSONObject: users))
             groupStore.authorizationGroups = [AuthorizationGroupSummary(id: "resize-group", name: "Resize group", revision: 1,
-                userIds: groupStore.users.map(\.id), nodeIds: [], userCount: count, nodeCount: 0, createdAt: stamp, updatedAt: stamp)]
+                userCount: count, nodeCount: 0, createdAt: stamp, updatedAt: stamp)]
             let page = AuthorizationPageState()
             page.selectedGroupID = "resize-group"
             return AnyView(AuthorizationGroupsView(store: groupStore, pageState: page, onOpenUser: { _ in }))

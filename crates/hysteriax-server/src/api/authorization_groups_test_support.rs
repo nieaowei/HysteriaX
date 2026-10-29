@@ -147,7 +147,7 @@ async fn commit_membership(
     .await
 }
 
-/// Exercise the same staged signing/commit boundary as direct HTTP mutations.
+/// Exercise the same identity admission/commit boundary as direct HTTP mutations.
 pub(crate) async fn create_prepared(
     state: &AppState,
     input: FixtureGroupCreate,

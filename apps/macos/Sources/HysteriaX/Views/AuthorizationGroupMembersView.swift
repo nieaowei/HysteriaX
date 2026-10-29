@@ -1,32 +1,28 @@
 import SwiftUI
 
 struct AuthorizationGroupMembersView: View {
+    @Bindable var store: ManagementStore
     let group: AuthorizationGroupSummary
-    let users: [UserSummary]
     let canEdit: Bool
     var onOpen: (String) -> Void
     var onEdit: (AuthorizationMemberEditorMode, Set<String>) -> Void
-    @State private var selection: Set<String> = []
+    @State private var mode = AuthorizationMemberEditorMode.members
+    @State private var draft = AuthorizationRelationDraft()
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            DetailHeaderLayout {
-                Text(L10n.text("成员用户（{0}）", String(group.userCount))).font(.headline)
-                HStack {
-                    Button(L10n.text("添加成员"), systemImage: "person.badge.plus") { onEdit(.add, []) }
-                        .disabled(!canEdit)
-                        .accessibilityIdentifier("authorizationGroups.addMembers")
-                    Button(L10n.text("移除所选 {0} 人", String(selection.count)), role: .destructive) { onEdit(.changes, selection) }
-                        .disabled(selection.isEmpty || !canEdit)
-                        .accessibilityIdentifier("authorizationGroups.removeMembers")
-                }
-            }
-            AuthorizationMemberBrowser(
-                rows: AuthorizationMemberRow.make(users: users, ids: Set(group.userIds)), selection: $selection, minimumTableHeight: 80,
-                onOpen: onOpen, onRemove: canEdit ? { ids in onEdit(.changes, ids) } : nil
-            )
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .padding(16)
+        AuthorizationRelationBrowser(store: store, group: group, users: true, mode: $mode, draft: $draft, onOpen: onOpen, onEdit: canEdit ? onEdit : nil)
+            .padding(16)
+    }
+}
+
+struct AuthorizationGroupNodesView: View {
+    @Bindable var store: ManagementStore
+    let group: AuthorizationGroupSummary
+    var onOpen: (String) -> Void
+    @State private var mode = AuthorizationMemberEditorMode.members
+    @State private var draft = AuthorizationRelationDraft()
+
+    var body: some View {
+        AuthorizationRelationBrowser(store: store, group: group, users: false, mode: $mode, draft: $draft, onOpen: onOpen)
     }
 }

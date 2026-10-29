@@ -331,5 +331,3 @@ pub async fn for_node(
         .into();
     Ok(Some((certificate, private_key)))
 }
-
-pub(super) mod authorization_batch;

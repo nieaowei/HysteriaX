@@ -1184,7 +1184,9 @@ enum APIEndpoints {
     static func updateUserAuthorizationGroups(id: String) -> APIOperation<UserAuthorizationGroupsUpdateRequest, UserAuthorizationGroupsMutationResponse> {
         APIOperation(method: "PUT", path: "api/v2/users/\(id)/authorization-groups", queryParameters: [:])
     }
-    static let listAuthorizationGroups: APIOperation<NoRequest, [AuthorizationGroupSummary]> = APIOperation<NoRequest, [AuthorizationGroupSummary]>(method: "GET", path: "api/v2/authorization-groups", queryParameters: [:])
+    static func listAuthorizationGroups(page: Int? = nil, pageSize: Int? = nil, q: String? = nil, sort: String? = nil, order: String? = nil) -> APIOperation<NoRequest, AuthorizationGroupsPage> {
+        APIOperation(method: "GET", path: "api/v2/authorization-groups", queryParameters: ["page": page.map { String($0) }, "page_size": pageSize.map { String($0) }, "q": q.map { String($0) }, "sort": sort.map { String($0) }, "order": order.map { String($0) }].compactMapValues { $0 })
+    }
     static let createAuthorizationGroup: APIOperation<AuthorizationGroupCreateRequest, AuthorizationGroupMutationResponse> = APIOperation<AuthorizationGroupCreateRequest, AuthorizationGroupMutationResponse>(method: "POST", path: "api/v2/authorization-groups", queryParameters: [:])
     static func getAuthorizationGroup(groupID: String) -> APIOperation<NoRequest, AuthorizationGroupSummary> {
         APIOperation(method: "GET", path: "api/v2/authorization-groups/\(groupID)", queryParameters: [:])
@@ -1194,6 +1196,12 @@ enum APIEndpoints {
     }
     static func deleteAuthorizationGroup(groupID: String) -> APIOperation<AuthorizationGroupDeleteRequest, AuthorizationGroupMutationResponse> {
         APIOperation(method: "DELETE", path: "api/v2/authorization-groups/\(groupID)", queryParameters: [:])
+    }
+    static func listAuthorizationGroupUsers(groupID: String, page: Int? = nil, pageSize: Int? = nil, q: String? = nil, sort: String? = nil, order: String? = nil, member: Bool? = nil, enabled: Bool? = nil) -> APIOperation<NoRequest, AuthorizationGroupUsersPage> {
+        APIOperation(method: "GET", path: "api/v2/authorization-groups/\(groupID)/users", queryParameters: ["page": page.map { String($0) }, "page_size": pageSize.map { String($0) }, "q": q.map { String($0) }, "sort": sort.map { String($0) }, "order": order.map { String($0) }, "member": member.map { String($0) }, "enabled": enabled.map { String($0) }].compactMapValues { $0 })
+    }
+    static func listAuthorizationGroupNodes(groupID: String, page: Int? = nil, pageSize: Int? = nil, q: String? = nil, sort: String? = nil, order: String? = nil, member: Bool? = nil) -> APIOperation<NoRequest, AuthorizationGroupNodesPage> {
+        APIOperation(method: "GET", path: "api/v2/authorization-groups/\(groupID)/nodes", queryParameters: ["page": page.map { String($0) }, "page_size": pageSize.map { String($0) }, "q": q.map { String($0) }, "sort": sort.map { String($0) }, "order": order.map { String($0) }, "member": member.map { String($0) }].compactMapValues { $0 })
     }
     static func rotateUserCredentials(id: String) -> APIOperation<RevisionRequest, RotatedCredentials> {
         APIOperation(method: "POST", path: "api/v2/users/\(id)/credentials/rotate", queryParameters: [:])

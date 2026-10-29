@@ -10,6 +10,7 @@ import ast
 import hashlib
 import platform
 import json
+from urllib.parse import quote
 from pathlib import Path
 import subprocess
 import tempfile
@@ -269,7 +270,7 @@ def main():
         save()
         group_name = f"DNS live authorization {run}"
         api.write("POST", "/api/v2/authorization-groups", {"name": group_name})
-        group = next(item for item in api.get("/api/v2/authorization-groups") if item["name"] == group_name)
+        group = next(item for item in api.get("/api/v2/authorization-groups?q=" + quote(group_name, safe=""))["items"] if item["name"] == group_name)
         api.write("PATCH", "/api/v2/authorization-groups/" + group["id"],
                   {"expected_revision": group["revision"], "add_user_ids": [user["id"]], "add_node_ids": [node_id]})
         current_user = api.get("/api/v2/users/" + user["id"])

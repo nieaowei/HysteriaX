@@ -23,7 +23,7 @@ with tempfile.TemporaryDirectory(prefix="hx-group-ui-") as folder:
     stamp = "2026-10-07T00:00:00Z"
     def fixture_user_id(index):
         return f"user-{index}" if index in (1, 101, 202, 203) else f"{index:08x}-1234-5678-9abc-000000000000"
-    group = dict(id="group-1", name="常用线路", revision=1, user_ids=[fixture_user_id(index) for index in range(1, 202)], node_ids=["node-1"], user_count=201, node_count=1, created_at=stamp, updated_at=stamp)
+    group = dict(id="group-1", name="常用线路", revision=1, user_count=201, node_count=1, created_at=stamp, updated_at=stamp)
     user = dict(id="user-1", name="Alice", enabled=True, usage_bytes=0, revision=1, created_at=stamp, updated_at=stamp,
                 authorization_groups=[dict(id="group-1", name="常用线路", revision=1)],
                 assignments=[dict(node_id="node-1", created_at=stamp, source_groups=[dict(id="group-1", name="常用线路")])])
@@ -66,13 +66,50 @@ final class AuthorizationFixtureProtocol: URLProtocol, @unchecked Sendable {
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {
-        let paths = ["/readyz":"ready", "/api/v2/events/head":"event_head", "/api/v2/events":"empty", "/api/v2/version":"version", "/api/v2/authorization-groups":"groups", "/api/v2/authorization-groups/group-1":"group", "/api/v2/users":"users", "/api/v2/users/user-1":"user", "/api/v2/nodes":"nodes", "/api/v2/nodes/node-1":"node_detail", "/api/v2/nodes/node-1/resources":"empty", "/api/v2/credentials":"credentials", "/api/v2/credentials/ca-1":"ca", "/api/v2/credentials/ca-identities":"ca_receipt", "/api/v2/credentials/ca-1/ca-policy":"policy_receipt", "/api/v2/credentials/ca-1/ca-versions":"ca_receipt", "/api/v2/jobs":"empty", "/api/v2/audit":"empty", "/api/v2/admin/tokens":"empty"]
+        let paths = ["/readyz":"ready", "/api/v2/events/head":"event_head", "/api/v2/events":"empty", "/api/v2/version":"version", "/api/v2/authorization-groups":"groups", "/api/v2/authorization-groups/group-1":"group", "/api/v2/authorization-groups/group-1/users":"users", "/api/v2/authorization-groups/group-1/nodes":"nodes", "/api/v2/users":"users", "/api/v2/users/user-1":"user", "/api/v2/nodes":"nodes", "/api/v2/nodes/node-1":"node_detail", "/api/v2/nodes/node-1/resources":"empty", "/api/v2/credentials":"credentials", "/api/v2/credentials/ca-1":"ca", "/api/v2/credentials/ca-identities":"ca_receipt", "/api/v2/credentials/ca-1/ca-policy":"policy_receipt", "/api/v2/credentials/ca-1/ca-versions":"ca_receipt", "/api/v2/jobs":"empty", "/api/v2/audit":"empty", "/api/v2/admin/tokens":"empty"]
         let path = request.url!.path
         if path.contains("authorization-groups"), request.httpMethod != "GET" { Self.state.markCommitted() }
         let folder = ProcessInfo.processInfo.environment["HYSTERIAX_AUTHORIZATION_FIXTURE_DIRECTORY"]!
         var data = paths[path].map { try! Data(contentsOf: URL(fileURLWithPath: folder + "/" + $0 + ".json")) } ?? Data(#"{"code":"fixture","message":"not available"}"#.utf8)
         if ["/api/v2/jobs", "/api/v2/audit"].contains(path) {
             data = Data(#"{"items":[],"total":0,"page":1,"page_size":200}"#.utf8)
+        }
+        if request.httpMethod == "GET", path == "/api/v2/authorization-groups" || path.hasPrefix("/api/v2/authorization-groups/group-1/") {
+            let parameters = Dictionary(uniqueKeysWithValues: (URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!.queryItems ?? []).map { ($0.name, $0.value ?? "") })
+            let query = (parameters["q"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let size = Int(parameters["page_size"] ?? "50")!
+            let isUsers = path.hasSuffix("/users")
+            let isNodes = path.hasSuffix("/nodes")
+            let source = isUsers ? "users" : isNodes ? "nodes" : "groups"
+            var all = try! JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: folder + "/" + source + ".json"))) as! [[String: Any]]
+            let extraGroups = Int(ProcessInfo.processInfo.environment["HYSTERIAX_TEST_EXTRA_GROUP_COUNT"] ?? "0") ?? 0
+            if source == "groups", extraGroups > 0, let baseGroup = all.first {
+                for index in 1...extraGroups {
+                    var entry = baseGroup
+                    entry["id"] = String(format: "group-extra-%03d", index)
+                    entry["name"] = String(format: "Z Group %03d", index)
+                    entry["user_count"] = 0; entry["node_count"] = 0
+                    all.append(entry)
+                }
+            }
+            let filtered = all.filter { row in
+                let member = isUsers ? !(row["authorization_groups"] as? [[String: Any]] ?? []).isEmpty : row["id"] as? String == "node-1"
+                return (!(isUsers || isNodes) || member == (parameters["member"] != "false"))
+                    && (parameters["enabled"] == nil || row["enabled"] as? Bool == (parameters["enabled"] == "true"))
+                    && (query.isEmpty || (row["name"] as! String).localizedCaseInsensitiveContains(query) || (row["id"] as! String).localizedCaseInsensitiveContains(query))
+            }.sorted { left, right in
+                let key = parameters["sort"] ?? "name"
+                let lhs = left[key] as? String ?? "", rhs = right[key] as? String ?? ""
+                if parameters["order"] == "desc" { return lhs == rhs ? (left["id"] as! String) > (right["id"] as! String) : lhs > rhs }
+                return lhs == rhs ? (left["id"] as! String) < (right["id"] as! String) : lhs < rhs
+            }
+            let page = min(Int(parameters["page"] ?? "1")!, max(1, (filtered.count + size - 1) / size))
+            let items = Array(filtered.dropFirst((page - 1) * size).prefix(size)).map { row in
+                if !(isUsers || isNodes) { return row }
+                let fields = isUsers ? ["id", "name", "enabled", "expires_at"] : ["id", "name", "state"]
+                return row.filter { fields.contains($0.key) }
+            }
+            data = try! JSONSerialization.data(withJSONObject: ["items":items,"total":filtered.count,"page":page,"page_size":size,"revision":1])
         }
         if path == "/api/v2/users" {
             let users = try! JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: folder + "/users.json"))) as! [[String: Any]]

@@ -221,12 +221,8 @@ async fn directory_cache_ignores_sampling_and_tracks_membership_changes() {
             .bearer_auth("admin-a")
     };
     assert!(
-        get()
-            .send()
-            .await
-            .unwrap()
-            .json::<Vec<Value>>()
-            .await
+        get().send().await.unwrap().json::<Value>().await.unwrap()["items"]
+            .as_array()
             .unwrap()
             .is_empty()
     );
@@ -258,14 +254,8 @@ async fn directory_cache_ignores_sampling_and_tracks_membership_changes() {
             .unwrap()
     );
     sqlx::query("INSERT INTO authorization_groups(id,name,created_at,updated_at) VALUES('group','Committed',now(),now())").execute(&state.pool).await.unwrap();
-    let response = get()
-        .send()
-        .await
-        .unwrap()
-        .json::<Vec<Value>>()
-        .await
-        .unwrap();
-    assert_eq!(response[0]["name"], "Committed");
+    let response = get().send().await.unwrap().json::<Value>().await.unwrap();
+    assert_eq!(response["items"][0]["name"], "Committed");
     assert!(
         state.caches.stats()["routes"]["/api/v2/authorization-groups"]["reused"]
             .as_u64()

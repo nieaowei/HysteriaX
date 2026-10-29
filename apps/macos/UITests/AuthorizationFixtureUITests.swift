@@ -87,10 +87,9 @@ final class AuthorizationFixtureUITests: XCTestCase {
         let group = app.descendants(matching: .any)["authorizationGroups.row.group-1"].firstMatch
         XCTAssertTrue(group.waitForExistence(timeout: 10)); group.click()
         app.buttons["authorizationGroups.manageNodes"].firstMatch.click()
-        app.buttons["authorizationGroups.editor.nodes"].firstMatch.click()
-        let node = app.descendants(matching: .any)["authorization.selection.node-1"].firstMatch
+        let node = app.descendants(matching: .any)["authorizationGroups.member.node-1"].firstMatch
         XCTAssertTrue(node.waitForExistence(timeout: 5)); node.click()
-        app.buttons["authorization.selection.done"].firstMatch.click()
+        app.buttons["authorization.members.remove"].firstMatch.click()
         app.buttons["authorizationGroups.editor.save"].firstMatch.click()
         let summary = app.descendants(matching: .any)["authorizationGroups.editor.resultSummary"].firstMatch
         XCTAssertTrue(summary.waitForExistence(timeout: 4), "Saved result must not wait for the eight-second monitoring read")
@@ -147,10 +146,9 @@ final class AuthorizationFixtureUITests: XCTestCase {
         let group = app.descendants(matching: .any)["authorizationGroups.row.group-1"].firstMatch
         XCTAssertTrue(group.waitForExistence(timeout: 10)); group.click()
         app.buttons["authorizationGroups.manageNodes"].firstMatch.click()
-        app.buttons["authorizationGroups.editor.nodes"].firstMatch.click()
-        let node = app.descendants(matching: .any)["authorization.selection.node-1"].firstMatch
+        let node = app.descendants(matching: .any)["authorizationGroups.member.node-1"].firstMatch
         XCTAssertTrue(node.waitForExistence(timeout: 5)); node.click()
-        app.buttons["authorization.selection.done"].firstMatch.click()
+        app.buttons["authorization.members.remove"].firstMatch.click()
         XCTAssertFalse(app.buttons["authorizationGroups.editor.preview"].firstMatch.exists)
         let save = app.buttons["authorizationGroups.editor.save"].firstMatch
         XCTAssertTrue(save.isEnabled); save.click()
@@ -216,12 +214,49 @@ final class AuthorizationFixtureUITests: XCTestCase {
         save.click()
         let summary = app.descendants(matching: .any)["authorizationGroups.editor.resultSummary"].firstMatch
         XCTAssertTrue(summary.waitForExistence(timeout: 10))
-        XCTAssertTrue(displayedText(summary).contains("新增 2 条连接授权 · 移除 1 条连接授权"), displayedText(summary))
+        XCTAssertTrue(displayedText(summary).contains("授权组已更新"), displayedText(summary))
         XCTAssertTrue(app.descendants(matching: .any)["authorization.mutationReceipt"].firstMatch.exists)
         app.buttons["完成"].firstMatch.click()
 
     }
 
+
+    @MainActor
+    func testGroupDirectoryAndPickerUseServerPages() {
+        let app = XCUIApplication()
+        app.launchEnvironment["HYSTERIAX_AUTHORIZATION_FIXTURE_DIRECTORY"] = "__AUTHORIZATION_FIXTURES__"
+        app.launchEnvironment["HYSTERIAX_TEST_EXTRA_GROUP_COUNT"] = "120"
+        app.launchArguments += ["-appLanguage", "zh-Hans"]
+        app.launch()
+        addTeardownBlock { await MainActor.run { app.terminate() } }
+        let sidebar = app.descendants(matching: .any)["sidebar.users"].firstMatch
+        XCTAssertTrue(sidebar.waitForExistence(timeout: 10)); sidebar.click()
+        app.radioButtons["授权组"].firstMatch.click()
+        XCTAssertTrue(app.descendants(matching: .any)["authorizationGroups.row.group-extra-001"].firstMatch.waitForExistence(timeout: 10))
+        app.buttons["authorizationGroups.nextPage"].firstMatch.click()
+        XCTAssertTrue(app.descendants(matching: .any)["authorizationGroups.row.group-extra-051"].firstMatch.waitForExistence(timeout: 10))
+        XCTAssertFalse(app.descendants(matching: .any)["authorizationGroups.row.group-extra-001"].firstMatch.exists)
+
+        app.radioButtons["用户"].firstMatch.click()
+        let user = app.descendants(matching: .any)["users.row.user-1"].firstMatch
+        XCTAssertTrue(user.waitForExistence(timeout: 10)); user.click()
+        let source = app.descendants(matching: .any)["users.assignment.sourceGroup.group-1"].firstMatch
+        XCTAssertTrue(source.waitForExistence(timeout: 5)); source.click()
+        // The linked group is outside the current directory page; fetch its metadata separately.
+        XCTAssertTrue(app.descendants(matching: .any)["authorizationGroups.member.user-1"].firstMatch.waitForExistence(timeout: 10))
+        XCTAssertFalse(app.descendants(matching: .any)["authorizationGroups.row.group-1"].firstMatch.exists)
+
+        app.radioButtons["用户"].firstMatch.click()
+        app.buttons["users.manageAuthorizationGroups"].firstMatch.click()
+        app.buttons["users.groups.select"].firstMatch.click()
+        let next = app.buttons["authorization.selection.nextPage"].firstMatch
+        XCTAssertTrue(next.waitForExistence(timeout: 10)); next.click()
+        let choice = app.descendants(matching: .any)["authorization.selection.group-extra-051"].firstMatch
+        XCTAssertTrue(choice.waitForExistence(timeout: 10)); choice.click()
+        app.buttons["authorization.selection.done"].firstMatch.click()
+        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "value CONTAINS %@", "Z Group 051")).firstMatch.waitForExistence(timeout: 5))
+        app.buttons["取消"].firstMatch.click()
+    }
 
     @MainActor
     func testCAIdentityCreationPolicyAndPublication() {

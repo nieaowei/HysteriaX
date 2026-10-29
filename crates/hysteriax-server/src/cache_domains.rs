@@ -80,6 +80,9 @@ pub fn dependencies(path: &str, query: &[(String, String)]) -> Vec<&'static str>
     if path.starts_with("/dns/") {
         return vec!["dns", "node_config", "credentials"];
     }
+    if path.starts_with("/authorization-groups/") && path.ends_with("/nodes") {
+        return vec!["groups", "node_config", "nodes"];
+    }
     if path.starts_with("/authorization-groups") {
         return vec!["groups", "user_config", "node_config"];
     }

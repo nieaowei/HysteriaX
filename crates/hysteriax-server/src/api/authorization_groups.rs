@@ -66,94 +66,22 @@ pub(crate) struct MembershipUpdateRequest {
 
 #[derive(Clone, Debug)]
 struct GroupInfo {
+    #[cfg(test)]
     id: String,
     name: String,
     revision: i64,
     user_ids: Vec<String>,
     node_ids: Vec<String>,
+    #[cfg(test)]
     created_at: DateTime<Utc>,
+    #[cfg(test)]
     updated_at: DateTime<Utc>,
 }
 
 type Pair = (String, String);
 
-pub async fn list(State(state): State<AppState>) -> Result<Json<Vec<Value>>, ApiError> {
-    crate::read_snapshot::scope(&state.pool, list_snapshot(State(state.clone()))).await
-}
-async fn list_snapshot(State(state): State<AppState>) -> Result<Json<Vec<Value>>, ApiError> {
-    let version =
-        crate::cache_domains::version(&state.pool, &["groups", "user_config", "node_config"])
-            .await?;
-    let value = state
-        .caches
-        .values
-        .get(
-            format!("group-directory:{version}"),
-            std::time::Duration::from_secs(60),
-            crate::cache::bypass(),
-            || async { Ok::<_, ApiError>(json!(read_directory(&state).await?)) },
-        )
-        .await?;
-    Ok(Json(
-        value.as_array().ok_or_else(ApiError::internal)?.clone(),
-    ))
-}
-
-async fn read_directory(state: &AppState) -> Result<Vec<Value>, ApiError> {
-    let mut tx = crate::read_snapshot::begin(&state.pool).await?;
-    let rows=sqlx::query("SELECT id,name,revision,created_at,updated_at FROM authorization_groups ORDER BY lower(name) COLLATE \"C\",name COLLATE \"C\",id").fetch_all(&mut *tx).await?;
-    let users =
-        sqlx::query("SELECT group_id,user_id FROM authorization_group_users ORDER BY user_id")
-            .fetch_all(&mut *tx)
-            .await?;
-    let nodes =
-        sqlx::query("SELECT group_id,node_id FROM authorization_group_nodes ORDER BY node_id")
-            .fetch_all(&mut *tx)
-            .await?;
-    let mut user_map = std::collections::BTreeMap::<String, Vec<String>>::new();
-    let mut node_map = std::collections::BTreeMap::<String, Vec<String>>::new();
-    for row in users {
-        user_map
-            .entry(row.get("group_id"))
-            .or_default()
-            .push(row.get("user_id"));
-    }
-    for row in nodes {
-        node_map
-            .entry(row.get("group_id"))
-            .or_default()
-            .push(row.get("node_id"));
-    }
-    let groups = rows
-        .iter()
-        .map(|row| {
-            let id: String = row.get("id");
-            let user_ids = user_map.remove(&id).unwrap_or_default();
-            let node_ids = node_map.remove(&id).unwrap_or_default();
-            group_json(&GroupInfo {
-                id,
-                name: row.get("name"),
-                revision: row.get("revision"),
-                user_ids,
-                node_ids,
-                created_at: row.get("created_at"),
-                updated_at: row.get("updated_at"),
-            })
-        })
-        .collect();
-    tx.commit().await?;
-    Ok(groups)
-}
-
-pub async fn get(
-    State(state): State<AppState>,
-    Path(group_id): Path<String>,
-) -> Result<Json<Value>, ApiError> {
-    let group = load_group(&state.pool, &group_id)
-        .await?
-        .ok_or_else(|| ApiError::not_found("authorization group"))?;
-    Ok(Json(group_json(&group)))
-}
+mod reads;
+pub(crate) use reads::{get, list, list_nodes, list_users};
 
 #[cfg(test)]
 fn normalized_proposal(mut proposal: GroupProposal) -> Result<GroupProposal, ApiError> {
@@ -226,16 +154,20 @@ async fn load_group_tx(
         return Ok(None);
     };
     Ok(Some(GroupInfo {
+        #[cfg(test)]
         id: row.get("id"),
         name: row.get("name"),
         revision: row.get("revision"),
         user_ids: row.get("user_ids"),
         node_ids: row.get("node_ids"),
+        #[cfg(test)]
         created_at: row.get("created_at"),
+        #[cfg(test)]
         updated_at: row.get("updated_at"),
     }))
 }
 
+#[cfg(test)]
 fn group_json(group: &GroupInfo) -> Value {
     json!({
         "id":group.id,
@@ -425,7 +357,7 @@ async fn lock_authorization_graph_on(
 #[allow(clippy::too_many_arguments)]
 async fn commit_group_on(
     tx: &mut Transaction<'_, Postgres>,
-    state: &AppState,
+    _state: &AppState,
     action: &str,
     group_id: Option<&str>,
     expected_revision: Option<i64>,
@@ -570,14 +502,10 @@ async fn commit_group_on(
             "authorization sources changed while saving; retry the change",
         ));
     }
-    let mut managed_identities = crate::credentials::authorization::commit_prepared(
-        tx,
-        &state.secrets,
-        prepared,
-        &actual_additions,
-    )
-    .await
-    .map_err(authorization_transaction_error)?;
+    let mut managed_identities =
+        crate::credentials::authorization::commit_prepared(tx, prepared, &actual_additions)
+            .await
+            .map_err(authorization_transaction_error)?;
     let (_, revocation_job_ids, touched_users) =
         reconcile_assignments(tx, &affected_users, &effective_after, &assignments, false).await?;
     crate::credentials::authorization::annotate_results_on(tx, &mut managed_identities).await?;
@@ -795,7 +723,7 @@ pub(crate) async fn before_node_delete(
 #[allow(clippy::too_many_arguments)]
 async fn commit_membership_on(
     tx: &mut Transaction<'_, Postgres>,
-    state: &AppState,
+    _state: &AppState,
     user_id: &str,
     expected_revision: i64,
     proposal: MembershipProposal,
@@ -855,14 +783,10 @@ async fn commit_membership_on(
             "authorization sources changed while saving; retry the change",
         ));
     }
-    let mut managed_identities = crate::credentials::authorization::commit_prepared(
-        tx,
-        &state.secrets,
-        prepared,
-        &actual_additions,
-    )
-    .await
-    .map_err(authorization_transaction_error)?;
+    let mut managed_identities =
+        crate::credentials::authorization::commit_prepared(tx, prepared, &actual_additions)
+            .await
+            .map_err(authorization_transaction_error)?;
     let (created_credentials, revocation_job_ids, touched_users) = reconcile_assignments(
         tx,
         &[user_id.to_owned()],

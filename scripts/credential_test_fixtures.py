@@ -8,6 +8,7 @@ import base64
 import copy
 import hashlib
 import uuid
+from urllib.parse import quote
 
 _STAGED_TLS = {}
 import json
@@ -85,7 +86,7 @@ def grant_group(expect, user_id, node_ids, name=None, *, api_prefix="/api/v2"):
     name = name or "Live grant " + uuid.uuid4().hex[:12]
     path = api_prefix + "/authorization-groups"
     expect(path, "POST", {"name": name}, (201,))
-    group = next(item for item in expect(path) if item["name"] == name)
+    group = next(item for item in expect(path + "?q=" + quote(name, safe=""))["items"] if item["name"] == name)
     patch = {"expected_revision": group["revision"], "add_user_ids": [user_id]}
     if node_ids: patch["add_node_ids"] = list(node_ids)
     return expect(path + "/" + group["id"], "PATCH", patch, (200,))
@@ -98,9 +99,9 @@ def request_group(raw_request, base, token, user_ids, node_ids, name=None):
     status, body = raw_request(base, path, token, "POST", {"name": name})
     if status != 201: return status, body
     created = status, body
-    status, body = raw_request(base, path, token, "GET")
+    status, body = raw_request(base, path + "?q=" + quote(name, safe=""), token, "GET")
     if status != 200: return status, body
-    group = next(item for item in json.loads(body) if item["name"] == name)
+    group = next(item for item in json.loads(body)["items"] if item["name"] == name)
     patch = {"expected_revision": group["revision"]}
     if user_ids: patch["add_user_ids"] = list(user_ids)
     if node_ids: patch["add_node_ids"] = list(node_ids)

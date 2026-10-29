@@ -319,8 +319,6 @@ struct AuthorizationGroupSummary: Codable, Sendable, Identifiable {
     let id: String
     let name: String
     let revision: Int
-    let userIds: [String]
-    let nodeIds: [String]
     let userCount: Int
     let nodeCount: Int
     let createdAt: String
@@ -330,12 +328,82 @@ struct AuthorizationGroupSummary: Codable, Sendable, Identifiable {
         case id
         case name
         case revision
-        case userIds = "user_ids"
-        case nodeIds = "node_ids"
         case userCount = "user_count"
         case nodeCount = "node_count"
         case createdAt = "created_at"
         case updatedAt = "updated_at"
+    }
+}
+
+struct AuthorizationGroupsPage: Codable, Sendable {
+    let items: [AuthorizationGroupSummary]
+    let total: Int
+    let page: Int
+    let pageSize: Int
+
+    enum CodingKeys: String, CodingKey {
+        case items
+        case total
+        case page
+        case pageSize = "page_size"
+    }
+}
+
+struct AuthorizationGroupUser: Codable, Sendable, Identifiable {
+    let id: String
+    let name: String
+    let enabled: Bool
+    let expiresAt: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case enabled
+        case expiresAt = "expires_at"
+    }
+}
+
+struct AuthorizationGroupNode: Codable, Sendable, Identifiable {
+    let id: String
+    let name: String
+    let state: String
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case state
+    }
+}
+
+struct AuthorizationGroupUsersPage: Codable, Sendable {
+    let items: [AuthorizationGroupUser]
+    let total: Int
+    let page: Int
+    let pageSize: Int
+    let revision: Int
+
+    enum CodingKeys: String, CodingKey {
+        case items
+        case total
+        case page
+        case pageSize = "page_size"
+        case revision
+    }
+}
+
+struct AuthorizationGroupNodesPage: Codable, Sendable {
+    let items: [AuthorizationGroupNode]
+    let total: Int
+    let page: Int
+    let pageSize: Int
+    let revision: Int
+
+    enum CodingKeys: String, CodingKey {
+        case items
+        case total
+        case page
+        case pageSize = "page_size"
+        case revision
     }
 }
 

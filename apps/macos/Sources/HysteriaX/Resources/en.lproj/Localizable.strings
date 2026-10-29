@@ -2182,3 +2182,10 @@
 "授权组已删除" = "Authorization group deleted";
 
 "填写名称创建空组，再分别添加成员和节点。" = "Enter a name to create an empty group, then add members and nodes separately.";
+"取消全部选择" = "Clear selection";
+"授权组版本已变化，请重新打开编辑。" = "The authorization group changed. Reopen the editor.";
+"查看详情" = "View details";
+"选择当前页" = "Select this page";
+"已选 {0} 人" = "{0} people selected";
+"添加所选 {0} 项" = "Add {0} selected items";
+"移除所选 {0} 项" = "Remove {0} selected items";

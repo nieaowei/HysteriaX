@@ -1,12 +1,10 @@
-//! Managed identity preparation for direct authorization changes.
-//! All keys/signatures are prepared before the commit write lock.
-use super::identities::{self, PreparedIdentity};
-use crate::security::SecretBox;
+//! Durable identity admission for direct authorization changes.
+//! Authorization commits identity requirements and work, never signing material.
 use anyhow::{Context, Result, ensure};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use sqlx::{PgPool, Postgres, Row, Transaction};
+use sqlx::{Postgres, Row, Transaction};
 use std::collections::{BTreeMap, BTreeSet};
 
 pub type Pair = (String, String);
@@ -122,29 +120,83 @@ pub async fn plan_on(connection: &mut sqlx::PgConnection, additions: &[Pair]) ->
 #[derive(Clone)]
 pub struct Prepared {
     pub plan: Plan,
-    identities: Vec<Vec<PreparedIdentity>>,
+    // Allocate IDs once so transaction retries preserve candidate identity IDs.
+    identity_ids: Vec<String>,
 }
-pub async fn prepare_plan(pool: &PgPool, secrets: &SecretBox, plan: Plan) -> Result<Prepared> {
-    let identities =
-        identities::authorization_batch::prepare(pool, secrets, &plan.identities).await?;
-    Ok(Prepared { plan, identities })
+pub fn prepare_plan(plan: Plan) -> Prepared {
+    let identity_ids = plan
+        .identities
+        .iter()
+        .map(|_| uuid::Uuid::new_v4().to_string())
+        .collect();
+    Prepared { plan, identity_ids }
 }
 
 pub async fn commit_prepared(
     tx: &mut Transaction<'_, Postgres>,
-    _secrets: &SecretBox,
     prepared: Prepared,
     additions: &[Pair],
 ) -> Result<Value> {
     let current = plan_on(tx, additions).await?;
     ensure!(
         current == prepared.plan,
-        "managed identity requirements changed during signing; retry the change"
+        "managed identity requirements changed; retry the change"
     );
-    let committed = identities::authorization_batch::commit(tx, prepared.identities).await?;
     let mut result = Vec::new();
-    for (requirement, versions) in prepared.plan.identities.into_iter().zip(committed) {
-        result.push(json!({"user_id":requirement.user_id,"ca_credential_id":requirement.ca_credential_id,"identity_id":versions.first().map(|v|&v.0),"ca_versions":requirement.ca_versions,"policy_revision":requirement.policy_revision,"issued":requirement.issue_now,"pending":requirement.pending}));
+    let entries: Vec<_> = prepared
+        .plan
+        .identities
+        .iter()
+        .zip(&prepared.identity_ids)
+        .collect();
+    // Bound each statement independently of group size (100k users / 10k nodes).
+    for page in entries.chunks(256) {
+        let input: Vec<_> = page
+            .iter()
+            .map(|(r, id)| {
+                json!({
+                    "id":id,"user_id":r.user_id,"ca_id":r.ca_credential_id,"issue":r.issue_now
+                })
+            })
+            .collect();
+        let rows = sqlx::query(r#"
+INSERT INTO mtls_user_identities(id,user_id,ca_id,next_action_at,created_at,updated_at)
+SELECT id,user_id,ca_id,CASE WHEN issue THEN clock_timestamp() END,clock_timestamp(),clock_timestamp()
+FROM jsonb_to_recordset($1) AS r(id text,user_id text,ca_id text,issue boolean)
+ORDER BY user_id,ca_id
+ON CONFLICT(user_id,ca_id) DO UPDATE SET archived=false,
+ next_action_at=CASE WHEN EXCLUDED.next_action_at IS NOT NULL THEN EXCLUDED.next_action_at ELSE mtls_user_identities.next_action_at END,
+ updated_at=clock_timestamp()
+RETURNING id,user_id,ca_id
+"#).bind(json!(input)).fetch_all(&mut **tx).await?;
+        let ids: BTreeMap<Pair, String> = rows
+            .into_iter()
+            .map(|row| ((row.get("user_id"), row.get("ca_id")), row.get("id")))
+            .collect();
+        let mut work = Vec::new();
+        for (r, _) in page {
+            let id = &ids[&(r.user_id.clone(), r.ca_credential_id.clone())];
+            if r.issue_now {
+                work.push(json!({"id":format!("mtls-identity:{id}"),"payload":{
+                    "identity_id":id,"user_id":r.user_id,"ca_id":r.ca_credential_id,
+                    "lease_resources":[format!("identity:{id}")]
+                }}));
+            }
+            result.push(
+                json!({"user_id":r.user_id,"ca_credential_id":r.ca_credential_id,
+                "identity_id":id,"ca_versions":r.ca_versions,"policy_revision":r.policy_revision,
+                "issued":false,"pending":r.issue_now || r.pending}),
+            );
+        }
+        if !work.is_empty() {
+            sqlx::query(r#"
+INSERT INTO background_work(id,kind,payload)
+SELECT id,'mtls-identity-renewal',payload FROM jsonb_to_recordset($1) AS r(id text,payload jsonb) ORDER BY id
+ON CONFLICT(id) DO UPDATE SET state='queued',owner=NULL,started_at=NULL,finished_at=NULL,
+ error_code=NULL,available_at=clock_timestamp()
+WHERE background_work.kind=excluded.kind AND background_work.state IN ('complete','failed')
+"#).bind(json!(work)).execute(&mut **tx).await?;
+        }
     }
     Ok(json!(result))
 }

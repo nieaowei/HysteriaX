@@ -14,7 +14,8 @@ final class AuthorizationPageState {
 
     var selectedGroupID: String?
     var groupSearchText = ""
-    var groupSortOrder = [KeyPathComparator<AuthorizationGroupSummary>(\.name)]
+    var groupSort = "name"
+    var groupPage = 1
     // Toolbar actions may outlive a tab view; keep their presentation state page-owned.
     var groupEditorTarget: AuthorizationGroupEditorTarget?
 }

@@ -76,7 +76,7 @@ private final class GroupFixtureProtocol: URLProtocol, @unchecked Sendable {
         else if method == "PUT" && path.hasSuffix("/authorization-groups") { data = Data(#"{"user_id":"user","revision":2,"group_ids":[],"assignments":[],"additions_count":0,"removals_count":1,"created_credentials":[],"revocation_job_ids":["kick-1"]}"#.utf8) }
         else if path == "/api/v2/version" { data = Data(#"{"api_version":"2.0.0","management_protocol":2,"directory_version":"b3:test","features":["authorization_groups","managed_mtls"],"service_version":"fixture","hysteria_version":"fixture","mihomo_version":"fixture"}"#.utf8) }
         else if path == "/api/v2/authorization-groups" && Self.state.failGroups { status = 503; data = Data(#"{"error":{"code":"temporary","message":"groups unavailable"}}"#.utf8) }
-        else if ["/api/v2/jobs", "/api/v2/audit", "/api/v2/nodes", "/api/v2/users", "/api/v2/credentials", "/api/v2/dns/records"].contains(path) { data = Data(#"{"items":[],"total":0,"page":1,"page_size":50}"#.utf8) }
+        else if ["/api/v2/authorization-groups", "/api/v2/jobs", "/api/v2/audit", "/api/v2/nodes", "/api/v2/users", "/api/v2/credentials", "/api/v2/dns/records"].contains(path) { data = Data(#"{"items":[],"total":0,"page":1,"page_size":50}"#.utf8) }
         else { data = Data("[]".utf8) }
         client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: "HTTP/1.1", headerFields: ["Content-Type":"application/json"])!, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: data)
@@ -230,23 +230,23 @@ struct AuthorizationGroupClientChecks {
     }
 
     static func checkMemberDrafts(user: UserSummary) {
-        let ids = Set((0..<5_000).map { "member-\($0)" })
-        let proposed = ids.subtracting(["member-0", "member-101"]).union(["new-member"])
-        let changes = AuthorizationMemberChanges(original: ids, proposed: proposed)
-        precondition(changes.added == ["new-member"] && changes.removed == ["member-0", "member-101"])
-        precondition(changes.undoing(["member-0", "new-member"]) == ids.subtracting(["member-101"]))
-        // Search/page selection changes affect only the currently visible rows.
-        let firstPage = Set((0..<100).map { "member-\($0)" })
-        let secondPage = Set((100..<200).map { "member-\($0)" })
-        var selection = AuthorizationMemberSelection.merging(["member-0"], visibleIDs: firstPage, into: [])
-        selection = AuthorizationMemberSelection.merging(["member-101"], visibleIDs: secondPage, into: selection)
-        precondition(selection == ["member-0", "member-101"])
-        selection = AuthorizationMemberSelection.merging([], visibleIDs: firstPage, into: selection)
-        precondition(selection == ["member-101"], "deselecting this page must preserve other pages")
-        let rows = AuthorizationMemberRow.make(users: [user], ids: ids.union([user.id]), changes: changes)
-        precondition(rows.count == 5_001 && rows.first { $0.id == user.id }?.name == user.name)
-        precondition(rows.first { $0.id == "member-0" }?.enabled == nil, "missing users must remain manageable by ID")
-        print("Member checks passed: 5,000 members, cross-page selection, targeted undo and missing users.")
+        var draft = AuthorizationRelationDraft()
+        let first = AuthorizationRelationRow.placeholder("member-0")
+        let second = AuthorizationRelationRow.placeholder("member-101")
+        let added = AuthorizationRelationRow.placeholder("new-member")
+        draft.setMember(false, row: first, originallyMember: true)
+        draft.setMember(false, row: second, originallyMember: true)
+        draft.setMember(true, row: added, originallyMember: false)
+        precondition(Set(draft.removed.keys) == [first.id, second.id])
+        precondition(Set(draft.added.keys) == [added.id])
+        // Cancel an explicit change without ever loading the rest of the group's members.
+        draft.setMember(true, row: first, originallyMember: true)
+        draft.undo([added.id])
+        precondition(draft.added.isEmpty && Set(draft.removed.keys) == [second.id])
+        precondition(draft.rows.count == 1, "unvisited members must never enter the patch")
+        draft.undo([second.id])
+        precondition(draft.isEmpty)
+        print("Member checks passed: bounded deltas, cross-page edits and targeted undo.")
     }
 
 }

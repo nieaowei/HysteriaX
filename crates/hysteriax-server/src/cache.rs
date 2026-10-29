@@ -460,7 +460,7 @@ async fn cached_middleware(state: AppState, request: Request, next: Next) -> Res
         .unwrap_or("")
         .to_ascii_lowercase();
     if controls.split(',').any(|v| v.trim() == "no-store") {
-        return BYPASS.scope(true, next.run(request)).await;
+        return next.run(request).await;
     }
     let started = Instant::now();
     let computed = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -489,7 +489,7 @@ async fn cached_middleware(state: AppState, request: Request, next: Next) -> Res
         .responses
         .get(key, ttl, bypass, || async {
             computed.store(true, Ordering::Relaxed);
-            CachedResponse::capture(BYPASS.scope(bypass, next.run(request)).await).await
+            CachedResponse::capture(next.run(request).await).await
         })
         .await
     {
@@ -618,11 +618,6 @@ pub async fn configuration_generation(pool: &sqlx::PgPool) -> Result<i64, ApiErr
             .fetch_one(pool)
             .await?,
     )
-}
-
-tokio::task_local! { static BYPASS: bool; }
-pub fn bypass() -> bool {
-    BYPASS.try_with(|value| *value).unwrap_or(false)
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]

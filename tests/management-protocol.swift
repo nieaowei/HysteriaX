@@ -57,7 +57,7 @@ private final class ProtocolTransport: URLProtocol, @unchecked Sendable {
                 }
                 if path.hasSuffix("/events/head") { return .response(200,try! JSONSerialization.data(withJSONObject:["cursor":"v2:77777777-7777-4777-8777-777777777777:\(headSequence)","epoch":"77777777-7777-4777-8777-777777777777","publication_seq":headSequence]),"application/json") }
                 if path.hasSuffix("/authorization-groups"), failGroups { failedGroupsReads += 1; return .response(503,Data(),"application/json") }
-                if path.hasSuffix("/authorization-groups") { return .response(200,Data("[]".utf8),"application/json") }
+                if path.hasSuffix("/authorization-groups") { return .response(200,Data(#"{"items":[],"total":0,"page":1,"page_size":50}"#.utf8),"application/json") }
                 if path.hasSuffix("/version") { return .response(200,Data("{\"api_version\":\"2.0.0\",\"management_protocol\":2,\"current_admin_token_id\":\"fixture-admin\",\"directory_version\":\"b3:test\",\"service_version\":\"test\",\"hysteria_version\":\"test\",\"mihomo_version\":\"test\",\"features\":\(feature.map { "[\"\($0)\"]" } ?? "[]")}".utf8),"application/json") }
                 if path == "/readyz" { return .response(200,Data("{\"status\":\"ok\"}".utf8),"application/json") }
                 if path.hasSuffix("/users"), failState { failedStateReads += 1; return .response(503,Data(),"application/json") }

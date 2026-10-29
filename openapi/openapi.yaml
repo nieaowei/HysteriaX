@@ -1424,15 +1424,22 @@ paths:
   /authorization-groups:
     get:
       operationId: listAuthorizationGroups
-      summary: List authorization groups
+      summary: List authorization group metadata and counts
+      description: Always returns a page without member or node ID arrays. Out-of-range pages clamp to the last page; empty results use page 1.
+      x-swift-include-optional-query: true
+      parameters:
+        - { name: page, in: query, schema: { type: integer, minimum: 1, default: 1 } }
+        - { name: page_size, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+        - { name: q, in: query, description: Literal case-insensitive name or ID substring., schema: { type: string } }
+        - { name: sort, in: query, schema: { type: string, enum: [name, created_at, updated_at], default: name } }
+        - { name: order, in: query, schema: { type: string, enum: [asc, desc], default: asc } }
       responses:
         '200':
-          description: Authorization groups with their member and node sets
+          description: Bounded authorization group page
           content:
             application/json:
-              schema:
-                type: array
-                items: { $ref: '#/components/schemas/AuthorizationGroupSummary' }
+              schema: { $ref: '#/components/schemas/AuthorizationGroupsPage' }
+        '400': { $ref: '#/components/responses/Error' }
     post:
       operationId: createAuthorizationGroup
       parameters:
@@ -1505,6 +1512,53 @@ paths:
         '400': { $ref: '#/components/responses/Error' }
         '404': { $ref: '#/components/responses/Error' }
         '409': { $ref: '#/components/responses/Error' }
+  /authorization-groups/{group_id}/users:
+    parameters:
+      - { name: group_id, in: path, required: true, schema: { type: string } }
+    get:
+      operationId: listAuthorizationGroupUsers
+      summary: List group users or candidates
+      description: Lightweight entries only. Each page carries the group revision from the same read snapshot. Stable ID tie-breaks; out-of-range pages clamp; empty results use page 1.
+      x-swift-include-optional-query: true
+      parameters:
+        - { name: page, in: query, schema: { type: integer, minimum: 1, default: 1 } }
+        - { name: page_size, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+        - { name: q, in: query, description: Literal case-insensitive name or ID substring., schema: { type: string } }
+        - { name: sort, in: query, schema: { type: string, enum: [name, id, expires_at], default: name } }
+        - { name: order, in: query, schema: { type: string, enum: [asc, desc], default: asc } }
+        - { name: member, in: query, description: "True lists current members; false lists candidates.", schema: { type: boolean, default: true } }
+        - { name: enabled, in: query, schema: { type: boolean } }
+      responses:
+        '200':
+          description: Bounded users page
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuthorizationGroupUsersPage' }
+        '400': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+  /authorization-groups/{group_id}/nodes:
+    parameters:
+      - { name: group_id, in: path, required: true, schema: { type: string } }
+    get:
+      operationId: listAuthorizationGroupNodes
+      summary: List group nodes or candidates
+      description: Lightweight entries only. Each page carries the group revision from the same read snapshot. Stable ID tie-breaks; out-of-range pages clamp; empty results use page 1.
+      x-swift-include-optional-query: true
+      parameters:
+        - { name: page, in: query, schema: { type: integer, minimum: 1, default: 1 } }
+        - { name: page_size, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+        - { name: q, in: query, description: Literal case-insensitive name or ID substring., schema: { type: string } }
+        - { name: sort, in: query, schema: { type: string, enum: [name, id, state], default: name } }
+        - { name: order, in: query, schema: { type: string, enum: [asc, desc], default: asc } }
+        - { name: member, in: query, description: "True lists current members; false lists candidates.", schema: { type: boolean, default: true } }
+      responses:
+        '200':
+          description: Bounded nodes page
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuthorizationGroupNodesPage' }
+        '400': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
   /users/{id}/credentials/rotate:
     parameters:
       - $ref: '#/components/parameters/Id'
@@ -2840,22 +2894,58 @@ components:
         name: { type: string }
     AuthorizationGroupSummary:
       type: object
-      required: [id, name, revision, user_ids, node_ids, user_count, node_count, created_at, updated_at]
+      required: [id, name, revision, user_count, node_count, created_at, updated_at]
       properties:
         id: { type: string }
         name: { type: string }
         revision: { type: integer }
-        user_ids:
-          type: array
-          items: { type: string, format: uuid }
-        node_ids:
-          type: array
-          items: { type: string, format: uuid }
         user_count: { type: integer, minimum: 0 }
         node_count: { type: integer, minimum: 0 }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
+    AuthorizationGroupUser:
+      type: object
+      required: [id, name, enabled, expires_at]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        enabled: { type: boolean }
+        expires_at: { type: [string, 'null'], format: date-time }
+    AuthorizationGroupNode:
+      type: object
+      required: [id, name, state]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        state: { type: string }
+    AuthorizationGroupsPage:
+      type: object
+      required: [items, total, page, page_size]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/AuthorizationGroupSummary' } }
+        total: { type: integer, minimum: 0 }
+        page: { type: integer, minimum: 1 }
+        page_size: { type: integer, minimum: 1, maximum: 200 }
+    AuthorizationGroupUsersPage:
+      type: object
+      required: [items, total, page, page_size, revision]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/AuthorizationGroupUser' } }
+        total: { type: integer, minimum: 0 }
+        page: { type: integer, minimum: 1 }
+        page_size: { type: integer, minimum: 1, maximum: 200 }
+        revision: { type: integer }
+    AuthorizationGroupNodesPage:
+      type: object
+      required: [items, total, page, page_size, revision]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/AuthorizationGroupNode' } }
+        total: { type: integer, minimum: 0 }
+        page: { type: integer, minimum: 1 }
+        page_size: { type: integer, minimum: 1, maximum: 200 }
+        revision: { type: integer }
     AuthorizationIdentityResult:
+      description: Authorization mutations admit durable background signing work. issued is false; pending indicates a missing certificate awaiting issuance or user eligibility. Existing valid certificates are reused.
       type: object
       required: [user_id, ca_credential_id, identity_id, issued, pending]
       properties:

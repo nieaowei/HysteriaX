@@ -11,21 +11,64 @@ struct AuthorizationGroupsView: View {
     @State private var resizingListStart: CGFloat?
     @State private var deletionTarget: AuthorizationGroupSummary?
 
-    private var visibleGroups: [AuthorizationGroupSummary] {
-        let query = pageState.groupSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        return store.authorizationGroups
-            .filter { query.isEmpty || $0.name.localizedStandardContains(query) || $0.id.localizedCaseInsensitiveContains(query) }
-            .sorted(using: pageState.groupSortOrder)
-    }
+    @State private var response: AuthorizationGroupsPage?
+    @State private var detail: AuthorizationGroupSummary?
+    @State private var loadedKey: String?
+    @State private var error: String?
+    @State private var detailError: String?
+    @State private var loading = false
+    @State private var retry = UUID()
 
+    private var key: String { store.listPageKey([pageState.groupSearchText, pageState.groupSort, String(pageState.groupPage)]) }
+    private var requestKey: String { "\(key)|\(store.isConnected)|\(store.dataRefreshToken)|\(retry)" }
+    private var detailKey: String { "\(store.serviceAddress)|\(pageState.selectedGroupID ?? "")|\(store.isConnected)|\(store.dataRefreshToken)|\(retry)" }
+    private var visibleGroups: [AuthorizationGroupSummary] {
+        if !store.isConnected { return Array(store.authorizationGroups.prefix(50)) }
+        return loadedKey == key ? response?.items ?? [] : []
+    }
     private var selectedGroup: AuthorizationGroupSummary? {
-        store.authorizationGroups.first { $0.id == pageState.selectedGroupID }
+        if let detail, detail.id == pageState.selectedGroupID { return detail }
+        return visibleGroups.first { $0.id == pageState.selectedGroupID }
     }
 
     var body: some View {
         directoryContent
-            .task(id: store.dataRefreshToken) { await store.prepareDirectories([.nodes, .users]) }
-            .disabled(pageState.groupEditorTarget == nil && deletionTarget == nil && [ManagementStore.Directory.nodes, .users].contains { store.loadingDirectories.contains($0) })
+            .onChange(of: pageState.groupSort) { _, _ in pageState.groupPage = 1 }
+            .onChange(of: store.serviceAddress) { _, _ in
+                response = nil; detail = nil; loadedKey = nil; pageState.selectedGroupID = nil; pageState.groupPage = 1
+            }
+            .task(id: requestKey) { await loadPage() }
+            .task(id: detailKey) { await loadDetail() }
+    }
+
+    private func loadPage() async {
+        let request = requestKey
+        guard store.isConnected else { loading = false; return }
+        loading = true; error = nil
+        defer { if request == requestKey { loading = false } }
+        do {
+            if !pageState.groupSearchText.isEmpty { try await Task.sleep(for: .milliseconds(250)) }
+            let value = try await store.authorizationGroupsPage(page: pageState.groupPage, query: pageState.groupSearchText, sort: pageState.groupSort, order: pageState.groupSort == "updated_at" ? "desc" : "asc")
+            guard !Task.isCancelled, request == requestKey else { return }
+            pageState.groupPage = value.page; response = value; loadedKey = key
+        } catch {
+            guard !Task.isCancelled, !isRequestCancellation(error), request == requestKey else { return }
+            self.error = error.localizedDescription
+        }
+    }
+
+    private func loadDetail() async {
+        let request = detailKey
+        detailError = nil
+        guard store.isConnected, let id = pageState.selectedGroupID else { detail = nil; return }
+        do {
+            let value = try await store.authorizationGroupDetail(id)
+            guard !Task.isCancelled, request == detailKey else { return }
+            detail = value
+        } catch {
+            guard !Task.isCancelled, !isRequestCancellation(error), request == detailKey else { return }
+            detail = nil; detailError = error.localizedDescription
+        }
     }
 
     private var directoryContent: some View {
@@ -73,7 +116,7 @@ struct AuthorizationGroupsView: View {
         }
         .searchable(text: $pageState.groupSearchText, placement: .toolbar, prompt: L10n.text("搜索授权组"))
         .onChange(of: pageState.selectedGroupID) { _, _ in detailTab = "members" }
-        .onChange(of: pageState.groupSearchText) { _, _ in pageState.selectedGroupID = nil }
+        .onChange(of: pageState.groupSearchText) { _, _ in pageState.selectedGroupID = nil; pageState.groupPage = 1 }
         .sheet(item: $pageState.groupEditorTarget) { target in
             AuthorizationGroupEditorView(store: store, group: target.group, intent: target.intent, memberMode: target.memberMode, removedUserIDs: target.removedUserIDs) { id in
                 pageState.selectedGroupID = id
@@ -84,9 +127,6 @@ struct AuthorizationGroupsView: View {
                 pageState.selectedGroupID = nil
             }
         }
-        .task(id: store.isConnected) {
-            if store.isConnected { await store.refreshAuthorizationGroups() }
-        }
     }
 
     @ViewBuilder
@@ -96,6 +136,8 @@ struct AuthorizationGroupsView: View {
                 .id(selectedGroup.id)
                 .accessibilityElement(children: .contain)
                 .accessibilityIdentifier("authorizationGroups.detail")
+        } else if let detailError {
+            VStack { Text(detailError).foregroundStyle(.red); Button(L10n.text("重试")) { retry = UUID() } }
         } else {
             ContentUnavailableView(L10n.text("选择授权组"), systemImage: "person.3", description: Text(L10n.text("在左侧选择授权组，查看成员和节点。")))
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -108,8 +150,8 @@ struct AuthorizationGroupsView: View {
                 Text(L10n.text("授权组")).font(.headline)
                 Spacer()
                 Menu {
-                    Button(L10n.text("名称")) { pageState.groupSortOrder = [KeyPathComparator(\.name)] }
-                    Button(L10n.text("更新时间")) { pageState.groupSortOrder = [KeyPathComparator(\.updatedAt, order: .reverse)] }
+                    Button(L10n.text("名称")) { pageState.groupSort = "name" }
+                    Button(L10n.text("更新时间")) { pageState.groupSort = "updated_at" }
                 } label: {
                     Image(systemName: "arrow.up.arrow.down")
                 }
@@ -134,21 +176,22 @@ struct AuthorizationGroupsView: View {
             .scrollContentBackground(.hidden)
             .accessibilityIdentifier("authorizationGroups.list")
             .overlay {
-                if let error = store.authorizationGroupsError {
+                if let error {
                     VStack(spacing: 10) {
                         Label(L10n.text("无法读取授权组"), systemImage: "exclamationmark.triangle")
-                        Button(L10n.text("重试")) { Task { await store.refreshAuthorizationGroups() } }
-                            .disabled(!store.isConnected || store.isLoadingAuthorizationGroups)
+                        Button(L10n.text("重试")) { retry = UUID() }
+                            .disabled(!store.isConnected || loading)
                     }
                     .padding(12).help(error)
-                } else if store.authorizationGroups.isEmpty, store.isLoadingAuthorizationGroups {
+                } else if visibleGroups.isEmpty, loading {
                     ProgressView(L10n.text("读取授权组…"))
-                } else if store.authorizationGroups.isEmpty {
-                    Text(L10n.text("还没有授权组")).foregroundStyle(.secondary)
                 } else if visibleGroups.isEmpty {
-                    Text(L10n.text("没有匹配的授权组")).foregroundStyle(.secondary)
+                    Text(pageState.groupSearchText.isEmpty ? L10n.text("还没有授权组") : L10n.text("没有匹配的授权组")).foregroundStyle(.secondary)
                 }
             }
+            Divider()
+            AuthorizationPagination(page: $pageState.groupPage, pages: max(1, ((response?.total ?? 0) + 49) / 50), total: response?.total ?? 0, disabled: loading || !store.isConnected, identifier: "authorizationGroups")
+                .padding(8)
         }
     }
 
@@ -177,22 +220,20 @@ struct AuthorizationGroupsView: View {
             .padding(.horizontal, 16).padding(.top, 12)
             .accessibilityIdentifier("authorizationGroups.detailTabs")
             if detailTab == "members" {
-                AuthorizationGroupMembersView(group: group, users: store.users, canEdit: store.isConnected, onOpen: onOpenUser) { mode, removed in
+                AuthorizationGroupMembersView(store: store, group: group, canEdit: store.isConnected, onOpen: onOpenUser) { mode, removed in
                     pageState.groupEditorTarget = AuthorizationGroupEditorTarget(group: group, intent: .users, memberMode: mode, removedUserIDs: removed)
                 }
                 .id(group.id)
+            } else if detailTab == "nodes" {
+                nodes(group).padding(16)
             } else {
                 ScrollView {
-                    if detailTab == "nodes" {
-                        nodes(group)
-                    } else {
                         LazyVGrid(columns: [GridItem(.adaptive(minimum: 200), alignment: .leading)], alignment: .leading, spacing: 12) {
                             groupMetric(L10n.text("授权组 ID"), value: group.id)
                             groupMetric(L10n.text("创建时间"), value: DateDisplayText.local(group.createdAt))
                             groupMetric(L10n.text("更新时间"), value: DateDisplayText.local(group.updatedAt))
                             groupMetric(L10n.text("版本"), value: String(group.revision))
                         }
-                    }
                 }
                 .padding(16)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -220,37 +261,8 @@ struct AuthorizationGroupsView: View {
     }
 
     private func nodes(_ group: AuthorizationGroupSummary) -> some View {
-        GroupBox {
-            VStack(alignment: .leading, spacing: 0) {
-                if group.nodeIds.isEmpty {
-                    Text(L10n.text("此授权组没有节点。"))
-                        .foregroundStyle(.secondary).padding(.vertical, 8)
-                }
-                ForEach(Array(group.nodeIds.sorted().enumerated()), id: \.element) { index, nodeID in
-                    if index > 0 { Divider() }
-                    Button {
-                        onOpenNode(nodeID)
-                    } label: {
-                        HStack(spacing: 10) {
-                            Image(systemName: "server.rack").foregroundStyle(.secondary)
-                            Text(store.nodes.first(where: { $0.id == nodeID })?.name ?? nodeID)
-                                .foregroundStyle(Color.accentColor)
-                            Spacer()
-                            Text(nodeID.prefix(8)).font(.caption.monospaced()).foregroundStyle(.secondary)
-                            Image(systemName: "chevron.right").font(.caption).foregroundStyle(.secondary)
-                        }
-                        .padding(.vertical, 8)
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(!store.nodes.contains { $0.id == nodeID })
-                    .accessibilityIdentifier("authorizationGroups.node.\(nodeID)")
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-        } label: {
-            Label(L10n.text("授权节点（{0}）", String(group.nodeIds.count)), systemImage: "server.rack")
-        }
+        AuthorizationGroupNodesView(store: store, group: group, onOpen: onOpenNode)
+            .frame(minHeight: 360)
     }
 
     private func groupMetric(_ title: String, value: String) -> some View {

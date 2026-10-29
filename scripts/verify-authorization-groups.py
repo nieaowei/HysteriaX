@@ -3,6 +3,7 @@
 from management_test_http import management_request, start_test_server
 import base64
 import json
+from urllib.parse import quote
 import os
 import pathlib
 import secrets
@@ -52,7 +53,7 @@ def main():
         def group(name, users, nodes):
             receipt = expect("/api/v2/authorization-groups", "POST", {"name": name}, 201)
             assert receipt == {"revocation_job_ids": []}
-            current = next(item for item in expect("/api/v2/authorization-groups") if item["name"] == name)
+            current = next(item for item in expect("/api/v2/authorization-groups?q=" + quote(name, safe=""))["items"] if item["name"] == name)
             if users or nodes:
                 patch = {"expected_revision": current["revision"]}
                 if users: patch["add_user_ids"] = users

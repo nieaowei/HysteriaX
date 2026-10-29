@@ -3,172 +3,69 @@ import SwiftUI
 struct AuthorizationGroupEditorView: View {
     @Environment(\.dismiss) private var dismiss
     @Bindable var store: ManagementStore
-    @State private var group: AuthorizationGroupSummary?
+    let group: AuthorizationGroupSummary?
     let intent: AuthorizationGroupEditorIntent
     var onSaved: (String) -> Void = { _ in }
 
     @State private var name: String
-    @State private var originalUserIDs: Set<String>
     @State private var memberMode: AuthorizationMemberEditorMode
-    @State private var userIDs: Set<String>
-    @State private var nodeIDs: Set<String>
+    @State private var draft: AuthorizationRelationDraft
     @State private var isSaving = false
     @State private var errorMessage: String?
-    @State private var selectingUsers = false
-    @State private var selectingNodes = false
     @State private var receipt: AuthorizationGroupMutationResponse?
 
-    init(
-        store: ManagementStore,
-        group: AuthorizationGroupSummary?,
-        intent: AuthorizationGroupEditorIntent,
-        memberMode: AuthorizationMemberEditorMode = .members,
-        removedUserIDs: Set<String> = [],
-        onSaved: @escaping (String) -> Void = { _ in }
-    ) {
-        self.store = store
-        _group = State(initialValue: group)
-        self.intent = intent
-        self.onSaved = onSaved
+    init(store: ManagementStore, group: AuthorizationGroupSummary?, intent: AuthorizationGroupEditorIntent,
+         memberMode: AuthorizationMemberEditorMode = .members, removedUserIDs: Set<String> = [],
+         onSaved: @escaping (String) -> Void = { _ in }) {
+        self.store = store; self.group = group; self.intent = intent; self.onSaved = onSaved
         _name = State(initialValue: group?.name ?? "")
-        _originalUserIDs = State(initialValue: Set(group?.userIds ?? []))
         _memberMode = State(initialValue: memberMode)
-        _userIDs = State(initialValue: Set(group?.userIds ?? []).subtracting(removedUserIDs))
-        _nodeIDs = State(initialValue: Set(group?.nodeIds ?? []))
+        var initial = AuthorizationRelationDraft()
+        for id in removedUserIDs { initial.setMember(false, row: .placeholder(id), originallyMember: true) }
+        _draft = State(initialValue: initial)
     }
 
-    private var canEditUsers: Bool { intent == .users }
-    private var canEditNodes: Bool { intent == .nodes }
+    private var relations: Bool { intent == .users || intent == .nodes }
     private var isReadyToSave: Bool {
         guard !isSaving else { return false }
-        switch intent {
-        case .create: return !proposedName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        case .rename: return proposedName.trimmingCharacters(in: .whitespacesAndNewlines) != group?.name
-        case .users: return userIDs != originalUserIDs
-        case .nodes: return nodeIDs != Set(group?.nodeIds ?? [])
-        }
-    }
-
-    private var editorSize: CGSize {
-        let hasDetails = receipt != nil
-        switch intent {
-        case .create:
-            return CGSize(width: 560, height: hasDetails ? 480 : 340)
-        case .users:
-            return CGSize(width: 880, height: 620)
-        case .rename:
-            return CGSize(width: 560, height: hasDetails ? 480 : 340)
-        case .nodes:
-            return CGSize(width: 680, height: hasDetails ? 580 : 380)
-        }
-    }
-
-    private var requiredDirectories: [ManagementStore.Directory] {
-        switch intent {
-        case .create: []
-        case .users: [.users]
-        case .nodes: [.nodes]
-        case .rename: []
-        }
+        if relations { return !draft.isEmpty }
+        return !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && (intent == .create || name.trimmingCharacters(in: .whitespacesAndNewlines) != group?.name)
     }
 
     var body: some View {
-        directoryContent
-            .task(id: store.dataRefreshToken) {
-                guard receipt == nil else { return }
-                await store.prepareDirectories(requiredDirectories)
-            }
-            .disabled(receipt == nil && requiredDirectories.contains { store.loadingDirectories.contains($0) })
-    }
-
-    private var directoryContent: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text(receipt == nil ? title : L10n.text("授权组已更新"))
-                .font(.title2.bold())
-
-            if intent == .users, receipt == nil {
-                Text(group?.name ?? "").font(.headline)
-                AuthorizationGroupMembersEditor(users: store.users, originalIDs: originalUserIDs, userIDs: $userIDs, mode: $memberMode)
+            Text(receipt == nil ? title : L10n.text("授权组已更新")).font(.title2.bold())
+            if let receipt {
+                Text(L10n.text("授权组已更新")).accessibilityIdentifier("authorizationGroups.editor.resultSummary")
+                AuthorizationMutationReceiptView(store: store, createdCredentials: [], revocationJobIDs: receipt.revocationJobIds)
+            } else if relations, let group {
+                Text(group.name).font(.headline)
+                AuthorizationRelationBrowser(store: store, group: group, users: intent == .users, editing: true, mode: $memberMode, draft: $draft)
                     .disabled(isSaving)
             } else {
-                ScrollView {
-                    editorContent.frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .frame(maxHeight: .infinity)
+                Text(intent == .create ? L10n.text("填写名称创建空组，再分别添加成员和节点。") : L10n.text("修改授权组名称后保存。"))
+                    .foregroundStyle(.secondary)
+                LabeledContent(L10n.text("授权组名称")) {
+                    TextField(L10n.text("授权组名称"), text: $name).textFieldStyle(.roundedBorder)
+                        .accessibilityIdentifier("authorizationGroups.editor.name")
+                }.disabled(isSaving)
             }
-
             if let errorMessage { Text(errorMessage).foregroundStyle(.red).textSelection(.enabled) }
-
+            Spacer(minLength: 0)
             HStack {
                 Button(receipt == nil ? L10n.text("取消") : L10n.text("完成"), role: .cancel) { dismiss() }
-                    .keyboardShortcut(.cancelAction)
-                    .disabled(isSaving)
+                    .keyboardShortcut(.cancelAction).disabled(isSaving)
                 Spacer()
                 if receipt == nil {
                     Button(isSaving ? L10n.text("正在保存…") : L10n.text("保存授权组")) { save() }
-                        .disabled(!isReadyToSave || !store.isConnected || (intent == .create && name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty))
-                        .keyboardShortcut(.defaultAction)
+                        .disabled(!isReadyToSave || !store.isConnected).keyboardShortcut(.defaultAction)
                         .accessibilityIdentifier("authorizationGroups.editor.save")
                 }
             }
         }
         .padding(24)
-        .frame(width: editorSize.width, height: editorSize.height)
-        .interactiveDismissDisabled(isSaving || (intent == .users && !memberChanges.changed.isEmpty))
-        .sheet(isPresented: $selectingUsers) {
-            AuthorizationMultiSelectSheet(
-                title: L10n.text("选择成员用户"),
-                options: store.users.map { AuthorizationPickerOption(id: $0.id, name: $0.name, detail: $0.enabled ? nil : L10n.text("已停用")) },
-                selection: $userIDs
-            )
-        }
-        .sheet(isPresented: $selectingNodes) {
-            AuthorizationMultiSelectSheet(
-                title: L10n.text("选择授权节点"),
-                options: store.nodes.map { AuthorizationPickerOption(id: $0.id, name: $0.name, detail: $0.mtlsRequired == true ? "mTLS" : nil) },
-                selection: $nodeIDs
-            )
-        }
-
-    }
-
-    private var memberChanges: AuthorizationMemberChanges { .init(original: originalUserIDs, proposed: userIDs) }
-
-    @ViewBuilder
-    private var editorContent: some View {
-        if let receipt {
-            VStack(alignment: .leading, spacing: 12) {
-                Text(L10n.text("授权组已更新"))
-                    .font(.callout.weight(.medium))
-                    .accessibilityIdentifier("authorizationGroups.editor.resultSummary")
-                AuthorizationMutationReceiptView(store: store, createdCredentials: [], revocationJobIDs: receipt.revocationJobIds)
-            }
-        } else {
-            VStack(alignment: .leading, spacing: 16) {
-                Text(description).font(.callout).foregroundStyle(.secondary)
-                GroupBox {
-                    VStack(alignment: .leading, spacing: 14) {
-                        if intent == .create || intent == .rename {
-                            LabeledContent(L10n.text("授权组名称")) {
-                                TextField(L10n.text("授权组名称"), text: $name)
-                                    .textFieldStyle(.roundedBorder)
-                                    .accessibilityIdentifier("authorizationGroups.editor.name")
-                            }
-                        } else if let group { LabeledContent(L10n.text("授权组名称"), value: group.name) }
-                        if intent == .users || intent == .nodes {
-                            if canEditUsers {
-                                selectionRow(title: L10n.text("成员用户"), count: userIDs.count, buttonTitle: L10n.text("选择用户…"), identifier: "authorizationGroups.editor.users") { selectingUsers = true }
-                            } else { LabeledContent(L10n.text("成员用户"), value: L10n.text("{0} 位", String(userIDs.count))) }
-                            if canEditNodes {
-                                selectionRow(title: L10n.text("授权节点"), count: nodeIDs.count, buttonTitle: L10n.text("选择节点…"), identifier: "authorizationGroups.editor.nodes") { selectingNodes = true }
-                            } else { LabeledContent(L10n.text("授权节点"), value: L10n.text("{0} 个", String(nodeIDs.count))) }
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading).padding(8)
-                    .disabled(isSaving)
-                }
-            }
-        }
+        .frame(width: relations ? 880 : 560, height: relations ? 620 : receipt == nil ? 340 : 480)
+        .interactiveDismissDisabled(isSaving || (receipt == nil && !draft.isEmpty))
     }
 
     private var title: String {
@@ -180,53 +77,24 @@ struct AuthorizationGroupEditorView: View {
         }
     }
 
-    private var description: String {
-        switch intent {
-        case .create: L10n.text("填写名称创建空组，再分别添加成员和节点。")
-        case .rename: L10n.text("修改授权组名称后保存。")
-        case .users: L10n.text("调整本组成员；其他授权组授予的权限会保留。")
-        case .nodes: L10n.text("调整本组节点；同一连接仍由其他授权组授予时不会撤权。")
-        }
-    }
-
-    private func selectionRow(title: String, count: Int, buttonTitle: String, identifier: String, action: @escaping () -> Void) -> some View {
-        HStack {
-            LabeledContent(title, value: L10n.text("{0} 项已选", String(count)))
-            Button(buttonTitle, action: action)
-                .accessibilityIdentifier(identifier)
-        }
-    }
-
     private func save() {
         guard isReadyToSave else { return }
-        isSaving = true
-        errorMessage = nil
+        isSaving = true; errorMessage = nil
         Task {
             defer { isSaving = false }
             do {
-                let result: AuthorizationGroupMutationResponse
                 if let group {
-                    result = try await store.updateAuthorizationGroup(
-                        group,
-                        name: intent == .rename ? proposedName : nil,
-                        addUserIDs: intent == .users ? userIDs.subtracting(originalUserIDs).sorted() : [],
-                        removeUserIDs: intent == .users ? originalUserIDs.subtracting(userIDs).sorted() : [],
-                        addNodeIDs: intent == .nodes ? nodeIDs.subtracting(Set(group.nodeIds)).sorted() : [],
-                        removeNodeIDs: intent == .nodes ? Set(group.nodeIds).subtracting(nodeIDs).sorted() : []
-                    )
-                } else {
-                    result = try await store.createAuthorizationGroup(name: proposedName)
-                }
-                receipt = result
-                if let groupID = group?.id { onSaved(groupID) }
+                    receipt = try await store.updateAuthorizationGroup(group,
+                        name: intent == .rename ? name : nil,
+                        addUserIDs: intent == .users ? draft.added.keys.sorted() : [],
+                        removeUserIDs: intent == .users ? draft.removed.keys.sorted() : [],
+                        addNodeIDs: intent == .nodes ? draft.added.keys.sorted() : [],
+                        removeNodeIDs: intent == .nodes ? draft.removed.keys.sorted() : [])
+                    onSaved(group.id)
+                } else { receipt = try await store.createAuthorizationGroup(name: name) }
             } catch {
-                errorMessage = L10n.text("保存失败，草稿已保留。请检查错误后重试；如有版本冲突，请重新打开编辑。\n{0}", String(describing: (error.localizedDescription)))
+                errorMessage = L10n.text("保存失败，草稿已保留。请检查错误后重试；如有版本冲突，请重新打开编辑。\n{0}", error.localizedDescription)
             }
         }
     }
-
-    private var proposedName: String {
-        name
-    }
-
 }

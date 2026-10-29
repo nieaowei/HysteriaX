@@ -96,10 +96,7 @@ pub(super) async fn prepare_group_change(
     let plan = crate::credentials::authorization::plan_on(&mut tx, &additions).await?;
     let (missing, timestamp) = missing_on(&mut tx, &users, &after).await?;
     tx.commit().await?;
-    let managed =
-        crate::credentials::authorization::prepare_plan(&state.pool, &state.secrets, plan)
-            .await
-            .map_err(authorization_transaction_error)?;
+    let managed = crate::credentials::authorization::prepare_plan(plan);
     Ok((managed, prepare(state, missing, timestamp)?))
 }
 
@@ -123,10 +120,7 @@ pub(super) async fn prepare_membership_change(
     let plan = crate::credentials::authorization::plan_on(&mut tx, &additions).await?;
     let (missing, timestamp) = missing_on(&mut tx, &[user.to_owned()], &after).await?;
     tx.commit().await?;
-    let managed =
-        crate::credentials::authorization::prepare_plan(&state.pool, &state.secrets, plan)
-            .await
-            .map_err(authorization_transaction_error)?;
+    let managed = crate::credentials::authorization::prepare_plan(plan);
     Ok((managed, prepare(state, missing, timestamp)?))
 }
 

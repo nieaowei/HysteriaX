@@ -153,8 +153,7 @@ async fn v2_directory_cache_ignores_usage_and_unrelated_audits_but_sees_group_ch
     let client = client();
     let path = "/api/v2/authorization-groups";
     assert!(
-        get(&client, &base, path)
-            .await
+        get(&client, &base, path).await["items"]
             .as_array()
             .unwrap()
             .is_empty()
@@ -171,7 +170,10 @@ async fn v2_directory_cache_ignores_usage_and_unrelated_audits_but_sees_group_ch
         hits + 1
     );
     sqlx::query("INSERT INTO authorization_groups(id,name,created_at,updated_at) VALUES('group','Committed',clock_timestamp(),clock_timestamp())").execute(&state.pool).await.unwrap();
-    assert_eq!(get(&client, &base, path).await[0]["name"], "Committed");
+    assert_eq!(
+        get(&client, &base, path).await["items"][0]["name"],
+        "Committed"
+    );
     server.abort();
 }
 

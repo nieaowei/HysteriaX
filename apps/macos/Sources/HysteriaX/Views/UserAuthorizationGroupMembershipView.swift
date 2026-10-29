@@ -6,6 +6,7 @@ struct UserAuthorizationGroupMembershipView: View {
     @State private var user: UserSummary
 
     @State private var groupIDs: Set<String>
+    @State private var selectedNames: [String: String]
     @State private var receipt: UserAuthorizationGroupsMutationResponse?
     @State private var selectingGroups = false
     @State private var isSaving = false
@@ -14,6 +15,7 @@ struct UserAuthorizationGroupMembershipView: View {
     init(store: ManagementStore, user: UserSummary) {
         self.store = store
         _user = State(initialValue: user)
+        _selectedNames = State(initialValue: Dictionary((user.authorizationGroups ?? []).map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first }))
         _groupIDs = State(initialValue: Set(user.authorizationGroups?.map(\.id) ?? []))
     }
 
@@ -88,8 +90,10 @@ struct UserAuthorizationGroupMembershipView: View {
         .sheet(isPresented: $selectingGroups) {
             AuthorizationMultiSelectSheet(
                 title: L10n.text("选择授权组"),
-                options: store.authorizationGroups.map { AuthorizationPickerOption(id: $0.id, name: $0.name, detail: L10n.text("{0} 位用户 · {1} 个节点", String($0.userCount), String($0.nodeCount))) },
-                selection: $groupIDs
+                store: store,
+                selection: $groupIDs,
+                initialNames: selectedNames,
+                onNamesChanged: { selectedNames = $0 }
             )
         }
         .onChange(of: groupIDs) { _, _ in
@@ -99,7 +103,7 @@ struct UserAuthorizationGroupMembershipView: View {
 
     private var selectedGroupNames: String {
         let names = groupIDs.sorted().map { id in
-            store.authorizationGroups.first(where: { $0.id == id })?.name ?? id
+            selectedNames[id] ?? id
         }
         return names.isEmpty ? L10n.text("尚未选择授权组") : names.joined(separator: "、")
     }

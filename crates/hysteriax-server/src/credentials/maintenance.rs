@@ -4,6 +4,9 @@ use anyhow::Result;
 
 use crate::state::AppState;
 
+#[cfg(test)]
+pub use super::identity_maintenance::pass as issue_pending;
+
 pub async fn run(state: AppState) {
     tokio::join!(
         maintenance_loop(state.clone()),

@@ -27,9 +27,7 @@ async fn prepare(
         .await
         .unwrap();
     tx.commit().await.unwrap();
-    credentials::authorization::prepare_plan(&state.pool, &state.secrets, plan)
-        .await
-        .unwrap()
+    credentials::authorization::prepare_plan(plan)
 }
 async fn commit(
     state: &AppState,
@@ -47,7 +45,7 @@ async fn commit(
     Ok(groups::group_named(state, name).await)
 }
 pub(super) async fn group(state: &AppState, name: &str, users: &[&str], nodes: &[&str]) -> Value {
-    groups::create(
+    let _ = groups::create(
         State(state.clone()),
         Json(
             serde_json::from_value(json!({"name":name,"user_ids":users,"node_ids":nodes})).unwrap(),
@@ -55,7 +53,21 @@ pub(super) async fn group(state: &AppState, name: &str, users: &[&str], nodes: &
     )
     .await
     .unwrap();
+    settle(state).await;
     groups::group_named(state, name).await
+}
+async fn settle(state: &AppState) {
+    for _ in 0..identity_count(state).await.max(1) {
+        credentials::maintenance::issue_pending(state)
+            .await
+            .unwrap();
+    }
+}
+async fn work_count(state: &AppState) -> i64 {
+    sqlx::query_scalar("SELECT count(*) FROM background_work WHERE kind='mtls-identity-renewal'")
+        .fetch_one(&state.pool)
+        .await
+        .unwrap()
 }
 async fn audit(state: &AppState, name: &str) -> Value {
     sqlx::query_scalar("SELECT detail_json FROM audit_records WHERE entity_id=(SELECT id FROM authorization_groups WHERE name=$1) ORDER BY created_at DESC LIMIT 1")
@@ -103,6 +115,9 @@ async fn two_nodes_one_ca_issue_once_preparation_is_read_only_and_union_controls
         .await
         .unwrap();
     assert_eq!(identity_count(&state).await, 1);
+    assert_eq!(version_count(&state).await, 0);
+    assert_eq!(work_count(&state).await, 1);
+    settle(&state).await;
     assert_eq!(version_count(&state).await, 1);
     sqlx::query("UPDATE mtls_node_trust SET deployed=TRUE WHERE ca_id=$1")
         .bind(&ca)
@@ -207,6 +222,14 @@ async fn preparing_rotation_signs_two_generations_under_one_stable_shared_identi
         .await
         .unwrap();
     assert_eq!(identity_count(&state).await, 1);
+    assert_eq!(version_count(&state).await, 0);
+    // Rotation issuance starts after node trust preparation has completed.
+    sqlx::query("UPDATE mtls_rotations SET phase='identities',next_action_at=now()")
+        .execute(&state.pool)
+        .await
+        .unwrap();
+    settle(&state).await;
+    credentials::rotations::run_pass(&state).await.unwrap();
     assert_eq!(version_count(&state).await, 2);
     let versions: Vec<(i64, bool)> =
         sqlx::query_as("SELECT ca_version,released FROM mtls_user_versions ORDER BY ca_version")
@@ -273,11 +296,14 @@ async fn concurrent_preparations_do_not_duplicate_current_identity() {
     );
     assert_ne!(a.is_ok(), b.is_ok());
     assert_eq!(identity_count(&state).await, 1);
+    assert_eq!(version_count(&state).await, 0);
+    assert_eq!(work_count(&state).await, 1);
+    settle(&state).await;
     assert_eq!(version_count(&state).await, 1);
 }
 
 #[tokio::test]
-async fn signatures_are_prepared_before_the_authorization_commit() {
+async fn authorization_preparation_does_not_sign_or_create_work() {
     let state = state().await;
     let ca = generated(&state).await;
     user(&state, "alice", true).await;
@@ -374,6 +400,8 @@ async fn grant_covers_desired_deployed_and_inflight_activation_ca_identities() {
         .await
         .unwrap();
     assert_eq!(identity_count(&state).await, 3);
+    assert_eq!(version_count(&state).await, 0);
+    settle(&state).await;
     assert_eq!(version_count(&state).await, 3);
     let details = crate::api::managed_mtls::user_identities(&state, "alice")
         .await
@@ -401,35 +429,45 @@ async fn grant_covers_desired_deployed_and_inflight_activation_ca_identities() {
 }
 
 #[tokio::test]
-async fn failed_signing_preparation_does_not_commit_any_group_or_permissions() {
+async fn signing_failure_is_deferred_and_does_not_roll_back_permissions() {
     let state = state().await;
     let ca = generated(&state).await;
     user(&state, "alice", true).await;
     let node = managed_node(&state, &ca).await;
     let id = node["id"].as_str().unwrap();
+    let p = prepare(&state, "Async", &["alice"], &[id]).await;
+    let _ = commit(&state, "Async", &["alice"], &[id], &p)
+        .await
+        .unwrap();
+    assert_eq!(identity_count(&state).await, 1);
+    assert_eq!(version_count(&state).await, 0);
+    assert_eq!(work_count(&state).await, 1);
     let bad = AppState::new(
         state.pool.clone(),
         SecretBox::from_base64("AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE").unwrap(),
     );
-    assert_eq!(
-        groups::create(
-            State(bad.clone()),
-            Json(
-                serde_json::from_value(
-                    json!({"name":"Atomic","user_ids":["alice"],"node_ids":[id]})
-                )
-                .unwrap()
-            )
-        )
-        .await
-        .unwrap_err()
-        .status,
-        StatusCode::CONFLICT
-    );
-    assert_eq!(identity_count(&state).await, 0);
+    credentials::maintenance::maintain(&bad).await.unwrap();
     assert_eq!(version_count(&state).await, 0);
-    let counts:(i64,i64)=sqlx::query_as("SELECT (SELECT count(*) FROM authorization_groups),(SELECT count(*) FROM node_assignments)").fetch_one(&state.pool).await.unwrap();
-    assert_eq!(counts, (0, 0));
+    let error: String = sqlx::query_scalar("SELECT maintenance_error FROM mtls_user_identities")
+        .fetch_one(&state.pool)
+        .await
+        .unwrap();
+    assert_eq!(error, "Managed identity renewal failed; retry scheduled");
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM node_assignments")
+        .fetch_one(&state.pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 1);
+    sqlx::query("UPDATE mtls_user_identities SET next_action_at=now()")
+        .execute(&state.pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE background_work SET available_at=now()")
+        .execute(&state.pool)
+        .await
+        .unwrap();
+    settle(&state).await;
+    assert_eq!(version_count(&state).await, 1);
 }
 
 #[tokio::test]
@@ -457,6 +495,9 @@ async fn batch_grant_deduplicates_signatures_across_many_users_and_nodes() {
     assert_eq!(p.plan.automatic_issue_count, 25);
     let _ = commit(&state, "Batch", &users, &nodes, &p).await.unwrap();
     assert_eq!(identity_count(&state).await, 25);
+    assert_eq!(version_count(&state).await, 0);
+    assert_eq!(work_count(&state).await, 25);
+    settle(&state).await;
     assert_eq!(version_count(&state).await, 25);
 }
 
@@ -480,7 +521,7 @@ async fn ordinary_ssh_state_updates_do_not_invalidate_prepared_grant() {
 }
 
 #[tokio::test]
-async fn retried_grant_preserves_one_prepared_managed_identity_and_version() {
+async fn retried_grant_preserves_one_managed_identity_and_durable_task() {
     let state = state().await;
     let ca = generated(&state).await;
     user(&state, "alice", true).await;
@@ -492,10 +533,11 @@ async fn retried_grant_preserves_one_prepared_managed_identity_and_version() {
         .await
         .unwrap();
     assert_eq!(identity_count(&state).await, 1);
-    assert_eq!(version_count(&state).await, 1);
+    assert_eq!(version_count(&state).await, 0);
+    assert_eq!(work_count(&state).await, 1);
     assert_eq!(
         audit(&state, "Retry grant").await["managed_identities"][0]["issued"],
-        true
+        false
     );
     let id: String =
         sqlx::query_scalar("SELECT id FROM mtls_user_identities WHERE user_id='alice'")
@@ -525,7 +567,7 @@ async fn retried_grant_preserves_one_prepared_managed_identity_and_version() {
 }
 
 #[tokio::test]
-async fn direct_group_update_issues_and_archives_identity_without_preview() {
+async fn revoke_before_worker_runs_prevents_issuance() {
     let state = state().await;
     let ca = generated(&state).await;
     user(&state, "alice", true).await;
@@ -543,7 +585,7 @@ async fn direct_group_update_issues_and_archives_identity_without_preview() {
         assert_eq!(detail["additions_count"], additions);
         assert_eq!(detail["removals_count"], removals);
         assert_eq!(identity_count(&state).await, 1);
-        assert_eq!(version_count(&state).await, 1);
+        assert_eq!(version_count(&state).await, 0);
         let archived: bool =
             sqlx::query_scalar("SELECT archived FROM mtls_user_identities WHERE user_id='alice'")
                 .fetch_one(&state.pool)
@@ -551,29 +593,22 @@ async fn direct_group_update_issues_and_archives_identity_without_preview() {
                 .unwrap();
         assert_eq!(archived, users.is_empty());
     }
+    settle(&state).await;
+    assert_eq!(version_count(&state).await, 0);
 }
 
 #[tokio::test]
-async fn paged_member_certificates_roll_back_together_and_rejoin_reuses_both_ca_versions() {
+async fn paged_identity_admission_rolls_back_with_tasks_and_permissions() {
     let state = state().await;
     let ca = generated(&state).await;
     let node = managed_node(&state, &ca).await;
     let node_id = node["id"].as_str().unwrap();
-    let _ = publish(
-        State(state.clone()),
-        actor(),
-        Path(ca.clone()),
-        Json(publish_request(1, "paged-members")),
-    )
-    .await
-    .unwrap();
     let users: Vec<String> = (0..260).map(|i| format!("member-{i:04}")).collect();
-    sqlx::query("INSERT INTO users(id,name,created_at,updated_at) SELECT id,id,now(),now() FROM unnest($1::text[]) AS u(id)").bind(&users).execute(&state.pool).await.unwrap();
+    sqlx::query("INSERT INTO users(id,name,created_at,updated_at) SELECT id,id,now(),now() FROM unnest($1::text[]) AS u(id)")
+        .bind(&users).execute(&state.pool).await.unwrap();
     let names: Vec<&str> = users.iter().map(String::as_str).collect();
     let prepared = prepare(&state, "Paged", &names, &[node_id]).await;
-    assert_eq!(prepared.plan.automatic_issue_count, 260);
-    assert_eq!(identity_count(&state).await, 0);
-    sqlx::raw_sql("CREATE SEQUENCE member_batch_attempt; CREATE FUNCTION fail_second_identity_page() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF nextval('member_batch_attempt')=257 THEN RAISE EXCEPTION 'second page failed'; END IF; RETURN NEW; END $$; CREATE TRIGGER fail_second_identity_page BEFORE INSERT ON mtls_user_versions FOR EACH ROW EXECUTE FUNCTION fail_second_identity_page();")
+    sqlx::raw_sql("CREATE SEQUENCE task_attempt; CREATE FUNCTION fail_task_page() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.kind='mtls-identity-renewal' AND nextval('task_attempt')=257 THEN RAISE EXCEPTION 'task page failed'; END IF; RETURN NEW; END $$; CREATE TRIGGER fail_task_page BEFORE INSERT ON background_work FOR EACH ROW EXECUTE FUNCTION fail_task_page();")
         .execute(&state.pool).await.unwrap();
     assert!(
         commit(&state, "Paged", &names, &[node_id], &prepared)
@@ -581,84 +616,89 @@ async fn paged_member_certificates_roll_back_together_and_rejoin_reuses_both_ca_
             .is_err()
     );
     assert_eq!(identity_count(&state).await, 0);
-    assert_eq!(version_count(&state).await, 0);
-    let leftovers:i64=sqlx::query_scalar("SELECT (SELECT count(*) FROM authorization_groups)+(SELECT count(*) FROM node_assignments)+(SELECT count(*) FROM credentials WHERE kind='tls_identity' AND owner_user_id=ANY($1))").bind(&users).fetch_one(&state.pool).await.unwrap();
+    assert_eq!(work_count(&state).await, 0);
+    let leftovers: i64 = sqlx::query_scalar("SELECT (SELECT count(*) FROM authorization_groups)+(SELECT count(*) FROM node_assignments)")
+        .fetch_one(&state.pool).await.unwrap();
     assert_eq!(leftovers, 0);
-    assert_eq!(
-        sqlx::query_scalar::<_, i64>("SELECT last_value FROM member_batch_attempt")
-            .fetch_one(&state.pool)
-            .await
-            .unwrap(),
-        257
-    );
-    sqlx::raw_sql("DROP TRIGGER fail_second_identity_page ON mtls_user_versions; CREATE TABLE member_batch_statements(kind text PRIMARY KEY,calls int NOT NULL); CREATE FUNCTION count_member_batch() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN INSERT INTO member_batch_statements VALUES(TG_TABLE_NAME,1) ON CONFLICT(kind) DO UPDATE SET calls=member_batch_statements.calls+1; RETURN NULL; END $$; CREATE TRIGGER count_member_versions AFTER INSERT ON credential_versions FOR EACH STATEMENT EXECUTE FUNCTION count_member_batch();")
-        .execute(&state.pool).await.unwrap();
-    let granted = commit(&state, "Paged", &names, &[node_id], &prepared)
+    sqlx::query("DROP TRIGGER fail_task_page ON background_work")
+        .execute(&state.pool)
         .await
         .unwrap();
-    assert_eq!(audit(&state, "Paged").await["additions_count"], 260);
+    let _ = commit(&state, "Paged", &names, &[node_id], &prepared)
+        .await
+        .unwrap();
     assert_eq!(identity_count(&state).await, 260);
-    assert_eq!(version_count(&state).await, 520);
-    let statements: i32 = sqlx::query_scalar(
-        "SELECT calls FROM member_batch_statements WHERE kind='credential_versions'",
-    )
-    .fetch_one(&state.pool)
-    .await
-    .unwrap();
-    assert_eq!(
-        statements, 4,
-        "two bounded pages for each of two CA generations"
-    );
-    let materials:Vec<(String,i64,String)>=sqlx::query_as("SELECT v.credential_id,v.version,v.payload_enc FROM credential_versions v JOIN credentials c ON c.id=v.credential_id WHERE c.kind='tls_identity' ORDER BY v.credential_id,v.version").fetch_all(&state.pool).await.unwrap();
-    let ids: Vec<(String, String)> =
-        sqlx::query_as("SELECT user_id,id FROM mtls_user_identities ORDER BY user_id")
-            .fetch_all(&state.pool)
-            .await
-            .unwrap();
-    for result in audit(&state, "Paged").await["managed_identities"]
-        .as_array()
-        .unwrap()
-    {
-        assert!(
-            ids.iter()
-                .any(|(user, id)| result["user_id"] == *user && result["identity_id"] == *id)
-        );
-    }
-    let group_id = granted["id"].as_str().unwrap();
-    for (revision, members, additions, removals) in
-        [(1, Vec::<&str>::new(), 0, 260), (2, names.clone(), 260, 0)]
-    {
-        let Json(receipt)=groups::update(State(state.clone()),Path(group_id.into()),Json(serde_json::from_value(json!({"expected_revision":revision,"name":"Paged","user_ids":members,"node_ids":[node_id]})).unwrap())).await.unwrap();
-        assert_eq!(receipt.as_object().unwrap().len(), 1);
-        let detail = audit(&state, "Paged").await;
-        assert_eq!(detail["additions_count"], additions);
-        assert_eq!(detail["removals_count"], removals);
-        assert_eq!(version_count(&state).await, 520);
-        if members.is_empty() {
-            assert_eq!(receipt["revocation_job_ids"].as_array().unwrap().len(), 1);
+    assert_eq!(work_count(&state).await, 260);
+    assert_eq!(version_count(&state).await, 0);
+    let valid: i64 = sqlx::query_scalar("SELECT count(*) FROM background_work w JOIN mtls_user_identities i ON w.id='mtls-identity:'||i.id WHERE w.payload->>'identity_id'=i.id AND w.payload->>'user_id'=i.user_id AND w.payload->>'ca_id'=i.ca_id AND w.state='queued'")
+        .fetch_one(&state.pool).await.unwrap();
+    assert_eq!(valid, 260);
+}
+
+#[tokio::test]
+async fn http_group_and_membership_grants_enqueue_once_and_resume_on_another_instance() {
+    for membership in [false, true] {
+        let state = state().await;
+        let ca = generated(&state).await;
+        user(&state, "alice", true).await;
+        let node = managed_node(&state, &ca).await;
+        let n = node["id"].as_str().unwrap();
+        let group = group(&state, "HTTP async", &[], &[n]).await;
+        let id = group["id"].as_str().unwrap();
+        sqlx::query("INSERT INTO admin_tokens(id,token_hash,label,created_at,last_used_at) VALUES('async-admin',$1,'async',now(),now())")
+            .bind(crate::security::token_digest("async-token")).execute(&state.pool).await.unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}/api/v2", listener.local_addr().unwrap());
+        let app = state.clone();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, crate::api::router(app))
+                .await
+                .unwrap()
+        });
+        let client = reqwest::Client::new();
+        let (method, path, body) = if membership {
+            (
+                reqwest::Method::PUT,
+                "/users/alice/authorization-groups".to_string(),
+                json!({"expected_revision":1,"group_ids":[id]}),
+            )
         } else {
-            assert!(
-                audit(&state, "Paged").await["managed_identities"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .all(|r| r["issued"] == false && r["pending"] == false)
-            );
+            (
+                reqwest::Method::PATCH,
+                format!("/authorization-groups/{id}"),
+                json!({"expected_revision":1,"add_user_ids":["alice"]}),
+            )
+        };
+        let mut receipt = None;
+        for _ in 0..2 {
+            let response = client
+                .request(method.clone(), format!("{base}{path}"))
+                .bearer_auth("async-token")
+                .header("Idempotency-Key", "async-grant")
+                .json(&body)
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let value: Value = response.json().await.unwrap();
+            if let Some(previous) = &receipt {
+                assert_eq!(previous, &value);
+            }
+            if membership {
+                assert_eq!(value["managed_identities"][0]["issued"], false);
+                assert_eq!(value["managed_identities"][0]["pending"], true);
+            }
+            receipt = Some(value);
         }
+        assert_eq!(identity_count(&state).await, 1);
+        assert_eq!(version_count(&state).await, 0);
+        assert_eq!(work_count(&state).await, 1);
+        server.abort();
+        let resumed = AppState::new(state.pool.clone(), (*state.secrets).clone());
+        settle(&resumed).await;
+        assert_eq!(version_count(&state).await, 1);
+        let done: i64 = sqlx::query_scalar("SELECT count(*) FROM background_work WHERE kind='mtls-identity-renewal' AND state='complete'")
+            .fetch_one(&state.pool).await.unwrap();
+        assert_eq!(done, 1);
     }
-    let after:Vec<(String,i64,String)>=sqlx::query_as("SELECT v.credential_id,v.version,v.payload_enc FROM credential_versions v JOIN credentials c ON c.id=v.credential_id WHERE c.kind='tls_identity' ORDER BY v.credential_id,v.version").fetch_all(&state.pool).await.unwrap();
-    assert_eq!(materials, after);
-    let archived: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM mtls_user_identities WHERE archived")
-            .fetch_one(&state.pool)
-            .await
-            .unwrap();
-    assert_eq!(archived, 0);
-    assert_eq!(
-        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM kick_requests WHERE state='active'")
-            .fetch_one(&state.pool)
-            .await
-            .unwrap(),
-        0
-    );
 }

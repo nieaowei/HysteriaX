@@ -139,6 +139,14 @@ pub fn router(state: AppState) -> Router {
                 .delete(authorization_groups::v2::change),
         )
         .route(
+            "/api/v2/authorization-groups/{id}/users",
+            get(authorization_groups::list_users),
+        )
+        .route(
+            "/api/v2/authorization-groups/{id}/nodes",
+            get(authorization_groups::list_nodes),
+        )
+        .route(
             "/api/v2/users/{id}/authorization-groups",
             axum::routing::put(authorization_groups::v2::update_memberships),
         )
