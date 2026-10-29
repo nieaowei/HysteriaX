@@ -79,15 +79,14 @@ final class AuthorizationFixtureUITests: XCTestCase {
         let cancelledValue = (cancelledNode.value as? String).flatMap(Int.init) ?? (cancelledNode.value as? NSNumber)?.intValue
         XCTAssertEqual(cancelledValue, 0)
         app.buttons["authorization.selection.done"].firstMatch.click()
-        let preview = app.buttons["authorizationGroups.editor.preview"].firstMatch
-        preview.click()
+        XCTAssertFalse(app.buttons["authorizationGroups.editor.preview"].firstMatch.exists)
         let save = app.buttons["authorizationGroups.editor.save"].firstMatch
         XCTAssertTrue(save.waitForExistence(timeout: 5))
         let ready = NSPredicate(format: "enabled == true")
         expectation(for: ready, evaluatedWith: save)
         waitForExpectations(timeout: 5)
         let editor = XCTAttachment(screenshot: app.sheets.firstMatch.screenshot())
-        editor.name = "Bulk authorization group editor and impact preview"
+        editor.name = "Direct authorization group editor"
         editor.lifetime = .keepAlways
         add(editor)
         // Managed nodes issue shared identities automatically; no certificate picker is required.
@@ -96,9 +95,7 @@ final class AuthorizationFixtureUITests: XCTestCase {
         XCTAssertTrue(mtls.waitForExistence(timeout: 5))
         mtls.click()
         app.buttons["authorization.selection.done"].firstMatch.click()
-        XCTAssertFalse(save.isEnabled)
-        preview.click()
-        XCTAssertTrue(app.descendants(matching: .any)["authorization.managedIssuance"].firstMatch.waitForExistence(timeout: 5))
+        XCTAssertTrue(save.isEnabled)
         expectation(for: ready, evaluatedWith: save)
         waitForExpectations(timeout: 5)
         let certificates = XCTAttachment(screenshot: app.sheets.firstMatch.screenshot())
@@ -108,7 +105,6 @@ final class AuthorizationFixtureUITests: XCTestCase {
         app.buttons["authorizationGroups.editor.nodes"].firstMatch.click()
         app.descendants(matching: .any)["authorization.selection.node-2"].firstMatch.click()
         app.buttons["authorization.selection.done"].firstMatch.click()
-        preview.click()
         expectation(for: ready, evaluatedWith: save)
         waitForExpectations(timeout: 5)
         save.click()
@@ -118,6 +114,93 @@ final class AuthorizationFixtureUITests: XCTestCase {
         receipt.lifetime = .keepAlways
         add(receipt)
         app.terminate()
+    }
+
+    @MainActor
+    func testSavedResultDoesNotWaitForSlowGlobalRefresh() {
+        let app = XCUIApplication()
+        app.launchEnvironment["HYSTERIAX_AUTHORIZATION_FIXTURE_DIRECTORY"] = "__AUTHORIZATION_FIXTURES__"
+        app.launchEnvironment["HYSTERIAX_TEST_REFRESH_DELAY_SECONDS"] = "8"
+        app.launchEnvironment["HYSTERIAX_TEST_SLOW_DIRECTORY"] = "1"
+        app.launchArguments += ["-appLanguage", "zh-Hans"]
+        app.launch()
+        addTeardownBlock { await MainActor.run { app.terminate() } }
+        let sidebar = app.descendants(matching: .any)["sidebar.users"].firstMatch
+        XCTAssertTrue(sidebar.waitForExistence(timeout: 10)); sidebar.click()
+        app.radioButtons["授权组"].firstMatch.click()
+        let group = app.descendants(matching: .any)["authorizationGroups.row.group-1"].firstMatch
+        XCTAssertTrue(group.waitForExistence(timeout: 10)); group.click()
+        app.buttons["authorizationGroups.manageNodes"].firstMatch.click()
+        app.buttons["authorizationGroups.editor.nodes"].firstMatch.click()
+        let node = app.descendants(matching: .any)["authorization.selection.node-1"].firstMatch
+        XCTAssertTrue(node.waitForExistence(timeout: 5)); node.click()
+        app.buttons["authorization.selection.done"].firstMatch.click()
+        app.buttons["authorizationGroups.editor.save"].firstMatch.click()
+        let summary = app.descendants(matching: .any)["authorizationGroups.editor.resultSummary"].firstMatch
+        XCTAssertTrue(summary.waitForExistence(timeout: 4), "Saved result must not wait for the eight-second monitoring read")
+        XCTAssertTrue(app.buttons["完成"].firstMatch.isEnabled)
+        let directoryStarted = NSPredicate { _, _ in FileManager.default.fileExists(atPath: "__AUTHORIZATION_FIXTURES__/directory-refresh-started") }
+        expectation(for: directoryStarted, evaluatedWith: app)
+        waitForExpectations(timeout: 15)
+        XCTAssertTrue(app.buttons["完成"].firstMatch.isEnabled, "Directory reloading must not disable the saved result sheet")
+    }
+
+    @MainActor
+    func testDeletionAndMembershipSaveDirectly() {
+        let app = XCUIApplication()
+        app.launchEnvironment["HYSTERIAX_AUTHORIZATION_FIXTURE_DIRECTORY"] = "__AUTHORIZATION_FIXTURES__"
+        app.launchArguments += ["-appLanguage", "zh-Hans"]
+        app.launch()
+        addTeardownBlock { await MainActor.run { app.terminate() } }
+        let sidebar = app.descendants(matching: .any)["sidebar.users"].firstMatch
+        XCTAssertTrue(sidebar.waitForExistence(timeout: 10)); sidebar.click()
+        app.radioButtons["用户"].firstMatch.click()
+        let user = app.descendants(matching: .any)["users.row.user-1"].firstMatch
+        XCTAssertTrue(user.waitForExistence(timeout: 10)); user.click()
+        app.buttons["users.manageAuthorizationGroups"].firstMatch.click()
+        app.buttons["users.groups.select"].firstMatch.click()
+        let selected = app.descendants(matching: .any)["authorization.selection.group-1"].firstMatch
+        XCTAssertTrue(selected.waitForExistence(timeout: 5)); selected.click()
+        app.buttons["authorization.selection.done"].firstMatch.click()
+        XCTAssertFalse(app.buttons["users.groups.preview"].firstMatch.exists)
+        let save = app.buttons["users.groups.save"].firstMatch
+        XCTAssertTrue(save.isEnabled); save.click()
+        let membership = app.descendants(matching: .any)["users.groups.resultSummary"].firstMatch
+        XCTAssertTrue(membership.waitForExistence(timeout: 10))
+        XCTAssertTrue(displayedText(membership).contains("移除 1 条连接授权"), displayedText(membership))
+        app.buttons["完成"].firstMatch.click()
+        app.radioButtons["授权组"].firstMatch.click()
+        let group = app.descendants(matching: .any)["authorizationGroups.row.group-1"].firstMatch
+        XCTAssertTrue(group.waitForExistence(timeout: 10)); group.click()
+        app.buttons["authorizationGroups.delete"].firstMatch.click()
+        let result = app.descendants(matching: .any)["authorizationGroups.delete.resultSummary"].firstMatch
+        XCTAssertTrue(result.waitForExistence(timeout: 10))
+        XCTAssertTrue(displayedText(result).contains("移除 201 条连接授权"), displayedText(result))
+    }
+
+    @MainActor
+    func testNodeChangesSaveDirectlyAndShowResult() {
+        let app = XCUIApplication()
+        app.launchEnvironment["HYSTERIAX_AUTHORIZATION_FIXTURE_DIRECTORY"] = "__AUTHORIZATION_FIXTURES__"
+        app.launchArguments += ["-appLanguage", "zh-Hans"]
+        app.launch()
+        addTeardownBlock { await MainActor.run { app.terminate() } }
+        let sidebar = app.descendants(matching: .any)["sidebar.users"].firstMatch
+        XCTAssertTrue(sidebar.waitForExistence(timeout: 10)); sidebar.click()
+        app.radioButtons["授权组"].firstMatch.click()
+        let group = app.descendants(matching: .any)["authorizationGroups.row.group-1"].firstMatch
+        XCTAssertTrue(group.waitForExistence(timeout: 10)); group.click()
+        app.buttons["authorizationGroups.manageNodes"].firstMatch.click()
+        app.buttons["authorizationGroups.editor.nodes"].firstMatch.click()
+        let node = app.descendants(matching: .any)["authorization.selection.node-1"].firstMatch
+        XCTAssertTrue(node.waitForExistence(timeout: 5)); node.click()
+        app.buttons["authorization.selection.done"].firstMatch.click()
+        XCTAssertFalse(app.buttons["authorizationGroups.editor.preview"].firstMatch.exists)
+        let save = app.buttons["authorizationGroups.editor.save"].firstMatch
+        XCTAssertTrue(save.isEnabled); save.click()
+        let summary = app.descendants(matching: .any)["authorizationGroups.editor.resultSummary"].firstMatch
+        XCTAssertTrue(summary.waitForExistence(timeout: 10))
+        XCTAssertTrue(displayedText(summary).contains("新增 0 条连接授权 · 移除 201 条连接授权"), displayedText(summary))
     }
 
     @MainActor
@@ -158,13 +241,9 @@ final class AuthorizationFixtureUITests: XCTestCase {
         let count = app.descendants(matching: .any)["authorization.members.selectionCount"].firstMatch
         XCTAssertTrue(displayedText(count).contains("已选 2 人"), displayedText(count))
         app.buttons["authorizationGroups.removeMembers"].firstMatch.click()
-        let changeCount = app.descendants(matching: .any)["authorization.members.changeCount"].firstMatch
-        XCTAssertTrue(changeCount.waitForExistence(timeout: 5))
-        XCTAssertTrue(displayedText(changeCount).contains("待移除 2 人"), displayedText(changeCount))
         let pending = app.descendants(matching: .any)["authorizationGroups.member.user-101"].firstMatch
         XCTAssertTrue(pending.waitForExistence(timeout: 5)); pending.click()
         app.buttons["authorization.members.undo"].firstMatch.click()
-        XCTAssertTrue(displayedText(changeCount).contains("待移除 1 人"), displayedText(changeCount))
         app.radioButtons["添加成员"].firstMatch.click()
         let search = app.textFields["authorization.members.search"].firstMatch
         XCTAssertTrue(search.waitForExistence(timeout: 5)); search.click(); search.typeText("user-202")
@@ -175,21 +254,16 @@ final class AuthorizationFixtureUITests: XCTestCase {
         XCTAssertTrue(second.waitForExistence(timeout: 5)); second.click()
         let add = app.buttons["authorization.members.add"].firstMatch
         XCTAssertTrue(add.label.contains("2 人"), add.label); add.click()
-        XCTAssertTrue(displayedText(changeCount).contains("待添加 2 人"), displayedText(changeCount))
-        app.buttons["authorizationGroups.editor.preview"].firstMatch.click()
-        let summary = app.descendants(matching: .any)["authorizationGroups.editor.previewSummary"].firstMatch
-        XCTAssertTrue(summary.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["authorizationGroups.editor.preview"].firstMatch.exists)
         let save = app.buttons["authorizationGroups.editor.save"].firstMatch
-        expectation(for: NSPredicate(format: "enabled == true"), evaluatedWith: save)
-        waitForExpectations(timeout: 5)
-        let preview = XCTAttachment(screenshot: app.sheets.firstMatch.screenshot())
-        preview.name = "Large group membership delta and permission impact"
-        preview.lifetime = .keepAlways; self.add(preview)
-        app.buttons["取消"].firstMatch.click()
-        app.buttons["authorizationGroups.addMembers"].firstMatch.click()
-        XCTAssertTrue(changeCount.waitForExistence(timeout: 5))
-        XCTAssertTrue(displayedText(changeCount).contains("待添加 0 人 · 待移除 0 人"), displayedText(changeCount))
-        app.buttons["取消"].firstMatch.click()
+        XCTAssertTrue(save.isEnabled)
+        save.click()
+        let summary = app.descendants(matching: .any)["authorizationGroups.editor.resultSummary"].firstMatch
+        XCTAssertTrue(summary.waitForExistence(timeout: 10))
+        XCTAssertTrue(displayedText(summary).contains("新增 2 条连接授权 · 移除 1 条连接授权"), displayedText(summary))
+        XCTAssertTrue(app.descendants(matching: .any)["authorization.mutationReceipt"].firstMatch.exists)
+        app.buttons["完成"].firstMatch.click()
+
     }
 
 

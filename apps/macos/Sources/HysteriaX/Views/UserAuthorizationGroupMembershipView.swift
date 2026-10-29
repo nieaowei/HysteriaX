@@ -6,10 +6,8 @@ struct UserAuthorizationGroupMembershipView: View {
     @State private var user: UserSummary
 
     @State private var groupIDs: Set<String>
-    @State private var preview: AuthorizationChangePreview?
     @State private var receipt: UserAuthorizationGroupsMutationResponse?
     @State private var selectingGroups = false
-    @State private var isPreviewing = false
     @State private var isSaving = false
     @State private var errorMessage: String?
 
@@ -21,8 +19,6 @@ struct UserAuthorizationGroupMembershipView: View {
 
     var body: some View {
         directoryContent
-            .task(id: store.dataRefreshToken) { await store.prepareDirectories([.nodes, .users]) }
-            .disabled([ManagementStore.Directory.nodes, .users].contains { store.loadingDirectories.contains($0) })
     }
 
     private var directoryContent: some View {
@@ -33,6 +29,9 @@ struct UserAuthorizationGroupMembershipView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
             if let receipt {
+                Text(L10n.text("新增 {0} 条连接授权 · 移除 {1} 条连接授权", String(receipt.additionsCount), String(receipt.removalsCount)))
+                    .font(.callout.weight(.medium))
+                    .accessibilityIdentifier("users.groups.resultSummary")
                 AuthorizationMutationReceiptView(
                     store: store,
                     createdCredentials: receipt.createdCredentials,
@@ -52,7 +51,7 @@ struct UserAuthorizationGroupMembershipView: View {
                             Spacer()
                             Button(L10n.text("选择授权组…")) { selectingGroups = true }
                                 .accessibilityIdentifier("users.groups.select")
-                                .disabled(isPreviewing || isSaving)
+                                .disabled(isSaving)
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -61,9 +60,6 @@ struct UserAuthorizationGroupMembershipView: View {
                     Label(L10n.text("所属授权组"), systemImage: "person.3")
                 }
 
-                if let preview {
-                    previewSummary(preview)
-                }
             }
 
                 }
@@ -76,13 +72,11 @@ struct UserAuthorizationGroupMembershipView: View {
             HStack {
                 Button(receipt == nil ? L10n.text("取消") : L10n.text("完成"), role: .cancel) { dismiss() }
                     .keyboardShortcut(.cancelAction)
+                    .disabled(isSaving)
                 Spacer()
                 if receipt == nil {
-                    Button(isPreviewing ? L10n.text("正在预览…") : L10n.text("预览影响")) { runPreview() }
-                        .disabled(isPreviewing || isSaving || !store.isConnected)
-                        .accessibilityIdentifier("users.groups.preview")
                     Button(isSaving ? L10n.text("正在保存…") : L10n.text("保存所属组")) { save() }
-                        .disabled(preview == nil || isSaving || isPreviewing || !store.isConnected)
+                        .disabled(isSaving || !store.isConnected)
                         .keyboardShortcut(.defaultAction)
                         .accessibilityIdentifier("users.groups.save")
                 }
@@ -99,7 +93,6 @@ struct UserAuthorizationGroupMembershipView: View {
             )
         }
         .onChange(of: groupIDs) { _, _ in
-            preview = nil
             errorMessage = nil
         }
     }
@@ -111,77 +104,16 @@ struct UserAuthorizationGroupMembershipView: View {
         return names.isEmpty ? L10n.text("尚未选择授权组") : names.joined(separator: "、")
     }
 
-    private func previewSummary(_ preview: AuthorizationChangePreview) -> some View {
-        GroupBox {
-            VStack(alignment: .leading, spacing: 10) {
-                Text(L10n.text("新增 {0} 条有效连接 · 移除 {1} 条有效连接", String(preview.additionsCount), String(preview.removalsCount)))
-                    .font(.callout.weight(.medium))
-                if !preview.additions.isEmpty {
-                    DisclosureGroup(L10n.text("查看新增连接（{0}）", String(preview.additions.count))) {
-                        pairList(preview.additions).padding(.top, 6)
-                    }
-                }
-                if !preview.removals.isEmpty {
-                    DisclosureGroup(L10n.text("查看失去最后授权来源的连接（{0}）", String(preview.removals.count))) {
-                        pairList(preview.removals).padding(.top, 6)
-                    }
-                }
-                ManagedIdentityIssuanceSummary(immediate: preview.automaticIssueCount, pending: preview.pendingIssueCount)
-                Text(L10n.text("预览有效。再次修改草稿或凭据后，需要重新预览。"))
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.vertical, 4)
-        } label: {
-            Label(L10n.text("授权变更预览"), systemImage: "checklist")
-        }
-        .accessibilityIdentifier("users.groups.previewSummary")
-    }
-
-    private func pairList(_ pairs: [AuthorizationPair]) -> some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 6) {
-                ForEach(Array(pairs.enumerated()), id: \.offset) { _, pair in
-                    HStack(spacing: 8) {
-                        Text(store.users.first(where: { $0.id == pair.userId })?.name ?? pair.userId)
-                        Image(systemName: "arrow.right").foregroundStyle(.secondary)
-                        Text(store.nodes.first(where: { $0.id == pair.nodeID })?.name ?? pair.nodeID)
-                    }
-                    .font(.caption)
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .frame(maxHeight: 150)
-    }
-
-    private func runPreview() {
-        isPreviewing = true
-        errorMessage = nil
-        Task {
-            defer { isPreviewing = false }
-            do {
-                user = try await store.authorizationUserDetail(user.id)
-                let result = try await store.previewUserAuthorizationGroups(user, groupIDs: groupIDs.sorted())
-                preview = result
-            } catch {
-                self.preview = nil
-                errorMessage = L10n.text("无法生成预览。草稿已保留，请重新加载数据后再试。\n{0}", String(describing: (error.localizedDescription)))
-            }
-        }
-    }
-
     private func save() {
-        guard let preview else { return }
+        guard !isSaving else { return }
         isSaving = true
         errorMessage = nil
         Task {
             defer { isSaving = false }
             do {
-                receipt = try await store.updateUserAuthorizationGroups(user, groupIDs: groupIDs.sorted(), previewToken: preview.previewToken)
+                receipt = try await store.updateUserAuthorizationGroups(user, groupIDs: groupIDs.sorted())
             } catch {
-                self.preview = nil
-                errorMessage = L10n.text("提交前授权数据可能已变化。草稿仍保留，请重新预览。\n{0}", String(describing: (error.localizedDescription)))
+                errorMessage = L10n.text("保存失败，草稿已保留。请检查错误后重试；如有版本冲突，请重新打开编辑。\n{0}", String(describing: (error.localizedDescription)))
             }
         }
     }

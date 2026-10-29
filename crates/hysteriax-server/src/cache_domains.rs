@@ -436,4 +436,71 @@ mod bucket_tests {
         assert_eq!(generation, 2);
         empty_pending(&pool).await;
     }
+    #[tokio::test]
+    async fn job_progress_invalidates_node_responses_without_restarting_authorization_commit() {
+        let pool = crate::db::test_pool_with_max_connections(4).await;
+        let baseline = include_str!("../migrations/0001_baseline.sql");
+        let start = baseline
+            .find("CREATE FUNCTION hysteriax_cache_row_changed()")
+            .unwrap();
+        let end = baseline[start..].find("\n-- FUNCTION:").unwrap() + start;
+        sqlx::raw_sql(sqlx::AssertSqlSafe(baseline[start..end].replacen(
+            "CREATE FUNCTION",
+            "CREATE OR REPLACE FUNCTION",
+            1,
+        )))
+        .execute(&pool)
+        .await
+        .unwrap();
+        user(&pool, "member").await;
+        sqlx::query("INSERT INTO nodes(id,name,ssh_host,ssh_port,ssh_username,ssh_auth_type,ssh_secret_enc,public_host,public_port,listen_addr,node_token_hash,node_token_enc,traffic_stats_secret_enc,desired_config_enc,created_at,updated_at) VALUES('node','Node','127.0.0.1',22,'root','private_key','unused','example.test',443,':443','hash','unused','unused','{}',now(),now())").execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO jobs(id,kind,node_id,payload_json,status,stage,available_at,created_at,updated_at) VALUES('progress','kick','node','{\"scope\":\"node\"}','queued','queued',now(),now(),now())").execute(&pool).await.unwrap();
+        let before_upgrade:i64=sqlx::query_scalar("SELECT (SELECT count(*) FROM users)+(SELECT count(*) FROM nodes)+(SELECT count(*) FROM jobs)").fetch_one(&pool).await.unwrap();
+        sqlx::raw_sql(include_str!(
+            "../migrations/0004_separate_job_cache_roots.sql"
+        ))
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert_eq!(sqlx::query_scalar::<_,i64>("SELECT (SELECT count(*) FROM users)+(SELECT count(*) FROM nodes)+(SELECT count(*) FROM jobs)").fetch_one(&pool).await.unwrap(),before_upgrade);
+        let state = crate::state::AppState::new(
+            pool.clone(),
+            crate::security::SecretBox::from_base64("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+                .unwrap(),
+        );
+        let read_node_revision = || {
+            sqlx::query_scalar::<_,i64>("SELECT generation FROM cache_entity_versions WHERE kind='nodes' AND entity_id='node'").fetch_one(&pool)
+        };
+        let revision = read_node_revision().await.unwrap();
+        let before = policy(&state, "/api/v2/nodes/node", &[], Duration::from_secs(60))
+            .await
+            .unwrap()
+            .0;
+        sqlx::query("UPDATE jobs SET stage='checking' WHERE id='progress'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert_eq!(read_node_revision().await.unwrap(), revision);
+        assert_ne!(
+            policy(&state, "/api/v2/nodes/node", &[], Duration::from_secs(60))
+                .await
+                .unwrap()
+                .0,
+            before
+        );
+        let mut authorization = pool
+            .begin_with("BEGIN ISOLATION LEVEL SERIALIZABLE")
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO node_assignments(user_id,node_id,credential_hash,credential_enc,created_at) VALUES('member','node','hash','unused',now())").execute(&mut *authorization).await.unwrap();
+        sqlx::query("UPDATE jobs SET stage='checkpointing' WHERE id='progress'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        authorization
+            .commit()
+            .await
+            .expect("job metadata must not conflict with authorization cache counters");
+        assert_eq!(read_node_revision().await.unwrap(), revision + 1);
+    }
 }

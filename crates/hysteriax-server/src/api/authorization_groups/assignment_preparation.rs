@@ -16,9 +16,13 @@ pub(super) struct PreparedAssignments {
 
 impl PreparedAssignments {
     pub(super) fn get(&self, user: &str, node: &str) -> Result<&Password, ApiError> {
-        self.entries.get(&(user.to_owned(),node.to_owned())).ok_or_else(||ApiError::conflict(
-            "authorization assignments changed during preparation; preview the change again",
-        ))
+        self.entries
+            .get(&(user.to_owned(), node.to_owned()))
+            .ok_or_else(|| {
+                ApiError::conflict(
+                    "authorization assignments changed during preparation; retry the change",
+                )
+            })
     }
 }
 
@@ -55,6 +59,78 @@ fn prepare(
     Ok(PreparedAssignments { entries, timestamp })
 }
 
+pub(super) async fn prepare_group_change(
+    state: &AppState,
+    action: &str,
+    group_id: Option<&str>,
+    proposal: &GroupProposal,
+) -> Result<
+    (
+        crate::credentials::authorization::Prepared,
+        PreparedAssignments,
+    ),
+    ApiError,
+> {
+    let mut tx = crate::read_snapshot::transaction(&state.pool).await?;
+    let mut users = proposal.user_ids.clone();
+    if let Some(id) = group_id {
+        let current = load_group_tx(&mut tx, id)
+            .await?
+            .ok_or_else(|| ApiError::not_found("authorization group"))?;
+        users.extend(current.user_ids);
+    }
+    if action != "delete" {
+        validate_proposal_entities(&mut tx, proposal).await?;
+    }
+    sort_dedup(&mut users);
+    let before = effective_pairs(&mut tx, &users, None).await?;
+    let mut after = if action == "create" {
+        before.clone()
+    } else {
+        effective_pairs(&mut tx, &users, group_id).await?
+    };
+    if action != "delete" {
+        add_group_pairs(&mut after, &proposal.user_ids, &proposal.node_ids);
+    }
+    let (additions, _) = pair_diff(&before, &after);
+    let plan = crate::credentials::authorization::plan_on(&mut tx, &additions).await?;
+    let (missing, timestamp) = missing_on(&mut tx, &users, &after).await?;
+    tx.commit().await?;
+    let managed =
+        crate::credentials::authorization::prepare_plan(&state.pool, &state.secrets, plan)
+            .await
+            .map_err(authorization_transaction_error)?;
+    Ok((managed, prepare(state, missing, timestamp)?))
+}
+
+pub(super) async fn prepare_membership_change(
+    state: &AppState,
+    user: &str,
+    proposal: &MembershipProposal,
+) -> Result<
+    (
+        crate::credentials::authorization::Prepared,
+        PreparedAssignments,
+    ),
+    ApiError,
+> {
+    let mut tx = crate::read_snapshot::transaction(&state.pool).await?;
+    user_revision(&mut tx, user).await?;
+    validate_group_ids(&mut tx, &proposal.group_ids).await?;
+    let before = effective_pairs(&mut tx, &[user.to_owned()], None).await?;
+    let after = pairs_for_user_groups(&mut tx, user, &proposal.group_ids).await?;
+    let (additions, _) = pair_diff(&before, &after);
+    let plan = crate::credentials::authorization::plan_on(&mut tx, &additions).await?;
+    let (missing, timestamp) = missing_on(&mut tx, &[user.to_owned()], &after).await?;
+    tx.commit().await?;
+    let managed =
+        crate::credentials::authorization::prepare_plan(&state.pool, &state.secrets, plan)
+            .await
+            .map_err(authorization_transaction_error)?;
+    Ok((managed, prepare(state, missing, timestamp)?))
+}
+
+#[cfg(test)]
 pub(super) async fn prepare_group_assignments(
     state: &AppState,
     action: &str,
@@ -62,7 +138,7 @@ pub(super) async fn prepare_group_assignments(
     proposal: &GroupProposal,
 ) -> Result<PreparedAssignments, ApiError> {
     // This snapshot prepares candidates only. The final write still checks the
-    // preview guard and the complete authoritative graph after resource locking.
+    // version, identity plan and complete authoritative graph after resource locking.
     let mut tx = crate::read_snapshot::transaction(&state.pool).await?;
     let mut users = proposal.user_ids.clone();
     if let Some(id) = group_id {
@@ -88,18 +164,6 @@ pub(super) async fn prepare_group_assignments(
     prepare(state, missing, timestamp)
 }
 
-pub(super) async fn prepare_membership_assignments(
-    state: &AppState,
-    user: &str,
-    proposal: &MembershipProposal,
-) -> Result<PreparedAssignments, ApiError> {
-    let mut tx = crate::read_snapshot::transaction(&state.pool).await?;
-    let after = pairs_for_user_groups(&mut tx, user, &proposal.group_ids).await?;
-    let (missing, timestamp) = missing_on(&mut tx, &[user.to_owned()], &after).await?;
-    tx.commit().await?;
-    prepare(state, missing, timestamp)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -107,7 +171,6 @@ mod tests {
     async fn candidate(
         state: &AppState,
     ) -> (
-        String,
         GroupProposal,
         crate::credentials::authorization::Prepared,
         PreparedAssignments,
@@ -117,16 +180,10 @@ mod tests {
             user_ids: vec!["user".into()],
             node_ids: vec!["node".into()],
         };
-        let Json(preview)=super::super::preview_create(State(state.clone()),Json(serde_json::from_value(json!({"action":"create","name":proposal.name,"user_ids":proposal.user_ids,"node_ids":proposal.node_ids})).unwrap())).await.unwrap();
-        let token = preview["preview_token"].as_str().unwrap().to_owned();
-        let managed =
-            crate::credentials::authorization::prepare_preview(&state.pool, &state.secrets, &token)
-                .await
-                .unwrap();
-        let assignments = prepare_group_assignments(state, "create", None, &proposal)
+        let (managed, assignments) = prepare_group_change(state, "create", None, &proposal)
             .await
             .unwrap();
-        (token, proposal, managed, assignments)
+        (proposal, managed, assignments)
     }
 
     #[tokio::test]
@@ -138,7 +195,7 @@ mod tests {
                 .execute(&state.pool)
                 .await
                 .unwrap();
-            let (token, proposal, managed, assignments) = candidate(&state).await;
+            let (proposal, managed, assignments) = candidate(&state).await;
             let material = assignments.get("user", "node").unwrap().clone();
             let timestamp = assignments.timestamp;
             let unchanged:i64=sqlx::query_scalar("SELECT (SELECT count(*) FROM authorization_groups)+(SELECT count(*) FROM node_assignments)").fetch_one(&state.pool).await.unwrap();
@@ -149,9 +206,8 @@ mod tests {
                 .execute(&state.pool).await.unwrap();
             let app = state.clone();
             let receipt = db::serializable(&state.pool, move |tx| {
-                let (app, token, proposal, managed, assignments, id) = (
+                let (app, proposal, managed, assignments, id) = (
                     app.clone(),
-                    token.clone(),
                     proposal.clone(),
                     managed.clone(),
                     assignments.clone(),
@@ -164,7 +220,6 @@ mod tests {
                         "create",
                         None,
                         None,
-                        &token,
                         proposal,
                         managed,
                         &id,
@@ -197,19 +252,17 @@ mod tests {
         let state = super::super::tests::fixture().await;
         sqlx::query("INSERT INTO node_assignments(user_id,node_id,credential_hash,credential_enc,created_at) VALUES('user','node',$1,$2,clock_timestamp()) ON CONFLICT DO NOTHING")
             .bind(token_digest("before-preparation")).bind(state.secrets.encrypt("before-preparation").unwrap()).execute(&state.pool).await.unwrap();
-        let (token, proposal, managed, assignments) = candidate(&state).await;
+        let (proposal, managed, assignments) = candidate(&state).await;
         assert!(assignments.entries.is_empty());
         sqlx::query("DELETE FROM node_assignments")
             .execute(&state.pool)
             .await
             .unwrap();
-        let preserved = token.clone();
         let app = state.clone();
         let id = Uuid::new_v4().to_string();
         let error = db::serializable(&state.pool, move |tx| {
-            let (app, token, proposal, managed, assignments, id) = (
+            let (app, proposal, managed, assignments, id) = (
                 app.clone(),
-                token.clone(),
                 proposal.clone(),
                 managed.clone(),
                 assignments.clone(),
@@ -222,7 +275,6 @@ mod tests {
                     "create",
                     None,
                     None,
-                    &token,
                     proposal,
                     managed,
                     &id,
@@ -236,13 +288,5 @@ mod tests {
         assert_eq!(error.status, StatusCode::CONFLICT);
         let unchanged:i64=sqlx::query_scalar("SELECT (SELECT count(*) FROM authorization_groups)+(SELECT count(*) FROM node_assignments)+(SELECT count(*) FROM audit_records WHERE action='authorization_group.created')").fetch_one(&state.pool).await.unwrap();
         assert_eq!(unchanged, 0);
-        let unconsumed: bool = sqlx::query_scalar(
-            "SELECT consumed_at IS NULL FROM authorization_group_previews WHERE token=$1",
-        )
-        .bind(preserved)
-        .fetch_one(&state.pool)
-        .await
-        .unwrap();
-        assert!(unconsumed);
     }
 }

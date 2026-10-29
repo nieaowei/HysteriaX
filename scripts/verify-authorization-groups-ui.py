@@ -52,12 +52,23 @@ with tempfile.TemporaryDirectory(prefix="hx-group-ui-") as folder:
     for name, value in responses.items():
         (fixtures / (name + ".json")).write_text(json.dumps(value))
     support = '''import Foundation
+private final class AuthorizationFixtureState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var committed = false
+    func markCommitted() { lock.lock(); committed = true; lock.unlock() }
+    var hasCommitted: Bool { lock.lock(); defer { lock.unlock() }; return committed }
+}
 final class AuthorizationFixtureProtocol: URLProtocol, @unchecked Sendable {
+    private static let state = AuthorizationFixtureState()
+    private let deliveryLock = NSLock()
+    private var stopped = false
+    private var canDeliver: Bool { deliveryLock.lock(); defer { deliveryLock.unlock() }; return !stopped }
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {
         let paths = ["/readyz":"ready", "/api/v2/events/head":"event_head", "/api/v2/events":"empty", "/api/v2/version":"version", "/api/v2/authorization-groups":"groups", "/api/v2/authorization-groups/group-1":"group", "/api/v2/users":"users", "/api/v2/users/user-1":"user", "/api/v2/nodes":"nodes", "/api/v2/nodes/node-1":"node_detail", "/api/v2/nodes/node-1/resources":"empty", "/api/v2/credentials":"credentials", "/api/v2/credentials/ca-1":"ca", "/api/v2/credentials/ca-identities":"ca_receipt", "/api/v2/credentials/ca-1/ca-policy":"policy_receipt", "/api/v2/credentials/ca-1/ca-versions":"ca_receipt", "/api/v2/jobs":"empty", "/api/v2/audit":"empty", "/api/v2/admin/tokens":"empty"]
         let path = request.url!.path
+        if path.contains("authorization-groups"), request.httpMethod != "GET" { Self.state.markCommitted() }
         let folder = ProcessInfo.processInfo.environment["HYSTERIAX_AUTHORIZATION_FIXTURE_DIRECTORY"]!
         var data = paths[path].map { try! Data(contentsOf: URL(fileURLWithPath: folder + "/" + $0 + ".json")) } ?? Data(#"{"code":"fixture","message":"not available"}"#.utf8)
         if ["/api/v2/jobs", "/api/v2/audit"].contains(path) {
@@ -160,33 +171,51 @@ final class AuthorizationFixtureProtocol: URLProtocol, @unchecked Sendable {
             data = try! JSONSerialization.data(withJSONObject: ["group":group, "additions_count":1, "removals_count":0, "created_credentials":[], "revocation_job_ids":[]])
             status = 201
         }
-        if path.hasSuffix("/preview") {
+        if path == "/api/v2/authorization-groups/group-1" && request.httpMethod == "PUT" {
             let stream = request.httpBodyStream
             var body = request.httpBody ?? Data()
-            if let stream { stream.open(); defer { stream.close() }; var buffer = [UInt8](repeating: 0, count: 4096); while stream.hasBytesAvailable { let n = stream.read(&buffer, maxLength: buffer.count); if n <= 0 { break }; body.append(contentsOf: buffer.prefix(n)) } }
-            let input = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any] ?? [:]
-            let users = input["user_ids"] as? [String] ?? ["user-1"]
-            let nodes = input["node_ids"] as? [String] ?? ["node-1"]
-            let pairs = users.flatMap { user in nodes.map { ["user_id":user,"node_id":$0] } }
-            let existingGroup = try! JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: folder + "/group.json"))) as! [String:Any]
-            let existing = (existingGroup["user_ids"] as! [String]).map { ["user_id":$0, "node_id":"node-1"] }
-            let isUpdate = path == "/api/v2/authorization-groups/group-1/preview"
-            let additions = pairs.filter { !existing.contains($0) }
-            let removals = isUpdate ? existing.filter { !pairs.contains($0) } : []
-            let managedUsers = Array(Set(additions.compactMap { $0["user_id"] })).sorted()
-            let existingUsers = Set(existing.compactMap { $0["user_id"] })
-            let managed = managedUsers.map { ["user_id":$0,"ca_credential_id":"ca-1","ca_versions":[1],"issue_now":!existingUsers.contains($0),"pending":false] as [String:Any] }
-            let issueCount = managed.filter { $0["issue_now"] as? Bool == true }.count
-            data = try! JSONSerialization.data(withJSONObject: ["action":input["action"] ?? "update_memberships", "preview_token":"fixture-preview", "additions_count":additions.count, "removals_count":removals.count, "additions":additions, "removals":removals, "automatic_issue_count":issueCount,"pending_issue_count":0,"managed_identities":managed])
+            if let stream { stream.open(); defer { stream.close() }; var buffer = [UInt8](repeating:0,count:4096); while stream.hasBytesAvailable { let n=stream.read(&buffer,maxLength:buffer.count); if n<=0 { break }; body.append(contentsOf:buffer.prefix(n)) } }
+            let input = try! JSONSerialization.jsonObject(with:body) as! [String:Any]
+            precondition(input["preview_token"] == nil)
+            let old = try! JSONSerialization.jsonObject(with: Data(contentsOf:URL(fileURLWithPath:folder+"/group.json"))) as! [String:Any]
+            let oldPairs = Set((old["user_ids"] as! [String]).flatMap { user in (old["node_ids"] as! [String]).map { user + ":" + $0 } })
+            let newPairs = Set((input["user_ids"] as! [String]).flatMap { user in (input["node_ids"] as! [String]).map { user + ":" + $0 } })
+            var group = old
+            group["user_ids"] = input["user_ids"]; group["node_ids"] = input["node_ids"]
+            group["revision"] = 2
+            data = try! JSONSerialization.data(withJSONObject:["group":group,"additions_count":newPairs.subtracting(oldPairs).count,"removals_count":oldPairs.subtracting(newPairs).count,"created_credentials":[],"revocation_job_ids":[]])
+        }
+        if path.contains("authorization-groups"), path.hasSuffix("/preview") {
+            preconditionFailure("authorization previews are retired")
+        }
+        if path == "/api/v2/authorization-groups/group-1" && request.httpMethod == "DELETE" {
+            data = Data(#"{"group":null,"additions_count":0,"removals_count":201,"created_credentials":[],"revocation_job_ids":[]}"#.utf8)
+        }
+        if path == "/api/v2/users/user-1/authorization-groups" && request.httpMethod == "PUT" {
+            data = Data(#"{"user_id":"user-1","revision":2,"group_ids":[],"assignments":[],"additions_count":0,"removals_count":1,"created_credentials":[],"revocation_job_ids":[]}"#.utf8)
             status = 200
         }
         if request.url!.path == "/api/v2/events" { data = Data() }
-        let response = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: "HTTP/1.1", headerFields: ["Content-Type":request.url!.path == "/api/v2/events" ? "text/event-stream" : "application/json"])!
-        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-        client?.urlProtocol(self, didLoad: data)
-        client?.urlProtocolDidFinishLoading(self)
+        let resultData = data
+        let resultStatus = status
+        let deliver: @Sendable () -> Void = { [self] in
+            guard canDeliver else { return }
+            let response = HTTPURLResponse(url: request.url!, statusCode: resultStatus, httpVersion: "HTTP/1.1", headerFields: ["Content-Type":path == "/api/v2/events" ? "text/event-stream" : "application/json"])!
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: resultData)
+            client?.urlProtocolDidFinishLoading(self)
+        }
+        let delay = Double(ProcessInfo.processInfo.environment["HYSTERIAX_TEST_REFRESH_DELAY_SECONDS"] ?? "0") ?? 0
+        let parameters = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems ?? []
+        let slowDirectory = ProcessInfo.processInfo.environment["HYSTERIAX_TEST_SLOW_DIRECTORY"] == "1" && path == "/api/v2/users" && parameters.contains { $0.name == "page_size" && $0.value == "200" }
+        if slowDirectory, Self.state.hasCommitted {
+            try! Data().write(to: URL(fileURLWithPath: folder + "/directory-refresh-started"))
+            DispatchQueue.global().asyncAfter(deadline: .now() + 8, execute: deliver)
+        } else if path == "/api/v2/server/monitoring", Self.state.hasCommitted, delay > 0 {
+            DispatchQueue.global().asyncAfter(deadline: .now() + delay, execute: deliver)
+        } else { deliver() }
     }
-    override func stopLoading() {}
+    override func stopLoading() { deliveryLock.lock(); stopped = true; deliveryLock.unlock() }
 }
 '''
     (temp / "AppSources/Support/AuthorizationFixtureProtocol.swift").write_text(support)

@@ -411,7 +411,7 @@ mod tests {
         .fetch_one(&pool)
         .await
         .unwrap();
-        assert_eq!(json_types, 6);
+        assert_eq!(json_types, 5);
 
         let buckets: Vec<(String, i64, i16, i16)> = sqlx::query_as(
             "SELECT domain,count(*),min(bucket),max(bucket) FROM cache_bucket_versions GROUP BY domain ORDER BY domain",
@@ -440,7 +440,7 @@ mod tests {
             0
         );
         assert!(sqlx::query_scalar::<_, bool>(
-            "SELECT to_regclass('traffic_history_cleanup_runs') IS NULL AND to_regclass('traffic_history_cleanup_nodes') IS NULL AND to_regclass('cache_generation') IS NULL AND to_regclass('cache_domain_versions') IS NULL",
+            "SELECT to_regclass('authorization_group_previews') IS NULL AND to_regclass('traffic_history_cleanup_runs') IS NULL AND to_regclass('traffic_history_cleanup_nodes') IS NULL AND to_regclass('cache_generation') IS NULL AND to_regclass('cache_domain_versions') IS NULL",
         ).fetch_one(&pool).await.unwrap());
         let epoch: String = sqlx::query_scalar("SELECT epoch FROM cache_version_epoch WHERE id")
             .fetch_one(&pool)

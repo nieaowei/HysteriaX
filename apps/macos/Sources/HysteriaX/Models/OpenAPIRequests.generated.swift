@@ -635,59 +635,25 @@ struct UserPatchRequest: Encodable, Sendable {
     }
 }
 
-struct AuthorizationGroupPreviewRequest: Encodable, Sendable {
-    let action: String
-    let expectedRevision: Int?
-    let name: String?
-    let userIds: [String]?
-    let nodeIds: [String]?
-
-    init(
-        action: String,
-        expectedRevision: Int? = nil,
-        name: String? = nil,
-        userIds: [String]? = nil,
-        nodeIds: [String]? = nil
-    ) {
-        self.action = action
-        self.expectedRevision = expectedRevision
-        self.name = name
-        self.userIds = userIds
-        self.nodeIds = nodeIds
-    }
-
-    enum CodingKeys: String, CodingKey {
-        case action
-        case expectedRevision = "expected_revision"
-        case name
-        case userIds = "user_ids"
-        case nodeIds = "node_ids"
-    }
-}
-
 struct AuthorizationGroupCreateRequest: Encodable, Sendable {
     let name: String
     let userIds: [String]
     let nodeIds: [String]
-    let previewToken: String
 
     init(
         name: String,
         userIds: [String],
-        nodeIds: [String],
-        previewToken: String
+        nodeIds: [String]
     ) {
         self.name = name
         self.userIds = userIds
         self.nodeIds = nodeIds
-        self.previewToken = previewToken
     }
 
     enum CodingKeys: String, CodingKey {
         case name
         case userIds = "user_ids"
         case nodeIds = "node_ids"
-        case previewToken = "preview_token"
     }
 }
 
@@ -696,20 +662,17 @@ struct AuthorizationGroupUpdateRequest: Encodable, Sendable {
     let name: String
     let userIds: [String]
     let nodeIds: [String]
-    let previewToken: String
 
     init(
         expectedRevision: Int,
         name: String,
         userIds: [String],
-        nodeIds: [String],
-        previewToken: String
+        nodeIds: [String]
     ) {
         self.expectedRevision = expectedRevision
         self.name = name
         self.userIds = userIds
         self.nodeIds = nodeIds
-        self.previewToken = previewToken
     }
 
     enum CodingKeys: String, CodingKey {
@@ -717,64 +680,37 @@ struct AuthorizationGroupUpdateRequest: Encodable, Sendable {
         case name
         case userIds = "user_ids"
         case nodeIds = "node_ids"
-        case previewToken = "preview_token"
     }
 }
 
 struct AuthorizationGroupDeleteRequest: Encodable, Sendable {
     let expectedRevision: Int
-    let previewToken: String
 
     init(
-        expectedRevision: Int,
-        previewToken: String
+        expectedRevision: Int
     ) {
         self.expectedRevision = expectedRevision
-        self.previewToken = previewToken
     }
 
     enum CodingKeys: String, CodingKey {
         case expectedRevision = "expected_revision"
-        case previewToken = "preview_token"
-    }
-}
-
-struct UserAuthorizationGroupsPreviewRequest: Encodable, Sendable {
-    let expectedRevision: Int
-    let groupIds: [String]
-
-    init(
-        expectedRevision: Int,
-        groupIds: [String]
-    ) {
-        self.expectedRevision = expectedRevision
-        self.groupIds = groupIds
-    }
-
-    enum CodingKeys: String, CodingKey {
-        case expectedRevision = "expected_revision"
-        case groupIds = "group_ids"
     }
 }
 
 struct UserAuthorizationGroupsUpdateRequest: Encodable, Sendable {
     let expectedRevision: Int
-    let previewToken: String
     let groupIds: [String]
 
     init(
         expectedRevision: Int,
-        previewToken: String,
         groupIds: [String]
     ) {
         self.expectedRevision = expectedRevision
-        self.previewToken = previewToken
         self.groupIds = groupIds
     }
 
     enum CodingKeys: String, CodingKey {
         case expectedRevision = "expected_revision"
-        case previewToken = "preview_token"
         case groupIds = "group_ids"
     }
 }
@@ -1245,18 +1181,11 @@ enum APIEndpoints {
     static func deleteUser(id: String, expectedRevision: Int) -> APIOperation<NoRequest, NoResponse> {
         APIOperation(method: "DELETE", path: "api/v2/users/\(id)", queryParameters: ["expected_revision": String(expectedRevision)])
     }
-    static func previewUserAuthorizationGroups(id: String) -> APIOperation<UserAuthorizationGroupsPreviewRequest, AuthorizationChangePreview> {
-        APIOperation(method: "POST", path: "api/v2/users/\(id)/authorization-groups/preview", queryParameters: [:])
-    }
     static func updateUserAuthorizationGroups(id: String) -> APIOperation<UserAuthorizationGroupsUpdateRequest, UserAuthorizationGroupsMutationResponse> {
         APIOperation(method: "PUT", path: "api/v2/users/\(id)/authorization-groups", queryParameters: [:])
     }
-    static let previewAuthorizationGroupCreate: APIOperation<AuthorizationGroupPreviewRequest, AuthorizationChangePreview> = APIOperation<AuthorizationGroupPreviewRequest, AuthorizationChangePreview>(method: "POST", path: "api/v2/authorization-groups/preview", queryParameters: [:])
     static let listAuthorizationGroups: APIOperation<NoRequest, [AuthorizationGroupSummary]> = APIOperation<NoRequest, [AuthorizationGroupSummary]>(method: "GET", path: "api/v2/authorization-groups", queryParameters: [:])
     static let createAuthorizationGroup: APIOperation<AuthorizationGroupCreateRequest, AuthorizationGroupMutationResponse> = APIOperation<AuthorizationGroupCreateRequest, AuthorizationGroupMutationResponse>(method: "POST", path: "api/v2/authorization-groups", queryParameters: [:])
-    static func previewAuthorizationGroupChange(groupID: String) -> APIOperation<AuthorizationGroupPreviewRequest, AuthorizationChangePreview> {
-        APIOperation(method: "POST", path: "api/v2/authorization-groups/\(groupID)/preview", queryParameters: [:])
-    }
     static func getAuthorizationGroup(groupID: String) -> APIOperation<NoRequest, AuthorizationGroupSummary> {
         APIOperation(method: "GET", path: "api/v2/authorization-groups/\(groupID)", queryParameters: [:])
     }

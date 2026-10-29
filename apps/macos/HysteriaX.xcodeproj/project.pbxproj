@@ -22,7 +22,6 @@
 		B82491C664254D0C4C791CDD /* Views/CAIdentityEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E3ACF8B090BFAB20AEF5E02 /* Views/CAIdentityEditorView.swift */; };
 		5304768297D21D1864A6316E /* Views/CAIdentityStatusView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C5FE7ED9BD01433C63BF2082 /* Views/CAIdentityStatusView.swift */; };
 		7CBE9BD7135E38F17542E73F /* Views/CATrustCleanupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1DA5DB1B6D4507B38B6B3485 /* Views/CATrustCleanupView.swift */; };
-		33E57D52252178ED759B171B /* Views/ManagedIdentityIssuanceSummary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A222F5968C5F61EDF73C599 /* Views/ManagedIdentityIssuanceSummary.swift */; };
 		CAA100F8E281660B4B9D419E /* Views/ManagedMTLSFields.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDA59B1027A9082F06C3FE90 /* Views/ManagedMTLSFields.swift */; };
 		30A94AD13DFE4FBDF6DF9B6F /* Views/NodeMTLSStatusView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0491BC5C4E5569AE802721DC /* Views/NodeMTLSStatusView.swift */; };
 		096E2CD53CC7646029291DE6 /* Views/UserManagedCertificatesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 80FA1BD6FABEEBD2840EB23B /* Views/UserManagedCertificatesView.swift */; };
@@ -32,7 +31,7 @@
 		F11E00000000000000000002 /* Stores/AuthorizationGroupStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F11F00000000000000000002 /* Stores/AuthorizationGroupStore.swift */; };
 		F11E00000000000000000003 /* Views/AuthorizationGroupsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F11F00000000000000000003 /* Views/AuthorizationGroupsView.swift */; };
 		F11E00000000000000000004 /* Views/AuthorizationGroupEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F11F00000000000000000004 /* Views/AuthorizationGroupEditorView.swift */; };
-		F11E00000000000000000005 /* Views/AuthorizationGroupDeletionPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F11F00000000000000000005 /* Views/AuthorizationGroupDeletionPreviewView.swift */; };
+		F11E00000000000000000005 /* Views/AuthorizationGroupDeletionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F11F00000000000000000005 /* Views/AuthorizationGroupDeletionView.swift */; };
 		F11E00000000000000000006 /* Views/AuthorizationMutationReceiptView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F11F00000000000000000006 /* Views/AuthorizationMutationReceiptView.swift */; };
 		F11E00000000000000000007 /* Views/AuthorizationMultiSelectSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = F11F00000000000000000007 /* Views/AuthorizationMultiSelectSheet.swift */; };
 		F11E00000000000000000008 /* Views/UserAuthorizationGroupMembershipView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F11F00000000000000000008 /* Views/UserAuthorizationGroupMembershipView.swift */; };
@@ -101,7 +100,6 @@
 		F11E0000000000000000000A /* Views/AuthorizationMemberBrowser.swift in Sources */ = {isa = PBXBuildFile; fileRef = F11F0000000000000000000A /* Views/AuthorizationMemberBrowser.swift */; };
 		F11E0000000000000000000B /* Views/AuthorizationGroupMembersEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = F11F0000000000000000000B /* Views/AuthorizationGroupMembersEditor.swift */; };
 		F11E0000000000000000000C /* Views/AuthorizationGroupMembersView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F11F0000000000000000000C /* Views/AuthorizationGroupMembersView.swift */; };
-		F11E0000000000000000000D /* Views/AuthorizationUserImpactList.swift in Sources */ = {isa = PBXBuildFile; fileRef = F11F0000000000000000000D /* Views/AuthorizationUserImpactList.swift */; };
 		A3207EBD4510F5B6947AF01F /* Models/MihomoTemplateRule.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00DD25B4749AA5E518D61257 /* Models/MihomoTemplateRule.swift */; };
 		46DB2436058952FC9DF38DD7 /* Models/SubscriptionTemplateDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = E6A1671076FE13DA6D3DCACD /* Models/SubscriptionTemplateDocument.swift */; };
 		AE6D6D6486D144D09CF00001 /* Models/TemplateEditorGuidance.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE6D6D6486D144D09CF00002 /* Models/TemplateEditorGuidance.swift */; };
@@ -138,7 +136,6 @@
 		0E3ACF8B090BFAB20AEF5E02 /* Views/CAIdentityEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/CAIdentityEditorView.swift; sourceTree = "<group>"; };
 		C5FE7ED9BD01433C63BF2082 /* Views/CAIdentityStatusView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/CAIdentityStatusView.swift; sourceTree = "<group>"; };
 		1DA5DB1B6D4507B38B6B3485 /* Views/CATrustCleanupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/CATrustCleanupView.swift; sourceTree = "<group>"; };
-		6A222F5968C5F61EDF73C599 /* Views/ManagedIdentityIssuanceSummary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/ManagedIdentityIssuanceSummary.swift; sourceTree = "<group>"; };
 		DDA59B1027A9082F06C3FE90 /* Views/ManagedMTLSFields.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/ManagedMTLSFields.swift; sourceTree = "<group>"; };
 		0491BC5C4E5569AE802721DC /* Views/NodeMTLSStatusView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/NodeMTLSStatusView.swift; sourceTree = "<group>"; };
 		80FA1BD6FABEEBD2840EB23B /* Views/UserManagedCertificatesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/UserManagedCertificatesView.swift; sourceTree = "<group>"; };
@@ -148,7 +145,7 @@
 		F11F00000000000000000002 /* Stores/AuthorizationGroupStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Stores/AuthorizationGroupStore.swift; sourceTree = "<group>"; };
 		F11F00000000000000000003 /* Views/AuthorizationGroupsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/AuthorizationGroupsView.swift; sourceTree = "<group>"; };
 		F11F00000000000000000004 /* Views/AuthorizationGroupEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/AuthorizationGroupEditorView.swift; sourceTree = "<group>"; };
-		F11F00000000000000000005 /* Views/AuthorizationGroupDeletionPreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/AuthorizationGroupDeletionPreviewView.swift; sourceTree = "<group>"; };
+		F11F00000000000000000005 /* Views/AuthorizationGroupDeletionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/AuthorizationGroupDeletionView.swift; sourceTree = "<group>"; };
 		F11F00000000000000000006 /* Views/AuthorizationMutationReceiptView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/AuthorizationMutationReceiptView.swift; sourceTree = "<group>"; };
 		F11F00000000000000000007 /* Views/AuthorizationMultiSelectSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/AuthorizationMultiSelectSheet.swift; sourceTree = "<group>"; };
 		F11F00000000000000000008 /* Views/UserAuthorizationGroupMembershipView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/UserAuthorizationGroupMembershipView.swift; sourceTree = "<group>"; };
@@ -219,7 +216,6 @@
 		F11F0000000000000000000A /* Views/AuthorizationMemberBrowser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/AuthorizationMemberBrowser.swift; sourceTree = "<group>"; };
 		F11F0000000000000000000B /* Views/AuthorizationGroupMembersEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/AuthorizationGroupMembersEditor.swift; sourceTree = "<group>"; };
 		F11F0000000000000000000C /* Views/AuthorizationGroupMembersView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/AuthorizationGroupMembersView.swift; sourceTree = "<group>"; };
-		F11F0000000000000000000D /* Views/AuthorizationUserImpactList.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/AuthorizationUserImpactList.swift; sourceTree = "<group>"; };
 		00DD25B4749AA5E518D61257 /* Models/MihomoTemplateRule.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models/MihomoTemplateRule.swift; sourceTree = "<group>"; };
 		E6A1671076FE13DA6D3DCACD /* Models/SubscriptionTemplateDocument.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models/SubscriptionTemplateDocument.swift; sourceTree = "<group>"; };
 		AE6D6D6486D144D09CF00002 /* Models/TemplateEditorGuidance.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models/TemplateEditorGuidance.swift; sourceTree = "<group>"; };
@@ -288,7 +284,6 @@
 				0E3ACF8B090BFAB20AEF5E02 /* Views/CAIdentityEditorView.swift */,
 				C5FE7ED9BD01433C63BF2082 /* Views/CAIdentityStatusView.swift */,
 				1DA5DB1B6D4507B38B6B3485 /* Views/CATrustCleanupView.swift */,
-				6A222F5968C5F61EDF73C599 /* Views/ManagedIdentityIssuanceSummary.swift */,
 				DDA59B1027A9082F06C3FE90 /* Views/ManagedMTLSFields.swift */,
 				0491BC5C4E5569AE802721DC /* Views/NodeMTLSStatusView.swift */,
 				80FA1BD6FABEEBD2840EB23B /* Views/UserManagedCertificatesView.swift */,
@@ -297,11 +292,10 @@
 				F11F00000000000000000002 /* Stores/AuthorizationGroupStore.swift */,
 				F11F00000000000000000003 /* Views/AuthorizationGroupsView.swift */,
 				F11F00000000000000000004 /* Views/AuthorizationGroupEditorView.swift */,
-				F11F00000000000000000005 /* Views/AuthorizationGroupDeletionPreviewView.swift */,
+				F11F00000000000000000005 /* Views/AuthorizationGroupDeletionView.swift */,
 				F11F00000000000000000006 /* Views/AuthorizationMutationReceiptView.swift */,
 				F11F00000000000000000007 /* Views/AuthorizationMultiSelectSheet.swift */,
 				F11F00000000000000000008 /* Views/UserAuthorizationGroupMembershipView.swift */,
-				F11F0000000000000000000D /* Views/AuthorizationUserImpactList.swift */,
 				F11F0000000000000000000C /* Views/AuthorizationGroupMembersView.swift */,
 				F11F0000000000000000000B /* Views/AuthorizationGroupMembersEditor.swift */,
 				F11F0000000000000000000A /* Views/AuthorizationMemberBrowser.swift */,
@@ -490,7 +484,6 @@
 				B82491C664254D0C4C791CDD /* Views/CAIdentityEditorView.swift in Sources */,
 				5304768297D21D1864A6316E /* Views/CAIdentityStatusView.swift in Sources */,
 				7CBE9BD7135E38F17542E73F /* Views/CATrustCleanupView.swift in Sources */,
-				33E57D52252178ED759B171B /* Views/ManagedIdentityIssuanceSummary.swift in Sources */,
 				CAA100F8E281660B4B9D419E /* Views/ManagedMTLSFields.swift in Sources */,
 				30A94AD13DFE4FBDF6DF9B6F /* Views/NodeMTLSStatusView.swift in Sources */,
 				096E2CD53CC7646029291DE6 /* Views/UserManagedCertificatesView.swift in Sources */,
@@ -499,11 +492,10 @@
 				F11E00000000000000000002 /* Stores/AuthorizationGroupStore.swift in Sources */,
 				F11E00000000000000000003 /* Views/AuthorizationGroupsView.swift in Sources */,
 				F11E00000000000000000004 /* Views/AuthorizationGroupEditorView.swift in Sources */,
-				F11E00000000000000000005 /* Views/AuthorizationGroupDeletionPreviewView.swift in Sources */,
+				F11E00000000000000000005 /* Views/AuthorizationGroupDeletionView.swift in Sources */,
 				F11E00000000000000000006 /* Views/AuthorizationMutationReceiptView.swift in Sources */,
 				F11E00000000000000000007 /* Views/AuthorizationMultiSelectSheet.swift in Sources */,
 				F11E00000000000000000008 /* Views/UserAuthorizationGroupMembershipView.swift in Sources */,
-				F11E0000000000000000000D /* Views/AuthorizationUserImpactList.swift in Sources */,
 				F11E0000000000000000000C /* Views/AuthorizationGroupMembersView.swift in Sources */,
 				F11E0000000000000000000B /* Views/AuthorizationGroupMembersEditor.swift in Sources */,
 				F11E0000000000000000000A /* Views/AuthorizationMemberBrowser.swift in Sources */,

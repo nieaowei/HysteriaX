@@ -15,108 +15,6 @@ fn parse<T: serde::de::DeserializeOwned>(body: Value) -> Result<T, ApiError> {
         .map_err(|_| ApiError::bad_request("invalid authorization group request"))
 }
 
-pub(crate) async fn preview_create(
-    State(state): State<AppState>,
-    Extension(actor): Extension<AdminActor>,
-    OriginalUri(uri): OriginalUri,
-    headers: HeaderMap,
-    Json(body): Json<Value>,
-) -> Result<Response, ApiError> {
-    let identity = RequestIdentity::from_headers(
-        &state.secrets,
-        &actor.id,
-        "groups.preview_create",
-        &headers,
-        json!({"method":"POST","uri":uri.to_string(),"body":body}),
-    )?;
-    if let Some(response) = replay(&state, &identity).await? {
-        return response.into_http();
-    }
-    let proposal = preview_create_input(parse(body)?)?;
-    let token = Uuid::new_v4().to_string();
-    let app = state.clone();
-    execute(&state, identity, move |tx| {
-        let (app, proposal, token) = (app.clone(), proposal.clone(), token.clone());
-        Box::pin(async move {
-            let Json(value) = preview_create_on(tx, app, proposal, token).await?;
-            Ok(StoredResponse::json(StatusCode::OK, value))
-        })
-    })
-    .await?
-    .into_http()
-}
-
-pub(crate) async fn preview_group(
-    State(state): State<AppState>,
-    Extension(actor): Extension<AdminActor>,
-    Path(id): Path<String>,
-    OriginalUri(uri): OriginalUri,
-    headers: HeaderMap,
-    Json(body): Json<Value>,
-) -> Result<Response, ApiError> {
-    let identity = RequestIdentity::from_headers(
-        &state.secrets,
-        &actor.id,
-        "groups.preview_group",
-        &headers,
-        json!({"method":"POST","uri":uri.to_string(),"id":id,"body":body}),
-    )?;
-    if let Some(response) = replay(&state, &identity).await? {
-        return response.into_http();
-    }
-    let (action, expected_revision, proposal) = preview_group_input(parse(body)?)?;
-    let token = Uuid::new_v4().to_string();
-    let app = state.clone();
-    execute(&state, identity, move |tx| {
-        let (app, id, action, proposal, token) = (
-            app.clone(),
-            id.clone(),
-            action.clone(),
-            proposal.clone(),
-            token.clone(),
-        );
-        Box::pin(async move {
-            let Json(value) =
-                preview_group_on(tx, app, id, action, expected_revision, proposal, token).await?;
-            Ok(StoredResponse::json(StatusCode::OK, value))
-        })
-    })
-    .await?
-    .into_http()
-}
-
-pub(crate) async fn preview_memberships(
-    State(state): State<AppState>,
-    Extension(actor): Extension<AdminActor>,
-    Path(user): Path<String>,
-    OriginalUri(uri): OriginalUri,
-    headers: HeaderMap,
-    Json(body): Json<Value>,
-) -> Result<Response, ApiError> {
-    let identity = RequestIdentity::from_headers(
-        &state.secrets,
-        &actor.id,
-        "groups.preview_memberships",
-        &headers,
-        json!({"method":"POST","uri":uri.to_string(),"id":user,"body":body}),
-    )?;
-    if let Some(response) = replay(&state, &identity).await? {
-        return response.into_http();
-    }
-    let (expected_revision, proposal) = preview_memberships_input(parse(body)?)?;
-    let token = Uuid::new_v4().to_string();
-    execute(&state, identity, move |tx| {
-        let (user, proposal, token) = (user.clone(), proposal.clone(), token.clone());
-        Box::pin(async move {
-            let Json(value) =
-                preview_memberships_on(tx, user, proposal, expected_revision, token).await?;
-            Ok(StoredResponse::json(StatusCode::OK, value))
-        })
-    })
-    .await?
-    .into_http()
-}
-
 #[derive(Clone)]
 enum GroupChange {
     Create(CreateGroupRequest),
@@ -124,15 +22,12 @@ enum GroupChange {
     Delete(String, DeleteGroupRequest),
 }
 impl GroupChange {
-    fn normalize(
-        self,
-    ) -> Result<(String, Option<String>, Option<i64>, String, GroupProposal), ApiError> {
+    fn normalize(self) -> Result<(String, Option<String>, Option<i64>, GroupProposal), ApiError> {
         Ok(match self {
             Self::Create(input) => (
                 "create".into(),
                 None,
                 None,
-                input.preview_token,
                 normalized_proposal(GroupProposal {
                     name: input.name,
                     user_ids: input.user_ids,
@@ -143,7 +38,6 @@ impl GroupChange {
                 "update".into(),
                 Some(id),
                 Some(input.expected_revision),
-                input.preview_token,
                 normalized_proposal(GroupProposal {
                     name: input.name,
                     user_ids: input.user_ids,
@@ -154,7 +48,6 @@ impl GroupChange {
                 "delete".into(),
                 Some(id),
                 Some(input.expected_revision),
-                input.preview_token,
                 GroupProposal {
                     name: String::new(),
                     user_ids: Vec::new(),
@@ -170,45 +63,33 @@ async fn commit_group(
     identity: RequestIdentity,
     change: GroupChange,
 ) -> Result<Response, ApiError> {
-    let (action, id, revision, token, proposal) = change.normalize()?;
-    let prepared = match crate::credentials::authorization::prepare_preview(
-        &state.pool,
-        &state.secrets,
-        &token,
-    )
-    .await
-    {
+    let started = std::time::Instant::now();
+    let (action, id, revision, proposal) = change.normalize()?;
+    let preparation = prepare_group_change(state, &action, id.as_deref(), &proposal).await;
+    let (prepared, assignments) = match preparation {
         Ok(prepared) => prepared,
         Err(error) => {
             if let Some(response) = replay(state, &identity).await? {
                 return response.into_http();
             }
-            return Err(ApiError::conflict(error.to_string()));
+            return Err(error);
         }
     };
-    let assignments =
-        match prepare_group_assignments(state, &action, id.as_deref(), &proposal).await {
-            Ok(assignments) => assignments,
-            Err(error) => {
-                if let Some(response) = replay(state, &identity).await? {
-                    return response.into_http();
-                }
-                return Err(error);
-            }
-        };
     let status = if action == "create" {
         StatusCode::CREATED
     } else {
         StatusCode::OK
     };
+    let preparation_ms = started.elapsed().as_millis() as u64;
+    let operation = action.clone();
+    let execution_started = std::time::Instant::now();
     let creation_id = Uuid::new_v4().to_string();
     let app = state.clone();
-    execute(state, identity, move |tx| {
-        let (app, action, id, token, proposal, prepared, creation_id) = (
+    let result = execute(state, identity, move |tx| {
+        let (app, action, id, proposal, prepared, creation_id) = (
             app.clone(),
             action.clone(),
             id.clone(),
-            token.clone(),
             proposal.clone(),
             prepared.clone(),
             creation_id.clone(),
@@ -221,7 +102,6 @@ async fn commit_group(
                 &action,
                 id.as_deref(),
                 revision,
-                &token,
                 proposal,
                 prepared,
                 &creation_id,
@@ -231,8 +111,16 @@ async fn commit_group(
             Ok(StoredResponse::json(status, value))
         })
     })
-    .await?
-    .into_http()
+    .await;
+    tracing::info!(
+        operation,
+        preparation_ms,
+        transaction_ms = execution_started.elapsed().as_millis() as u64,
+        total_ms = started.elapsed().as_millis() as u64,
+        success = result.is_ok(),
+        "authorization group mutation finished"
+    );
+    result?.into_http()
 }
 
 pub(crate) async fn create(
@@ -312,25 +200,9 @@ pub(crate) async fn update_memberships(
     let proposal = normalized_membership(MembershipProposal {
         group_ids: input.group_ids,
     })?;
-    let token = input.preview_token;
     let revision = input.expected_revision;
-    let prepared = match crate::credentials::authorization::prepare_preview(
-        &state.pool,
-        &state.secrets,
-        &token,
-    )
-    .await
-    {
+    let (prepared, assignments) = match prepare_membership_change(&state, &user, &proposal).await {
         Ok(prepared) => prepared,
-        Err(error) => {
-            if let Some(response) = replay(&state, &identity).await? {
-                return response.into_http();
-            }
-            return Err(ApiError::conflict(error.to_string()));
-        }
-    };
-    let assignments = match prepare_membership_assignments(&state, &user, &proposal).await {
-        Ok(assignments) => assignments,
         Err(error) => {
             if let Some(response) = replay(&state, &identity).await? {
                 return response.into_http();
@@ -340,10 +212,9 @@ pub(crate) async fn update_memberships(
     };
     let app = state.clone();
     execute(&state, identity, move |tx| {
-        let (app, user, token, proposal, prepared) = (
+        let (app, user, proposal, prepared) = (
             app.clone(),
             user.clone(),
-            token.clone(),
             proposal.clone(),
             prepared.clone(),
         );
@@ -354,7 +225,6 @@ pub(crate) async fn update_memberships(
                 &app,
                 &user,
                 revision,
-                &token,
                 proposal,
                 prepared,
                 assignments,

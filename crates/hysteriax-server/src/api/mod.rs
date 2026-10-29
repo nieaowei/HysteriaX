@@ -133,22 +133,10 @@ pub fn router(state: AppState) -> Router {
             get(authorization_groups::list).post(authorization_groups::v2::create),
         )
         .route(
-            "/api/v2/authorization-groups/preview",
-            post(authorization_groups::v2::preview_create),
-        )
-        .route(
             "/api/v2/authorization-groups/{id}",
             get(authorization_groups::get)
                 .put(authorization_groups::v2::change)
                 .delete(authorization_groups::v2::change),
-        )
-        .route(
-            "/api/v2/authorization-groups/{id}/preview",
-            post(authorization_groups::v2::preview_group),
-        )
-        .route(
-            "/api/v2/users/{id}/authorization-groups/preview",
-            post(authorization_groups::v2::preview_memberships),
         )
         .route(
             "/api/v2/users/{id}/authorization-groups",

@@ -1,7 +1,7 @@
 """Create credential objects for the existing live-test fixture descriptions.
 
 Credential fixture writes use IDs and pinned versions. Authorization fixtures
-use the real group preview/commit protocol; retired assignment routes are never
+use the real direct group creation protocol; retired assignment routes are never
 translated.
 """
 import base64
@@ -81,23 +81,16 @@ def request_with_credentials(raw_request, base, path, token=None, method="GET", 
 
 
 def grant_group(expect, user_id, node_ids, name=None, *, api_prefix="/api/v2"):
-    """Exercise the actual group preview/commit protocol; no retired assignment route."""
-    draft = {"action": "create", "name": name or "Live grant " + uuid.uuid4().hex[:12],
+    """Exercise the actual direct group creation protocol; no retired assignment route."""
+    draft = {"name": name or "Live grant " + uuid.uuid4().hex[:12],
              "user_ids": [user_id], "node_ids": list(node_ids)}
-    preview = expect(api_prefix + "/authorization-groups/preview", "POST", draft)
-    draft.pop("action")
-    draft["preview_token"] = preview["preview_token"]
     return expect(api_prefix + "/authorization-groups", "POST", draft, (201,))
 
 
 def request_group(raw_request, base, token, user_ids, node_ids, name=None):
     """Return the actual group receipt, preserving real HTTP failure statuses."""
-    draft = {"action":"create", "name":name or "Live grant " + uuid.uuid4().hex[:12],
+    draft = {"name":name or "Live grant " + uuid.uuid4().hex[:12],
              "user_ids":list(user_ids), "node_ids":list(node_ids)}
-    status,body = raw_request(base,"/api/v2/authorization-groups/preview",token,"POST",draft)
-    if status!=200:return status,body
-    draft.pop("action")
-    draft["preview_token"]=json.loads(body)["preview_token"]
     return raw_request(base,"/api/v2/authorization-groups",token,"POST",draft)
 
 

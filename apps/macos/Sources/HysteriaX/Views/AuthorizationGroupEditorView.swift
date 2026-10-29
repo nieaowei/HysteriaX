@@ -10,12 +10,8 @@ struct AuthorizationGroupEditorView: View {
     @State private var name: String
     @State private var originalUserIDs: Set<String>
     @State private var memberMode: AuthorizationMemberEditorMode
-    @State private var showingImpact = false
-    @State private var previewUserIDs: Set<String>?
     @State private var userIDs: Set<String>
     @State private var nodeIDs: Set<String>
-    @State private var preview: AuthorizationChangePreview?
-    @State private var isPreviewing = false
     @State private var isSaving = false
     @State private var errorMessage: String?
     @State private var selectingUsers = false
@@ -43,10 +39,10 @@ struct AuthorizationGroupEditorView: View {
 
     private var canEditUsers: Bool { intent == .create || intent == .users }
     private var canEditNodes: Bool { intent == .create || intent == .nodes }
-    private var isReadyToSave: Bool { preview != nil && !isSaving && !isPreviewing }
+    private var isReadyToSave: Bool { !isSaving }
 
     private var editorSize: CGSize {
-        let hasDetails = preview != nil || receipt != nil
+        let hasDetails = receipt != nil
         switch intent {
         case .create:
             return CGSize(width: 760, height: 560)
@@ -59,10 +55,22 @@ struct AuthorizationGroupEditorView: View {
         }
     }
 
+    private var requiredDirectories: [ManagementStore.Directory] {
+        switch intent {
+        case .create: [.nodes, .users]
+        case .users: [.users]
+        case .nodes: [.nodes]
+        case .rename: []
+        }
+    }
+
     var body: some View {
         directoryContent
-            .task(id: store.dataRefreshToken) { await store.prepareDirectories([.nodes, .users]) }
-            .disabled([ManagementStore.Directory.nodes, .users].contains { store.loadingDirectories.contains($0) })
+            .task(id: store.dataRefreshToken) {
+                guard receipt == nil else { return }
+                await store.prepareDirectories(requiredDirectories)
+            }
+            .disabled(receipt == nil && requiredDirectories.contains { store.loadingDirectories.contains($0) })
     }
 
     private var directoryContent: some View {
@@ -71,27 +79,9 @@ struct AuthorizationGroupEditorView: View {
                 .font(.title2.bold())
 
             if intent == .users, receipt == nil {
-                HStack {
-                    Text(group?.name ?? "").font(.headline)
-                    Spacer()
-                    Button(showingImpact ? L10n.text("返回成员编辑") : L10n.text("查看权限预览")) { showingImpact.toggle() }
-                        .disabled(!showingImpact && preview == nil)
-                        .accessibilityIdentifier("authorization.members.showImpact")
-                }
-                if showingImpact {
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 16) {
-                            if let preview { previewSummary(preview) }
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                } else {
-                    AuthorizationGroupMembersEditor(users: store.users, originalIDs: originalUserIDs, userIDs: $userIDs, mode: $memberMode)
-                        .disabled(isPreviewing || isSaving)
-                }
-                Text(L10n.text("待添加 {0} 人 · 待移除 {1} 人", String(memberChanges.added.count), String(memberChanges.removed.count)))
-                    .font(.callout.weight(.medium))
-                    .accessibilityIdentifier("authorization.members.changeCount")
+                Text(group?.name ?? "").font(.headline)
+                AuthorizationGroupMembersEditor(users: store.users, originalIDs: originalUserIDs, userIDs: $userIDs, mode: $memberMode)
+                    .disabled(isSaving)
             } else {
                 ScrollView {
                     editorContent.frame(maxWidth: .infinity, alignment: .leading)
@@ -107,9 +97,6 @@ struct AuthorizationGroupEditorView: View {
                     .disabled(isSaving)
                 Spacer()
                 if receipt == nil {
-                    Button(isPreviewing ? L10n.text("正在预览…") : L10n.text("预览影响")) { runPreview() }
-                        .disabled(isPreviewing || isSaving || !store.isConnected || (intent == .create && name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty))
-                        .accessibilityIdentifier("authorizationGroups.editor.preview")
                     Button(isSaving ? L10n.text("正在保存…") : L10n.text("保存授权组")) { save() }
                         .disabled(!isReadyToSave || !store.isConnected || (intent == .create && name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty))
                         .keyboardShortcut(.defaultAction)
@@ -134,13 +121,7 @@ struct AuthorizationGroupEditorView: View {
                 selection: $nodeIDs
             )
         }
-        .onChange(of: name) { _, _ in
-            if intent == .create || intent == .rename { invalidatePreview() }
-        }
-        .onChange(of: userIDs) { _, _ in
-            if canEditUsers, previewUserIDs != userIDs { invalidatePreview() }
-        }
-        .onChange(of: nodeIDs) { _, _ in if canEditNodes { invalidatePreview() } }
+
     }
 
     private var memberChanges: AuthorizationMemberChanges { .init(original: originalUserIDs, proposed: userIDs) }
@@ -148,7 +129,12 @@ struct AuthorizationGroupEditorView: View {
     @ViewBuilder
     private var editorContent: some View {
         if let receipt {
-            AuthorizationMutationReceiptView(store: store, createdCredentials: receipt.createdCredentials, revocationJobIDs: receipt.revocationJobIds)
+            VStack(alignment: .leading, spacing: 12) {
+                Text(L10n.text("新增 {0} 条连接授权 · 移除 {1} 条连接授权", String(receipt.additionsCount), String(receipt.removalsCount)))
+                    .font(.callout.weight(.medium))
+                    .accessibilityIdentifier("authorizationGroups.editor.resultSummary")
+                AuthorizationMutationReceiptView(store: store, createdCredentials: receipt.createdCredentials, revocationJobIDs: receipt.revocationJobIds)
+            }
         } else {
             VStack(alignment: .leading, spacing: 16) {
                 Text(description).font(.callout).foregroundStyle(.secondary)
@@ -169,9 +155,8 @@ struct AuthorizationGroupEditorView: View {
                         } else { LabeledContent(L10n.text("授权节点"), value: L10n.text("{0} 个", String(nodeIDs.count))) }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading).padding(8)
-                    .disabled(isPreviewing || isSaving)
+                    .disabled(isSaving)
                 }
-                if let preview { previewSummary(preview) }
             }
         }
     }
@@ -188,7 +173,7 @@ struct AuthorizationGroupEditorView: View {
     private var description: String {
         switch intent {
         case .create: L10n.text("选择成员和节点；可以先创建空组，再分别管理用户或节点。")
-        case .rename: L10n.text("保存前预览连接授权的影响。")
+        case .rename: L10n.text("修改授权组名称后保存。")
         case .users: L10n.text("调整本组成员；其他授权组授予的权限会保留。")
         case .nodes: L10n.text("调整本组节点；同一连接仍由其他授权组授予时不会撤权。")
         }
@@ -202,82 +187,8 @@ struct AuthorizationGroupEditorView: View {
         }
     }
 
-    private func previewSummary(_ preview: AuthorizationChangePreview) -> some View {
-        GroupBox {
-            VStack(alignment: .leading, spacing: 10) {
-                Text(L10n.text("新增 {0} 条连接授权 · 移除 {1} 条连接授权", String(preview.additionsCount), String(preview.removalsCount)))
-                    .font(.callout.weight(.medium))
-                Text(L10n.text("新增访问涉及 {0} 人 · 撤权涉及 {1} 人", String(preview.additionsUserCount ?? Set(preview.additions.map(\.userId)).count), String(preview.removalsUserCount ?? Set(preview.removals.map(\.userId)).count)))
-                    .font(.caption).foregroundStyle(.secondary)
-                if intent == .users, !memberChanges.removed.isEmpty {
-                    let revoked = memberChanges.removed.intersection(preview.removals.map(\.userId)).count
-                    Text(L10n.text("移除 {0} 位成员，其中 {1} 位将失去部分节点访问权限；其余成员的节点访问权限不变。", String(memberChanges.removed.count), String(revoked)))
-                        .font(.callout)
-                }
-                if !preview.additions.isEmpty {
-                    DisclosureGroup(L10n.text("查看新增授权（{0}）", String(preview.additions.count))) {
-                        AuthorizationUserImpactList(pairs: preview.additions, users: store.users, nodes: store.nodes).padding(.top, 6)
-                    }
-                }
-                if !preview.removals.isEmpty {
-                    DisclosureGroup(L10n.text("查看撤权对象（{0}）", String(preview.removals.count))) {
-                        AuthorizationUserImpactList(pairs: preview.removals, users: store.users, nodes: store.nodes).padding(.top, 6)
-                    }
-                }
-                ManagedIdentityIssuanceSummary(immediate: preview.automaticIssueCount, pending: preview.pendingIssueCount)
-                Text(L10n.text("预览有效。再次修改草稿或凭据后，需要重新预览。"))
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.vertical, 4)
-        } label: {
-            Label(L10n.text("授权变更预览"), systemImage: "checklist")
-        }
-        .accessibilityIdentifier("authorizationGroups.editor.previewSummary")
-    }
-
-    private func runPreview() {
-        guard intent == .create || intent == .rename || intent == .users || intent == .nodes else { return }
-        isPreviewing = true
-        errorMessage = nil
-        Task {
-            defer { isPreviewing = false }
-            do {
-                if let group {
-                    let latest = try await store.authorizationGroupDetail(group.id)
-                    self.group = latest
-                    if intent == .users {
-                        name = latest.name
-                        userIDs = memberChanges.applying(to: Set(latest.userIds))
-                        originalUserIDs = Set(latest.userIds)
-                        nodeIDs = Set(latest.nodeIds)
-                    }
-                    if intent == .nodes {
-                        userIDs = Set(latest.userIds)
-                    }
-                    if intent == .rename {
-                        userIDs = Set(latest.userIds)
-                        nodeIDs = Set(latest.nodeIds)
-                    }
-                }
-                previewUserIDs = userIDs
-                let result = try await store.previewAuthorizationGroup(
-                    group: group,
-                    name: proposedName,
-                    userIDs: userIDs.sorted(),
-                    nodeIDs: nodeIDs.sorted()
-                )
-                preview = result
-                if intent == .users { showingImpact = true }
-            } catch {
-                preview = nil
-                errorMessage = L10n.text("无法生成预览。草稿已保留，请重新加载数据后再试。\n{0}", String(describing: (error.localizedDescription)))
-            }
-        }
-    }
-
     private func save() {
-        guard let preview, !preview.previewToken.isEmpty else { return }
+        guard isReadyToSave else { return }
         isSaving = true
         errorMessage = nil
         Task {
@@ -289,22 +200,19 @@ struct AuthorizationGroupEditorView: View {
                         group,
                         name: proposedName,
                         userIDs: userIDs.sorted(),
-                        nodeIDs: nodeIDs.sorted(),
-                        previewToken: preview.previewToken
+                        nodeIDs: nodeIDs.sorted()
                     )
                 } else {
                     result = try await store.createAuthorizationGroup(
                         name: proposedName,
                         userIDs: userIDs.sorted(),
-                        nodeIDs: nodeIDs.sorted(),
-                        previewToken: preview.previewToken
+                        nodeIDs: nodeIDs.sorted()
                     )
                 }
                 receipt = result
                 if let groupID = result.group?.id ?? group?.id { onSaved(groupID) }
             } catch {
-                self.preview = nil
-                errorMessage = L10n.text("提交前授权数据可能已变化。草稿仍保留，请重新预览。\n{0}", String(describing: (error.localizedDescription)))
+                errorMessage = L10n.text("保存失败，草稿已保留。请检查错误后重试；如有版本冲突，请重新打开编辑。\n{0}", String(describing: (error.localizedDescription)))
             }
         }
     }
@@ -313,10 +221,4 @@ struct AuthorizationGroupEditorView: View {
         name
     }
 
-    private func invalidatePreview() {
-        guard receipt == nil else { return }
-        preview = nil
-        previewUserIDs = nil
-        errorMessage = nil
-    }
 }

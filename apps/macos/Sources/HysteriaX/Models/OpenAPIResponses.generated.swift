@@ -339,34 +339,6 @@ struct AuthorizationGroupSummary: Codable, Sendable, Identifiable {
     }
 }
 
-struct AuthorizationPair: Codable, Sendable {
-    let userId: String
-    let nodeID: String
-
-    enum CodingKeys: String, CodingKey {
-        case userId = "user_id"
-        case nodeID = "node_id"
-    }
-}
-
-struct AuthorizationManagedIdentity: Codable, Sendable {
-    let policyRevision: Int?
-    let userId: String
-    let caCredentialId: String
-    let caVersions: [Int]
-    let issueNow: Bool
-    let pending: Bool
-
-    enum CodingKeys: String, CodingKey {
-        case policyRevision = "policy_revision"
-        case userId = "user_id"
-        case caCredentialId = "ca_credential_id"
-        case caVersions = "ca_versions"
-        case issueNow = "issue_now"
-        case pending
-    }
-}
-
 struct AuthorizationIdentityResult: Codable, Sendable {
     let policyRevision: Int?
     let caVersions: [Int]?
@@ -386,34 +358,6 @@ struct AuthorizationIdentityResult: Codable, Sendable {
         case identityId = "identity_id"
         case issued
         case pending
-    }
-}
-
-struct AuthorizationChangePreview: Codable, Sendable {
-    let automaticIssueCount: Int
-    let pendingIssueCount: Int
-    let managedIdentities: [AuthorizationManagedIdentity]
-    let action: String
-    let previewToken: String
-    let additionsCount: Int
-    let removalsCount: Int
-    let additionsUserCount: Int?
-    let removalsUserCount: Int?
-    let additions: [AuthorizationPair]
-    let removals: [AuthorizationPair]
-
-    enum CodingKeys: String, CodingKey {
-        case automaticIssueCount = "automatic_issue_count"
-        case pendingIssueCount = "pending_issue_count"
-        case managedIdentities = "managed_identities"
-        case action
-        case previewToken = "preview_token"
-        case additionsCount = "additions_count"
-        case removalsCount = "removals_count"
-        case additionsUserCount = "additions_user_count"
-        case removalsUserCount = "removals_user_count"
-        case additions
-        case removals
     }
 }
 
@@ -448,6 +392,8 @@ struct AuthorizationGroupMutationResponse: Codable, Sendable {
 }
 
 struct UserAuthorizationGroupsMutationResponse: Codable, Sendable {
+    let additionsCount: Int
+    let removalsCount: Int
     let managedIdentities: [AuthorizationIdentityResult]?
     let userId: String
     let revision: Int
@@ -457,6 +403,8 @@ struct UserAuthorizationGroupsMutationResponse: Codable, Sendable {
     let revocationJobIds: [String]
 
     enum CodingKeys: String, CodingKey {
+        case additionsCount = "additions_count"
+        case removalsCount = "removals_count"
         case managedIdentities = "managed_identities"
         case userId = "user_id"
         case revision

@@ -50,17 +50,12 @@ def main():
             return json.loads(body) if body else None
 
         def group(name, users, nodes):
-            draft = {"action": "create", "name": name, "user_ids": users, "node_ids": nodes}
-            preview = expect("/api/v2/authorization-groups/preview", "POST", draft)
-            assert "missing_mtls" not in preview
-            draft.pop("action")
-            draft["preview_token"] = preview["preview_token"]
+            draft = {"name": name, "user_ids": users, "node_ids": nodes}
             return expect("/api/v2/authorization-groups", "POST", draft, 201)
 
         def remove(group_data):
             path = "/api/v2/authorization-groups/" + group_data["id"]
-            preview = expect(path + "/preview", "POST", {"action": "delete", "expected_revision": group_data["revision"]})
-            return expect(path, "DELETE", {"expected_revision": group_data["revision"], "preview_token": preview["preview_token"]})
+            return expect(path, "DELETE", {"expected_revision": group_data["revision"]})
 
         log = open(pathlib.Path(folder) / "server.log", "wb")
         server = start_test_server([str(ROOT / "target/debug/hysteriax-server")], cwd=ROOT, env=env, stdout=log, stderr=log)
@@ -100,12 +95,10 @@ def main():
             with db.connect() as connection:
                 current = connection.execute("SELECT user_id,credential_hash FROM node_assignments").fetchall()
             assert current == [pair for pair in original if pair[0] == users[0]]
-            # Preview must reject a concurrent user mutation atomically.
+            # A stale user revision must reject membership changes atomically.
             alice = expect("/api/v2/users/" + users[0])
             membership = {"expected_revision": alice["revision"], "group_ids": []}
-            preview = expect(f"/api/v2/users/{users[0]}/authorization-groups/preview", "POST", membership)
             expect(f"/api/v2/users/{users[0]}", "PATCH", {"expected_revision": alice["revision"], "name": "Alice edited"})
-            membership["preview_token"] = preview["preview_token"]
             expect(f"/api/v2/users/{users[0]}/authorization-groups", "PUT", membership, 409)
             assert len(expect("/api/v2/users/" + users[0])["assignments"]) == 1
             final = remove(second["group"])
@@ -121,25 +114,17 @@ def main():
             empty = group("Empty group", [], [node])["group"]
             alice = expect("/api/v2/users/" + users[0])
             membership = {"expected_revision": alice["revision"], "group_ids": [regrant["id"], empty["id"]]}
-            preview = expect(f"/api/v2/users/{users[0]}/authorization-groups/preview", "POST", membership)
-            assert preview["additions_count"] == 0 and preview["removals_count"] == 0
-            membership["preview_token"] = preview["preview_token"]
             joined = expect(f"/api/v2/users/{users[0]}/authorization-groups", "PUT", membership)
+            assert joined["additions_count"] == 0 and joined["removals_count"] == 0
             assert len(joined["assignments"][0]["source_groups"]) == 2
             empty = expect("/api/v2/authorization-groups/" + empty["id"])
-            draft = {"action": "update", "expected_revision": empty["revision"], "name": "Expanded group",
+            draft = {"expected_revision": empty["revision"], "name": "Expanded group",
                      "user_ids": users, "node_ids": [node]}
             path = "/api/v2/authorization-groups/" + empty["id"]
-            preview = expect(path + "/preview", "POST", draft)
-            assert preview["additions_count"] == 1
-            draft.pop("action")
-            draft["preview_token"] = preview["preview_token"]
             expanded = expect(path, "PUT", draft)
             assert expanded["additions_count"] == 1
             bob = expect("/api/v2/users/" + users[1])
             membership = {"expected_revision": bob["revision"], "group_ids": []}
-            preview = expect(f"/api/v2/users/{users[1]}/authorization-groups/preview", "POST", membership)
-            membership["preview_token"] = preview["preview_token"]
             expect(f"/api/v2/users/{users[1]}/authorization-groups", "PUT", membership)
             assert expect("/api/v2/users/" + users[1])["assignments"] == []
             certificate = (ROOT / "tests/fixtures/credentials-test.crt").read_text()
@@ -153,11 +138,8 @@ def main():
                 "public_host": "mtls.example.test", "public_port": 443, "listen_addr": ":443", "config": {"tls": {
                     "cert": prefix + "certificate", "key": prefix + "private_key"}, "mtls":{"mode":"managed","ca_credential_id":ca["id"],"ca_credential_version":1}}}, 201, fixtures=True)["node"]
             assert mtls_node["mtls_required"] is True
-            draft = {"action": "create", "name": "mTLS users", "user_ids": users, "node_ids": [mtls_node["id"]]}
-            preview = expect("/api/v2/authorization-groups/preview", "POST", draft)
-            assert preview["automatic_issue_count"] == 2 and preview["pending_issue_count"] == 0
-            invalid = dict(draft, mtls_bindings=[])
-            code, _ = raw_request(base, "/api/v2/authorization-groups/preview", admin, "POST", invalid)
+            invalid = {"name":"Invalid","user_ids":users,"node_ids":[mtls_node["id"]],"mtls_bindings":[]}
+            code, _ = raw_request(base, "/api/v2/authorization-groups", admin, "POST", invalid)
             assert 400 <= code < 500
             result = group("mTLS complete", users, [mtls_node["id"]])
             assert result["additions_count"] == 2 and len(result["managed_identities"]) == 2
@@ -183,7 +165,7 @@ def main():
             expect(f"/api/v2/nodes/{node}?expected_revision=1", "DELETE", status=204)
             latest = expect("/api/v2/authorization-groups/" + regrant["id"])
             assert latest["revision"] > old_group["revision"] and latest["node_count"] == 0
-            print("Authorization groups HTTP acceptance passed: union, credentials, last-source revocation, stale preview, retired writes and regrant.")
+            print("Authorization groups HTTP acceptance passed: union, credentials, last-source revocation, stale revision, retired writes and regrant.")
         finally:
             server.terminate()
             try:

@@ -683,22 +683,10 @@ async fn cleanup_deadline_includes_archived_longer_history_not_only_latest_certi
     .unwrap();
     issue(&state, "alice", &ca, true).await;
     let id = grant["group"]["id"].as_str().unwrap();
-    let Json(p) = crate::api::authorization_groups::preview_group(
-        State(state.clone()),
-        Path(id.into()),
-        Json(serde_json::from_value(json!({"action":"delete","expected_revision":1})).unwrap()),
-    )
-    .await
-    .unwrap();
     let _ = crate::api::authorization_groups::delete(
         State(state.clone()),
         Path(id.into()),
-        Json(
-            serde_json::from_value(
-                json!({"expected_revision":1,"preview_token":p["preview_token"]}),
-            )
-            .unwrap(),
-        ),
+        Json(serde_json::from_value(json!({"expected_revision":1})).unwrap()),
     )
     .await
     .unwrap();

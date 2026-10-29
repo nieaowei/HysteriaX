@@ -4,6 +4,35 @@ private final class FixtureState: @unchecked Sendable {
     let lock = NSLock()
     var requests: [(String, String, Data, String?)] = []
     var failGroups = false
+    private var holdingReads = false
+    private var heldReads: [GroupFixtureProtocol] = []
+    func holdRead(_ request: GroupFixtureProtocol) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        guard holdingReads else { return false }
+        heldReads.append(request)
+        return true
+    }
+    var hasHeldRead: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return !heldReads.isEmpty
+    }
+    func beginHoldingReads() {
+        lock.lock(); defer { lock.unlock() }
+        precondition(heldReads.isEmpty)
+        holdingReads = true
+    }
+    func releaseReads() {
+        lock.lock()
+        holdingReads = false
+        let reads = heldReads
+        heldReads = []
+        lock.unlock()
+        for read in reads { read.finishLoading() }
+    }
+    func cancel(_ request: GroupFixtureProtocol) {
+        lock.lock(); defer { lock.unlock() }
+        heldReads.removeAll { $0 === request }
+    }
     func record(_ request: URLRequest) -> Data {
         var body = request.httpBody ?? Data()
         if let stream = request.httpBodyStream {
@@ -27,10 +56,13 @@ private final class GroupFixtureProtocol: URLProtocol, @unchecked Sendable {
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {
         _ = Self.state.record(request)
+        if request.httpMethod == "GET", Self.state.holdRead(self) { return }
+        finishLoading()
+    }
+    func finishLoading() {
         let path = request.url!.path
         let method = request.httpMethod ?? "GET"
         let receipt = #"{"group":null,"additions_count":0,"removals_count":1,"created_credentials":[],"revocation_job_ids":["kick-1"]}"#
-        let preview = #"{"action":"create","preview_token":"guard-1","additions_count":1,"removals_count":0,"additions":[{"user_id":"user","node_id":"node"}],"removals":[],"automatic_issue_count":1,"pending_issue_count":0,"managed_identities":[{"user_id":"user","ca_credential_id":"ca","ca_versions":[1],"issue_now":true,"pending":false}]}"#
         var status = 200
         let data: Data
         if path == "/api/v2/credentials/ca-identities" || path.hasSuffix("/ca-versions") {
@@ -39,8 +71,9 @@ private final class GroupFixtureProtocol: URLProtocol, @unchecked Sendable {
         else if path.hasSuffix("/ca-policy") {
             data = Data(#"{"id":"ca","policy_revision":4,"policy":{"client_validity_days":90,"renew_before_hours":168}}"#.utf8)
         }
-        else if path.hasSuffix("/preview") { data = Data(preview.utf8) }
-        else if method == "DELETE" { data = Data(receipt.utf8) }
+        else if path.hasSuffix("/preview") { preconditionFailure("authorization previews are retired") }
+        else if method == "DELETE" || method == "POST" && path == "/api/v2/authorization-groups" || method == "PUT" && path.contains("/authorization-groups/") { data = Data(receipt.utf8) }
+        else if method == "PUT" && path.hasSuffix("/authorization-groups") { data = Data(#"{"user_id":"user","revision":2,"group_ids":[],"assignments":[],"additions_count":0,"removals_count":1,"created_credentials":[],"revocation_job_ids":["kick-1"]}"#.utf8) }
         else if path == "/api/v2/version" { data = Data(#"{"api_version":"2.0.0","management_protocol":2,"directory_version":"b3:test","features":["authorization_groups","managed_mtls"],"service_version":"fixture","hysteria_version":"fixture","mihomo_version":"fixture"}"#.utf8) }
         else if path == "/api/v2/authorization-groups" && Self.state.failGroups { status = 503; data = Data(#"{"error":{"code":"temporary","message":"groups unavailable"}}"#.utf8) }
         else if ["/api/v2/jobs", "/api/v2/audit", "/api/v2/nodes", "/api/v2/users", "/api/v2/credentials", "/api/v2/dns/records"].contains(path) { data = Data(#"{"items":[],"total":0,"page":1,"page_size":50}"#.utf8) }
@@ -49,7 +82,7 @@ private final class GroupFixtureProtocol: URLProtocol, @unchecked Sendable {
         client?.urlProtocol(self, didLoad: data)
         client?.urlProtocolDidFinishLoading(self)
     }
-    override func stopLoading() {}
+    override func stopLoading() { Self.state.cancel(self) }
 }
 
 @MainActor
@@ -74,26 +107,38 @@ struct AuthorizationGroupClientChecks {
         store.users = [oldUser]
         await store.refreshAuthorizationGroups()
         precondition(GroupFixtureProtocol.state.requests.contains { $0.1 == "/api/v2/authorization-groups" })
-        let preview = try await store.previewAuthorizationGroup(group:nil,name:"Test",userIDs:["user"],nodeIDs:["node"])
-        precondition(preview.automaticIssueCount == 1 && preview.pendingIssueCount == 0 && preview.previewToken == "guard-1")
-        let summary = try JSONDecoder().decode(AuthorizationChangePreview.self, from: Data(#"{"action":"update","preview_token":"summary","additions_count":100,"removals_count":50,"additions_user_count":20,"removals_user_count":10,"additions":[],"removals":[],"automatic_issue_count":5,"pending_issue_count":2,"managed_identities":[]}"#.utf8))
-        precondition(summary.additions.isEmpty && summary.removals.isEmpty)
-        precondition(summary.additionsUserCount == 20 && summary.removalsUserCount == 10)
-        precondition(preview.additionsUserCount == nil, "older full previews remain decodable")
-        let sent = try JSONSerialization.jsonObject(with: GroupFixtureProtocol.state.requests.last!.2) as! [String:Any]
-        precondition(sent["mtls_bindings"] == nil)
-        precondition(sent["user_ids"] as? [String] == ["user"])
+        _ = try await store.createAuthorizationGroup(name:"Test", userIDs:["user"], nodeIDs:["node"])
+        let createRequest = GroupFixtureProtocol.state.requests.first { $0.0 == "POST" && $0.1 == "/api/v2/authorization-groups" }!
+        let sent = try JSONSerialization.jsonObject(with:createRequest.2) as! [String:Any]
+        precondition(sent["preview_token"] == nil && sent["user_ids"] as? [String] == ["user"])
         let reissue=ManagedUserReissueRequest(caCredentialId:"ca",expectedRevisions:["ca":.integer(3)])
         let encoded=try JSONSerialization.jsonObject(with:JSONEncoder().encode(reissue)) as! [String:Any]
         precondition((encoded["expected_revisions"] as? [String:Int])?["ca"] == 3)
         let source = try JSONDecoder().decode(AssignmentInfo.self, from: Data(#"{"node_id":"node","created_at":"2026-10-07T00:00:00Z","source_groups":[{"id":"migration-abc","name":"Migrated"},{"id":"group-b","name":"Second"}]}"#.utf8))
         precondition(source.sourceGroups?.count == 2, "all sources must decode without a revision")
         let group = try JSONDecoder().decode(AuthorizationGroupSummary.self, from: Data(#"{"id":"migration-abc","name":"Migrated","revision":1,"user_ids":["user"],"node_ids":["node"],"user_count":1,"node_count":1,"created_at":"2026-10-07T00:00:00Z","updated_at":"2026-10-07T00:00:00Z"}"#.utf8))
-        let deleted = try await store.deleteAuthorizationGroup(group,previewToken:"guard-delete")
+        let beforeUpdate = GroupFixtureProtocol.state.requests.count
+        let updated = try await store.updateAuthorizationGroup(group, name: group.name, userIDs: [], nodeIDs: group.nodeIds)
+        precondition(updated.removalsCount == 1 && updated.revocationJobIds == ["kick-1"])
+        let updates = Array(GroupFixtureProtocol.state.requests.dropFirst(beforeUpdate))
+        precondition(!updates.contains { $0.1.hasSuffix("/preview") }, "updates must not create hidden previews")
+        let updateRequest = updates.first { $0.0 == "PUT" }!
+        let updateBody = try JSONSerialization.jsonObject(with: updateRequest.2) as! [String:Any]
+        precondition(updateBody["preview_token"] == nil)
+        precondition(updateBody["expected_revision"] as? Int == 1)
+        precondition(updateBody["user_ids"] as? [String] == [])
+        let deleted = try await store.deleteAuthorizationGroup(group)
         precondition(deleted.group == nil && deleted.revocationJobIds == ["kick-1"])
         let deleteRequest = GroupFixtureProtocol.state.requests.first { $0.0 == "DELETE" }!
         let deleteBody = try JSONSerialization.jsonObject(with: deleteRequest.2) as! [String:Any]
-        precondition(deleteBody["preview_token"] as? String == "guard-delete")
+        precondition(deleteBody["preview_token"] == nil)
+        let membership = try await store.updateUserAuthorizationGroups(oldUser, groupIDs: [])
+        precondition(membership.removalsCount == 1)
+        let membershipRequest = GroupFixtureProtocol.state.requests.first { $0.0 == "PUT" && $0.1 == "/api/v2/users/user/authorization-groups" }!
+        let membershipBody = try JSONSerialization.jsonObject(with: membershipRequest.2) as! [String:Any]
+        precondition(membershipBody["preview_token"] == nil)
+        precondition(!GroupFixtureProtocol.state.requests.contains { $0.1.hasSuffix("/preview") })
+        await store.refresh()
         store.users = [oldUser]
         GroupFixtureProtocol.state.failGroups = true
         await store.refreshAuthorizationGroups()
@@ -106,7 +151,42 @@ struct AuthorizationGroupClientChecks {
         precondition(page.userPage == 3 && page.userPageSize == 25)
         checkMemberDrafts(user: oldUser)
         try await checkManagedMTLS(store: store)
+        GroupFixtureProtocol.state.failGroups = false
+        await store.refresh()
+        try await checkSaveDoesNotWaitForRefresh(client: client, user: oldUser, group: group)
         print("Authorization client checks passed: automatic issuance wire shape, integer identity revisions, source decoding, deletion receipt, isolated group errors and independent tab state.")
+    }
+
+    @MainActor static func checkSaveDoesNotWaitForRefresh(client: APIClient, user: UserSummary, group: AuthorizationGroupSummary) async throws {
+        for operation in 0..<4 {
+            let defaults = UserDefaults(suiteName: "save-feedback-" + UUID().uuidString)!
+            let store = ManagementStore(client: client, restoreSnapshot: false, nodeNotifications: NodeAlertNotifications(transport: SilentNotifications(), defaults: defaults))
+            store.isConnected = true
+            store.serviceAddress = "https://authorization-fixture.invalid"
+            GroupFixtureProtocol.state.beginHoldingReads()
+            var completed = false
+            let mutation = Task {
+                switch operation {
+                case 0: _ = try await store.createAuthorizationGroup(name: "Immediate", userIDs: [], nodeIDs: [])
+                case 1: _ = try await store.updateAuthorizationGroup(group, name: group.name, userIDs: [], nodeIDs: [])
+                case 2: _ = try await store.deleteAuthorizationGroup(group)
+                default: _ = try await store.updateUserAuthorizationGroups(user, groupIDs: [])
+                }
+                completed = true
+            }
+            let deadline = Date().addingTimeInterval(5)
+            while !GroupFixtureProtocol.state.hasHeldRead, Date() < deadline {
+                try await Task.sleep(for: .milliseconds(5))
+            }
+            let hadBlockedRefresh = GroupFixtureProtocol.state.hasHeldRead
+            let completedBeforeRead = completed
+            GroupFixtureProtocol.state.releaseReads()
+            try await mutation.value
+            await store.refresh()
+            precondition(hadBlockedRefresh, "background refresh must still be scheduled")
+            precondition(completedBeforeRead, "committed authorization save must return while refresh reads are blocked: operation \(operation)")
+        }
+        print("Save feedback checks passed: all four authorization mutations return before blocked refresh reads finish.")
     }
 
     @MainActor static func checkManagedMTLS(store: ManagementStore) async throws {
@@ -145,12 +225,6 @@ struct AuthorizationGroupClientChecks {
         let changes = AuthorizationMemberChanges(original: ids, proposed: proposed)
         precondition(changes.added == ["new-member"] && changes.removed == ["member-0", "member-101"])
         precondition(changes.undoing(["member-0", "new-member"]) == ids.subtracting(["member-101"]))
-        let concurrent = ids.subtracting(["member-10"]).union(["other-admin-added"])
-        let rebased = changes.applying(to: concurrent)
-        precondition(rebased.contains("other-admin-added") && !rebased.contains("member-10"))
-        precondition(rebased.contains("new-member") && !rebased.contains("member-101"))
-        let secondPreview = AuthorizationMemberChanges(original: concurrent, proposed: rebased)
-        precondition(secondPreview.added == changes.added && secondPreview.removed == changes.removed)
         // Search/page selection changes affect only the currently visible rows.
         let firstPage = Set((0..<100).map { "member-\($0)" })
         let secondPage = Set((100..<200).map { "member-\($0)" })
@@ -162,10 +236,7 @@ struct AuthorizationGroupClientChecks {
         let rows = AuthorizationMemberRow.make(users: [user], ids: ids.union([user.id]), changes: changes)
         precondition(rows.count == 5_001 && rows.first { $0.id == user.id }?.name == user.name)
         precondition(rows.first { $0.id == "member-0" }?.enabled == nil, "missing users must remain manageable by ID")
-        let pairs = (0..<5_000).flatMap { index in (0..<4).map { AuthorizationPair(userId: "member-\(index)", nodeID: "node-\($0)") } }
-        let impacts = AuthorizationUserImpact.grouped(pairs + [pairs[0]])
-        precondition(impacts.count == 5_000 && impacts.allSatisfy { $0.nodeIDs.count == 4 })
-        print("Member checks passed: 5,000 members, 20,000 connections, cross-page selection, targeted undo, missing users and concurrent membership rebase.")
+        print("Member checks passed: 5,000 members, cross-page selection, targeted undo and missing users.")
     }
 
 }

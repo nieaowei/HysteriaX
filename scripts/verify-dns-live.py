@@ -267,9 +267,7 @@ def main():
         user = api.write("POST", "/api/v2/users", {"name": f"DNS live user {run}"})
         manifest["user_ids"].append(user["id"])
         save()
-        draft = {"action":"create","name":f"DNS live authorization {run}","user_ids":[user["id"]],"node_ids":[node_id]}
-        preview = api.write("POST","/api/v2/authorization-groups/preview",draft)
-        draft.pop("action"); draft["preview_token"]=preview["preview_token"]
+        draft = {"name":f"DNS live authorization {run}","user_ids":[user["id"]],"node_ids":[node_id]}
         api.write("POST","/api/v2/authorization-groups",draft)
         current_user = api.get("/api/v2/users/" + user["id"])
         subscription = api.write("POST", "/api/v2/users/" + user["id"] + "/subscription", {"expected_revision": current_user["revision"]})

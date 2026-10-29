@@ -65,7 +65,7 @@ struct AuthorizationGroupMembersEditor: View {
                 onRemove: mode == .members ? { ids in userIDs.subtract(ids) } : nil,
                 onUndo: mode == .changes ? { ids in userIDs = changes.undoing(ids) } : nil)
                 .id(mode)
-            Text(L10n.text("选择会跨搜索和分页保留；添加、移除只修改草稿，预览后保存才会生效。"))
+            Text(L10n.text("选择会跨搜索和分页保留；添加、移除只修改草稿，保存后才会生效。"))
                 .font(.caption).foregroundStyle(.secondary)
         }
     }

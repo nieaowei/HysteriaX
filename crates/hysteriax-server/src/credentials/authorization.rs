@@ -1,5 +1,5 @@
-//! Managed identity work attached to an authorization preview. A preview only
-//! reads metadata; all keys/signatures are prepared before the commit write lock.
+//! Managed identity preparation for direct authorization changes.
+//! All keys/signatures are prepared before the commit write lock.
 use super::identities::{self, PreparedIdentity};
 use crate::security::SecretBox;
 use anyhow::{Context, Result, ensure};
@@ -119,72 +119,31 @@ pub async fn plan_on(connection: &mut sqlx::PgConnection, additions: &[Pair]) ->
     Ok(plan)
 }
 
-/// Only public state participates in this guard; encrypted credential payloads,
-/// CA keys and signing candidates never enter preview storage or responses.
-pub async fn guard_on(
-    connection: &mut sqlx::PgConnection,
-    nodes: &[String],
-    users: &[String],
-) -> Result<Value> {
-    let links = links_on(connection, nodes).await?;
-    let cas: Vec<String> = links
-        .values()
-        .flatten()
-        .cloned()
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect();
-    let value:Value=sqlx::query_scalar("SELECT jsonb_build_object('authorities',coalesce((SELECT jsonb_agg(to_jsonb(a)||jsonb_build_object('credential_revision',c.revision,'archived',c.archived) ORDER BY a.credential_id) FROM mtls_authorities a JOIN credentials c ON c.id=a.credential_id WHERE a.credential_id=ANY($1)),'[]'::jsonb),'generations',coalesce((SELECT jsonb_agg(to_jsonb(g) ORDER BY g.ca_id,g.ca_version) FROM mtls_ca_generations g WHERE g.ca_id=ANY($1)),'[]'::jsonb),'trust',coalesce((SELECT jsonb_agg(to_jsonb(t) ORDER BY t.node_id,t.ca_id,t.ca_version) FROM mtls_node_trust t WHERE t.node_id=ANY($2)),'[]'::jsonb),'identities',coalesce((SELECT jsonb_agg(to_jsonb(i) ORDER BY i.user_id,i.ca_id) FROM mtls_user_identities i WHERE i.user_id=ANY($3) AND i.ca_id=ANY($1)),'[]'::jsonb),'versions',coalesce((SELECT jsonb_agg(to_jsonb(v)||jsonb_build_object('time_valid',v.not_before<=$4 AND v.expires_at>$4,'renewal_due',v.next_action_at<=$4) ORDER BY v.identity_id,v.credential_version) FROM mtls_user_versions v JOIN mtls_user_identities i ON i.id=v.identity_id WHERE i.user_id=ANY($3) AND i.ca_id=ANY($1)),'[]'::jsonb),'activations',coalesce((SELECT jsonb_agg(jsonb_build_object('id',a.id,'node_id',a.node_id,'generation',a.generation,'phase',a.phase,'digest',a.target_digest,'trust',a.trust) ORDER BY a.node_id,a.generation) FROM mtls_activations a JOIN nodes n ON n.mtls_activation_id=a.id WHERE n.id=ANY($2)),'[]'::jsonb))")
-        .bind(cas).bind(nodes).bind(users).bind(Utc::now()).fetch_one(connection).await?;
-    Ok(value)
-}
-
 #[derive(Clone)]
 pub struct Prepared {
     pub plan: Plan,
     identities: Vec<Vec<PreparedIdentity>>,
 }
-pub async fn prepare_preview(pool: &PgPool, secrets: &SecretBox, token: &str) -> Result<Prepared> {
-    let row=sqlx::query("SELECT result_json FROM authorization_group_previews WHERE token=$1 AND consumed_at IS NULL AND expires_at>clock_timestamp()")
-        .bind(token).fetch_optional(pool).await?.context("preview expired or was consumed; preview again")?;
-    let result: Value = row.get("result_json");
-    let plan: Plan = serde_json::from_value(result["mtls_plan"].clone())
-        .context("preview predates managed identities; preview again")?;
-    let mut identities = Vec::new();
-    for requirement in &plan.identities {
-        identities.push(
-            identities::prepare_versions(
-                pool,
-                secrets,
-                &requirement.user_id,
-                &requirement.ca_credential_id,
-                &requirement.ca_versions,
-            )
-            .await?,
-        );
-    }
+pub async fn prepare_plan(pool: &PgPool, secrets: &SecretBox, plan: Plan) -> Result<Prepared> {
+    let identities =
+        identities::authorization_batch::prepare(pool, secrets, &plan.identities).await?;
     Ok(Prepared { plan, identities })
 }
 
 pub async fn commit_prepared(
     tx: &mut Transaction<'_, Postgres>,
-    secrets: &SecretBox,
+    _secrets: &SecretBox,
     prepared: Prepared,
     additions: &[Pair],
 ) -> Result<Value> {
     let current = plan_on(tx, additions).await?;
     ensure!(
         current == prepared.plan,
-        "managed identity requirements changed during signing; preview again"
+        "managed identity requirements changed during signing; retry the change"
     );
+    let committed = identities::authorization_batch::commit(tx, prepared.identities).await?;
     let mut result = Vec::new();
-    for (requirement, candidates) in prepared
-        .plan
-        .identities
-        .into_iter()
-        .zip(prepared.identities)
-    {
-        let versions = identities::commit_versions(tx, secrets, candidates).await?;
+    for (requirement, versions) in prepared.plan.identities.into_iter().zip(committed) {
         result.push(json!({"user_id":requirement.user_id,"ca_credential_id":requirement.ca_credential_id,"identity_id":versions.first().map(|v|&v.0),"ca_versions":requirement.ca_versions,"policy_revision":requirement.policy_revision,"issued":requirement.issue_now,"pending":requirement.pending}));
     }
     Ok(json!(result))
@@ -219,6 +178,10 @@ pub async fn reconcile_on(
         }
     }
     let identities=sqlx::query("SELECT id,user_id,ca_id,credential_id,archived FROM mtls_user_identities WHERE user_id=ANY($1)").bind(users).fetch_all(&mut **tx).await?;
+    let mut identity_ids = Vec::<String>::new();
+    let mut archived_states = Vec::<bool>::new();
+    let mut credential_ids = Vec::<String>::new();
+    let mut credential_states = Vec::<bool>::new();
     for row in identities {
         let key = (
             row.get::<String, _>("user_id"),
@@ -230,11 +193,20 @@ pub async fn reconcile_on(
         if !changed {
             continue;
         }
-        sqlx::query("UPDATE mtls_user_identities SET archived=$2,authorization_revision=authorization_revision+1,revision=revision+1,next_action_at=CASE WHEN $2 THEN NULL ELSE next_action_at END,updated_at=$3 WHERE id=$1")
-            .bind(row.get::<String,_>("id")).bind(archived).bind(Utc::now()).execute(&mut **tx).await?;
+        identity_ids.push(row.get::<String, _>("id"));
+        archived_states.push(archived);
         if let Some(credential) = row.get::<Option<String>, _>("credential_id") {
-            sqlx::query("UPDATE credentials SET archived=$2,revision=revision+1,updated_at=$3 WHERE id=$1 AND archived<>$2").bind(credential).bind(archived).bind(Utc::now()).execute(&mut **tx).await?;
+            credential_ids.push(credential);
+            credential_states.push(archived);
         }
+    }
+    if !identity_ids.is_empty() {
+        sqlx::query("UPDATE mtls_user_identities i SET archived=p.archived,authorization_revision=i.authorization_revision+1,revision=i.revision+1,next_action_at=CASE WHEN p.archived THEN NULL ELSE i.next_action_at END,updated_at=$3 FROM unnest($1::text[],$2::bool[]) AS p(id,archived) WHERE i.id=p.id")
+            .bind(identity_ids).bind(archived_states).bind(Utc::now()).execute(&mut **tx).await?;
+    }
+    if !credential_ids.is_empty() {
+        sqlx::query("UPDATE credentials c SET archived=p.archived,revision=c.revision+1,updated_at=$3 FROM unnest($1::text[],$2::bool[]) AS p(id,archived) WHERE c.id=p.id AND c.archived<>p.archived")
+            .bind(credential_ids).bind(credential_states).bind(Utc::now()).execute(&mut **tx).await?;
     }
     Ok(())
 }
@@ -289,17 +261,36 @@ pub async fn annotate_results_on(
     connection: &mut sqlx::PgConnection,
     results: &mut Value,
 ) -> Result<()> {
-    for identity in results
+    let identities = results
         .as_array_mut()
-        .context("managed identity result must be an array")?
-    {
-        let user = identity["user_id"]
-            .as_str()
-            .context("identity owner missing")?;
-        let ca = identity["ca_credential_id"]
-            .as_str()
-            .context("identity CA missing")?;
-        identity["affected_node_ids"] = json!(referenced_nodes_on(connection, user, ca).await?);
+        .context("managed identity result must be an array")?;
+    if identities.is_empty() {
+        return Ok(());
+    }
+    let mut users = Vec::with_capacity(identities.len());
+    let mut cas = Vec::with_capacity(identities.len());
+    for identity in identities.iter() {
+        users.push(
+            identity["user_id"]
+                .as_str()
+                .context("identity owner missing")?
+                .to_owned(),
+        );
+        cas.push(
+            identity["ca_credential_id"]
+                .as_str()
+                .context("identity CA missing")?
+                .to_owned(),
+        );
+    }
+    let rows: Vec<(String,String,String)> = sqlx::query_as("WITH links AS (SELECT node_id,ca_id FROM mtls_node_trust WHERE desired OR deployed UNION SELECT node_id,ca_id FROM mtls_live_activation_trust) SELECT DISTINCT p.user_id,p.ca_id,a.node_id FROM unnest($1::text[],$2::text[]) AS p(user_id,ca_id) JOIN node_assignments a ON a.user_id=p.user_id JOIN links l ON l.node_id=a.node_id AND l.ca_id=p.ca_id ORDER BY p.user_id,p.ca_id,a.node_id")
+        .bind(&users).bind(&cas).fetch_all(connection).await?;
+    let mut nodes = BTreeMap::<(String, String), Vec<String>>::new();
+    for (user, ca, node) in rows {
+        nodes.entry((user, ca)).or_default().push(node);
+    }
+    for ((identity, user), ca) in identities.iter_mut().zip(users).zip(cas) {
+        identity["affected_node_ids"] = json!(nodes.get(&(user, ca)).cloned().unwrap_or_default());
     }
     Ok(())
 }

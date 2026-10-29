@@ -5,7 +5,7 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
 };
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sqlx::{Postgres, Row, Transaction};
@@ -18,9 +18,6 @@ use crate::{
     state::AppState,
 };
 
-mod preview_storage;
-
-const PREVIEW_TTL_MINUTES: i64 = 10;
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 struct GroupProposal {
@@ -31,21 +28,10 @@ struct GroupProposal {
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct GroupPreviewRequest {
-    action: String,
-    expected_revision: Option<i64>,
-    name: Option<String>,
-    user_ids: Option<Vec<String>>,
-    node_ids: Option<Vec<String>>,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
-#[serde(deny_unknown_fields)]
 pub(crate) struct CreateGroupRequest {
     name: String,
     user_ids: Vec<String>,
     node_ids: Vec<String>,
-    preview_token: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -55,14 +41,12 @@ pub(crate) struct UpdateGroupRequest {
     name: String,
     user_ids: Vec<String>,
     node_ids: Vec<String>,
-    preview_token: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct DeleteGroupRequest {
     expected_revision: i64,
-    preview_token: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -73,17 +57,9 @@ struct MembershipProposal {
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct MembershipPreviewRequest {
-    expected_revision: i64,
-    group_ids: Vec<String>,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
-#[serde(deny_unknown_fields)]
 pub(crate) struct MembershipUpdateRequest {
     expected_revision: i64,
     group_ids: Vec<String>,
-    preview_token: String,
 }
 
 #[derive(Clone, Debug)]
@@ -177,20 +153,6 @@ pub async fn get(
     Ok(Json(group_json(&group)))
 }
 
-fn proposal_from_preview(input: GroupPreviewRequest) -> Result<GroupProposal, ApiError> {
-    normalized_proposal(GroupProposal {
-        name: input
-            .name
-            .ok_or_else(|| ApiError::bad_request("name is required"))?,
-        user_ids: input
-            .user_ids
-            .ok_or_else(|| ApiError::bad_request("user_ids is required"))?,
-        node_ids: input
-            .node_ids
-            .ok_or_else(|| ApiError::bad_request("node_ids is required"))?,
-    })
-}
-
 fn normalized_proposal(mut proposal: GroupProposal) -> Result<GroupProposal, ApiError> {
     proposal.name = validate_name(&proposal.name)?.to_owned();
     normalize_ids(&mut proposal.user_ids, "user_ids")?;
@@ -252,7 +214,7 @@ async fn load_group_tx(
     group_id: &str,
 ) -> Result<Option<GroupInfo>, sqlx::Error> {
     let Some(row) = sqlx::query(
-        "SELECT id,name,revision,created_at,updated_at FROM authorization_groups WHERE id=$1",
+        "SELECT g.id,g.name,g.revision,g.created_at,g.updated_at,ARRAY(SELECT user_id FROM authorization_group_users WHERE group_id=g.id ORDER BY user_id) AS user_ids,ARRAY(SELECT node_id FROM authorization_group_nodes WHERE group_id=g.id ORDER BY node_id) AS node_ids FROM authorization_groups g WHERE g.id=$1",
     )
     .bind(group_id)
     .fetch_optional(&mut *tx)
@@ -260,24 +222,12 @@ async fn load_group_tx(
     else {
         return Ok(None);
     };
-    let user_ids = sqlx::query_scalar::<_, String>(
-        "SELECT user_id FROM authorization_group_users WHERE group_id=$1 ORDER BY user_id",
-    )
-    .bind(group_id)
-    .fetch_all(&mut *tx)
-    .await?;
-    let node_ids = sqlx::query_scalar::<_, String>(
-        "SELECT node_id FROM authorization_group_nodes WHERE group_id=$1 ORDER BY node_id",
-    )
-    .bind(group_id)
-    .fetch_all(&mut *tx)
-    .await?;
     Ok(Some(GroupInfo {
         id: row.get("id"),
         name: row.get("name"),
         revision: row.get("revision"),
-        user_ids,
-        node_ids,
+        user_ids: row.get("user_ids"),
+        node_ids: row.get("node_ids"),
         created_at: row.get("created_at"),
         updated_at: row.get("updated_at"),
     }))
@@ -358,19 +308,6 @@ async fn group_ids_for_users(
     .await
 }
 
-async fn load_groups_by_ids(
-    tx: &mut Transaction<'_, Postgres>,
-    ids: &[String],
-) -> Result<Vec<GroupInfo>, ApiError> {
-    let mut groups = Vec::with_capacity(ids.len());
-    for id in ids {
-        if let Some(group) = load_group_tx(tx, id).await? {
-            groups.push(group);
-        }
-    }
-    Ok(groups)
-}
-
 async fn effective_pairs(
     tx: &mut Transaction<'_, Postgres>,
     users: &[String],
@@ -426,282 +363,6 @@ fn pair_diff(before: &HashSet<Pair>, after: &HashSet<Pair>) -> (Vec<Pair>, Vec<P
     (additions, removals)
 }
 
-fn pairs_json(pairs: &[Pair]) -> Vec<Value> {
-    pairs
-        .iter()
-        .map(|(user_id, node_id)| json!({"user_id":user_id,"node_id":node_id}))
-        .collect()
-}
-
-fn diff_json(additions: &[Pair], removals: &[Pair]) -> Value {
-    json!({
-        "additions_count": additions.len(),
-        "removals_count": removals.len(),
-        "additions_user_count": additions.iter().map(|(user, _)| user).collect::<HashSet<_>>().len(),
-        "removals_user_count": removals.iter().map(|(user, _)| user).collect::<HashSet<_>>().len(),
-        "additions": pairs_json(additions),
-        "removals": pairs_json(removals),
-    })
-}
-
-fn preview_json(action: &str, token: String, mut result: Value) -> Value {
-    let plan = result
-        .as_object_mut()
-        .expect("preview object")
-        .remove("mtls_plan")
-        .expect("managed plan");
-    result["preview_token"] = json!(token);
-    result["action"] = json!(action);
-    result["managed_identities"] = plan["identities"].clone();
-    result
-}
-// Wire responses are independent of the compact database representation.
-fn node_change_preview_json(action: &str, token: String, result: Value) -> Value {
-    let mut response = preview_json(action, token, result);
-    for field in ["additions", "removals", "managed_identities"] {
-        response[field] = json!([]);
-    }
-    response
-}
-
-fn with_plan(mut result: Value, plan: crate::credentials::authorization::Plan) -> Value {
-    result["automatic_issue_count"] = json!(plan.automatic_issue_count);
-    result["pending_issue_count"] = json!(plan.pending_issue_count);
-    result["mtls_plan"] = json!(plan);
-    result
-}
-fn diff_matches(result: &Value, additions: &[Pair], removals: &[Pair]) -> bool {
-    let expected = diff_json(additions, removals);
-    preview_storage::compact_diff_matches(result, &expected)
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn preview_data(
-    _state: &AppState,
-    tx: &mut Transaction<'_, Postgres>,
-    action: &str,
-    group_id: Option<&str>,
-    _expected_revision: Option<i64>,
-    affected_users: &[String],
-    proposal: &GroupProposal,
-    old_pairs: &HashSet<Pair>,
-    new_pairs: &HashSet<Pair>,
-) -> Result<(Value, Value, Value), ApiError> {
-    let (additions, removals) = pair_diff(old_pairs, new_pairs);
-    let guard = guard_snapshot(
-        tx,
-        affected_users,
-        group_id,
-        &[],
-        if action == "delete" {
-            &[]
-        } else {
-            &proposal.node_ids
-        },
-    )
-    .await?;
-    let result = with_plan(
-        diff_json(&additions, &removals),
-        crate::credentials::authorization::plan_on(tx, &additions).await?,
-    );
-    let request_json = json!({
-        "action":action,
-        "expected_revision":_expected_revision,
-        "name":if action == "delete" { Value::Null } else { json!(proposal.name) },
-        "user_ids":if action == "delete" { json!([]) } else { json!(proposal.user_ids) },
-        "node_ids":if action == "delete" { json!([]) } else { json!(proposal.node_ids) },
-    });
-    Ok((guard, result, request_json))
-}
-
-async fn guard_snapshot(
-    tx: &mut Transaction<'_, Postgres>,
-    affected_users: &[String],
-    target_group: Option<&str>,
-    proposed_groups: &[String],
-    proposed_nodes: &[String],
-) -> Result<Value, ApiError> {
-    let mut group_ids = group_ids_for_users(tx, affected_users).await?;
-    group_ids.extend(proposed_groups.iter().cloned());
-    if let Some(group_id) = target_group {
-        group_ids.push(group_id.to_owned());
-    }
-    group_ids.sort();
-    group_ids.dedup();
-    let groups = load_groups_by_ids(tx, &group_ids).await?;
-
-    let mut user_ids = affected_users.to_vec();
-    for group in &groups {
-        user_ids.extend(group.user_ids.iter().cloned());
-    }
-    user_ids.sort();
-    user_ids.dedup();
-    let user_rows = if user_ids.is_empty() {
-        Vec::new()
-    } else {
-        sqlx::query("SELECT id,revision,enabled AND (expires_at IS NULL OR expires_at>now()) AND (quota_bytes IS NULL OR usage_bytes<quota_bytes) AS eligible FROM users WHERE id=ANY($1::text[]) ORDER BY id")
-            .bind(&user_ids)
-            .fetch_all(&mut **tx)
-            .await?
-    };
-    let users: Vec<Value> = user_rows
-        .iter()
-        .map(|row| json!({"id":row.get::<String,_>("id"),"revision":row.get::<i64,_>("revision"),"eligible":row.get::<bool,_>("eligible")}))
-        .collect();
-
-    let mut node_ids = proposed_nodes.to_vec();
-    for group in &groups {
-        node_ids.extend(group.node_ids.iter().cloned());
-    }
-    let assignment_rows = if user_ids.is_empty() {
-        Vec::new()
-    } else {
-        sqlx::query("SELECT user_id,node_id,created_at FROM node_assignments WHERE user_id=ANY($1::text[]) ORDER BY user_id,node_id")
-            .bind(&user_ids)
-            .fetch_all(&mut **tx)
-            .await?
-    };
-    let mut assignments = Vec::with_capacity(assignment_rows.len());
-    for row in assignment_rows {
-        let node_id: String = row.get("node_id");
-        node_ids.push(node_id.clone());
-        assignments.push(json!({"user_id":row.get::<String,_>("user_id"),"node_id":node_id,"created_at":row.get::<DateTime<Utc>,_>("created_at")}));
-    }
-    node_ids.sort();
-    node_ids.dedup();
-    let nodes = if node_ids.is_empty() {
-        Vec::new()
-    } else {
-        sqlx::query("SELECT id,desired_revision,state,mtls_state,mtls_generation,mtls_recovery_configured,mtls_activation_id,md5(desired_config_enc) AS config_digest FROM nodes WHERE id=ANY($1::text[]) ORDER BY id")
-            .bind(&node_ids)
-            .fetch_all(&mut **tx)
-            .await?
-            .iter()
-            .map(|row| json!({
-                "id":row.get::<String,_>("id"),
-                "desired_revision":row.get::<i64,_>("desired_revision"),
-                "deleting":matches!(row.get::<String,_>("state").as_str(),"deleting"|"delete_failed"),"mtls_state":row.get::<String,_>("mtls_state"),"mtls_generation":row.get::<i64,_>("mtls_generation"),"mtls_recovery_configured":row.get::<bool,_>("mtls_recovery_configured"),"activation_id":row.get::<Option<String>,_>("mtls_activation_id"),
-                "config_digest":row.get::<String,_>("config_digest"),
-            }))
-            .collect::<Vec<_>>()
-    };
-    let managed = crate::credentials::authorization::guard_on(tx, &node_ids, &user_ids).await?;
-    Ok(json!({
-        "users":users,
-        "groups":groups.iter().map(group_json).collect::<Vec<_>>(),
-        "nodes":nodes,
-        "assignments":assignments,
-        "managed":managed,
-    }))
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn store_preview(
-    tx: &mut Transaction<'_, Postgres>,
-    action: &str,
-    group_id: Option<&str>,
-    user_id: Option<&str>,
-    request_json: Value,
-    guard_json: Value,
-    result_json: &Value,
-    token: &str,
-) -> Result<String, ApiError> {
-    let timestamp: DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
-        .fetch_one(&mut **tx)
-        .await?;
-    sqlx::query("DELETE FROM authorization_group_previews WHERE token IN (SELECT token FROM authorization_group_previews WHERE expires_at <= $1 ORDER BY expires_at,token LIMIT 256 FOR UPDATE SKIP LOCKED)")
-        .bind(timestamp)
-        .execute(&mut **tx)
-        .await?;
-    sqlx::query("INSERT INTO authorization_group_previews(token,action,group_id,user_id,request_json,guard_json,result_json,created_at,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)")
-        .bind(token)
-        .bind(action)
-        .bind(group_id)
-        .bind(user_id)
-        .bind(preview_storage::digest(&request_json))
-        .bind(preview_storage::digest(&guard_json))
-        .bind(preview_storage::compact_result(result_json))
-        .bind(timestamp)
-        .bind(timestamp + Duration::minutes(PREVIEW_TTL_MINUTES))
-        .execute(&mut **tx)
-        .await?;
-    Ok(token.to_owned())
-}
-
-#[derive(Debug)]
-struct PreviewRow {
-    action: String,
-    group_id: Option<String>,
-    user_id: Option<String>,
-    request_json: Value,
-    guard_json: Value,
-    result_json: Value,
-    consumed_at: Option<DateTime<Utc>>,
-}
-
-async fn load_preview(
-    tx: &mut Transaction<'_, Postgres>,
-    token: &str,
-) -> Result<PreviewRow, ApiError> {
-    let row = sqlx::query("WITH held AS MATERIALIZED (SELECT action,group_id,user_id,request_json,guard_json,result_json,expires_at,consumed_at FROM authorization_group_previews WHERE token=$1 FOR UPDATE) SELECT held.*,expires_at>clock_timestamp() AS unexpired FROM held")
-        .bind(token)
-        .fetch_optional(&mut **tx)
-        .await?
-        .ok_or_else(|| ApiError::conflict("preview token is unknown; preview the change again"))?;
-    let preview = PreviewRow {
-        action: row.get("action"),
-        group_id: row.get("group_id"),
-        user_id: row.get("user_id"),
-        request_json: row.get("request_json"),
-        guard_json: row.get("guard_json"),
-        result_json: row.get("result_json"),
-        consumed_at: row.get("consumed_at"),
-    };
-    if preview.consumed_at.is_some() || !row.get::<bool, _>("unexpired") {
-        return Err(ApiError::conflict(
-            "preview token has expired or was already used; preview the change again",
-        ));
-    }
-    Ok(preview)
-}
-
-fn ensure_preview_matches(
-    preview: &PreviewRow,
-    action: &str,
-    group_id: Option<&str>,
-    user_id: Option<&str>,
-    request: &Value,
-    guard: &Value,
-) -> Result<(), ApiError> {
-    if preview.action != action
-        || preview.group_id.as_deref() != group_id
-        || preview.user_id.as_deref() != user_id
-        || !preview_storage::matches(&preview.request_json, request)
-    {
-        return Err(ApiError::conflict(
-            "preview does not match this change; preview the change again",
-        ));
-    }
-    if !preview_storage::matches(&preview.guard_json, guard) {
-        return Err(ApiError::conflict(
-            "related users, groups, nodes, or credentials changed after preview; refresh the preview",
-        ));
-    }
-    Ok(())
-}
-
-async fn mark_preview_used(
-    tx: &mut Transaction<'_, Postgres>,
-    token: &str,
-) -> Result<(), ApiError> {
-    sqlx::query("UPDATE authorization_group_previews SET consumed_at=$2 WHERE token=$1 AND consumed_at IS NULL")
-        .bind(token)
-        .bind(now())
-        .execute(&mut **tx)
-        .await?;
-    Ok(())
-}
-
 fn authorization_transaction_error(error: anyhow::Error) -> ApiError {
     if crate::db::RetryableTransactionError::retryable_transaction(&error) {
         ApiError::from(error)
@@ -729,10 +390,16 @@ async fn lock_authorization_graph_on(
     let mut node_ids = nodes.to_vec();
     node_ids.extend(sqlx::query_scalar::<_,String>("SELECT node_id FROM authorization_group_nodes WHERE group_id=ANY($1) UNION SELECT node_id FROM node_assignments WHERE user_id=ANY($2)").bind(&group_ids).bind(users).fetch_all(&mut **tx).await?);
     sort_dedup(&mut node_ids);
-    sqlx::query("SELECT id FROM nodes WHERE id=ANY($1) ORDER BY id FOR NO KEY UPDATE")
+    // Authorization changes do not update node configuration. Prevent deletion
+    // without serializing against monitoring's non-key node updates. Changes to
+    // trust and authorization inputs are still rechecked under SERIALIZABLE.
+    sqlx::query("SELECT id FROM nodes WHERE id=ANY($1) ORDER BY id FOR KEY SHARE")
         .bind(&node_ids)
         .fetch_all(&mut **tx)
         .await?;
+    if users.is_empty() && prepared.plan.identities.is_empty() {
+        return Ok(());
+    }
     sqlx::query("SELECT id FROM users WHERE id=ANY($1) ORDER BY id FOR NO KEY UPDATE")
         .bind(users)
         .fetch_all(&mut **tx)
@@ -759,7 +426,6 @@ async fn commit_group_on(
     action: &str,
     group_id: Option<&str>,
     expected_revision: Option<i64>,
-    preview_token: &str,
     proposal: GroupProposal,
     prepared: crate::credentials::authorization::Prepared,
     creation_id: &str,
@@ -784,15 +450,6 @@ async fn commit_group_on(
         &prepared,
     )
     .await?;
-    let preview = load_preview(tx, preview_token).await?;
-    if preview.action != action
-        || preview.group_id.as_deref() != group_id
-        || preview.user_id.is_some()
-    {
-        return Err(ApiError::conflict(
-            "preview does not match this change; preview the change again",
-        ));
-    }
     let current = if let Some(group_id) = group_id {
         Some(
             load_group_tx(tx, group_id)
@@ -831,21 +488,6 @@ async fn commit_group_on(
         add_group_pairs(&mut planned_pairs, &proposal.user_ids, &proposal.node_ids);
     }
     let (planned_additions, planned_removals) = pair_diff(&old_pairs, &planned_pairs);
-    let guard = guard_snapshot(
-        tx,
-        &affected_users,
-        group_id,
-        &[],
-        if action == "delete" {
-            &[]
-        } else {
-            &proposal.node_ids
-        },
-    )
-    .await?;
-    let request_json = group_request_json(action, expected_revision, &proposal);
-    ensure_preview_matches(&preview, action, group_id, None, &request_json, &guard)?;
-
     let timestamp = now();
     let target_group_id = if action == "create" {
         Some(creation_id.to_owned())
@@ -905,7 +547,6 @@ async fn commit_group_on(
         }
         "delete" => {
             let id = target_group_id.as_deref().expect("delete group ID");
-            mark_preview_used(tx, preview_token).await?;
             sqlx::query("DELETE FROM authorization_groups WHERE id=$1 AND revision=$2")
                 .bind(id)
                 .bind(current.as_ref().expect("delete group exists").revision)
@@ -921,12 +562,9 @@ async fn commit_group_on(
 
     let effective_after = effective_pairs(tx, &affected_users, None).await?;
     let (actual_additions, actual_removals) = pair_diff(&old_pairs, &effective_after);
-    if actual_additions != planned_additions
-        || actual_removals != planned_removals
-        || !diff_matches(&preview.result_json, &actual_additions, &actual_removals)
-    {
+    if actual_additions != planned_additions || actual_removals != planned_removals {
         return Err(ApiError::conflict(
-            "authorization sources changed while applying the preview; preview the change again",
+            "authorization sources changed while saving; retry the change",
         ));
     }
     let mut managed_identities = crate::credentials::authorization::commit_prepared(
@@ -982,9 +620,6 @@ async fn commit_group_on(
         )
         .await?;
     }
-    if action != "delete" {
-        mark_preview_used(tx, preview_token).await?;
-    }
     let group = if action == "delete" {
         Value::Null
     } else {
@@ -1004,20 +639,6 @@ async fn commit_group_on(
     Ok(response)
 }
 
-fn group_request_json(
-    action: &str,
-    expected_revision: Option<i64>,
-    proposal: &GroupProposal,
-) -> Value {
-    json!({
-        "action":action,
-        "expected_revision":expected_revision,
-        "name":if action == "delete" { Value::Null } else { json!(proposal.name) },
-        "user_ids":if action == "delete" { json!([]) } else { json!(proposal.user_ids) },
-        "node_ids":if action == "delete" { json!([]) } else { json!(proposal.node_ids) },
-    })
-}
-
 async fn write_group_relations(
     tx: &mut Transaction<'_, Postgres>,
     group_id: &str,
@@ -1029,41 +650,33 @@ async fn write_group_relations(
 ) -> Result<(), ApiError> {
     let old_users: BTreeSet<_> = old_users.iter().cloned().collect();
     let new_users: BTreeSet<_> = new_users.iter().cloned().collect();
-    for user in old_users.difference(&new_users) {
-        sqlx::query("DELETE FROM authorization_group_users WHERE group_id=$1 AND user_id=$2")
+    let removed_users: Vec<_> = old_users.difference(&new_users).cloned().collect();
+    let added_users: Vec<_> = new_users.difference(&old_users).cloned().collect();
+    if !removed_users.is_empty() {
+        sqlx::query("DELETE FROM authorization_group_users WHERE group_id=$1 AND user_id=ANY($2)")
             .bind(group_id)
-            .bind(user)
+            .bind(&removed_users)
             .execute(&mut **tx)
             .await?;
     }
-    for user in new_users.difference(&old_users) {
-        sqlx::query(
-            "INSERT INTO authorization_group_users(group_id,user_id,created_at) VALUES($1,$2,$3)",
-        )
-        .bind(group_id)
-        .bind(user)
-        .bind(timestamp)
-        .execute(&mut **tx)
-        .await?;
+    if !added_users.is_empty() {
+        sqlx::query("INSERT INTO authorization_group_users(group_id,user_id,created_at) SELECT $1,user_id,$3 FROM unnest($2::text[]) AS u(user_id) ORDER BY user_id")
+            .bind(group_id).bind(&added_users).bind(timestamp).execute(&mut **tx).await?;
     }
     let old_nodes: BTreeSet<_> = old_nodes.iter().cloned().collect();
     let new_nodes: BTreeSet<_> = new_nodes.iter().cloned().collect();
-    for node in old_nodes.difference(&new_nodes) {
-        sqlx::query("DELETE FROM authorization_group_nodes WHERE group_id=$1 AND node_id=$2")
+    let removed_nodes: Vec<_> = old_nodes.difference(&new_nodes).cloned().collect();
+    let added_nodes: Vec<_> = new_nodes.difference(&old_nodes).cloned().collect();
+    if !removed_nodes.is_empty() {
+        sqlx::query("DELETE FROM authorization_group_nodes WHERE group_id=$1 AND node_id=ANY($2)")
             .bind(group_id)
-            .bind(node)
+            .bind(&removed_nodes)
             .execute(&mut **tx)
             .await?;
     }
-    for node in new_nodes.difference(&old_nodes) {
-        sqlx::query(
-            "INSERT INTO authorization_group_nodes(group_id,node_id,created_at) VALUES($1,$2,$3)",
-        )
-        .bind(group_id)
-        .bind(node)
-        .bind(timestamp)
-        .execute(&mut **tx)
-        .await?;
+    if !added_nodes.is_empty() {
+        sqlx::query("INSERT INTO authorization_group_nodes(group_id,node_id,created_at) SELECT $1,node_id,$3 FROM unnest($2::text[]) AS n(node_id) ORDER BY node_id")
+            .bind(group_id).bind(&added_nodes).bind(timestamp).execute(&mut **tx).await?;
     }
     Ok(())
 }
@@ -1092,49 +705,40 @@ async fn reconcile_assignments(
     let changed_pairs: Vec<Pair> = additions.iter().chain(removals.iter()).cloned().collect();
     let mut created = Vec::new();
     let mut touched = BTreeSet::new();
-    for (user_id, node_id) in additions {
-        let credential = prepared.get(&user_id, &node_id)?;
-        sqlx::query("INSERT INTO node_assignments(user_id,node_id,credential_hash,credential_enc,created_at) VALUES($1,$2,$3,$4,$5)")
-            .bind(&user_id)
-            .bind(&node_id)
-            .bind(&credential.digest)
-            .bind(&credential.ciphertext)
-            .bind(prepared.timestamp)
-            .execute(&mut **tx)
+    if !additions.is_empty() {
+        let mut grant_users = Vec::with_capacity(additions.len());
+        let mut grant_nodes = Vec::with_capacity(additions.len());
+        let mut digests = Vec::with_capacity(additions.len());
+        let mut ciphertexts = Vec::with_capacity(additions.len());
+        for (user_id, node_id) in &additions {
+            let credential = prepared.get(user_id, node_id)?;
+            grant_users.push(user_id.clone());
+            grant_nodes.push(node_id.clone());
+            digests.push(credential.digest.clone());
+            ciphertexts.push(credential.ciphertext.clone());
+            created.push(
+                json!({"user_id":user_id,"node_id":node_id,"hy2_credential":credential.plaintext}),
+            );
+            touched.insert(user_id.clone());
+        }
+        sqlx::query("INSERT INTO node_assignments(user_id,node_id,credential_hash,credential_enc,created_at) SELECT user_id,node_id,digest,ciphertext,$5 FROM unnest($1::text[],$2::text[],$3::text[],$4::text[]) AS a(user_id,node_id,digest,ciphertext) ORDER BY user_id,node_id")
+            .bind(&grant_users).bind(&grant_nodes).bind(&digests).bind(&ciphertexts).bind(prepared.timestamp).execute(&mut **tx).await?;
+        crate::kick_requests::clear_reason_for_pairs(tx, &additions, "authorization_group_removed")
             .await?;
-        crate::kick_requests::clear_reason(
-            tx,
-            Some(&node_id),
-            Some(&user_id),
-            "authorization_group_removed",
-        )
-        .await?;
-        created.push(json!({
-            "user_id":user_id,
-            "node_id":node_id,
-            "hy2_credential":credential.plaintext,
-        }));
-        touched.insert(user_id);
     }
-    let mut jobs = BTreeSet::new();
-    let users: Vec<_> = removals.iter().map(|(u, _)| u.clone()).collect();
-    let nodes: Vec<_> = removals.iter().map(|(_, n)| n.clone()).collect();
-    sqlx::query("DELETE FROM node_assignments a USING unnest($1::text[],$2::text[]) r(user_id,node_id) WHERE a.user_id=r.user_id AND a.node_id=r.node_id")
-        .bind(&users).bind(&nodes).execute(&mut **tx).await?;
-    let mut by_node = std::collections::BTreeMap::<String, Vec<String>>::new();
-    for (user, node) in removals {
-        touched.insert(user.clone());
-        by_node.entry(node).or_default().push(user);
-    }
-    for (node, users) in by_node {
-        jobs.insert(
-            crate::kick_requests::enqueue_many(tx, &node, &users, "authorization_group_removed")
-                .await?,
-        );
-    }
+    let jobs = if removals.is_empty() {
+        Vec::new()
+    } else {
+        let users: Vec<_> = removals.iter().map(|(u, _)| u.clone()).collect();
+        let nodes: Vec<_> = removals.iter().map(|(_, n)| n.clone()).collect();
+        sqlx::query("DELETE FROM node_assignments a USING unnest($1::text[],$2::text[]) r(user_id,node_id) WHERE a.user_id=r.user_id AND a.node_id=r.node_id")
+            .bind(&users).bind(&nodes).execute(&mut **tx).await?;
+        touched.extend(users);
+        crate::kick_requests::enqueue_pairs(tx, &removals, "authorization_group_removed").await?
+    };
     crate::credentials::authorization::reconcile_on(tx, affected_users, &changed_pairs, None)
         .await?;
-    Ok((created, jobs.into_iter().collect(), touched))
+    Ok((created, jobs, touched))
 }
 
 async fn bump_user_revisions(
@@ -1142,9 +746,10 @@ async fn bump_user_revisions(
     users: &BTreeSet<String>,
     timestamp: DateTime<Utc>,
 ) -> Result<(), ApiError> {
-    for user_id in users {
-        sqlx::query("UPDATE users SET revision=revision+1,updated_at=$2 WHERE id=$1")
-            .bind(user_id)
+    if !users.is_empty() {
+        let users: Vec<_> = users.iter().cloned().collect();
+        sqlx::query("UPDATE users SET revision=revision+1,updated_at=$2 WHERE id=ANY($1)")
+            .bind(&users)
             .bind(timestamp)
             .execute(&mut **tx)
             .await?;
@@ -1202,7 +807,6 @@ async fn commit_membership_on(
     state: &AppState,
     user_id: &str,
     expected_revision: i64,
-    preview_token: &str,
     proposal: MembershipProposal,
     prepared: crate::credentials::authorization::Prepared,
     assignments: PreparedAssignments,
@@ -1215,15 +819,6 @@ async fn commit_membership_on(
         &prepared,
     )
     .await?;
-    let preview = load_preview(tx, preview_token).await?;
-    if preview.action != "update_memberships"
-        || preview.group_id.is_some()
-        || preview.user_id.as_deref() != Some(user_id)
-    {
-        return Err(ApiError::conflict(
-            "preview does not match this change; preview the change again",
-        ));
-    }
     let current_revision = user_revision(tx, user_id).await?;
     check_revision(current_revision, Some(expected_revision))?;
     validate_group_ids(tx, &proposal.group_ids).await?;
@@ -1238,60 +833,35 @@ async fn commit_membership_on(
     let old_pairs = effective_pairs(tx, std::slice::from_ref(&user_id.to_owned()), None).await?;
     let planned_pairs = pairs_for_user_groups(tx, user_id, &proposal.group_ids).await?;
     let (planned_additions, planned_removals) = pair_diff(&old_pairs, &planned_pairs);
-    let request_json = json!({
-        "expected_revision":expected_revision,
-        "group_ids":proposal.group_ids,
-    });
-    let guard = guard_snapshot(tx, &[user_id.to_owned()], None, &proposal.group_ids, &[]).await?;
-    ensure_preview_matches(
-        &preview,
-        "update_memberships",
-        None,
-        Some(user_id),
-        &request_json,
-        &guard,
-    )?;
-
     let timestamp = now();
-    for group_id in current_set.difference(&target_set) {
-        sqlx::query("DELETE FROM authorization_group_users WHERE group_id=$1 AND user_id=$2")
-            .bind(group_id)
+    let removed_groups: Vec<_> = current_set.difference(&target_set).cloned().collect();
+    let added_groups: Vec<_> = target_set.difference(&current_set).cloned().collect();
+    if !removed_groups.is_empty() {
+        sqlx::query("DELETE FROM authorization_group_users WHERE group_id=ANY($1) AND user_id=$2")
+            .bind(&removed_groups)
             .bind(user_id)
             .execute(&mut **tx)
             .await?;
-        sqlx::query(
-            "UPDATE authorization_groups SET revision=revision+1,updated_at=$2 WHERE id=$1",
-        )
-        .bind(group_id)
-        .bind(timestamp)
-        .execute(&mut **tx)
-        .await?;
     }
-    for group_id in target_set.difference(&current_set) {
+    if !added_groups.is_empty() {
+        sqlx::query("INSERT INTO authorization_group_users(group_id,user_id,created_at) SELECT group_id,$2,$3 FROM unnest($1::text[]) AS g(group_id) ORDER BY group_id")
+            .bind(&added_groups).bind(user_id).bind(timestamp).execute(&mut **tx).await?;
+    }
+    let changed_groups: Vec<_> = removed_groups.into_iter().chain(added_groups).collect();
+    if !changed_groups.is_empty() {
         sqlx::query(
-            "INSERT INTO authorization_group_users(group_id,user_id,created_at) VALUES($1,$2,$3)",
+            "UPDATE authorization_groups SET revision=revision+1,updated_at=$2 WHERE id=ANY($1)",
         )
-        .bind(group_id)
-        .bind(user_id)
-        .bind(timestamp)
-        .execute(&mut **tx)
-        .await?;
-        sqlx::query(
-            "UPDATE authorization_groups SET revision=revision+1,updated_at=$2 WHERE id=$1",
-        )
-        .bind(group_id)
+        .bind(changed_groups)
         .bind(timestamp)
         .execute(&mut **tx)
         .await?;
     }
     let effective_after = effective_pairs(tx, &[user_id.to_owned()], None).await?;
     let (actual_additions, actual_removals) = pair_diff(&old_pairs, &effective_after);
-    if actual_additions != planned_additions
-        || actual_removals != planned_removals
-        || !diff_matches(&preview.result_json, &actual_additions, &actual_removals)
-    {
+    if actual_additions != planned_additions || actual_removals != planned_removals {
         return Err(ApiError::conflict(
-            "authorization sources changed while applying the preview; preview the change again",
+            "authorization sources changed while saving; retry the change",
         ));
     }
     let mut managed_identities = crate::credentials::authorization::commit_prepared(
@@ -1322,7 +892,6 @@ async fn commit_membership_on(
         timestamp,
     )
     .await?;
-    mark_preview_used(tx, preview_token).await?;
     let revision = if current_set != target_set || !touched_users.is_empty() {
         current_revision + 1
     } else {
@@ -1331,6 +900,8 @@ async fn commit_membership_on(
     let assignments = assignments_json(tx, user_id).await?;
     let response = json!({
         "user_id":user_id,
+        "additions_count":actual_additions.len(),
+        "removals_count":actual_removals.len(),
         "revision":revision,
         "group_ids":proposal.group_ids,
         "assignments":assignments,
@@ -1346,7 +917,7 @@ async fn assignments_json(
     user_id: &str,
 ) -> Result<Vec<Value>, ApiError> {
     let rows = sqlx::query(
-        "SELECT node_id,created_at FROM node_assignments WHERE user_id=$1 ORDER BY node_id",
+        "SELECT a.node_id,a.created_at,coalesce((SELECT jsonb_agg(jsonb_build_object('id',g.id,'name',g.name) ORDER BY lower(g.name) COLLATE \"C\",g.name COLLATE \"C\",g.id) FROM authorization_group_users gu JOIN authorization_group_nodes gn ON gn.group_id=gu.group_id JOIN authorization_groups g ON g.id=gu.group_id WHERE gu.user_id=a.user_id AND gn.node_id=a.node_id),'[]'::jsonb) AS source_groups FROM node_assignments a WHERE a.user_id=$1 ORDER BY a.node_id",
     )
     .bind(user_id)
     .fetch_all(&mut **tx)
@@ -1356,11 +927,7 @@ async fn assignments_json(
         crate::credentials::authorization::assignment_refs_on(tx, &[user_id.to_owned()]).await?;
     for row in rows {
         let node_id: String = row.get("node_id");
-        let source_groups = sqlx::query_scalar::<_, Value>("SELECT COALESCE(jsonb_agg(jsonb_build_object('id',g.id,'name',g.name) ORDER BY lower(g.name) COLLATE \"C\",g.name COLLATE \"C\",g.id),'[]'::jsonb) FROM authorization_group_users gu JOIN authorization_group_nodes gn ON gn.group_id=gu.group_id JOIN authorization_groups g ON g.id=gu.group_id WHERE gu.user_id=$1 AND gn.node_id=$2")
-            .bind(user_id)
-            .bind(&node_id)
-            .fetch_one(&mut **tx)
-            .await?;
+        let source_groups: Value = row.get("source_groups");
         assignments.push(json!({
             "managed_identity_ids":identities.remove(&(user_id.to_owned(),node_id.clone())).unwrap_or_default(),
             "node_id":node_id,
@@ -1387,17 +954,8 @@ mod tests {
         state
     }
 
-    async fn create_group(state: &AppState, name: &str) -> Value {
-        let draft = json!({"action":"create","name":name,"user_ids":["user"],"node_ids":["node"]});
-        let Json(preview) = preview_create(
-            State(state.clone()),
-            Json(serde_json::from_value(draft.clone()).unwrap()),
-        )
-        .await
-        .unwrap();
-        let mut request = draft;
-        request.as_object_mut().unwrap().remove("action");
-        request["preview_token"] = preview["preview_token"].clone();
+    pub(super) async fn create_group(state: &AppState, name: &str) -> Value {
+        let request = json!({"name":name,"user_ids":["user"],"node_ids":["node"]});
         let (_, Json(result)) = create(
             State(state.clone()),
             Json(serde_json::from_value(request).unwrap()),
@@ -1420,22 +978,11 @@ mod tests {
         assert_eq!(second["created_credentials"], json!([]));
         for (index, group) in [&first["group"], &second["group"]].into_iter().enumerate() {
             let id = group["id"].as_str().unwrap();
-            let Json(preview) = preview_group(
-                State(state.clone()),
-                Path(id.into()),
-                Json(
-                    serde_json::from_value(json!({"action":"delete","expected_revision":1}))
-                        .unwrap(),
-                ),
-            )
-            .await
-            .unwrap();
             let Json(receipt) = delete(
                 State(state.clone()),
                 Path(id.into()),
                 Json(DeleteGroupRequest {
                     expected_revision: 1,
-                    preview_token: preview["preview_token"].as_str().unwrap().into(),
                 }),
             )
             .await
@@ -1453,152 +1000,6 @@ mod tests {
         create_group(&state, "Regrant").await;
         let stale: i64 = sqlx::query_scalar("SELECT count(*) FROM kick_requests WHERE state NOT IN ('completed','cancelled') AND reasons ? 'authorization_group_removed'").fetch_one(&state.pool).await.unwrap();
         assert_eq!(stale, 0);
-    }
-
-    #[tokio::test]
-    async fn stale_and_replayed_previews_cannot_write() {
-        let state = fixture().await;
-        let draft =
-            json!({"action":"create","name":"Previewed","user_ids":["user"],"node_ids":["node"]});
-        let Json(preview) = preview_create(
-            State(state.clone()),
-            Json(serde_json::from_value(draft.clone()).unwrap()),
-        )
-        .await
-        .unwrap();
-        sqlx::query("UPDATE authorization_group_previews SET expires_at=now()-interval '1 second' WHERE token=$1")
-            .bind(preview["preview_token"].as_str().unwrap()).execute(&state.pool).await.unwrap();
-        let expired = json!({"name":"Previewed","user_ids":["user"],"node_ids":["node"],"preview_token":preview["preview_token"]});
-        assert_eq!(
-            create(
-                State(state.clone()),
-                Json(serde_json::from_value(expired).unwrap())
-            )
-            .await
-            .unwrap_err()
-            .status,
-            StatusCode::CONFLICT
-        );
-        let Json(preview) = preview_create(
-            State(state.clone()),
-            Json(serde_json::from_value(draft.clone()).unwrap()),
-        )
-        .await
-        .unwrap();
-        sqlx::query("UPDATE users SET revision=revision+1 WHERE id='user'")
-            .execute(&state.pool)
-            .await
-            .unwrap();
-        let request = json!({"name":"Previewed","user_ids":["user"],"node_ids":["node"],"preview_token":preview["preview_token"]});
-        assert_eq!(
-            create(
-                State(state.clone()),
-                Json(serde_json::from_value(request).unwrap())
-            )
-            .await
-            .unwrap_err()
-            .status,
-            StatusCode::CONFLICT
-        );
-        let count: i64 = sqlx::query_scalar("SELECT count(*) FROM authorization_groups")
-            .fetch_one(&state.pool)
-            .await
-            .unwrap();
-        assert_eq!(count, 0);
-        let Json(preview) = preview_create(
-            State(state.clone()),
-            Json(serde_json::from_value(draft).unwrap()),
-        )
-        .await
-        .unwrap();
-        let request = json!({"name":"Previewed","user_ids":["user"],"node_ids":["node"],"preview_token":preview["preview_token"]});
-        let _ = create(
-            State(state.clone()),
-            Json(serde_json::from_value(request.clone()).unwrap()),
-        )
-        .await
-        .unwrap();
-        assert_eq!(
-            create(State(state), Json(serde_json::from_value(request).unwrap()))
-                .await
-                .unwrap_err()
-                .status,
-            StatusCode::CONFLICT
-        );
-    }
-
-    #[tokio::test]
-    async fn preview_rejects_changed_node_config_and_legacy_manual_binding() {
-        let state = fixture().await;
-        let draft =
-            json!({"action":"create","name":"Guarded","user_ids":["user"],"node_ids":["node"]});
-        let Json(preview) = preview_create(
-            State(state.clone()),
-            Json(serde_json::from_value(draft.clone()).unwrap()),
-        )
-        .await
-        .unwrap();
-        sqlx::query("UPDATE nodes SET desired_revision=desired_revision+1,desired_config_enc=$1 WHERE id='node'").bind(state.secrets.encrypt(r#"{"bandwidth":{"up":"1 mbps"}}"#).unwrap()).execute(&state.pool).await.unwrap();
-        let request = json!({"name":"Guarded","user_ids":["user"],"node_ids":["node"],"preview_token":preview["preview_token"]});
-        assert_eq!(
-            create(
-                State(state.clone()),
-                Json(serde_json::from_value(request).unwrap())
-            )
-            .await
-            .unwrap_err()
-            .status,
-            StatusCode::CONFLICT
-        );
-        let mut draft = draft;
-        draft["mtls_bindings"] = json!([]);
-        assert!(serde_json::from_value::<GroupPreviewRequest>(draft).is_err());
-        assert_eq!(
-            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM authorization_groups")
-                .fetch_one(&state.pool)
-                .await
-                .unwrap(),
-            0
-        );
-        assert_eq!(
-            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM node_assignments")
-                .fetch_one(&state.pool)
-                .await
-                .unwrap(),
-            0
-        );
-    }
-
-    #[tokio::test]
-    async fn compact_preview_storage_size_for_large_connection_lists() {
-        let state = fixture().await;
-        let pairs: Vec<Pair> = (0..10_000)
-            .map(|n| (format!("user-{n:05}"), "node".into()))
-            .collect();
-        let mut result = diff_json(&pairs, &[]);
-        result["mtls_plan"] =
-            json!({"identities":[], "automatic_issue_count":0, "pending_issue_count":0});
-        let request =
-            json!({"action":"update", "user_ids":pairs.iter().map(|p| &p.0).collect::<Vec<_>>()});
-        let guard = json!({"assignments": pairs_json(&pairs)});
-        let full = json!([request, guard, result]);
-        let compact = json!([
-            preview_storage::digest(&full[0]),
-            preview_storage::digest(&full[1]),
-            preview_storage::compact_result(&full[2])
-        ]);
-        let sizes: (i32, i32) =
-            sqlx::query_as("SELECT pg_column_size($1::jsonb),pg_column_size($2::jsonb)")
-                .bind(full)
-                .bind(compact)
-                .fetch_one(&state.pool)
-                .await
-                .unwrap();
-        println!(
-            "10,000 connections: JSONB value size {} -> {} bytes",
-            sizes.0, sizes.1
-        );
-        assert!(sizes.1 * 10 < sizes.0);
     }
 
     #[tokio::test]
@@ -1632,102 +1033,69 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn node_change_summary_keeps_compact_preview_and_can_commit() {
+    async fn member_and_node_changes_save_without_previews_and_report_actual_effects() {
         let state = fixture().await;
         let created = create_group(&state, "Group").await;
         let id = created["group"]["id"].as_str().unwrap();
-        // A member-only change still exposes the full affected connections.
-        let Json(members) = preview_group(
-            State(state.clone()),
-            Path(id.into()),
-            Json(
-                serde_json::from_value(json!({
-                    "action":"update", "expected_revision":1, "name":"Group",
-                    "user_ids":[], "node_ids":["node"]
-                }))
-                .unwrap(),
-            ),
-        )
-        .await
-        .unwrap();
-        assert_eq!(members["removals"].as_array().unwrap().len(), 1);
-        let Json(summary) = preview_group(
-            State(state.clone()),
-            Path(id.into()),
-            Json(
-                serde_json::from_value(json!({
-                    "action":"update", "expected_revision":1, "name":"Group",
-                    "user_ids":["user"], "node_ids":[]
-                }))
-                .unwrap(),
-            ),
-        )
-        .await
-        .unwrap();
-        assert_eq!(summary["removals_count"], 1);
-        assert_eq!(summary["removals_user_count"], 1);
-        assert_eq!(summary["removals"], json!([]));
-        let token = summary["preview_token"].as_str().unwrap();
-        let stored: Value = sqlx::query_scalar(
-            "SELECT result_json FROM authorization_group_previews WHERE token=$1",
-        )
-        .bind(token)
-        .fetch_one(&state.pool)
-        .await
-        .unwrap();
-        assert!(stored.get("removals").is_none());
-        assert!(stored.get("additions").is_none());
-        assert!(stored.get("mtls_plan").is_some());
-        assert_eq!(stored["removals_count"], 1);
-        let Json(receipt) = update(
-            State(state.clone()),
-            Path(id.into()),
-            Json(UpdateGroupRequest {
-                expected_revision: 1,
-                name: "Group".into(),
-                user_ids: vec!["user".into()],
-                node_ids: vec![],
-                preview_token: token.into(),
-            }),
-        )
-        .await
-        .unwrap();
-        assert_eq!(receipt["removals_count"], 1);
-        assert!(!receipt["revocation_job_ids"].as_array().unwrap().is_empty());
+        for (revision, users, nodes, additions, removals) in [
+            (1, vec!["user"], vec![], 0, 1),
+            (2, vec!["user"], vec!["node"], 1, 0),
+            (3, vec![], vec!["node"], 0, 1),
+            (4, vec!["user"], vec!["node"], 1, 0),
+        ] {
+            let Json(receipt) = update(
+                State(state.clone()),
+                Path(id.into()),
+                Json(UpdateGroupRequest {
+                    expected_revision: revision,
+                    name: "Group".into(),
+                    user_ids: users.into_iter().map(str::to_owned).collect(),
+                    node_ids: nodes.into_iter().map(str::to_owned).collect(),
+                }),
+            )
+            .await
+            .unwrap();
+            assert_eq!(receipt["additions_count"], additions);
+            assert_eq!(receipt["removals_count"], removals);
+            assert_eq!(receipt["group"]["revision"], revision + 1);
+            if removals > 0 {
+                assert!(!receipt["revocation_job_ids"].as_array().unwrap().is_empty());
+            }
+        }
+        assert!(
+            update(
+                State(state.clone()),
+                Path(id.into()),
+                Json(UpdateGroupRequest {
+                    expected_revision: 1,
+                    name: "Stale".into(),
+                    user_ids: vec![],
+                    node_ids: vec![],
+                })
+            )
+            .await
+            .is_err()
+        );
     }
 
     #[test]
-    fn node_change_preview_returns_counts_without_connection_or_identity_details() {
-        let additions = vec![
-            ("alice".into(), "node-a".into()),
-            ("alice".into(), "node-b".into()),
-            ("bob".into(), "node-a".into()),
-        ];
-        let removals = vec![("alice".into(), "node-c".into())];
-        let mut stored = diff_json(&additions, &removals);
-        stored["automatic_issue_count"] = json!(2);
-        stored["pending_issue_count"] = json!(1);
-        stored["mtls_plan"] = json!({"identities": [{"user_id": "alice"}]});
-        let response = node_change_preview_json("update", "token".into(), stored.clone());
-        assert_eq!(response["preview_token"], "token");
-        assert_eq!(response["additions_count"], 3);
-        assert_eq!(response["removals_count"], 1);
-        assert_eq!(response["additions_user_count"], 2);
-        assert_eq!(response["removals_user_count"], 1);
-        assert_eq!(response["automatic_issue_count"], 2);
-        assert_eq!(response["pending_issue_count"], 1);
-        for field in ["additions", "removals", "managed_identities"] {
-            assert_eq!(response[field], json!([]));
-        }
-        assert!(response.get("mtls_plan").is_none());
-        assert!(diff_matches(
-            &preview_storage::compact_result(&stored),
-            &additions,
-            &removals
-        ));
-        let full = preview_json("update", "token".into(), stored);
-        assert_eq!(full["additions"].as_array().unwrap().len(), 3);
-        assert_eq!(full["managed_identities"].as_array().unwrap().len(), 1);
+    fn authorization_requests_reject_obsolete_preview_tokens() {
+        let mut create = json!({"name":"Direct","user_ids":[],"node_ids":[]});
+        assert!(serde_json::from_value::<CreateGroupRequest>(create.clone()).is_ok());
+        create["preview_token"] = json!("obsolete");
+        assert!(serde_json::from_value::<CreateGroupRequest>(create).is_err());
+        let mut update = json!({"expected_revision":1,"name":"Direct","user_ids":[],"node_ids":[]});
+        assert!(serde_json::from_value::<UpdateGroupRequest>(update.clone()).is_ok());
+        update["preview_token"] = json!("obsolete");
+        assert!(serde_json::from_value::<UpdateGroupRequest>(update).is_err());
+        let mut delete = json!({"expected_revision":1});
+        assert!(serde_json::from_value::<DeleteGroupRequest>(delete.clone()).is_ok());
+        delete["preview_token"] = json!("obsolete");
+        assert!(serde_json::from_value::<DeleteGroupRequest>(delete).is_err());
+        let mut membership = json!({"expected_revision":1,"group_ids":[]});
+        assert!(serde_json::from_value::<MembershipUpdateRequest>(membership.clone()).is_ok());
+        membership["preview_token"] = json!("obsolete");
+        assert!(serde_json::from_value::<MembershipUpdateRequest>(membership).is_err());
     }
 
     #[test]
@@ -1743,9 +1111,6 @@ mod tests {
 
 #[cfg(test)]
 mod transaction_tests;
-
-mod previews;
-use previews::*;
 
 pub(super) mod v2;
 

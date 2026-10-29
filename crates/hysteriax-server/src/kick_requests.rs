@@ -131,7 +131,7 @@ pub async fn batch(
             .bind(&job.node_id).bind(&job.id).bind(users.as_deref()).bind(restricted).bind(BATCH_SIZE).fetch_all(&mut **tx).await?;
         let requests:Vec<Request>=rows.into_iter().map(|r|Request{user:r.get("user_id"),generation:r.get("generation"),required:r.get("required")}).collect();
         let ids:Vec<_>=requests.iter().map(|r|r.user.clone()).collect();
-        sqlx::query("UPDATE kick_requests SET execution_generation=generation WHERE node_id=$1 AND latest_job_id=$2 AND user_id=ANY($3) AND state='active'")
+        sqlx::query("UPDATE kick_requests SET execution_generation=generation WHERE node_id=$1 AND latest_job_id=$2 AND user_id=ANY($3) AND state='active' AND execution_generation IS DISTINCT FROM generation")
             .bind(&job.node_id).bind(&job.id).bind(ids).execute(&mut **tx).await?;
         Ok(requests)
     })}).await
@@ -208,6 +208,26 @@ pub async fn clear_reason(
     Ok(())
 }
 
+/// Clear only the exact restored user/node pairs; never their cartesian product.
+/// Cancel obligations atomically; the scheduler cleans empty queued jobs later.
+pub async fn clear_reason_for_pairs(
+    tx: &mut Transaction<'_, Postgres>,
+    pairs: &[(String, String)],
+    reason: &str,
+) -> Result<(), sqlx::Error> {
+    if pairs.is_empty() {
+        return Ok(());
+    }
+    let users: Vec<_> = pairs.iter().map(|p| p.0.clone()).collect();
+    let nodes: Vec<_> = pairs.iter().map(|p| p.1.clone()).collect();
+    // Permission restoration and its exact obligation generations commit
+    // together. Queue bookkeeping follows in the durable scheduler; reading job
+    // progress here creates unrelated SERIALIZABLE conflicts and long retries.
+    sqlx::query("UPDATE kick_requests r SET reasons=r.reasons-$3,generation=r.generation+1,state=CASE WHEN r.reasons-$3='{}'::jsonb THEN 'cancelled' ELSE r.state END,updated_at=now() FROM unnest($1::text[],$2::text[]) AS p(user_id,node_id) WHERE r.user_id=p.user_id AND r.node_id=p.node_id AND r.reasons ? $3 AND r.state NOT IN ('completed','cancelled')")
+        .bind(&users).bind(&nodes).bind(reason).execute(&mut **tx).await?;
+    Ok(())
+}
+
 pub async fn event(
     tx: &mut Transaction<'_, Postgres>,
     id: &str,
@@ -268,6 +288,9 @@ pub async fn schedule_page(
     recovered: bool,
     after: Option<&str>,
 ) -> Result<SchedulePage, ApiError> {
+    if after.is_none() {
+        authorization::cleanup_queued(tx, node).await?;
+    }
     let nodes:Vec<String>=sqlx::query_scalar("SELECT n.id FROM nodes n WHERE ($1::text IS NULL OR n.id=$1) AND ($3::text IS NULL OR n.id>$3) AND n.state NOT IN ('deleting','delete_failed') AND EXISTS(SELECT 1 FROM kick_requests r WHERE r.node_id=n.id AND (r.state='active' OR ($2 AND r.state='waiting_recovery')) AND NOT EXISTS(SELECT 1 FROM jobs failed WHERE failed.id=r.latest_job_id AND failed.status='failed' AND (failed.stage IN ('needs_attention','reconciling') OR (failed.stage='waiting_recovery' AND NOT $2)))) AND NOT EXISTS(SELECT 1 FROM jobs j WHERE j.kind='kick' AND j.node_id=n.id AND j.status IN ('queued','running')) ORDER BY n.id LIMIT 100 FOR NO KEY UPDATE OF n SKIP LOCKED")
         .bind(node).bind(recovered).bind(after).fetch_all(&mut **tx).await?;
     for node in &nodes {
@@ -543,3 +566,6 @@ pub(crate) mod tests {
 
 #[cfg(test)]
 mod batch_tests;
+
+mod authorization;
+pub use authorization::enqueue_pairs;

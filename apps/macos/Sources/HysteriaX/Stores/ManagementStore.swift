@@ -221,6 +221,33 @@ final class ManagementStore {
         startEventUpdates(using: client)
     }
 
+    /// A committed write is complete before any display refresh. In particular,
+    /// do not make the result wait for a shared refresh extended by event updates.
+    func authorizationMutationDidCommit(
+        using client: APIClient,
+        group: AuthorizationGroupSummary? = nil,
+        deletedGroupID: String? = nil
+    ) {
+        guard api === client else { return }
+        // An older group read must not overwrite this authoritative receipt.
+        authorizationGroupsRequestID = UUID()
+        isLoadingAuthorizationGroups = false
+        authorizationGroupsError = nil
+        if let group {
+            if let index = authorizationGroups.firstIndex(where: { $0.id == group.id }) {
+                if authorizationGroups[index].revision <= group.revision { authorizationGroups[index] = group }
+            } else {
+                authorizationGroups.append(group)
+            }
+        }
+        if let deletedGroupID { authorizationGroups.removeAll { $0.id == deletedGroupID } }
+        listPageCache.invalidate()
+        Task { [weak self] in
+            guard let self, self.api === client else { return }
+            await self.refresh()
+        }
+    }
+
     @discardableResult
     func refresh(forceDirectories: Bool = true) async -> Bool {
         guard let api else { isConnected = false; return false }

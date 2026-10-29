@@ -14,18 +14,35 @@ SQL 基线不是完整运行时初始化。`--migrate-only` 仍按顺序完成�
 cargo run -p hysteriax-server -- --migrate-only
 ```
 
-连接参数和测试环境见 [安装指南](../../../docs/installation.md#database-baseline)。生产发布仍需在本地构建镜像后传输。新安装在空库初始化；已登记当前基线的生产库直接启动对应镜像，无须重跑基线 SQL。
+连接参数和测试环境见 [安装指南](../../../docs/installation.md#database-baseline)。生产发布仍需在本地构建镜像后传输。新安装在空库初始化；已完成当前迁移链的数据库直接启动对应镜像；存在后续迁移时，应先停止全部 API 并执行维护初始化，无须重跑基线 SQL。
 
 ## 后续迁移
 
-- 从 `0003_<description>.sql` 继续递增；已发布的 SQL 不再修改、重命名或重排。
+- 从 `0005_<description>.sql` 继续递增；已发布的 SQL 不再修改、重命名或重排。
 - SQLx 内嵌 SQL 并记录 SHA-384 checksum；启动逐项验证完整历史，重复执行维护不会重新应用已成功迁移。
 - 应用对象使用相对 schema 名称，以支持隔离测试 schema。`pg_trgm` 仍安装到 `public`，索引显式引用 `public.gin_trgm_ops`。
 - 新增或移除对象时同步更新 [数据库表用途](../../../docs/database-tables.md)，并验证当前基线上的后续升级。
 
 ## 0002 节点级批量撤权
 
-`0002_node_kick_batches.sql` 将每个节点限制为一个活跃 kick 任务，并增加用户执行代次和分页索引。按用户要求，迁移会直接删除旧撤权需求、kick 任务及相关执行/事件/重试链历史，不转换旧载荷；新执行器不支持旧格式。2026-10-29 已按流程停止 API 并通过 `--migrate-only` 在生产应用 0002，未执行基线 SQL。迁移后 `runtime_contract.schema_version=2`，旧撤权需求与 kick 任务历史已清空；本机发布目录保存了配置和迁移前数据库快照。以后新增迁移从 0003 开始。
+`0002_node_kick_batches.sql` 将每个节点限制为一个活跃 kick 任务，并增加用户执行代次和分页索引。按用户要求，迁移会直接删除旧撤权需求、kick 任务及相关执行/事件/重试链历史，不转换旧载荷；新执行器不支持旧格式。2026-10-29 已按流程停止 API 并通过 `--migrate-only` 在生产应用 0002，未执行基线 SQL。迁移后 `runtime_contract.schema_version=2`，旧撤权需求与 kick 任务历史已清空；本机发布目录保存了配置和迁移前数据库快照。
+
+## 0003 移除授权预览
+
+`0003_remove_authorization_previews.sql` 删除 `authorization_group_previews` 及所有旧令牌、索引和约束，不删除授权组、成员、节点、连接凭据或撤权需求。已发布的 0001/0002 保持不变，新库按完整迁移链初始化后不再包含预览表。测试环境和部署均使用独立 SQL 迁移，经以下维护命令执行：
+
+```sh
+# 停止全部 API 后，使用新镜像执行维护初始化，再启动新版本 API。
+./target/debug/hysteriax-server --migrate-only
+```
+
+创建、修改、删除和用户所属组提交均不接受 `preview_token`；旧客户端不兼容，需要同步更新。2026-10-29 已按用户要求不备份完成生产迁移；`runtime_contract.schema_version=3`，预览表不存在，授权业务关系数量不变，维护与启动验证通过。
+
+## 0004 分离任务进度和节点实体缓存
+
+`0004_separate_job_cache_roots.sql` 仅替换缓存失效触发函数：任务更新继续推进 jobs 缓存域与任务版本；节点详情本来就依赖 jobs 域，因此不再额外推进节点实体版本。避免任务进度和授权写入在同一节点实体计数上产生无关的 SERIALIZABLE 冲突。保留其他缓存失效、权限数据及既有版本计数；协议仍为 2，维护初始化后 schema 为 4。
+
+测试环境单独迁移工具仍为 `--migrate-only`，新空库按 1～4 完整执行，已完成 1～3 的测试或生产库停止 API 后执行同一工具升级，无须修改历史迁移记录或重跑基线。升级测试保留现有用户/节点/任务并验证缓存刷新及并发授权提交。
 
 ## 验证
 

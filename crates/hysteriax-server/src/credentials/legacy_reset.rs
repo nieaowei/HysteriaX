@@ -163,9 +163,6 @@ pub async fn reset(tx: &mut Transaction<'_, Postgres>, secrets: &SecretBox) -> R
         .bind(&blocked)
         .execute(&mut **tx)
         .await?;
-    sqlx::query("DELETE FROM authorization_group_previews")
-        .execute(&mut **tx)
-        .await?;
     // Durable kicks survive offline nodes and resume through the existing trusted-SSH recovery path.
     let pairs: Vec<(String, String)> =
         sqlx::query_as("SELECT node_id,user_id FROM node_assignments WHERE node_id=ANY($1)")

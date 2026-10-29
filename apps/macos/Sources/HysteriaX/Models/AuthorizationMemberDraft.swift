@@ -9,10 +9,6 @@ struct AuthorizationMemberChanges {
     var removed: Set<String> { original.subtracting(proposed) }
     var changed: Set<String> { added.union(removed) }
 
-    func applying(to latest: Set<String>) -> Set<String> {
-        latest.union(added).subtracting(removed)
-    }
-
     func undoing(_ ids: Set<String>) -> Set<String> {
         proposed.subtracting(ids).union(original.intersection(ids))
     }
@@ -47,16 +43,5 @@ struct AuthorizationMemberRow: Identifiable {
 enum AuthorizationMemberSelection {
     static func merging(_ visibleSelection: Set<String>, visibleIDs: Set<String>, into selection: Set<String>) -> Set<String> {
         selection.subtracting(visibleIDs).union(visibleSelection.intersection(visibleIDs))
-    }
-}
-
-struct AuthorizationUserImpact: Identifiable {
-    let id: String
-    let nodeIDs: [String]
-
-    static func grouped(_ pairs: [AuthorizationPair]) -> [Self] {
-        Dictionary(grouping: pairs, by: \.userId).map { id, pairs in
-            Self(id: id, nodeIDs: Set(pairs.map(\.nodeID)).sorted())
-        }.sorted { $0.id < $1.id }
     }
 }

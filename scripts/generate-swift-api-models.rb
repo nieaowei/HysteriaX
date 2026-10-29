@@ -41,11 +41,9 @@ models = {
   "ResourceCreate" => "ResourceUploadRequest",
   "UserCreate" => "UserCreateRequest",
   "UserPatch" => "UserPatchRequest",
-  "AuthorizationGroupPreview" => "AuthorizationGroupPreviewRequest",
   "AuthorizationGroupCreate" => "AuthorizationGroupCreateRequest",
   "AuthorizationGroupUpdate" => "AuthorizationGroupUpdateRequest",
   "AuthorizationGroupDelete" => "AuthorizationGroupDeleteRequest",
-  "UserAuthorizationGroupsPreview" => "UserAuthorizationGroupsPreviewRequest",
   "UserAuthorizationGroupsUpdate" => "UserAuthorizationGroupsUpdateRequest",
   "JobFingerprintConfirmation" => "JobFingerprintConfirmationRequest",
   "Revision" => "RevisionRequest",
@@ -53,8 +51,8 @@ models = {
 response_models = %w[
   SubscriptionTemplate SubscriptionTemplatesPage SubscriptionTemplateDraft
   ManagedUserIdentity ManagedIdentityVersion ManagedCAPolicy CAIdentityReceipt CAPolicyReceipt CAIdentityState ManagedUserReissueReceipt ManagedIdentityReceipt CARotationState CARotationStatus CARotationNode CATrustCleanup CATrustCleanupNode
-  AuthorizationGroupReference AuthorizationGroupSource AuthorizationGroupSummary AuthorizationPair AuthorizationManagedIdentity AuthorizationIdentityResult
-  AuthorizationChangePreview AuthorizationCreatedCredential AuthorizationGroupMutationResponse
+  AuthorizationGroupReference AuthorizationGroupSource AuthorizationGroupSummary AuthorizationIdentityResult
+  AuthorizationCreatedCredential AuthorizationGroupMutationResponse
   UserAuthorizationGroupsMutationResponse
   DNSConnection DNSZone DNSRecord DNSRecordsPage PublishedConnection DNSBinding DNSBindingResponse DNSActionReceipt DNSCredentialBatchItem
   CredentialSummary CredentialsPage CredentialDetail CredentialVersion CredentialReference CredentialReceipt

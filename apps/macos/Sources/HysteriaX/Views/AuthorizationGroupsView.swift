@@ -10,9 +10,6 @@ struct AuthorizationGroupsView: View {
     @State private var groupListWidth: CGFloat = 200
     @State private var resizingListStart: CGFloat?
     @State private var deletionTarget: AuthorizationGroupSummary?
-    @State private var deletionPreview: AuthorizationChangePreview?
-    @State private var isPreparingDeletion = false
-    @State private var deletionError: String?
 
     private var visibleGroups: [AuthorizationGroupSummary] {
         let query = pageState.groupSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -28,7 +25,7 @@ struct AuthorizationGroupsView: View {
     var body: some View {
         directoryContent
             .task(id: store.dataRefreshToken) { await store.prepareDirectories([.nodes, .users]) }
-            .disabled([ManagementStore.Directory.nodes, .users].contains { store.loadingDirectories.contains($0) })
+            .disabled(pageState.groupEditorTarget == nil && deletionTarget == nil && [ManagementStore.Directory.nodes, .users].contains { store.loadingDirectories.contains($0) })
     }
 
     private var directoryContent: some View {
@@ -83,30 +80,8 @@ struct AuthorizationGroupsView: View {
             }
         }
         .sheet(item: $deletionTarget) { group in
-            if let deletionPreview {
-                AuthorizationGroupDeletionPreviewView(
-                    store: store,
-                    group: group,
-                    preview: deletionPreview,
-                    onDeleted: {
-                        pageState.selectedGroupID = nil
-                    }
-                )
-            } else {
-                VStack(alignment: .leading, spacing: 16) {
-                    Text(L10n.text("预览删除影响…")).font(.title2.bold())
-                    if let deletionError { Text(deletionError).foregroundStyle(.red).textSelection(.enabled) }
-                    else if isPreparingDeletion { ProgressView() }
-                    HStack {
-                        Button(L10n.text("取消"), role: .cancel) { deletionTarget = nil }
-                        Spacer()
-                        Button(L10n.text("重试")) { prepareDeletion(group) }
-                            .disabled(isPreparingDeletion || !store.isConnected)
-                    }
-                }
-                .padding(24)
-                .frame(width: 480)
-                .task { prepareDeletion(group) }
+            AuthorizationGroupDeletionView(store: store, group: group) {
+                pageState.selectedGroupID = nil
             }
         }
         .task(id: store.isConnected) {
@@ -236,7 +211,7 @@ struct AuthorizationGroupsView: View {
                 pageState.groupEditorTarget = AuthorizationGroupEditorTarget(group: group, intent: .nodes)
             }
             .accessibilityIdentifier("authorizationGroups.manageNodes")
-            Button(L10n.text("删除授权组"), role: .destructive) { prepareDeletion(group) }
+            Button(L10n.text("删除授权组"), role: .destructive) { deletionTarget = group }
                 .foregroundStyle(.red)
                 .accessibilityIdentifier("authorizationGroups.delete")
         }
@@ -285,19 +260,4 @@ struct AuthorizationGroupsView: View {
         }
     }
 
-    private func prepareDeletion(_ group: AuthorizationGroupSummary) {
-        guard !isPreparingDeletion else { return }
-        isPreparingDeletion = true
-        deletionError = nil
-        deletionTarget = group
-        deletionPreview = nil
-        Task {
-            defer { isPreparingDeletion = false }
-            do {
-                deletionPreview = try await store.previewAuthorizationGroupDeletion(group)
-            } catch {
-                deletionError = error.localizedDescription
-            }
-        }
-    }
 }

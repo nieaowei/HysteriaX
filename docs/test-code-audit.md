@@ -116,7 +116,7 @@ python3 -m unittest discover -s tests -p 'test_*.py'
 python3 tests/template-documentation-audit.py
 # 7 passed
 ruby scripts/verify-management-contract.rb
-# passed：61 个写操作的幂等头、握手与游标契约
+# passed：58 个写操作的幂等头、握手与游标契约
 ```
 
 另外以临时目录编译并运行 public-port 测试，通过；使用 workbench 脚本的原始源文件清单进行类型检查，失败如第 3 节所述。没有运行完整 Rust、Go、数据库、Docker 或 XCUITest 套件，没有执行部署或故障注入。

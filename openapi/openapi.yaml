@@ -1399,28 +1399,6 @@ paths:
           schema: { type: integer, minimum: 1 }
       responses:
         '204': { description: Deleted }
-  /users/{id}/authorization-groups/preview:
-    parameters:
-      - $ref: '#/components/parameters/Id'
-    post:
-      operationId: previewUserAuthorizationGroups
-      parameters:
-        - $ref: '#/components/parameters/IdempotencyKey'
-      summary: Preview a user's authorization-group membership change
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: '#/components/schemas/UserAuthorizationGroupsPreview' }
-      responses:
-        '200':
-          description: Membership change preview, including effective assignment deltas and missing mTLS bindings
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/AuthorizationChangePreview' }
-        '400': { $ref: '#/components/responses/Error' }
-        '404': { $ref: '#/components/responses/Error' }
-        '409': { $ref: '#/components/responses/Error' }
   /users/{id}/authorization-groups:
     parameters:
       - $ref: '#/components/parameters/Id'
@@ -1443,26 +1421,6 @@ paths:
         '400': { $ref: '#/components/responses/Error' }
         '404': { $ref: '#/components/responses/Error' }
         '409': { $ref: '#/components/responses/Error' }
-  /authorization-groups/preview:
-    post:
-      operationId: previewAuthorizationGroupCreate
-      parameters:
-        - $ref: '#/components/parameters/IdempotencyKey'
-      summary: Preview authorization-group creation
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: '#/components/schemas/AuthorizationGroupPreview' }
-      responses:
-        '200':
-          description: Creation preview, including effective assignment deltas and missing mTLS bindings
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/AuthorizationChangePreview' }
-        '400': { $ref: '#/components/responses/Error' }
-        '404': { $ref: '#/components/responses/Error' }
-        '409': { $ref: '#/components/responses/Error' }
   /authorization-groups:
     get:
       operationId: listAuthorizationGroups
@@ -1479,7 +1437,7 @@ paths:
       operationId: createAuthorizationGroup
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
-      summary: Create an authorization group from a validated preview
+      summary: Create an authorization group directly
       requestBody:
         required: true
         content:
@@ -1492,31 +1450,6 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/AuthorizationGroupMutationResponse' }
         '400': { $ref: '#/components/responses/Error' }
-        '409': { $ref: '#/components/responses/Error' }
-  /authorization-groups/{group_id}/preview:
-    parameters:
-      - name: group_id
-        in: path
-        required: true
-        schema: { type: string }
-    post:
-      operationId: previewAuthorizationGroupChange
-      parameters:
-        - $ref: '#/components/parameters/IdempotencyKey'
-      summary: Preview an authorization-group update or deletion
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: '#/components/schemas/AuthorizationGroupPreview' }
-      responses:
-        '200':
-          description: Update or deletion preview, including effective assignment deltas and missing mTLS bindings
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/AuthorizationChangePreview' }
-        '400': { $ref: '#/components/responses/Error' }
-        '404': { $ref: '#/components/responses/Error' }
         '409': { $ref: '#/components/responses/Error' }
   /authorization-groups/{group_id}:
     parameters:
@@ -1557,7 +1490,7 @@ paths:
       operationId: deleteAuthorizationGroup
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
-      summary: Delete an authorization group from a validated preview
+      summary: Delete an authorization group directly
       requestBody:
         required: true
         content:
@@ -2635,29 +2568,9 @@ components:
       required: [expected_revision]
       properties:
         expected_revision: { type: integer, minimum: 1 }
-    AuthorizationPair:
-      type: object
-      required: [user_id, node_id]
-      properties:
-        user_id: { type: string, format: uuid }
-        node_id: { type: string, format: uuid }
-    AuthorizationGroupPreview:
-      type: object
-      required: [action]
-      properties:
-        action: { type: string, enum: [create, update, delete] }
-        expected_revision: { type: integer, minimum: 1 }
-        name: { type: string }
-        user_ids:
-          type: array
-          items: { type: string, format: uuid }
-        node_ids:
-          type: array
-          items: { type: string, format: uuid }
-      additionalProperties: false
     AuthorizationGroupCreate:
       type: object
-      required: [name, user_ids, node_ids, preview_token]
+      required: [name, user_ids, node_ids]
       properties:
         name: { type: string }
         user_ids:
@@ -2666,11 +2579,10 @@ components:
         node_ids:
           type: array
           items: { type: string, format: uuid }
-        preview_token: { type: string }
       additionalProperties: false
     AuthorizationGroupUpdate:
       type: object
-      required: [expected_revision, name, user_ids, node_ids, preview_token]
+      required: [expected_revision, name, user_ids, node_ids]
       properties:
         expected_revision: { type: integer, minimum: 1 }
         name: { type: string }
@@ -2680,30 +2592,18 @@ components:
         node_ids:
           type: array
           items: { type: string, format: uuid }
-        preview_token: { type: string }
       additionalProperties: false
     AuthorizationGroupDelete:
       type: object
-      required: [expected_revision, preview_token]
+      required: [expected_revision]
       properties:
         expected_revision: { type: integer, minimum: 1 }
-        preview_token: { type: string }
       additionalProperties: false
-    UserAuthorizationGroupsPreview:
+    UserAuthorizationGroupsUpdate:
       type: object
       required: [expected_revision, group_ids]
       properties:
         expected_revision: { type: integer, minimum: 1 }
-        group_ids:
-          type: array
-          items: { type: string }
-      additionalProperties: false
-    UserAuthorizationGroupsUpdate:
-      type: object
-      required: [expected_revision, preview_token, group_ids]
-      properties:
-        expected_revision: { type: integer, minimum: 1 }
-        preview_token: { type: string }
         group_ids:
           type: array
           items: { type: string }
@@ -2954,16 +2854,6 @@ components:
         node_count: { type: integer, minimum: 0 }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
-    AuthorizationManagedIdentity:
-      type: object
-      required: [user_id, ca_credential_id, ca_versions, issue_now, pending]
-      properties:
-        policy_revision: { type: integer }
-        user_id: { type: string }
-        ca_credential_id: { type: string }
-        ca_versions: { type: array, items: { type: integer } }
-        issue_now: { type: boolean }
-        pending: { type: boolean }
     AuthorizationIdentityResult:
       type: object
       required: [user_id, ca_credential_id, identity_id, issued, pending]
@@ -2976,26 +2866,6 @@ components:
         identity_id: { type: [string, 'null'] }
         issued: { type: boolean }
         pending: { type: boolean }
-    AuthorizationChangePreview:
-      description: "Group updates that change nodes return statistics only; additions, removals and managed_identities are empty. Server-side commit validation uses stored digests and the required issuance plan."
-      type: object
-      required: [action, preview_token, additions_count, removals_count, additions, removals, automatic_issue_count, pending_issue_count, managed_identities]
-      properties:
-        automatic_issue_count: { type: integer, minimum: 0, description: "Immediate shared identities to issue, deduplicated by user and CA identity." }
-        pending_issue_count: { type: integer, minimum: 0, description: Identities deferred until account access is restored. }
-        managed_identities: { type: array, items: { $ref: '#/components/schemas/AuthorizationManagedIdentity' } }
-        action: { type: string, enum: [create, update, delete, update_memberships] }
-        preview_token: { type: string }
-        additions_count: { type: integer, minimum: 0 }
-        removals_count: { type: integer, minimum: 0 }
-        additions_user_count: { type: integer, minimum: 0, description: Number of distinct users gaining access. }
-        removals_user_count: { type: integer, minimum: 0, description: Number of distinct users losing access. }
-        additions:
-          type: array
-          items: { $ref: '#/components/schemas/AuthorizationPair' }
-        removals:
-          type: array
-          items: { $ref: '#/components/schemas/AuthorizationPair' }
     AuthorizationCreatedCredential:
       type: object
       required: [user_id, node_id, hy2_credential]
@@ -3228,8 +3098,10 @@ components:
         updated_at: { type: string, format: date-time }
     UserAuthorizationGroupsMutationResponse:
       type: object
-      required: [user_id, revision, group_ids, assignments, created_credentials, revocation_job_ids]
+      required: [additions_count, removals_count, user_id, revision, group_ids, assignments, created_credentials, revocation_job_ids]
       properties:
+        additions_count: { type: integer, minimum: 0 }
+        removals_count: { type: integer, minimum: 0 }
         managed_identities: { type: array, items: { $ref: '#/components/schemas/AuthorizationIdentityResult' } }
         user_id: { type: string, format: uuid }
         revision: { type: integer }

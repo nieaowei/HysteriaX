@@ -40,31 +40,10 @@ extension ManagementStore {
         try await requireConnectedAPI().get(APIEndpoints.getUser(id: userID))
     }
 
-    func previewAuthorizationGroup(
-        group: AuthorizationGroupSummary?,
-        name: String,
-        userIDs: [String],
-        nodeIDs: [String]
-    ) async throws -> AuthorizationChangePreview {
-        let client = try requireConnectedAPI()
-        let request = AuthorizationGroupPreviewRequest(
-            action: group == nil ? "create" : "update",
-            expectedRevision: group?.revision,
-            name: name,
-            userIds: userIDs,
-            nodeIds: nodeIDs
-        )
-        if let group {
-            return try await client.post(APIEndpoints.previewAuthorizationGroupChange(groupID: group.id), body: request)
-        }
-        return try await client.post(APIEndpoints.previewAuthorizationGroupCreate, body: request)
-    }
-
     func createAuthorizationGroup(
         name: String,
         userIDs: [String],
-        nodeIDs: [String],
-        previewToken: String
+        nodeIDs: [String]
     ) async throws -> AuthorizationGroupMutationResponse {
         let client = try requireConnectedAPI()
         let result: AuthorizationGroupMutationResponse = try await client.post(
@@ -72,11 +51,10 @@ extension ManagementStore {
             body: AuthorizationGroupCreateRequest(
                 name: name,
                 userIds: userIDs,
-                nodeIds: nodeIDs,
-                previewToken: previewToken
+                nodeIds: nodeIDs
             )
         )
-        await refresh()
+        authorizationMutationDidCommit(using: client, group: result.group)
         return result
     }
 
@@ -84,8 +62,7 @@ extension ManagementStore {
         _ group: AuthorizationGroupSummary,
         name: String,
         userIDs: [String],
-        nodeIDs: [String],
-        previewToken: String
+        nodeIDs: [String]
     ) async throws -> AuthorizationGroupMutationResponse {
         let client = try requireConnectedAPI()
         let result: AuthorizationGroupMutationResponse = try await client.put(
@@ -94,60 +71,38 @@ extension ManagementStore {
                 expectedRevision: group.revision,
                 name: name,
                 userIds: userIDs,
-                nodeIds: nodeIDs,
-                previewToken: previewToken
+                nodeIds: nodeIDs
             )
         )
-        await refresh()
+        authorizationMutationDidCommit(using: client, group: result.group)
         return result
-    }
-
-    func previewAuthorizationGroupDeletion(_ group: AuthorizationGroupSummary) async throws -> AuthorizationChangePreview {
-        try await requireConnectedAPI().post(
-            APIEndpoints.previewAuthorizationGroupChange(groupID: group.id),
-            body: AuthorizationGroupPreviewRequest(action: "delete", expectedRevision: group.revision)
-        )
     }
 
     func deleteAuthorizationGroup(
-        _ group: AuthorizationGroupSummary,
-        previewToken: String
+        _ group: AuthorizationGroupSummary
     ) async throws -> AuthorizationGroupMutationResponse {
-        let result: AuthorizationGroupMutationResponse = try await requireConnectedAPI().delete(
+        let client = try requireConnectedAPI()
+        let result: AuthorizationGroupMutationResponse = try await client.delete(
             APIEndpoints.deleteAuthorizationGroup(groupID: group.id),
-            body: AuthorizationGroupDeleteRequest(expectedRevision: group.revision, previewToken: previewToken)
+            body: AuthorizationGroupDeleteRequest(expectedRevision: group.revision)
         )
-        await refresh()
+        authorizationMutationDidCommit(using: client, deletedGroupID: group.id)
         return result
-    }
-
-    func previewUserAuthorizationGroups(
-        _ user: UserSummary,
-        groupIDs: [String]
-    ) async throws -> AuthorizationChangePreview {
-        try await requireConnectedAPI().post(
-            APIEndpoints.previewUserAuthorizationGroups(id: user.id),
-            body: UserAuthorizationGroupsPreviewRequest(
-                expectedRevision: user.revision,
-                groupIds: groupIDs
-            )
-        )
     }
 
     func updateUserAuthorizationGroups(
         _ user: UserSummary,
-        groupIDs: [String],
-        previewToken: String
+        groupIDs: [String]
     ) async throws -> UserAuthorizationGroupsMutationResponse {
-        let result: UserAuthorizationGroupsMutationResponse = try await requireConnectedAPI().put(
+        let client = try requireConnectedAPI()
+        let result: UserAuthorizationGroupsMutationResponse = try await client.put(
             APIEndpoints.updateUserAuthorizationGroups(id: user.id),
             body: UserAuthorizationGroupsUpdateRequest(
                 expectedRevision: user.revision,
-                previewToken: previewToken,
                 groupIds: groupIDs
             )
         )
-        await refresh()
+        authorizationMutationDidCommit(using: client)
         return result
     }
 }

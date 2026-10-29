@@ -2,55 +2,68 @@ use super::node_flow::managed_node;
 use super::*;
 use crate::api::authorization_groups as groups;
 
-async fn preview(state: &AppState, name: &str, users: &[&str], nodes: &[&str]) -> Value {
-    groups::preview_create(
-        State(state.clone()),
-        Json(
-            serde_json::from_value(
-                json!({"action":"create","name":name,"user_ids":users,"node_ids":nodes}),
-            )
-            .unwrap(),
-        ),
-    )
-    .await
-    .unwrap()
-    .0
+async fn prepare(
+    state: &AppState,
+    _name: &str,
+    users: &[&str],
+    nodes: &[&str],
+) -> credentials::authorization::Prepared {
+    let mut tx = crate::read_snapshot::transaction(&state.pool)
+        .await
+        .unwrap();
+    let owned_users: Vec<String> = users.iter().map(|s| s.to_string()).collect();
+    let existing: std::collections::HashSet<(String,String)> = sqlx::query_as("SELECT gu.user_id,gn.node_id FROM authorization_group_users gu JOIN authorization_group_nodes gn ON gn.group_id=gu.group_id WHERE gu.user_id=ANY($1)")
+        .bind(&owned_users).fetch_all(&mut *tx).await.unwrap().into_iter().collect();
+    let additions: Vec<_> = users
+        .iter()
+        .flat_map(|user| {
+            nodes
+                .iter()
+                .map(move |node| (user.to_string(), node.to_string()))
+        })
+        .filter(|pair| !existing.contains(pair))
+        .collect();
+    let plan = credentials::authorization::plan_on(&mut tx, &additions)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    credentials::authorization::prepare_plan(&state.pool, &state.secrets, plan)
+        .await
+        .unwrap()
 }
 async fn commit(
     state: &AppState,
     name: &str,
     users: &[&str],
     nodes: &[&str],
-    preview: &Value,
+    prepared: &credentials::authorization::Prepared,
 ) -> Result<Value, ApiError> {
-    Ok(groups::create(State(state.clone()),Json(serde_json::from_value(json!({"name":name,"user_ids":users,"node_ids":nodes,"preview_token":preview["preview_token"]})).unwrap())).await?.1.0)
+    groups::create_prepared(
+        state,
+        serde_json::from_value(json!({"name":name,"user_ids":users,"node_ids":nodes})).unwrap(),
+        prepared.clone(),
+    )
+    .await
 }
 pub(super) async fn group(state: &AppState, name: &str, users: &[&str], nodes: &[&str]) -> Value {
-    let p = preview(state, name, users, nodes).await;
-    commit(state, name, users, nodes, &p).await.unwrap()
+    groups::create(
+        State(state.clone()),
+        Json(
+            serde_json::from_value(json!({"name":name,"user_ids":users,"node_ids":nodes})).unwrap(),
+        ),
+    )
+    .await
+    .unwrap()
+    .1
+    .0
 }
 async fn remove(state: &AppState, group: &Value) {
     let id = group["group"]["id"].as_str().unwrap();
     let revision = group["group"]["revision"].as_i64().unwrap();
-    let Json(preview) = groups::preview_group(
-        State(state.clone()),
-        Path(id.into()),
-        Json(
-            serde_json::from_value(json!({"action":"delete","expected_revision":revision}))
-                .unwrap(),
-        ),
-    )
-    .await
-    .unwrap();
     let _ = groups::delete(
         State(state.clone()),
         Path(id.into()),
-        Json(
-            serde_json::from_value(
-                json!({"expected_revision":revision,"preview_token":preview["preview_token"]}),
-            )
-            .unwrap(),
-        ),
+        Json(serde_json::from_value(json!({"expected_revision":revision})).unwrap()),
     )
     .await
     .unwrap();
@@ -69,8 +82,7 @@ async fn version_count(state: &AppState) -> i64 {
 }
 
 #[tokio::test]
-async fn two_nodes_one_ca_issue_once_preview_is_read_only_and_permissions_union_controls_archival()
-{
+async fn two_nodes_one_ca_issue_once_preparation_is_read_only_and_union_controls_archival() {
     let state = state().await;
     let ca = generated(&state).await;
     user(&state, "alice", true).await;
@@ -78,10 +90,9 @@ async fn two_nodes_one_ca_issue_once_preview_is_read_only_and_permissions_union_
     let second = managed_node(&state, &ca).await;
     let n1 = first["id"].as_str().unwrap();
     let n2 = second["id"].as_str().unwrap();
-    let p = preview(&state, "Both", &["alice"], &[n1, n2]).await;
-    assert_eq!(p["automatic_issue_count"], 1);
-    assert_eq!(p["pending_issue_count"], 0);
-    assert!(p.get("missing_mtls").is_none());
+    let p = prepare(&state, "Both", &["alice"], &[n1, n2]).await;
+    assert_eq!(p.plan.automatic_issue_count, 1);
+    assert_eq!(p.plan.pending_issue_count, 0);
     assert_eq!(identity_count(&state).await, 0);
     assert_eq!(version_count(&state).await, 0);
     let first_group = commit(&state, "Both", &["alice"], &[n1, n2], &p)
@@ -103,8 +114,8 @@ async fn two_nodes_one_ca_issue_once_preview_is_read_only_and_permissions_union_
         .unwrap()
         .unwrap();
     assert_eq!(a, b);
-    let p = preview(&state, "Overlap", &["alice"], &[n2]).await;
-    assert_eq!(p["automatic_issue_count"], 0);
+    let p = prepare(&state, "Overlap", &["alice"], &[n2]).await;
+    assert_eq!(p.plan.automatic_issue_count, 0);
     let other_group = commit(&state, "Overlap", &["alice"], &[n2], &p)
         .await
         .unwrap();
@@ -150,9 +161,9 @@ async fn inactive_first_grant_is_pending_and_recovers_without_blocking_group_sav
     user(&state, "paused", false).await;
     let node = managed_node(&state, &ca).await;
     let n = node["id"].as_str().unwrap();
-    let p = preview(&state, "Pending", &["paused"], &[n]).await;
-    assert_eq!(p["automatic_issue_count"], 0);
-    assert_eq!(p["pending_issue_count"], 1);
+    let p = prepare(&state, "Pending", &["paused"], &[n]).await;
+    assert_eq!(p.plan.automatic_issue_count, 0);
+    assert_eq!(p.plan.pending_issue_count, 1);
     let result = commit(&state, "Pending", &["paused"], &[n], &p)
         .await
         .unwrap();
@@ -182,9 +193,9 @@ async fn preparing_rotation_signs_two_generations_under_one_stable_shared_identi
     )
     .await
     .unwrap();
-    let p = preview(&state, "During rotation", &["alice"], &[n]).await;
-    assert_eq!(p["automatic_issue_count"], 1);
-    assert_eq!(p["managed_identities"][0]["ca_versions"], json!([1, 2]));
+    let p = prepare(&state, "During rotation", &["alice"], &[n]).await;
+    assert_eq!(p.plan.automatic_issue_count, 1);
+    assert_eq!(p.plan.identities[0].ca_versions, vec![1, 2]);
     let _ = commit(&state, "During rotation", &["alice"], &[n], &p)
         .await
         .unwrap();
@@ -201,14 +212,13 @@ async fn preparing_rotation_signs_two_generations_under_one_stable_shared_identi
 }
 
 #[tokio::test]
-async fn policy_change_invalidates_preview_and_never_commits_prepared_credentials_or_partial_permissions()
- {
+async fn policy_change_rejects_stale_preparation_without_partial_permissions() {
     let state = state().await;
     let ca = generated(&state).await;
     user(&state, "alice", true).await;
     let node = managed_node(&state, &ca).await;
     let n = node["id"].as_str().unwrap();
-    let p = preview(&state, "Guarded", &["alice"], &[n]).await;
+    let p = prepare(&state, "Guarded", &["alice"], &[n]).await;
     let _ = update_policy(
         State(state.clone()),
         actor(),
@@ -241,14 +251,14 @@ async fn policy_change_invalidates_preview_and_never_commits_prepared_credential
 }
 
 #[tokio::test]
-async fn concurrent_previews_do_not_duplicate_current_identity() {
+async fn concurrent_preparations_do_not_duplicate_current_identity() {
     let state = state().await;
     let ca = generated(&state).await;
     user(&state, "alice", true).await;
     let node = managed_node(&state, &ca).await;
     let n = node["id"].as_str().unwrap();
-    let p1 = preview(&state, "First", &["alice"], &[n]).await;
-    let p2 = preview(&state, "Second", &["alice"], &[n]).await;
+    let p1 = prepare(&state, "First", &["alice"], &[n]).await;
+    let p2 = prepare(&state, "Second", &["alice"], &[n]).await;
     let nodes = [n];
     let (a, b) = tokio::join!(
         commit(&state, "First", &["alice"], &nodes, &p1),
@@ -266,18 +276,8 @@ async fn signatures_are_prepared_before_the_authorization_commit() {
     user(&state, "alice", true).await;
     let node = managed_node(&state, &ca).await;
     let n = node["id"].as_str().unwrap();
-    let p = preview(&state, "Outside lock", &["alice"], &[n]).await;
-    let candidate = tokio::time::timeout(
-        std::time::Duration::from_secs(5),
-        credentials::authorization::prepare_preview(
-            &state.pool,
-            &state.secrets,
-            p["preview_token"].as_str().unwrap(),
-        ),
-    )
-    .await
-    .unwrap()
-    .unwrap();
+    let p = prepare(&state, "Outside lock", &["alice"], &[n]).await;
+    let candidate = p;
     assert_eq!(candidate.plan.automatic_issue_count, 1);
     assert_eq!(version_count(&state).await, 0);
 }
@@ -361,8 +361,8 @@ async fn grant_covers_desired_deployed_and_inflight_activation_ca_identities() {
     )
     .await
     .unwrap();
-    let p = preview(&state, "All contexts", &["alice"], &[id]).await;
-    assert_eq!(p["automatic_issue_count"], 3);
+    let p = prepare(&state, "All contexts", &["alice"], &[id]).await;
+    assert_eq!(p.plan.automatic_issue_count, 3);
     let _ = commit(&state, "All contexts", &["alice"], &[id], &p)
         .await
         .unwrap();
@@ -400,16 +400,23 @@ async fn failed_signing_preparation_does_not_commit_any_group_or_permissions() {
     user(&state, "alice", true).await;
     let node = managed_node(&state, &ca).await;
     let id = node["id"].as_str().unwrap();
-    let p = preview(&state, "Atomic", &["alice"], &[id]).await;
     let bad = AppState::new(
         state.pool.clone(),
         SecretBox::from_base64("AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE").unwrap(),
     );
     assert_eq!(
-        commit(&bad, "Atomic", &["alice"], &[id], &p)
-            .await
-            .unwrap_err()
-            .status,
+        groups::create(
+            State(bad.clone()),
+            Json(
+                serde_json::from_value(
+                    json!({"name":"Atomic","user_ids":["alice"],"node_ids":[id]})
+                )
+                .unwrap()
+            )
+        )
+        .await
+        .unwrap_err()
+        .status,
         StatusCode::CONFLICT
     );
     assert_eq!(identity_count(&state).await, 0);
@@ -439,22 +446,21 @@ async fn batch_grant_deduplicates_signatures_across_many_users_and_nodes() {
     }
     let users: Vec<&str> = users.iter().map(String::as_str).collect();
     let nodes: Vec<&str> = nodes.iter().map(String::as_str).collect();
-    let p = preview(&state, "Batch", &users, &nodes).await;
-    assert_eq!(p["additions_count"], 100);
-    assert_eq!(p["automatic_issue_count"], 25);
+    let p = prepare(&state, "Batch", &users, &nodes).await;
+    assert_eq!(p.plan.automatic_issue_count, 25);
     let _ = commit(&state, "Batch", &users, &nodes, &p).await.unwrap();
     assert_eq!(identity_count(&state).await, 25);
     assert_eq!(version_count(&state).await, 25);
 }
 
 #[tokio::test]
-async fn ordinary_ssh_state_updates_do_not_invalidate_permission_preview() {
+async fn ordinary_ssh_state_updates_do_not_invalidate_prepared_grant() {
     let state = state().await;
     let ca = generated(&state).await;
     user(&state, "alice", true).await;
     let node = managed_node(&state, &ca).await;
     let id = node["id"].as_str().unwrap();
-    let p = preview(&state, "Offline grant", &["alice"], &[id]).await;
+    let p = prepare(&state, "Offline grant", &["alice"], &[id]).await;
     sqlx::query("UPDATE nodes SET state='failed',last_seen_at=now() WHERE id=$1")
         .bind(id)
         .execute(&state.pool)
@@ -473,7 +479,7 @@ async fn retried_grant_preserves_one_prepared_managed_identity_and_version() {
     user(&state, "alice", true).await;
     let node = managed_node(&state, &ca).await;
     let n = node["id"].as_str().unwrap();
-    let p = preview(&state, "Retry grant", &["alice"], &[n]).await;
+    let p = prepare(&state, "Retry grant", &["alice"], &[n]).await;
     sqlx::raw_sql("CREATE SEQUENCE managed_grant_attempts; CREATE FUNCTION retry_managed_grant_audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.action='authorization_group.created' AND nextval('managed_grant_attempts')=1 THEN RAISE EXCEPTION 'injected conflict' USING ERRCODE='40001'; END IF; RETURN NEW; END $$; CREATE TRIGGER retry_managed_grant_audit BEFORE INSERT ON audit_records FOR EACH ROW EXECUTE FUNCTION retry_managed_grant_audit();").execute(&state.pool).await.unwrap();
     let result = commit(&state, "Retry grant", &["alice"], &[n], &p)
         .await
@@ -502,5 +508,137 @@ async fn retried_grant_preserves_one_prepared_managed_identity_and_version() {
             .await
             .unwrap(),
         2
+    );
+}
+
+#[tokio::test]
+async fn direct_group_update_issues_and_archives_identity_without_preview() {
+    let state = state().await;
+    let ca = generated(&state).await;
+    user(&state, "alice", true).await;
+    let node = managed_node(&state, &ca).await;
+    let node_id = node["id"].as_str().unwrap();
+    let empty = group(&state, "Direct", &[], &[node_id]).await;
+    let id = empty["group"]["id"].as_str().unwrap();
+    assert_eq!(identity_count(&state).await, 0);
+    for (revision, users, additions, removals) in [(1, vec!["alice"], 1, 0), (2, vec![], 0, 1)] {
+        let Json(receipt) = groups::update(State(state.clone()), Path(id.into()), Json(
+            serde_json::from_value(json!({"expected_revision":revision,"name":"Direct","user_ids":users,"node_ids":[node_id]})).unwrap()
+        )).await.unwrap();
+        assert_eq!(receipt["additions_count"], additions);
+        assert_eq!(receipt["removals_count"], removals);
+        assert_eq!(identity_count(&state).await, 1);
+        assert_eq!(version_count(&state).await, 1);
+        let archived: bool =
+            sqlx::query_scalar("SELECT archived FROM mtls_user_identities WHERE user_id='alice'")
+                .fetch_one(&state.pool)
+                .await
+                .unwrap();
+        assert_eq!(archived, users.is_empty());
+    }
+}
+
+#[tokio::test]
+async fn paged_member_certificates_roll_back_together_and_rejoin_reuses_both_ca_versions() {
+    let state = state().await;
+    let ca = generated(&state).await;
+    let node = managed_node(&state, &ca).await;
+    let node_id = node["id"].as_str().unwrap();
+    let _ = publish(
+        State(state.clone()),
+        actor(),
+        Path(ca.clone()),
+        Json(publish_request(1, "paged-members")),
+    )
+    .await
+    .unwrap();
+    let users: Vec<String> = (0..260).map(|i| format!("member-{i:04}")).collect();
+    sqlx::query("INSERT INTO users(id,name,created_at,updated_at) SELECT id,id,now(),now() FROM unnest($1::text[]) AS u(id)").bind(&users).execute(&state.pool).await.unwrap();
+    let names: Vec<&str> = users.iter().map(String::as_str).collect();
+    let prepared = prepare(&state, "Paged", &names, &[node_id]).await;
+    assert_eq!(prepared.plan.automatic_issue_count, 260);
+    assert_eq!(identity_count(&state).await, 0);
+    sqlx::raw_sql("CREATE SEQUENCE member_batch_attempt; CREATE FUNCTION fail_second_identity_page() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF nextval('member_batch_attempt')=257 THEN RAISE EXCEPTION 'second page failed'; END IF; RETURN NEW; END $$; CREATE TRIGGER fail_second_identity_page BEFORE INSERT ON mtls_user_versions FOR EACH ROW EXECUTE FUNCTION fail_second_identity_page();")
+        .execute(&state.pool).await.unwrap();
+    assert!(
+        commit(&state, "Paged", &names, &[node_id], &prepared)
+            .await
+            .is_err()
+    );
+    assert_eq!(identity_count(&state).await, 0);
+    assert_eq!(version_count(&state).await, 0);
+    let leftovers:i64=sqlx::query_scalar("SELECT (SELECT count(*) FROM authorization_groups)+(SELECT count(*) FROM node_assignments)+(SELECT count(*) FROM credentials WHERE kind='tls_identity' AND owner_user_id=ANY($1))").bind(&users).fetch_one(&state.pool).await.unwrap();
+    assert_eq!(leftovers, 0);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT last_value FROM member_batch_attempt")
+            .fetch_one(&state.pool)
+            .await
+            .unwrap(),
+        257
+    );
+    sqlx::raw_sql("DROP TRIGGER fail_second_identity_page ON mtls_user_versions; CREATE TABLE member_batch_statements(kind text PRIMARY KEY,calls int NOT NULL); CREATE FUNCTION count_member_batch() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN INSERT INTO member_batch_statements VALUES(TG_TABLE_NAME,1) ON CONFLICT(kind) DO UPDATE SET calls=member_batch_statements.calls+1; RETURN NULL; END $$; CREATE TRIGGER count_member_versions AFTER INSERT ON credential_versions FOR EACH STATEMENT EXECUTE FUNCTION count_member_batch();")
+        .execute(&state.pool).await.unwrap();
+    let granted = commit(&state, "Paged", &names, &[node_id], &prepared)
+        .await
+        .unwrap();
+    assert_eq!(granted["additions_count"], 260);
+    assert_eq!(identity_count(&state).await, 260);
+    assert_eq!(version_count(&state).await, 520);
+    let statements: i32 = sqlx::query_scalar(
+        "SELECT calls FROM member_batch_statements WHERE kind='credential_versions'",
+    )
+    .fetch_one(&state.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        statements, 4,
+        "two bounded pages for each of two CA generations"
+    );
+    let materials:Vec<(String,i64,String)>=sqlx::query_as("SELECT v.credential_id,v.version,v.payload_enc FROM credential_versions v JOIN credentials c ON c.id=v.credential_id WHERE c.kind='tls_identity' ORDER BY v.credential_id,v.version").fetch_all(&state.pool).await.unwrap();
+    let ids: Vec<(String, String)> =
+        sqlx::query_as("SELECT user_id,id FROM mtls_user_identities ORDER BY user_id")
+            .fetch_all(&state.pool)
+            .await
+            .unwrap();
+    for result in granted["managed_identities"].as_array().unwrap() {
+        assert!(
+            ids.iter()
+                .any(|(user, id)| result["user_id"] == *user && result["identity_id"] == *id)
+        );
+    }
+    let group_id = granted["group"]["id"].as_str().unwrap();
+    for (revision, members, additions, removals) in
+        [(1, Vec::<&str>::new(), 0, 260), (2, names.clone(), 260, 0)]
+    {
+        let Json(receipt)=groups::update(State(state.clone()),Path(group_id.into()),Json(serde_json::from_value(json!({"expected_revision":revision,"name":"Paged","user_ids":members,"node_ids":[node_id]})).unwrap())).await.unwrap();
+        assert_eq!(receipt["additions_count"], additions);
+        assert_eq!(receipt["removals_count"], removals);
+        assert_eq!(version_count(&state).await, 520);
+        if members.is_empty() {
+            assert_eq!(receipt["revocation_job_ids"].as_array().unwrap().len(), 1);
+        } else {
+            assert!(
+                receipt["managed_identities"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .all(|r| r["issued"] == false && r["pending"] == false)
+            );
+        }
+    }
+    let after:Vec<(String,i64,String)>=sqlx::query_as("SELECT v.credential_id,v.version,v.payload_enc FROM credential_versions v JOIN credentials c ON c.id=v.credential_id WHERE c.kind='tls_identity' ORDER BY v.credential_id,v.version").fetch_all(&state.pool).await.unwrap();
+    assert_eq!(materials, after);
+    let archived: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM mtls_user_identities WHERE archived")
+            .fetch_one(&state.pool)
+            .await
+            .unwrap();
+    assert_eq!(archived, 0);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM kick_requests WHERE state='active'")
+            .fetch_one(&state.pool)
+            .await
+            .unwrap(),
+        0
     );
 }

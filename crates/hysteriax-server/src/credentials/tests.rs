@@ -564,13 +564,35 @@ async fn http_contract_authentication_and_current_token_protection() {
     .await
     .unwrap();
     assert_eq!(actor, "admin-one");
-    let used: bool = sqlx::query_scalar(
-        "SELECT last_used_at IS NOT NULL FROM admin_tokens WHERE id='admin-one'",
-    )
-    .fetch_one(&state.pool)
-    .await
-    .unwrap();
-    assert!(used);
+    // Usage metadata is best-effort background work. Poll through real reads
+    // (which reschedule a skipped/contended update), not a synchronous-write assumption.
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
+    loop {
+        let used: bool = sqlx::query_scalar(
+            "SELECT last_used_at IS NOT NULL FROM admin_tokens WHERE id='admin-one'",
+        )
+        .fetch_one(&state.pool)
+        .await
+        .unwrap();
+        if used {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "successful requests must eventually record usage"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        assert!(
+            client
+                .get(format!("{base}/api/v2/version"))
+                .bearer_auth("first-administrator-token")
+                .send()
+                .await
+                .unwrap()
+                .status()
+                .is_success()
+        );
+    }
     server.abort();
 }
 
