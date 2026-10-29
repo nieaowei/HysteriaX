@@ -2,7 +2,7 @@ use super::*;
 
 pub(super) async fn fixture() -> PgPool {
     let pool = db::test_pool_with_max_connections(8).await;
-    sqlx::query("INSERT INTO nodes(id,name,ssh_host,ssh_port,ssh_username,ssh_auth_type,ssh_secret_enc,public_host,public_port,listen_addr,node_token_hash,node_token_enc,traffic_stats_secret_enc,desired_config_enc,created_at,updated_at) SELECT id,id,'127.0.0.1',22,'root','password','unused','example.test',443,':443',id,'unused','unused','unused',now(),now() FROM unnest(ARRAY['node-a','node-b'])id").execute(&pool).await.unwrap();
+    sqlx::query("WITH fixture_ssh AS (INSERT INTO credentials(id,name,kind,created_at,updated_at) VALUES('fixture-ssh','Fixture SSH','ssh_password',now(),now()) ON CONFLICT DO NOTHING), fixture_ssh_version AS (INSERT INTO credential_versions(credential_id,version,payload_enc,created_at) VALUES('fixture-ssh',1,'unused',now()) ON CONFLICT DO NOTHING) INSERT INTO nodes(id,name,ssh_host,ssh_port,ssh_username,public_host,public_port,listen_addr,node_token_hash,node_token_enc,traffic_stats_secret_enc,desired_config_enc,created_at,updated_at,ssh_credential_id,ssh_credential_version) SELECT id,id,'127.0.0.1',22,'root','example.test',443,':443',id,'unused','unused','unused',now(),now(),'fixture-ssh',1 FROM unnest(ARRAY['node-a','node-b'])id").execute(&pool).await.unwrap();
     pool
 }
 pub(super) async fn enqueue(pool: &PgPool, id: &str, node: Option<&str>, resource: Option<&str>) {

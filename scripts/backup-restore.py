@@ -365,7 +365,7 @@ def _clear_redis_cache(project_root):
 
 def external_columns(project_root, database, table):
     # Table names below are constants; column names are quoted as identifiers
-    # before being reused. Missing modern journals are empty in legacy backups.
+    # before being reused. A supported backup must contain every journal.
     result = compose(project_root, "exec", "-T", "postgres", "psql",
                      "--username", app_role(project_root), "--dbname", database,
                      "--tuples-only", "--no-align", "--set=ON_ERROR_STOP=1",
@@ -373,13 +373,16 @@ def external_columns(project_root, database, table):
                      "FROM pg_attribute a JOIN pg_class c ON c.oid=a.attrelid "
                      "JOIN pg_namespace n ON n.oid=c.relnamespace "
                      "WHERE a.attnum>0 AND NOT a.attisdropped AND n.nspname='public' AND c.relname='" + table + "'")
-    return json.loads(result.stdout)
+    columns = json.loads(result.stdout)
+    if not columns:
+        raise RuntimeError("required external timeline table is missing (" + table + "); automatic restore refused")
+    return columns
 
 
 def external_fingerprint(project_root, database, table, columns, predicate):
     digest, count = hashlib.sha256(), 0
     if not columns:
-        return (count, digest.hexdigest())
+        raise RuntimeError("cannot fingerprint an absent external timeline table: " + table)
     selected = ",".join('"' + column.replace('"', '""') + '"' for column in columns)
     statement = (
         "BEGIN READ ONLY; SET LOCAL statement_timeout='5min'; SET LOCAL work_mem='16MB'; "
@@ -427,13 +430,11 @@ def check_external_timeline(project_root, staging_database):
     for table, predicate in tables.items():
         current = external_columns(project_root, DATABASE_NAME, table)
         restored = external_columns(project_root, staging_database, table)
-        common = sorted(set(current) & set(restored))
-        if current and restored and not common:
-            raise RuntimeError("external timeline schemas are incompatible; automatic restore refused")
-        # If a journal is absent in one schema, still scan every row on the
-        # other side: only an actually empty journal may match its absence.
-        left = external_fingerprint(project_root, DATABASE_NAME, table, common or current, predicate)
-        right = external_fingerprint(project_root, staging_database, table, common or restored, predicate)
+        if not current or set(current) != set(restored):
+            raise RuntimeError("external timeline schemas are incompatible (" + table + "); automatic restore refused")
+        columns = sorted(current)
+        left = external_fingerprint(project_root, DATABASE_NAME, table, columns, predicate)
+        right = external_fingerprint(project_root, staging_database, table, columns, predicate)
         if left != right:
             raise RuntimeError(
                 "external timeline differs from the backup (" + table + "); "

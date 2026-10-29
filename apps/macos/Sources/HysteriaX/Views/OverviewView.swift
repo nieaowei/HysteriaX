@@ -4,27 +4,11 @@ struct OverviewView: View {
     @Bindable var store: ManagementStore
     var navigate: (OverviewDestination) -> Void = { _ in }
 
-    private var nodesNeedingAttention: Int {
-        let failedStates: Set<String> = ["fingerprint_changed", "sync_failed", "rollback_failed", "drift", "unreachable", "delete_failed"]
-        return store.nodes.filter { node in
-            !(node.packageUsage?.alerts.isEmpty ?? true)
-                || node.packageUsage?.restricted == true
-                || (node.package?.quotaBytes != nil && node.packageUsage?.freshness != "fresh")
-                || failedStates.contains(node.state)
-                || node.dataFreshness == "stale"
-                || (node.state == "deployed" && node.dataFreshness == "not_collected")
-                || (node.openGaps ?? 0) > 0
-                || (node.pendingRevocations ?? 0) > 0
-        }.count
-    }
-
     @SceneStorage("overview.tab") private var selectedTab = "summary"
     @State private var quotaScrollRequest: UUID?
     @State private var sceneState = OverviewSceneState()
 
     private var activeTab: String { ["summary", "traffic", "quality"].contains(selectedTab) ? selectedTab : "summary" }
-
-    private var hasMonitoring: Bool { store.supportsOverviewMonitoring || store.overview != nil }
 
     var body: some View {
         @Bindable var quality = sceneState.quality
@@ -83,34 +67,21 @@ struct OverviewView: View {
     @ViewBuilder private func tabContent(_ tab: String) -> some View {
         switch tab {
         case "summary":
-            if hasMonitoring {
-                OverviewMonitoringView(store: store, navigate: navigate, section: .metrics, state: sceneState.summary) {
-                    selectedTab = "traffic"
-                    quotaScrollRequest = UUID()
-                }
-            } else {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 180))], spacing: 16) {
-                    summaryCard(L10n.text("节点"), value: "\(store.clientSummary?.nodeCount ?? store.nodes.count)", symbol: "server.rack")
-                    summaryCard(L10n.text("用户"), value: "\(store.clientSummary?.userTotal ?? store.users.count)", symbol: "person.2")
-                    summaryCard(L10n.text("最近任务中待处理"), value: "\(store.jobs.filter { $0.status == "queued" || $0.status == "running" }.count)", symbol: "hourglass")
-                    summaryCard(L10n.text("需关注节点"), value: "\(nodesNeedingAttention)", symbol: "exclamationmark.triangle")
-                }
-                monitoringUnavailable
+            OverviewMonitoringView(store: store, navigate: navigate, section: .metrics, state: sceneState.summary) {
+                selectedTab = "traffic"
+                quotaScrollRequest = UUID()
             }
             OverviewSummaryLayout {
                 summaryTasksColumn
                 serverMonitoringSection
             }
         case "traffic":
-            if hasMonitoring { OverviewHistoryView(store: store, category: .traffic, isActive: true, state: sceneState.traffic.history) }
-            else { monitoringUnavailable }
+            OverviewHistoryView(store: store, category: .traffic, isActive: true, state: sceneState.traffic.history)
             OverviewMonitoringView(store: store, navigate: navigate, section: .quota).id("overview.quota")
             userSummarySection
         case "quality":
-            if hasMonitoring {
-                OverviewMonitoringView(store: store, navigate: navigate, section: .quality, state: sceneState.quality)
-                OverviewHistoryView(store: store, category: .quality, isActive: true, state: sceneState.quality.history)
-            } else { monitoringUnavailable }
+            OverviewMonitoringView(store: store, navigate: navigate, section: .quality, state: sceneState.quality)
+            OverviewHistoryView(store: store, category: .quality, isActive: true, state: sceneState.quality.history)
         default:
             EmptyView()
         }
@@ -118,14 +89,9 @@ struct OverviewView: View {
 
     private var summaryTasksColumn: some View {
         VStack(alignment: .leading, spacing: 20) {
-            if hasMonitoring { OverviewMonitoringView(store: store, navigate: navigate, section: .issues, state: sceneState.summary) }
+            OverviewMonitoringView(store: store, navigate: navigate, section: .issues, state: sceneState.summary)
             recentJobsSection
         }.frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private var monitoringUnavailable: some View {
-        Text(L10n.text("当前服务不支持高级概览监控，升级后可查看持续探测、在线统计与历史趋势。"))
-            .font(.callout).foregroundStyle(.secondary)
     }
 
     private var recentJobsSection: some View {
@@ -151,15 +117,14 @@ struct OverviewView: View {
     }
 
     private var userSummarySection: some View {
-        let now = Date()
-        let enabled = store.clientSummary?.userEnabled ?? store.users.filter(\.enabled).count
-        let expired = store.clientSummary?.userExpired ?? store.users.filter { DateDisplayText.parse($0.expiresAt).map { $0 <= now } ?? false }.count
-        let expiring = store.clientSummary?.userExpiring ?? store.users.filter { DateDisplayText.parse($0.expiresAt).map { $0 > now && $0 <= now.addingTimeInterval(7 * 86400) } ?? false }.count
-        let depleted = store.clientSummary?.userDepleted ?? store.users.filter { user in user.quotaBytes.map { user.usageBytes >= $0 } ?? false }.count
         return OverviewCard(L10n.text("用户状态"), systemImage: "person.2") {
             VStack(alignment: .leading, spacing: 6) {
-                Text(L10n.text("全部 {0} · 启用 {1} · 停用 {2}", String(describing: (store.clientSummary?.userTotal ?? store.users.count)), String(describing: (enabled)), String(describing: ((store.clientSummary?.userTotal ?? store.users.count) - enabled))))
-                Text(L10n.text("已过期 {0} · 7 天内到期 {1} · 额度耗尽 {2}", String(describing: (expired)), String(describing: (expiring)), String(describing: (depleted)))).foregroundStyle(.secondary)
+                if let summary = store.clientSummary {
+                    Text(L10n.text("全部 {0} · 启用 {1} · 停用 {2}", String(summary.userTotal), String(summary.userEnabled), String(summary.userTotal - summary.userEnabled)))
+                    Text(L10n.text("已过期 {0} · 7 天内到期 {1} · 额度耗尽 {2}", String(summary.userExpired), String(summary.userExpiring), String(summary.userDepleted))).foregroundStyle(.secondary)
+                } else {
+                    Text(L10n.text("尚未读取")).foregroundStyle(.secondary)
+                }
                 Text(L10n.text("到期与额度分类可能重叠；启用状态不代表用户在线。")).font(.caption).foregroundStyle(.secondary)
             }.frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -170,16 +135,4 @@ struct OverviewView: View {
                            isConnected: store.isConnected, isLoading: store.isLoading, error: store.serverMonitoringError)
     }
 
-    private func summaryCard(_ title: String, value: String, symbol: String) -> some View {
-        GroupBox {
-            HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(title).foregroundStyle(.secondary)
-                    Text(value).font(.system(size: 30, weight: .semibold, design: .rounded))
-                }
-                Spacer()
-                Image(systemName: symbol).font(.title2).foregroundStyle(.tint)
-            }.frame(maxWidth: .infinity, minHeight: 60, alignment: .leading)
-        }
-    }
 }

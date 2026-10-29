@@ -4,9 +4,7 @@ pub mod authorization;
 pub mod ca;
 pub mod identities;
 mod identity_maintenance;
-mod legacy_reset;
 pub mod maintenance;
-pub mod migration;
 pub mod node_mtls;
 pub(crate) mod probe;
 mod probe_maintenance;
@@ -236,8 +234,8 @@ pub fn certificate_metadata(pem: &str) -> Result<Value> {
     )
 }
 
-// Migration supplies metadata and immutable filenames independently of the
-// validated import API; keep each persisted field explicit at this boundary.
+// Keep metadata and immutable artifact names explicit at the storage boundary.
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub async fn insert(
     tx: &mut Transaction<'_, Postgres>,
@@ -506,9 +504,6 @@ pub async fn test_node_request(
     state: &crate::state::AppState,
     mut input: Value,
 ) -> crate::api::nodes::CreateNode {
-    migration::migrate(&state.pool, &state.secrets)
-        .await
-        .unwrap();
     let kind = if input["ssh_auth_type"] == "password" {
         "ssh_password"
     } else {

@@ -178,31 +178,13 @@ pub(super) fn render(
         ))
     });
     let mut origins = Vec::new();
-    fn walk(
-        value: &Value,
-        path: &str,
-        platform: &str,
-        overlay: Option<&Overlay>,
-        format: &str,
-        out: &mut Vec<Value>,
-    ) {
+    fn walk(value: &Value, path: &str, format: &str, out: &mut Vec<Value>) {
         if let Some(map) = value.as_object() {
             for (k, v) in map {
-                walk(
-                    v,
-                    &format!("{path}/{}", escape(k)),
-                    platform,
-                    overlay,
-                    format,
-                    out,
-                );
+                walk(v, &format!("{path}/{}", escape(k)), format, out);
             }
         } else {
-            let source = if overlay.is_some_and(|o| o.set.pointer(path).is_some()) {
-                platform
-            } else {
-                "common"
-            };
+            let source = "common";
             let source = if path == "/proxies" {
                 "dynamic".to_owned()
             } else if format == "singbox" && path == "/outbounds" {
@@ -213,19 +195,8 @@ pub(super) fn render(
             out.push(json!({"path":path,"source":source}));
         }
     }
-    walk(
-        &config,
-        "",
-        platform,
-        document.platforms.get(platform),
-        format,
-        &mut origins,
-    );
-    let differences = if document.schema_version == 2 {
-        json!({"omitted_fields":omitted_fields})
-    } else {
-        json!(document.platforms.get(platform))
-    };
+    walk(&config, "", format, &mut origins);
+    let differences = json!({"omitted_fields":omitted_fields});
     Ok(
         json!({"config":config,"diagnostics":diagnostics,"origins":origins,"differences":differences,"node_selection":selections,"filtered_nodes":filtered}),
     )
@@ -238,23 +209,8 @@ pub fn seed(format: &str) -> Document {
         include_str!("../singbox-template.json")
     };
     let mut common = parse(format, source).expect("valid built-in seed");
-    let mut platforms = std::collections::BTreeMap::new();
     let mut injections = Vec::new();
     if format == "mihomo" {
-        let redir = common
-            .as_object_mut()
-            .unwrap()
-            .remove("redir-port")
-            .unwrap();
-        for platform in ["linux", "macos"] {
-            platforms.insert(
-                platform.into(),
-                Overlay {
-                    set: json!({"redir-port":redir}),
-                    remove: vec![],
-                },
-            );
-        }
         let target = common["proxy-groups"][0]["name"]
             .as_str()
             .unwrap()
@@ -270,42 +226,6 @@ pub fn seed(format: &str) -> Document {
             on_empty: EmptyPolicy::Direct,
         });
     } else {
-        let original = common
-            .as_object_mut()
-            .unwrap()
-            .remove("inbounds")
-            .unwrap_or(json!([]));
-        for platform in PLATFORMS {
-            let mut inbounds = original.clone();
-            if let Some(items) = inbounds.as_array_mut() {
-                items.retain(|v| match v["type"].as_str() {
-                    Some("tproxy") => platform == "linux",
-                    Some("redirect") => ["linux", "macos"].contains(&platform),
-                    _ => true,
-                });
-                for inbound in items {
-                    if inbound["type"] == "tun" {
-                        let map = inbound.as_object_mut().unwrap();
-                        if platform != "linux" {
-                            map.remove("auto_redirect");
-                        }
-                        if ["macos", "android", "ios"].contains(&platform) {
-                            map.remove("interface_name");
-                        }
-                        if ["android", "ios"].contains(&platform) {
-                            map.remove("auto_route");
-                        }
-                    }
-                }
-            }
-            platforms.insert(
-                platform.into(),
-                Overlay {
-                    set: json!({"inbounds":inbounds}),
-                    remove: vec![],
-                },
-            );
-        }
         if let Some(groups) = common["outbounds"].as_array_mut() {
             for group in groups {
                 let Some(entries) = group.get_mut("outbounds").and_then(Value::as_array_mut) else {
@@ -344,18 +264,8 @@ pub fn seed(format: &str) -> Document {
         }
     }
     Document {
-        schema_version: 1,
+        schema_version: 2,
         common,
-        platforms,
         injections,
     }
-}
-
-/// New templates use one editable configuration; legacy seeds remain readable.
-pub fn single_seed(format: &str) -> Document {
-    let mut document = seed(format);
-    document.common = document.effective("linux").expect("valid built-in seed");
-    document.platforms.clear();
-    document.schema_version = 2;
-    document
 }

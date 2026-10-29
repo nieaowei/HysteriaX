@@ -30,7 +30,6 @@ final class SubscriptionTemplateStore {
     var document: JSONValue = .object([:]) { didSet { if document != oldValue { documentGeneration = UUID(); invalidatePreview() } } }
     var baseline: JSONValue = .object([:])
     var catalog: JSONValue = .object([:])
-    var layer = "common"
     var source = "" { didSet { if source != oldValue { documentGeneration = UUID(); invalidatePreview() } } }
     var sourceBaseline = ""
     var sourceMode = false
@@ -41,7 +40,6 @@ final class SubscriptionTemplateStore {
     struct PendingDeletion {
         let before: JSONValue
         let after: JSONValue
-        let layer: String
         let presenterPath: [String]
         let names: [String]
         let changes: [String]
@@ -63,16 +61,7 @@ final class SubscriptionTemplateStore {
     }
     var schema: TemplateSchema { TemplateSchema(root: catalog["schema"]) }
     var common: JSONValue { document["common"] }
-    var overlay: JSONValue { document["platforms"][layer]["set"] }
-    var overridePaths: [[String]] {
-        func collect(_ value: JSONValue, _ path: [String]) -> [[String]] {
-            guard let object = value.objectValue, !object.isEmpty else { return [path] }
-            return object.keys.sorted().flatMap { collect(object[$0]!, path + [$0]) }
-        }
-        return (overlay.objectValue ?? [:]).keys.sorted().flatMap { collect(overlay[$0], [$0]) }
-    }
-    var removals: [String] { document["platforms"][layer]["remove"].arrayValue?.compactMap(\.stringValue) ?? [] }
-    var effective: JSONValue { TemplateReferenceIndex.effective(document, platform: layer) }
+    var effective: JSONValue { common }
     nonisolated static func path(_ pointer: String) -> [String] { pointer.dropFirst().components(separatedBy: "/").map { $0.replacingOccurrences(of: "~1", with: "/").replacingOccurrences(of: "~0", with: "~") } }
     nonisolated static func pointer(_ path: [String]) -> String { "/" + path.map { $0.replacingOccurrences(of: "~", with: "~0").replacingOccurrences(of: "/", with: "~1") }.joined(separator: "/") }
     func edit(_ body: (inout JSONValue) -> Void) {
@@ -97,25 +86,14 @@ final class SubscriptionTemplateStore {
         redoStack = checkpoint.redoStack
         error = checkpoint.error
     }
-    func state(_ path: [String]) -> String {
-        if layer == "common" { return common.at(path) == nil ? "inherit" : "set" }
-        let pointer = Self.pointer(path)
-        if removals.contains(where: { pointer == $0 || pointer.hasPrefix($0 + "/") }) { return "remove" }
-        return overlay.at(path) == nil ? "inherit" : "set"
-    }
+    func state(_ path: [String]) -> String { common.at(path) == nil ? "inherit" : "set" }
     func setState(_ state: String, path: [String], schema: JSONValue) {
-        if state == "set" { set(path, effective.at(path) ?? editorValue(schema, path: path)); return }
-        for index in path.indices where effective.at(Array(path.prefix(index)))?.arrayValue != nil {
-            let parent = Array(path.prefix(index)); var array = effective.at(parent) ?? .array([])
+        if state == "set" { set(path, common.at(path) ?? editorValue(schema, path: path)); return }
+        for index in path.indices where common.at(Array(path.prefix(index)))?.arrayValue != nil {
+            let parent = Array(path.prefix(index)); var array = common.at(parent) ?? .array([])
             array.set(Array(path.dropFirst(index)), nil); set(parent, array); return
         }
-        edit { doc in
-            if layer == "common" { doc.set(["common"] + path, nil); return }
-            doc.set(["platforms", layer, "set"] + path, nil)
-            var removes = removals.filter { $0 != Self.pointer(path) }
-            if state == "remove" { removes.append(Self.pointer(path)) }
-            doc.set(["platforms", layer, "remove"], .array(removes.map(JSONValue.string)))
-        }
+        edit { $0.set(["common"] + path, nil) }
     }
     private func portableInitial(_ value: JSONValue, path: [String]) -> JSONValue {
         if let map = value.objectValue {
@@ -141,7 +119,7 @@ final class SubscriptionTemplateStore {
     }
     func restoreDefault(path: [String], definition: JSONValue) {
         if let value = schema.resolve(definition, value: effective.at(path) ?? .null).objectValue?["default"] { set(path, portableInitial(value, path: path)) }
-        else { setState(layer == "common" ? "inherit" : "remove", path: path, schema: definition) }
+        else { setState("inherit", path: path, schema: definition) }
     }
     func set(_ path: [String], _ value: JSONValue) {
         for index in path.indices.dropLast() {
@@ -166,27 +144,11 @@ final class SubscriptionTemplateStore {
                 return
             }
             for old in removed {
-                let next = Self.applyingConfiguration(changed, to: document, layer: layer)
+                let next = Self.applyingConfiguration(changed, to: document)
                 guard permitsDeletion(candidate: next, names: [old.name], kind: old.kind) else { return }
             }
         }
-        // Editing an inherited array creates an explicit complete array override.
-        var actualPath = path
-        var actualValue = value
-        if layer != "common" {
-            for index in path.indices where effective.at(Array(path.prefix(index)))?.arrayValue != nil {
-                actualPath = Array(path.prefix(index)); actualValue = effective.at(actualPath) ?? .array([])
-                actualValue.set(Array(path.dropFirst(index)), value); break
-            }
-        }
-        edit { doc in
-            if layer == "common" { doc.set(["common"] + actualPath, actualValue) }
-            else {
-                doc.set(["platforms", layer, "set"] + actualPath, actualValue)
-                let pointer = Self.pointer(actualPath)
-                doc.set(["platforms", layer, "remove"], .array(removals.filter { $0 != pointer && !$0.hasPrefix(pointer + "/") && !pointer.hasPrefix($0 + "/") }.map(JSONValue.string)))
-            }
-        }
+        edit { $0.set(["common"] + path, value) }
     }
     func supportedPlatforms(_ path: [String], value: JSONValue? = nil) -> [String] {
         var platforms = TemplatePlatform.all
@@ -206,31 +168,16 @@ final class SubscriptionTemplateStore {
         return platforms
     }
     func allowed(_ path: [String], value: JSONValue? = nil) -> Bool {
-        let supported = supportedPlatforms(path, value: value)
-        if document["schema_version"].integerValue == 2 { return !supported.isEmpty }
-        return (layer == "common" ? TemplatePlatform.all : [layer]).allSatisfy { supported.contains($0) }
+        !supportedPlatforms(path, value: value).isEmpty
     }
-    var needsPlatformConversion: Bool {
-        (document["platforms"].objectValue ?? [:]).keys.contains {
-            TemplateReferenceIndex.effective(document, platform: $0) != common
+    static func requireSchema2(_ document: JSONValue) throws {
+        let keys = Set(document.objectValue?.keys.map { $0 } ?? [])
+        guard document["schema_version"].integerValue == 2,
+              document["common"].objectValue != nil,
+              keys.isSubset(of: ["schema_version", "common", "injections", "platforms"]),
+              document.objectValue?["platforms"] == nil || document["platforms"].objectValue?.isEmpty == true else {
+            throw APIClientError.server(L10n.text("此模板文档格式不受支持，仅支持 schema 2。"))
         }
-    }
-    func singleConfiguration(from platform: String) -> JSONValue {
-        var next = document
-        next["common"] = platform == "common" ? common : TemplateReferenceIndex.effective(document, platform: platform)
-        next["platforms"] = .object([:])
-        next["schema_version"] = .integer(2)
-        return next
-    }
-    func convertToSingleConfiguration(from platform: String) {
-        let next = singleConfiguration(from: platform)
-        edit { $0 = next }
-        layer = "common"
-        sourceMode = false
-    }
-    private func prepareSingleConfiguration() {
-        layer = "common"
-        if !needsPlatformConversion { document = singleConfiguration(from: "common") }
     }
     func requireSession(_ api: APIClient) throws {
         if closed || sessionAvailable?(api) == false { throw CancellationError() }
@@ -240,6 +187,7 @@ final class SubscriptionTemplateStore {
         guard sessionAvailable?(api) != false, !closed, let selected else { throw CancellationError() }
         let remote = try await api.get(APIEndpoints.getSubscriptionTemplateDraft(id: selected.id))
         guard sessionAvailable?(api) != false, !closed else { throw CancellationError() }
+        try Self.requireSchema2(.object(remote.document))
         connectedAPI = api
         if remote.template.revision != selected.revision {
             remoteConflict = .object(remote.document); conflictTemplate = remote.template
@@ -260,20 +208,22 @@ final class SubscriptionTemplateStore {
         try requireSession(api)
         let fields = try await api.get(APIEndpoints.subscriptionTemplateFields(format: template.format))
         try requireSession(api)
-        selected = draft.template; document = .object(draft.document); baseline = document; catalog = .object(fields)
-        undoStack = []; redoStack = []; diagnostics = []; preview = [:]; remoteConflict = nil; sourceMode = false; layer = "common"
-        prepareSingleConfiguration()
+        let nextDocument = JSONValue.object(draft.document)
+        try Self.requireSchema2(nextDocument)
+        selected = draft.template; document = nextDocument; baseline = document; catalog = .object(fields)
+        undoStack = []; redoStack = []; diagnostics = []; preview = [:]; remoteConflict = nil; sourceMode = false
         try await loadHistory(api); try await loadList(api)
     }
     func syncSource(_ api: APIClient) async throws {
         try requireSession(api)
         guard let selected else { return }
+        try Self.requireSchema2(document)
         if sourceMode {
-            let buffer = source; let target = layer
+            let buffer = source
             let response = try await api.post(APIEndpoints.subscriptionTemplateSource, body: SubscriptionTemplateSourceRequest(format: selected.format, source: buffer))
             try requireSession(api)
-            guard buffer == source, target == layer else { throw CancellationError() }
-            if let config = response["config"] { edit { doc in doc.set(layer == "common" ? ["common"] : ["platforms", layer, "set"], config) } }
+            guard buffer == source else { throw CancellationError() }
+            if let config = response["config"] { edit { doc in doc.set(["common"], config) } }
         }
     }
     func switchMode(_ api: APIClient) async throws {
@@ -281,10 +231,10 @@ final class SubscriptionTemplateStore {
         guard let selected else { return }
         if sourceMode { try await syncSource(api); sourceMode = false }
         else {
-            let generation = documentGeneration; let target = layer
-            let response = try await api.post(APIEndpoints.subscriptionTemplateSource, body: SubscriptionTemplateSourceRequest(format: selected.format, config: (layer == "common" ? common : overlay).objectValue ?? [:]))
+            let generation = documentGeneration
+            let response = try await api.post(APIEndpoints.subscriptionTemplateSource, body: SubscriptionTemplateSourceRequest(format: selected.format, config: common.objectValue ?? [:]))
             try requireSession(api)
-            guard generation == documentGeneration, target == layer else { throw CancellationError() }
+            guard generation == documentGeneration else { throw CancellationError() }
             source = response["source"]?.stringValue ?? ""; sourceBaseline = source; sourceMode = true
         }
     }
@@ -384,53 +334,35 @@ final class SubscriptionTemplateStore {
         try requireSession(api); pendingImport = imported
     }
     func acceptImport() {
-        if let next = pendingImport?["document"] { edit { $0 = next }; diagnostics = pendingImport?["diagnostics"]?.arrayValue ?? [] }
-        prepareSingleConfiguration()
-        pendingImport = nil; sourceMode = false
+        guard let next = pendingImport?["document"] else { return }
+        do {
+            try Self.requireSchema2(next)
+            edit { $0 = next }; diagnostics = pendingImport?["diagnostics"]?.arrayValue ?? []
+            pendingImport = nil; sourceMode = false
+        } catch { self.error = error.localizedDescription }
     }
     func refactor(_ api: APIClient, kind: String, old: String, new: String) async throws {
         try requireSession(api)
         try await syncSource(api); guard let selected else { return }
         let response = try await api.post(APIEndpoints.refactorSubscriptionTemplate(id: selected.id), body: RefactorSubscriptionTemplateRequest(expectedRevision: selected.revision, document: document.objectValue ?? [:], kind: kind, oldName: old, newName: new))
         try requireSession(api)
-        if let next = response["document"] { edit { $0 = next }; diagnostics = response["diagnostics"]?.arrayValue ?? []; sourceMode = false }
+        if let next = response["document"] { try Self.requireSchema2(next); edit { $0 = next }; diagnostics = response["diagnostics"]?.arrayValue ?? []; sourceMode = false }
     }
     private func candidate(_ action: (SubscriptionTemplateStore) -> Void) -> JSONValue {
-        let editor = SubscriptionTemplateStore(); editor.document = document; editor.layer = layer
+        let editor = SubscriptionTemplateStore(); editor.document = document
         action(editor); return editor.document
     }
-    private static func applyingConfiguration(_ config: JSONValue, to document: JSONValue, layer: String) -> JSONValue {
-        TemplateReferenceIndex.applying(config, to: document, layer: layer)
-    }
-    private var referenceMutationLayers: [String] {
-        layer == "common" ? ["common"] + (document["platforms"].objectValue ?? [:]).keys.sorted().filter { TemplatePlatform.all.contains($0) } : [layer]
+    private static func applyingConfiguration(_ config: JSONValue, to document: JSONValue) -> JSONValue {
+        TemplateReferenceIndex.applying(config, to: document)
     }
     private func renameReference(_ identity: TemplateReferenceIndex.Identity, new: String, index: TemplateReferenceIndex) {
-        let targets = referenceMutationLayers
         guard !new.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, !new.hasPrefix("hx:"),
               !(index.format == "mihomo" && new.contains(",")),
-              !targets.contains(where: { index.exists(new, kind: identity.kind, in: TemplateReferenceIndex.effective(document, platform: $0)) }) else {
+              !index.exists(new, kind: identity.kind, in: common) else {
             error = L10n.text("名称无效、已存在或使用了保留前缀。"); return
         }
-        if layer != "common", identity.kind == "outbound", (document["injections"].arrayValue ?? []).contains(where: { $0["group"] == .string(identity.name) }) {
-            error = L10n.text("请先转换为统一配置，再重命名注入规则引用的对象。"); return
-        }
         var next = document
-        if layer == "common", index.format == "mihomo", ["rule_set", "sub_rule"].contains(identity.kind), let collection = index.collections[identity.kind] {
-            let prefix = Self.pointer(collection + [identity.name]), replacement = Self.pointer(collection + [new])
-            for target in targets where target != "common" {
-                if let removals = next["platforms"][target]["remove"].arrayValue {
-                    next.set(["platforms", target, "remove"], .array(removals.map { item in
-                        guard let path = item.stringValue, path == prefix || path.hasPrefix(prefix + "/") else { return item }
-                        return .string(replacement + path.dropFirst(prefix.count))
-                    }))
-                }
-            }
-        }
-        for target in targets {
-            let config = TemplateReferenceIndex.effective(document, platform: target)
-            next = Self.applyingConfiguration(index.renamed(config, identity: identity, new: new), to: next, layer: target)
-        }
+        next = Self.applyingConfiguration(index.renamed(common, identity: identity, new: new), to: next)
         if identity.kind == "outbound" {
             var injections = next["injections"].arrayValue ?? []
             for i in injections.indices where injections[i]["group"] == .string(identity.name) { injections[i]["group"] = .string(new) }
@@ -442,41 +374,40 @@ final class SubscriptionTemplateStore {
     private func deleteOrPreview(_ candidate: JSONValue, identities: [TemplateReferenceIndex.Identity], presenterPath: [String]) {
         guard !identities.isEmpty else { pendingDeletion = nil; error = nil; edit { $0 = candidate }; return }
         let index = TemplateReferenceIndex(format: selected?.format ?? catalog["format"].stringValue ?? "mihomo", schema: schema)
-        let targets = referenceMutationLayers
         var next = candidate
         var changes: Set<String> = []
         var removed = Set(identities)
-        for target in targets {
-            let config = TemplateReferenceIndex.effective(next, platform: target)
+        do {
+            let config = TemplateReferenceIndex.effective(next)
             let injectedGroups = Set((next["injections"].arrayValue ?? []).compactMap { $0["group"].stringValue })
             let result = index.cascading(config, removing: removed, injectedGroups: injectedGroups)
             removed.formUnion(result.removed)
-            next = Self.applyingConfiguration(result.config, to: next, layer: target)
-            let original = TemplateReferenceIndex.effective(document, platform: target)
+            next = Self.applyingConfiguration(result.config, to: next)
+            let original = TemplateReferenceIndex.effective(document)
             for path in result.paths {
                 let address = TemplateReferenceIndex.originalPath(path, current: config, original: original)
                 let item = original.at(address) ?? .null
                 let name = item["name"].stringValue ?? item["tag"].stringValue
-                changes.insert(target + ":" + Self.pointer(address) + (name.map { " · " + $0 } ?? ""))
+                changes.insert("common:" + Self.pointer(address) + (name.map { " · " + $0 } ?? ""))
             }
         }
         var injections = next["injections"].arrayValue ?? []
         for i in injections.indices.reversed() {
             guard let group = injections[i]["group"].stringValue,
                   removed.contains(.init(kind: "outbound", name: group)),
-                  targets.contains(where: { !index.exists(group, kind: "outbound", in: TemplateReferenceIndex.effective(next, platform: $0)) }) else { continue }
+                  !index.exists(group, kind: "outbound", in: next["common"]) else { continue }
             changes.insert("/injections/\(i)"); injections.remove(at: i)
         }
         if next.objectValue?["injections"] != nil { next["injections"] = .array(injections) }
         error = nil
         if changes.isEmpty { pendingDeletion = nil; edit { $0 = candidate }; return }
-        pendingDeletion = PendingDeletion(before: document, after: next, layer: layer, presenterPath: presenterPath,
+        pendingDeletion = PendingDeletion(before: document, after: next, presenterPath: presenterPath,
             names: identities.map(\.name), changes: changes.sorted())
     }
     func confirmCascadeDeletion() {
         guard let pending = pendingDeletion else { return }
         pendingDeletion = nil
-        guard document == pending.before, layer == pending.layer else { error = L10n.text("配置已变化，请重新发起级联删除。"); return }
+        guard document == pending.before else { error = L10n.text("配置已变化，请重新发起级联删除。"); return }
         error = nil; edit { $0 = pending.after }
     }
     private func permitsDeletion(candidate: JSONValue, names: [String], kind: String?) -> Bool {
@@ -490,7 +421,7 @@ final class SubscriptionTemplateStore {
         let path = parent + [key]
         guard effective.at(path) != nil else { return }
         let kind = parent == ["rule-providers"] ? "rule_set" : (parent == ["sub-rules"] ? "sub_rule" : nil)
-        let operation: (SubscriptionTemplateStore) -> Void = { editor in editor.setState(editor.layer == "common" ? "inherit" : "remove", path: path, schema: .object([:])) }
+        let operation: (SubscriptionTemplateStore) -> Void = { editor in editor.setState("inherit", path: path, schema: .object([:])) }
         guard let kind else { operation(self); return }
         deleteOrPreview(candidate(operation), identities: [.init(kind: kind, name: key)], presenterPath: parent)
     }
@@ -511,6 +442,7 @@ final class SubscriptionTemplateStore {
         guard let selected else { return }
         let historical = try await api.get(APIEndpoints.getSubscriptionTemplateVersion(id: selected.id, version: String(version)))
         try requireSession(api)
+        try Self.requireSchema2(.object(historical.document))
         comparison = .object(historical.document)
     }
     func referenceNames(_ kind: String) -> [String] {
@@ -532,9 +464,6 @@ final class SubscriptionTemplateStore {
     }
     func focus(_ diagnostic: JSONValue, api: APIClient) async throws {
         try await syncSource(api)
-        let target = diagnostic["layer"].stringValue ?? "common"
-        if document["schema_version"].integerValue == 2 { layer = "common" }
-        else if target == "common" || TemplatePlatform.all.contains(target) { layer = target }
         focusedPath = diagnostic["path"].stringValue ?? ""
         sourceMode = false
     }

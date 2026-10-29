@@ -4,26 +4,39 @@ use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 
 pub const PLATFORMS: [&str; 5] = ["linux", "macos", "windows", "android", "ios"];
-#[derive(Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Clone, Serialize)]
 pub struct Document {
     pub schema_version: u32,
     pub common: Value,
     #[serde(default)]
-    pub platforms: BTreeMap<String, Overlay>,
-    #[serde(default)]
     pub injections: Vec<Injection>,
 }
-#[derive(Clone, Default, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Overlay {
-    #[serde(default = "object")]
-    pub set: Value,
-    #[serde(default)]
-    pub remove: Vec<String>,
-}
-fn object() -> Value {
-    json!({})
+impl<'de> Deserialize<'de> for Document {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Input {
+            schema_version: u32,
+            common: Value,
+            #[serde(default)]
+            injections: Vec<Injection>,
+            // Schema 2 previously emitted this empty metadata object. It has no
+            // editing or overlay semantics; nonempty values are always rejected.
+            #[serde(default)]
+            platforms: BTreeMap<String, Value>,
+        }
+        let input = Input::deserialize(deserializer)?;
+        if input.schema_version != 2 || !input.common.is_object() || !input.platforms.is_empty() {
+            return Err(serde::de::Error::custom(
+                "only schema 2 single-configuration templates are supported",
+            ));
+        }
+        Ok(Self {
+            schema_version: 2,
+            common: input.common,
+            injections: input.injections,
+        })
+    }
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -77,79 +90,12 @@ pub fn error(layer: &str, path: &str, message: impl Into<String>) -> Diagnostic 
 pub fn escape(key: &str) -> String {
     key.replace('~', "~0").replace('/', "~1")
 }
-pub fn merge(base: &mut Value, overlay: &Value) {
-    if let (Some(a), Some(b)) = (base.as_object_mut(), overlay.as_object()) {
-        for (key, value) in b {
-            if let Some(previous) = a.get_mut(key) {
-                merge(previous, value);
-            } else {
-                a.insert(key.clone(), value.clone());
-            }
-        }
-    } else {
-        *base = overlay.clone();
-    }
-}
-pub fn remove(config: &mut Value, path: &str) -> Result<(), ApiError> {
-    let (parent, key) = path
-        .rsplit_once('/')
-        .filter(|(_, k)| !k.is_empty())
-        .ok_or_else(|| ApiError::bad_request("removal paths must be non-root JSON pointers"))?;
-    let key = key.replace("~1", "/").replace("~0", "~");
-    if let Some(target) = config.pointer_mut(parent) {
-        let map = target.as_object_mut().ok_or_else(|| {
-            ApiError::bad_request("removal paths cannot address array items or scalar children")
-        })?;
-        map.remove(&key);
-    }
-    Ok(())
-}
 impl Document {
     pub fn shape(&self) -> Result<(), ApiError> {
-        if ![1, 2].contains(&self.schema_version) || !self.common.is_object() {
+        if self.schema_version != 2 || !self.common.is_object() {
             return Err(ApiError::bad_request(
-                "schema_version must be 1 or 2; common must be an object",
+                "template schema_version must be 2; common must be an object",
             ));
-        }
-        if self.schema_version == 2 && !self.platforms.is_empty() {
-            return Err(ApiError::bad_request(
-                "single-configuration templates cannot contain platform overlays",
-            ));
-        }
-        for (platform, overlay) in &self.platforms {
-            if !PLATFORMS.contains(&platform.as_str()) || !overlay.set.is_object() {
-                return Err(ApiError::bad_request(
-                    "invalid platform or platform set is not an object",
-                ));
-            }
-            let mut paths = BTreeSet::new();
-            for path in &overlay.remove {
-                if !path.starts_with('/')
-                    || path.as_bytes().iter().enumerate().any(|(i, b)| {
-                        *b == b'~' && !matches!(path.as_bytes().get(i + 1), Some(b'0' | b'1'))
-                    })
-                    || !paths.insert(path)
-                {
-                    return Err(ApiError::bad_request(
-                        "invalid or duplicate removal pointer",
-                    ));
-                }
-                let mut prefix = String::new();
-                for part in path.trim_start_matches('/').split('/') {
-                    prefix.push('/');
-                    prefix.push_str(part);
-                    if let Some(value) = overlay.set.pointer(&prefix)
-                        && (!value.is_object() || prefix == *path)
-                    {
-                        return Err(ApiError::bad_request(format!(
-                            "set/remove conflict at {path}"
-                        )));
-                    }
-                }
-                let mut copy = self.common.clone();
-                merge(&mut copy, &overlay.set);
-                remove(&mut copy, path)?;
-            }
         }
         Ok(())
     }
@@ -158,28 +104,17 @@ impl Document {
         format: &str,
         platform: &str,
     ) -> Result<(Value, Vec<Value>), ApiError> {
-        let config = self.effective(platform)?;
-        if self.schema_version == 2 {
-            project_configuration(format, &config, platform)
-        } else {
-            Ok((config, vec![]))
-        }
+        project_configuration(format, &self.effective(platform)?, platform)
     }
     pub fn effective(&self, platform: &str) -> Result<Value, ApiError> {
         self.shape()?;
         if !PLATFORMS.contains(&platform) {
             return Err(ApiError::bad_request("select a target platform"));
         }
-        let mut config = self.common.clone();
-        if let Some(overlay) = self.platforms.get(platform) {
-            merge(&mut config, &overlay.set);
-            for path in &overlay.remove {
-                remove(&mut config, path)?;
-            }
-        }
-        Ok(config)
+        Ok(self.common.clone())
     }
 }
+
 pub fn parse(format: &str, source: &str) -> Result<Value, ApiError> {
     let value = match format {
         "mihomo" => super::native_source::yaml(source)?,
@@ -208,37 +143,20 @@ pub fn platform_diagnostics(format: &str, config: &Value, platform: &str) -> Vec
 pub fn validate(format: &str, document: &Document) -> Result<Vec<Diagnostic>, ApiError> {
     document.shape()?;
     let mut diagnostics = Vec::new();
-    if document.schema_version == 2 {
-        diagnostics.extend(super::catalog::validate(format, &document.common, "common"));
-        diagnostics.extend(super::catalog::references(
-            format,
-            &document.common,
-            "common",
-        ));
-        diagnostics.extend(references(
-            format,
-            &document.common,
-            "common",
-            &document.injections,
-            false,
-        ));
-    }
-    // Legacy documents retain their original overlay validation semantics.
+    diagnostics.extend(super::catalog::validate(format, &document.common, "common"));
+    diagnostics.extend(super::catalog::references(
+        format,
+        &document.common,
+        "common",
+    ));
+    diagnostics.extend(references(
+        format,
+        &document.common,
+        "common",
+        &document.injections,
+        false,
+    ));
     for platform in PLATFORMS {
-        if document.schema_version == 1 {
-            diagnostics.extend(
-                platform_diagnostics(format, &document.common, platform)
-                    .into_iter()
-                    .map(|mut d| {
-                        d.message = format!(
-                            "{}: move this field to an appropriate platform overlay",
-                            d.message
-                        );
-                        d.layer = "common".into();
-                        d
-                    }),
-            );
-        }
         let (config, _) = document.configuration(format, platform)?;
         diagnostics.extend(platform_diagnostics(format, &config, platform));
         diagnostics.extend(super::catalog::validate(format, &config, platform));
@@ -550,8 +468,7 @@ pub fn rename(
                 })
         }
     }
-    let layers =
-        std::iter::once(&document.common).chain(document.platforms.values().map(|o| &o.set));
+    let layers = std::iter::once(&document.common);
     let mut exists = false;
     for config in layers {
         exists |= definition_exists(config, format, kind, group_key, name_key, old);
@@ -630,20 +547,6 @@ pub fn rename(
         super::mihomo_rules::rename(&mut document.common, kind, old, new);
     }
     walk(&mut document.common, "", format, kind, old, new);
-    for overlay in document.platforms.values_mut() {
-        if format == "mihomo" {
-            super::mihomo_rules::rename(&mut overlay.set, kind, old, new);
-        }
-        walk(&mut overlay.set, "", format, kind, old, new);
-        if format == "mihomo" && kind == "rule_set" {
-            for path in &mut overlay.remove {
-                let prefix = format!("/rule-providers/{}", escape(old));
-                if *path == prefix || path.starts_with(&(prefix.clone() + "/")) {
-                    *path = format!("/rule-providers/{}{}", escape(new), &path[prefix.len()..]);
-                }
-            }
-        }
-    }
     if kind == "group" {
         for injection in &mut document.injections {
             if injection.group == old {
@@ -716,70 +619,4 @@ pub fn project_configuration(
         }
     }
     Ok((config, moves))
-}
-
-/// Legacy partitioning retained to exercise version 1 compatibility in tests.
-#[cfg(test)]
-pub fn partition_import(format: &str, document: &mut Document) -> Result<Vec<Value>, ApiError> {
-    let mut configs = BTreeMap::new();
-    let mut moves = Vec::new();
-    for platform in PLATFORMS {
-        let (config, omitted) = project_configuration(format, &document.common, platform)?;
-        configs.insert(platform.to_owned(), config);
-        moves.extend(omitted);
-    }
-    fn common(values: &[Option<&Value>]) -> Option<Value> {
-        let first = values.first().copied().flatten()?;
-        if values.iter().all(|v| *v == Some(first)) {
-            return Some(first.clone());
-        }
-        if values.iter().all(|v| v.is_some_and(Value::is_object)) {
-            let mut map = serde_json::Map::new();
-            for key in first.as_object().unwrap().keys() {
-                if let Some(value) = common(
-                    &values
-                        .iter()
-                        .map(|v| v.and_then(|v| v.get(key)))
-                        .collect::<Vec<_>>(),
-                ) {
-                    map.insert(key.clone(), value);
-                }
-            }
-            return Some(Value::Object(map));
-        }
-        None
-    }
-    let portable = common(&configs.values().map(Some).collect::<Vec<_>>()).unwrap_or(json!({}));
-    fn delta(base: &Value, target: &Value) -> Value {
-        if let (Some(base), Some(target)) = (base.as_object(), target.as_object()) {
-            let mut result = serde_json::Map::new();
-            for (key, value) in target {
-                if base.get(key) != Some(value) {
-                    let next = base
-                        .get(key)
-                        .map(|b| delta(b, value))
-                        .unwrap_or_else(|| value.clone());
-                    result.insert(key.clone(), next);
-                }
-            }
-            Value::Object(result)
-        } else {
-            target.clone()
-        }
-    }
-    document.common = portable;
-    for (platform, config) in configs {
-        let set = delta(&document.common, &config);
-        if set.as_object().is_some_and(|o| !o.is_empty()) {
-            document.platforms.insert(
-                platform,
-                Overlay {
-                    set,
-                    remove: vec![],
-                },
-            );
-        }
-    }
-    document.shape()?;
-    Ok(moves)
 }

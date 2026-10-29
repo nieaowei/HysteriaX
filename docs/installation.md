@@ -72,3 +72,9 @@ Use the initial token from `.env` as the Bearer token. In macOS Settings, create
 `HYSTERIAX_TRAFFIC_CAPTURE_ENABLED` defaults to `true`. Set it to `false` and restart the API to pause new remote traffic captures during maintenance; previously captured batches continue billing. All nodes, including newly created nodes, use destructive interval reads (`/traffic?clear=1`). Complete responses are persisted before follow-up instance verification; a lost response or unverified instance is reported as a statistics gap. The collector never replays a destructive read for the same batch.
 
 The baseline creates interval capture defaults and constraints directly. It does not include the removed traffic cutover command, one-time cleanup tools or historical cleanup progress tables. Completed legacy capture modes remain representable in the accounting schema, but no old-database upgrade path is provided.
+
+The current macOS client requires the current protocol-2 function contract
+(client summary, overview monitoring, linked retries, record removal, node
+packages, DNS management and SSH/DNS synchronization). Servers missing those
+functions are rejected before a new connection is saved. Directory reads remain
+paged; unsupported servers no longer trigger whole-directory fallback downloads.

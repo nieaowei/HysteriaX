@@ -126,23 +126,21 @@ class RestoreTimelineTests(unittest.TestCase):
         ):
             backup_restore.check_external_timeline(pathlib.Path("fixture"), "staging")
 
-    def test_new_journal_cannot_hide_behind_absence_in_old_schema(self):
-        with patch.object(backup_restore, "external_columns", side_effect=[["operation_id"], []]), patch.object(
-            backup_restore, "external_fingerprint", side_effect=[(1, "new-send"), (0, "empty")]
-        ) as fingerprint:
-            with self.assertRaisesRegex(RuntimeError, "execution_operations"):
-                backup_restore.check_external_timeline(pathlib.Path("fixture"), "staging")
-            self.assertEqual(fingerprint.call_args_list[0].args[3], ["operation_id"])
-            self.assertEqual(fingerprint.call_args_list[1].args[3], [])
+    def test_missing_or_changed_journal_schema_refuses_before_fingerprinting(self):
+        for left, right in [(["operation_id"], []), ([], []), (["id", "state", "new_epoch"], ["id", "state"])]:
+            with self.subTest(left=left, right=right), patch.object(
+                backup_restore, "external_columns", side_effect=[left, right]
+            ), patch.object(backup_restore, "external_fingerprint") as fingerprint:
+                with self.assertRaisesRegex(RuntimeError, "schemas are incompatible"):
+                    backup_restore.check_external_timeline(pathlib.Path("fixture"), "staging")
+                fingerprint.assert_not_called()
 
-    def test_migration_columns_do_not_invalidate_unchanged_original_evidence(self):
-        def columns(_, database, table):
-            return ["id", "state", "new_epoch"] if database == "hysteriax" else ["state", "id"]
-        with patch.object(backup_restore, "external_columns", side_effect=columns), patch.object(
-            backup_restore, "external_fingerprint", return_value=(1, "original-fields")
-        ) as fingerprint:
-            backup_restore.check_external_timeline(pathlib.Path("fixture"), "staging")
-            self.assertTrue(all(call.args[3] == ["id", "state"] for call in fingerprint.call_args_list))
+    def test_missing_journal_is_rejected_when_inspecting_the_database(self):
+        with patch.object(backup_restore, "compose", return_value=Mock(stdout="[]")), patch.object(
+            backup_restore, "app_role", return_value="test"
+        ):
+            with self.assertRaisesRegex(RuntimeError, "required external timeline table is missing"):
+                backup_restore.external_columns(pathlib.Path("fixture"), "staging", "execution_operations")
 
     def test_failed_audit_does_not_rename_databases_and_resumes_current_after_maintenance(self):
         with tempfile.TemporaryDirectory(prefix="hysteriax-timeline-order-") as folder, ExitStack() as stack:

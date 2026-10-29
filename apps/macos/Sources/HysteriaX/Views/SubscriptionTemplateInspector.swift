@@ -45,7 +45,7 @@ struct SubscriptionTemplateInspector: View {
                     model.run { try await model.render(store.requireConnectedAPI(), user: model.previewUserID, platform: model.previewPlatform, version: model.previewKernelVersion, reveal: model.previewReveal) }
                 }
                 .labelStyle(.iconOnly).help(L10n.text("生成预览"))
-                .disabled(model.busy || model.suspended || model.previewUserID.isEmpty || model.previewPlatform.isEmpty || model.needsPlatformConversion)
+                .disabled(model.busy || model.suspended || model.previewUserID.isEmpty || model.previewPlatform.isEmpty)
                 .accessibilityIdentifier("templates.preview")
                 Button(model.preview["redacted"]?.boolValue == true ? L10n.text("导出脱敏预览…") : L10n.text("导出最终配置…"), systemImage: "square.and.arrow.up") {
                     guard let source = model.preview["source"]?.stringValue else { return }

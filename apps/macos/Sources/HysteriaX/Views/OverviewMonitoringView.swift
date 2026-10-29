@@ -32,7 +32,7 @@ struct OverviewMonitoringView: View {
                 if section == .quality {
                     monitoringNodes(overview)
                 }
-            } else if store.supportsOverviewMonitoring {
+            } else {
                 OverviewCard(L10n.text("监控信息"), systemImage: "network") { Text(store.overviewError ?? L10n.text("正在获取概览监控…")).frame(maxWidth: .infinity, alignment: .leading) }
             }
         }
@@ -166,7 +166,7 @@ struct OverviewMonitoringView: View {
         }.accessibilityIdentifier("overview.issues")
     }
     private var packageRisks: some View {
-        let nodes = (store.clientSummary?.notificationNodes ?? store.nodes).filter { $0.packageUsage?.restricted == true || !($0.packageUsage?.alerts.isEmpty ?? true) }
+        let nodes = (store.clientSummary?.notificationNodes ?? []).filter { $0.packageUsage?.restricted == true || !($0.packageUsage?.alerts.isEmpty ?? true) }
         return OverviewCard(L10n.text("套餐与到期提醒"), systemImage: "calendar") {
             VStack(alignment: .leading, spacing: 16) {
                 if nodes.isEmpty { Text(L10n.text("暂无套餐或到期提醒")).foregroundStyle(.secondary) }

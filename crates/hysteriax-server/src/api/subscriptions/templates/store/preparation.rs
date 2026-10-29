@@ -103,7 +103,7 @@ impl PreparedCreation {
         let name = name(&input.name)?.to_owned();
         let document = input
             .document
-            .unwrap_or_else(|| render::single_seed(&input.format));
+            .unwrap_or_else(|| render::seed(&input.format));
         document.shape()?;
         let id = Uuid::new_v4().to_string();
         let encrypted = state

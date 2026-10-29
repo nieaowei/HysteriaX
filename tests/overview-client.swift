@@ -13,6 +13,7 @@ struct OverviewClientChecks {
         store.nodes = try JSONDecoder().decode([NodeSummary].self, from: Data(contentsOf: URL(fileURLWithPath: fixture + "/nodes.json")))
         store.serverMonitoring = try JSONDecoder().decode(ServerMonitoring.self, from: Data(contentsOf: URL(fileURLWithPath: fixture + "/server-monitoring.json")))
         store.jobs = try JSONDecoder().decode([JobSummary].self, from: Data(contentsOf: URL(fileURLWithPath: fixture + "/jobs.json")))
+        store.clientSummary = try JSONDecoder().decode(ClientSummary.self, from: Data(contentsOf: URL(fileURLWithPath: fixture + "/client-summary.json")))
         store.overview = try JSONDecoder().decode(OverviewResponse.self, from: Data(contentsOf: URL(fileURLWithPath: fixture + "/overview.json")))
         store.overviewMonitoringPage = try JSONDecoder().decode(OverviewNodesPage.self, from: Data(contentsOf: URL(fileURLWithPath: fixture + "/overview-nodes.json")))
         store.overviewMonitoringPageKey = store.listPageKey(["1", "20", ""])
@@ -28,7 +29,6 @@ struct OverviewClientChecks {
         store.cacheOverviewHistory(month, nodeID: nil)
         store.cacheOverviewHistory(month, nodeID: nil, metrics: "traffic")
         store.cacheOverviewHistory(month, nodeID: nil, metrics: "quality")
-        store.supportsOverviewMonitoring = true
         store.lastUpdated = Date()
         precondition(store.cachedOverviewHistory(range: "7d", nodeID: nil, source: "users")?.buckets.count == 7)
         precondition(store.cachedOverviewHistory(range: "7d", nodeID: "other-node", source: "users") == nil)

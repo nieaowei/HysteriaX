@@ -2581,16 +2581,19 @@ components:
       - document
     SubscriptionTemplateDocument:
       type: object
+      additionalProperties: false
       properties:
         schema_version:
           type: integer
-          const: 1
+          const: 2
         common:
           type: object
           additionalProperties: true
         platforms:
           type: object
-          additionalProperties: true
+          additionalProperties: false
+          maxProperties: 0
+          description: Optional empty metadata; platform overlays are not supported.
         injections:
           type: array
           items:
@@ -2599,7 +2602,6 @@ components:
       required:
       - schema_version
       - common
-      - platforms
       - injections
     ClientSummary:
       type: object

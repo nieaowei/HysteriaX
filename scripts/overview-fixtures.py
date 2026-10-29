@@ -57,3 +57,6 @@ for name, value in [("users", users), ("jobs", jobs)]:
 
 server = {"service_version": "0.1.0", "service_uptime_seconds": 86400, "database": "ok", "sampled_at": stamp, "hostname": "management-server", "os": "Debian GNU/Linux 12", "host_uptime_seconds": 259200, "cpu_count": 4, "cpu_usage_percent": 18.5, "memory_used_bytes": 2_000_000_000, "memory_total_bytes": 8_000_000_000, "root_disk_used_bytes": 30_000_000_000, "root_disk_total_bytes": 100_000_000_000}
 (folder / "server-monitoring.json").write_text(json.dumps(server, ensure_ascii=False))
+
+summary = {"node_count":len(nodes),"user_total":len(users),"user_enabled":sum(u["enabled"] for u in users),"user_expired":1,"user_expiring":0,"user_depleted":1,"notification_nodes":nodes,"notification_credentials":[]}
+(folder / "client-summary.json").write_text(json.dumps(summary, ensure_ascii=False))

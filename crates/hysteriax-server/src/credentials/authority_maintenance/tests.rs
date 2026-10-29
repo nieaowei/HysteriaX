@@ -9,9 +9,7 @@ async fn fixture(n: i32) -> AppState {
         db::test_pool_with_max_connections(8).await,
         SecretBox::from_base64("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA").unwrap(),
     );
-    crate::credentials::migration::migrate(&state.pool, &state.secrets)
-        .await
-        .unwrap();
+
     let (_,Json(ca))=managed_mtls::create(State(state.clone()),Extension(AdminActor{id:"test".into()}),Json(serde_json::from_value::<CreateAuthority>(json!({"name":"CA","source":"generated","idempotency_key":"ca-maintenance-fixture"})).unwrap())).await.unwrap();
     let ca = ca["id"].as_str().unwrap();
     if n > 1 {

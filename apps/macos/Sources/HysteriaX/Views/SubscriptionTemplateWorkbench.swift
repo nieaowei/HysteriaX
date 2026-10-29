@@ -25,7 +25,6 @@ struct SubscriptionTemplateWorkbench: View {
     @State private var renaming = false
     @State private var rename = ""
     @State private var confirmingPublish = false
-    @State private var conversionSource = "common"
     var body: some View {
         NavigationSplitView(columnVisibility: .constant(.all)) {
             SubscriptionTemplateSidebar(store: store, model: model)
@@ -82,36 +81,11 @@ struct SubscriptionTemplateWorkbench: View {
                         }
                     }.padding()
                 }
-                if model.needsPlatformConversion {
-                    platformConversion
-                } else {
-                    SubscriptionTemplateModules(store: store, model: model)
-                }
+                SubscriptionTemplateModules(store: store, model: model)
             }.frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             ContentUnavailableView(L10n.text("订阅模板"), systemImage: "doc.text", description: Text(L10n.text("选择模板，或新建独立的全局配置。")))
         }
-    }
-    private var platformConversion: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text(L10n.text("转换为单份配置")).font(.title2)
-            Text(L10n.text("旧模板包含平台覆盖。请选择保留的配置，确认下方差异后转换；保存前可以撤销。"))
-                .foregroundStyle(.secondary)
-            Picker(L10n.text("保留配置"), selection: $conversionSource) {
-                Text(L10n.text("通用配置")).tag("common")
-                ForEach(TemplatePlatform.all.filter { model.document["platforms"][$0].objectValue != nil }, id: \.self) {
-                    Text(TemplatePlatform.title($0)).tag($0)
-                }
-            }
-            ScrollView {
-                Text(SubscriptionTemplateStore.difference(model.document, model.singleConfiguration(from: conversionSource)).pretty)
-                    .font(.system(.caption, design: .monospaced)).textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            Button(L10n.text("采用这份配置")) { model.convertToSingleConfiguration(from: conversionSource) }
-                .buttonStyle(.borderedProminent)
-        }.padding(20)
-        .accessibilityIdentifier("templates.platformConversion")
     }
     @ToolbarContentBuilder private var editorToolbar: some ToolbarContent {
         ToolbarItemGroup(placement: .automatic) {
@@ -119,14 +93,14 @@ struct SubscriptionTemplateWorkbench: View {
                 model.run { try await model.switchMode(store.requireConnectedAPI()) }
             } label: {
                 Label(model.sourceMode ? L10n.text("切换到可视化") : L10n.text("切换到源码"), systemImage: model.sourceMode ? "slider.horizontal.3" : "chevron.left.forwardslash.chevron.right")
-            }.labelStyle(.iconOnly).help(model.sourceMode ? L10n.text("切换到可视化") : L10n.text("切换到源码")).disabled(model.busy || model.needsPlatformConversion).accessibilityIdentifier("templates.sourceMode")
+            }.labelStyle(.iconOnly).help(model.sourceMode ? L10n.text("切换到可视化") : L10n.text("切换到源码")).disabled(model.busy).accessibilityIdentifier("templates.sourceMode")
         }
         ToolbarItemGroup(placement: .primaryAction) {
             Button { model.undo() } label: { Image(systemName: "arrow.uturn.backward") }.help(L10n.text("撤销")).disabled(model.undoStack.isEmpty || model.sourceMode || model.busy).accessibilityIdentifier("templates.undo")
             Button { model.redo() } label: { Image(systemName: "arrow.uturn.forward") }.help(L10n.text("重做")).disabled(model.redoStack.isEmpty || model.sourceMode || model.busy).accessibilityIdentifier("templates.redo")
-            Button(L10n.text("校验"), systemImage: "checkmark.shield") { model.run { try await model.validate(store.requireConnectedAPI()) } }.labelStyle(.iconOnly).help(L10n.text("校验")).disabled(model.suspended || model.busy || model.needsPlatformConversion)
-            Button(L10n.text("保存草稿"), systemImage: "square.and.arrow.down") { model.run { try await model.save(store.requireConnectedAPI()) } }.labelStyle(.iconOnly).help(L10n.text("保存草稿")).keyboardShortcut("s", modifiers: .command).disabled(model.suspended || model.busy || model.needsPlatformConversion).accessibilityIdentifier("templates.save")
-            Button(L10n.text("发布"), systemImage: "paperplane") { model.run { try await model.preparePublish(store.requireConnectedAPI()); confirmingPublish = true } }.labelStyle(.iconOnly).help(L10n.text("发布")).disabled(model.suspended || model.busy || model.needsPlatformConversion).accessibilityIdentifier("templates.publish")
+            Button(L10n.text("校验"), systemImage: "checkmark.shield") { model.run { try await model.validate(store.requireConnectedAPI()) } }.labelStyle(.iconOnly).help(L10n.text("校验")).disabled(model.suspended || model.busy)
+            Button(L10n.text("保存草稿"), systemImage: "square.and.arrow.down") { model.run { try await model.save(store.requireConnectedAPI()) } }.labelStyle(.iconOnly).help(L10n.text("保存草稿")).keyboardShortcut("s", modifiers: .command).disabled(model.suspended || model.busy).accessibilityIdentifier("templates.save")
+            Button(L10n.text("发布"), systemImage: "paperplane") { model.run { try await model.preparePublish(store.requireConnectedAPI()); confirmingPublish = true } }.labelStyle(.iconOnly).help(L10n.text("发布")).disabled(model.suspended || model.busy).accessibilityIdentifier("templates.publish")
             if let selected = model.selected { editorMenu(selected).disabled(model.busy) }
         }
     }

@@ -90,7 +90,6 @@ async fn page_values_on(
             .or_default()
             .insert(format!("node:{}", row.get::<String, _>("node_id")));
     }
-    for row in sqlx::query("SELECT user_id,node_id,mtls_credential_id FROM node_assignments WHERE mtls_credential_id=ANY($1)").bind(managed).fetch_all(&mut *connection).await? { counts.entry(row.get("mtls_credential_id")).or_default().insert(format!("assignment:{}:{}",row.get::<String,_>("user_id"),row.get::<String,_>("node_id"))); }
     for connection in
         sqlx::query("SELECT id,credential_id FROM dns_connections WHERE credential_id=ANY($1)")
             .bind(managed)

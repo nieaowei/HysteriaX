@@ -175,31 +175,24 @@ private final class DelayedTemplatePreview: URLProtocol, @unchecked Sendable {
         ])])) == nil)
         let unified = SubscriptionTemplateStore()
         unified.document = .object([
-            "schema_version": .integer(1),
-            "common": .object(["flag": .bool(true), "unknown": .object(["value": .null])]),
-            "platforms": .object(["windows": .object(["set": .object(["flag": .bool(false), "list": .array([.integer(0)])]), "remove": .array([])])]),
+            "schema_version": .integer(2),
+            "common": .object(["flag": .bool(false), "list": .array([.integer(0)]), "unknown": .object(["value": .null])]),
             "injections": .array([.object(["group": .string("Select")])])
         ])
+        try SubscriptionTemplateStore.requireSchema2(unified.document)
+        do { try SubscriptionTemplateStore.requireSchema2(.object(["schema_version": .integer(1), "common": .object([:])]))
+            preconditionFailure("schema 1 must be rejected")
+        } catch APIClientError.server { }
         unified.catalog = .object(["platform_rules": .array([
             .object(["path": .string("/inbounds/*/type"), "value": .string("tproxy"), "platforms": .array([.string("linux")])]),
             .object(["path": .string("/tun/**/device"), "platforms": .array([.string("linux"), .string("windows")])]),
             .object(["path": .string("/client_owned"), "platforms": .array([])])
         ])])
-        let legacy = unified.document
-        precondition(unified.needsPlatformConversion)
-        precondition(unified.singleConfiguration(from: "windows")["common"]["flag"] == .bool(false))
-        precondition(unified.document == legacy, "Review must not modify the legacy document")
-        unified.convertToSingleConfiguration(from: "windows")
-        precondition(!unified.needsPlatformConversion && unified.document["schema_version"] == .integer(2))
-        precondition(unified.common["unknown"]["value"] == .null && unified.common["list"] == .array([.integer(0)]))
-        precondition(unified.document["injections"] == legacy["injections"])
         precondition(unified.allowed(["inbounds", "0", "type"], value: .string("tproxy")))
         precondition(unified.supportedPlatforms(["inbounds", "0", "type"], value: .string("tproxy")) == ["linux"])
         precondition(unified.supportedPlatforms(["inbounds", "0", "type"], value: .string("mixed")) == TemplatePlatform.all)
         precondition(unified.supportedPlatforms(["tun", "nested", "device"]) == ["linux", "windows"])
         precondition(!unified.allowed(["client_owned"]))
-        unified.undo(); precondition(unified.document == legacy)
-        unified.redo(); precondition(unified.document["schema_version"] == .integer(2))
         let store = SubscriptionTemplateStore()
         let pickerChoices = SubscriptionTemplateStore()
         pickerChoices.document = .object(["schema_version": .integer(2), "common": .object([
@@ -246,20 +239,16 @@ private final class DelayedTemplatePreview: URLProtocol, @unchecked Sendable {
         precondition(resolverEditor.editorValue(defaultResolverDefinition, path: defaultResolverPath)["server"] == .string("dns-default"))
         resolverEditor.set(defaultResolverPath + ["timeout"], .string("3s"))
         precondition(resolverEditor.effective.at(defaultResolverPath) == .object(["server": .string("dns-default"), "timeout": .string("3s")]))
-        store.document = .object(["schema_version":.integer(1),"common":.object(["flag":.bool(true),"list":.array([.object(["n":.integer(1)]),.object(["n":.integer(2)])]),"unknown":.object(["future":.null])]),"platforms":.object([:]),"injections":.array([])])
+        store.document = .object(["schema_version":.integer(2),"common":.object(["flag":.bool(true),"list":.array([.object(["n":.integer(1)]),.object(["n":.integer(2)])]),"unknown":.object(["future":.null])]),"injections":.array([])])
         store.baseline = store.document
-        store.layer = "windows"
-        precondition(store.state(["flag"]) == "inherit")
+        precondition(store.state(["flag"]) == "set")
         store.set(["flag"], .bool(false)); precondition(store.effective["flag"] == .bool(false))
         store.set(["list", "1", "n"], .integer(0))
-        precondition(store.overlay["list"].arrayValue?.count == 2)
-        precondition(store.common["list"].arrayValue?[1]["n"] == .integer(2))
-        store.setState("remove", path: ["flag"], schema: .object(["type":.string("boolean")]))
+        precondition(store.common["list"].arrayValue?[1]["n"] == .integer(0))
+        store.setState("inherit", path: ["flag"], schema: .object(["type":.string("boolean")]))
         precondition(store.effective.objectValue?["flag"] == nil)
-        store.setState("inherit", path: ["flag"], schema: .object([:]))
-        precondition(store.effective["flag"] == .bool(true))
-        store.undo(); precondition(store.effective.objectValue?["flag"] == nil)
-        store.redo(); precondition(store.effective["flag"] == .bool(true))
+        store.undo(); precondition(store.effective["flag"] == .bool(false))
+        store.redo(); precondition(store.effective.objectValue?["flag"] == nil)
         precondition(store.effective["unknown"] == store.common["unknown"])
         let before = store.document
         let encoded = try JSONEncoder().encode(before)
@@ -839,11 +828,11 @@ private final class DelayedTemplatePreview: URLProtocol, @unchecked Sendable {
             if format != "singbox" {
                 precondition(root["x-rule-types"].arrayValue?.count ?? 0 > 30)
                 let allRules = try JSONDecoder().decode(JSONValue.self, from: Data(contentsOf: URL(fileURLWithPath: CommandLine.arguments[1]).appendingPathComponent("platform-capabilities.json")))
-                store.catalog = .object(["schema":root,"platform_rules":allRules["mihomo"]]); store.layer = "common"
+                store.catalog = .object(["schema":root,"platform_rules":allRules["mihomo"]])
                 store.restoreDefault(path: ["ipv6"], definition: root["properties"]["ipv6"])
                 precondition(store.common["ipv6"] == .bool(true))
                 store.restoreDefault(path: ["tun"], definition: root["properties"]["tun"])
-                precondition(store.common["tun"].objectValue?["recvmsgx"] == nil)
+                precondition(store.common["tun"]["recvmsgx"] == .bool(true))
                 precondition(root["properties"]["tun"]["default"]["recvmsgx"] == .bool(true))
             }
             let common = catalog.resolve(root, value: .object([:]))
@@ -858,18 +847,15 @@ private final class DelayedTemplatePreview: URLProtocol, @unchecked Sendable {
         do { try await store.save(switchedAPI); preconditionFailure("a changed service must not receive the previous service's draft") } catch APIClientError.server { }
         precondition(TemplateSessionSpy.requests.withLock { $0 } == 0 && store.document == retainedDocument)
         let deletion = SubscriptionTemplateStore(); deletion.catalog = store.catalog; deletion.selected = store.selected
-        deletion.document = .object(["schema_version":.integer(1),"common":.object(["rule-providers":.object(["A":.object(["type":.string("inline"),"behavior":.string("classical"),"payload":.array([])])]),"rules":.array([.string("RULE-SET,A,DIRECT")])]),"platforms":.object([:]),"injections":.array([])])
+        deletion.document = .object(["schema_version":.integer(2),"common":.object(["rule-providers":.object(["A":.object(["type":.string("inline"),"behavior":.string("classical"),"payload":.array([])])]),"rules":.array([.string("RULE-SET,A,DIRECT")])]),"injections":.array([])])
         let beforeDeletion = deletion.document
         deletion.deleteField(parent: ["rule-providers"], key: "A")
         precondition(deletion.document == beforeDeletion && deletion.pendingDeletion?.changes.contains(where: { $0.contains("/rules/0") }) == true)
         deletion.pendingDeletion = nil
-        deletion.document.set(["platforms","windows","set","rules"], .array([.string("MATCH,DIRECT")]))
-        deletion.layer = "windows"; deletion.deleteField(parent: ["rule-providers"], key: "A")
-        precondition(deletion.effective["rule-providers"].objectValue?["A"] == nil)
-        precondition(deletion.common["rule-providers"].objectValue?["A"] != nil)
-        precondition(deletion.removals.contains("/rule-providers/A"))
-        deletion.layer = "common"
-        deletion.document = .object(["schema_version":.integer(1),"common":.object(["proxy-groups":.array([.object(["name":.string("A"),"type":.string("select"),"proxies":.array([.string("DIRECT")])]),.object(["name":.string("B"),"type":.string("select"),"proxies":.array([.string("A")])])]),"rules":.array([.string("MATCH,B")])]),"platforms":.object([:]),"injections":.array([])])
+        deletion.document.set(["common","rules"], .array([.string("MATCH,DIRECT")]))
+        deletion.deleteField(parent: ["rule-providers"], key: "A")
+        precondition(deletion.common["rule-providers"].objectValue?["A"] == nil)
+        deletion.document = .object(["schema_version":.integer(2),"common":.object(["proxy-groups":.array([.object(["name":.string("A"),"type":.string("select"),"proxies":.array([.string("DIRECT")])]),.object(["name":.string("B"),"type":.string("select"),"proxies":.array([.string("A")])])]),"rules":.array([.string("MATCH,B")])]),"injections":.array([])])
         let beforeGroupDeletion = deletion.document
         deletion.set(["proxy-groups", "0", "name"], .string("Renamed"))
         precondition(deletion.effective["proxy-groups"].arrayValue?[1]["proxies"] == .array([.string("Renamed")]))
@@ -941,14 +927,14 @@ private final class DelayedTemplatePreview: URLProtocol, @unchecked Sendable {
         reconnectingModel.connectedAPI = switchedAPI
         precondition(observedConnection.value.withLock { $0 }, "reconnection must update the window's suspended state")
         print("Workbench identity, session isolation, structured null diff, suspension, and stale preview guards passed.")
-        print("Template overlay semantics, whole-array overrides, undo/redo, unknown fields, and typed catalog coverage passed.")
+        print("Template single-configuration editing, schema 1 rejection, undo/redo, unknown fields, and typed catalog coverage passed.")
     }
     @MainActor private static func verifyCascadeChanges(root: JSONValue, format: String) {
         let store = SubscriptionTemplateStore()
         store.catalog = .object(["schema": root, "format": .string(format)])
         func load(_ json: String) {
             store.document = try! JSONDecoder().decode(JSONValue.self, from: Data(json.utf8))
-            store.layer = "common"; store.undoStack = []; store.redoStack = []; store.pendingDeletion = nil
+            store.undoStack = []; store.redoStack = []; store.pendingDeletion = nil
         }
         if format == "singbox" {
             load(#"{"schema_version":2,"common":{"dns":{"servers":[{"type":"udp","tag":"dns-a","server":"1.1.1.1"},{"type":"udp","tag":"dns-b","server":"resolver.example","domain_resolver":"dns-a"},{"type":"udp","tag":"dns-c","server":"dns-a"}],"rules":[{"type":"logical","mode":"or","rules":[{"domain":"one.example"},{"domain":"two.example"}],"action":"route","server":"dns-a"},{"action":"route","server":"dns-b"},{"action":"route","server":"dns-c"}],"final":"dns-a"},"outbounds":[{"type":"direct","tag":"direct","domain_resolver":{"server":"dns-a"}},{"type":"selector","tag":"select","outbounds":["direct"]}],"route":{"final":"select","rules":[{"action":"route","outbound":"select"},{"action":"reject","domain":"safe.example"}]},"unknown":{"server":"dns-a","password":"dns-a"}},"injections":[]}"#)
@@ -1031,16 +1017,15 @@ private final class DelayedTemplatePreview: URLProtocol, @unchecked Sendable {
             precondition(nested.referenceNames("rule_set") == ["A"])
             precondition(nested.renamingReference("rule_set", old: "A", new: "B").source.contains("RULE-SET,B"))
             precondition(MihomoTemplateRule("DOMAIN-REGEX,^(RULE-SET,A)$,DIRECT").referenceNames("rule_set").isEmpty)
-            load(#"{"schema_version":1,"common":{"proxy-groups":[{"name":"A","type":"select","proxies":["DIRECT"]}],"rules":["MATCH,A"]},"platforms":{"windows":{"set":{"rules":["DOMAIN,win.example,A"]},"remove":[]}},"injections":[]}"#)
+            load(#"{"schema_version":2,"common":{"proxy-groups":[{"name":"A","type":"select","proxies":["DIRECT"]}],"rules":["DOMAIN,win.example,A"]},"injections":[]}"#)
             let old = store.document
             store.set(["proxy-groups", "0", "name"], .string("B"))
-            precondition(TemplateReferenceIndex.effective(store.document, platform: "windows")["rules"] == .array([.string("DOMAIN,win.example,B")]))
-            precondition(store.document["platforms"]["macos"] == .null, "Rename must not materialize unrelated platform overlays")
+            precondition(store.common["rules"] == .array([.string("DOMAIN,win.example,B")]))
             store.undo(); precondition(store.document == old)
             store.deleteItem(path: ["proxy-groups"], index: 0)
-            precondition(store.pendingDeletion?.changes.contains(where: { $0.contains("windows:/rules/0") }) == true)
+            precondition(store.pendingDeletion?.changes.contains(where: { $0.contains("common:/rules/0") }) == true)
             store.confirmCascadeDeletion()
-            precondition(TemplateReferenceIndex.effective(store.document, platform: "windows")["rules"] == .array([]))
+            precondition(TemplateReferenceIndex.effective(store.document)["rules"] == .array([]))
             store.undo(); precondition(store.document == old)
         }
         let oldRules: JSONValue = .object(["route": .object(["rules": .array([

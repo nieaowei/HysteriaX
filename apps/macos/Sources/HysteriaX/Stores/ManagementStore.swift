@@ -32,7 +32,7 @@ final class ManagementStore {
     var serviceAddress = UserDefaults.standard.string(forKey: "serviceAddress") ?? ""
     var requestedSection: String?
     var requestedJobID: String?
-    var supportsDNSManagement = false
+
     var dnsConnections: [DNSConnection] = []
     var dnsZones: [DNSZone] = []
     var dnsRecords: [DNSRecord] = []
@@ -57,8 +57,7 @@ final class ManagementStore {
     var overviewMonitoringPage: OverviewNodesPage?
     var overviewMonitoringPageKey: String?
     var clientSummary: ClientSummary?
-    var supportsClientSummary = false
-    var supportsSSHDNSSync = false
+
     enum Directory: String, Hashable { case nodes, users, credentials }
     private var loadedDirectories: Set<Directory> = []
     private var directoryTasks: [Directory: Task<Void, Never>] = [:]
@@ -66,14 +65,12 @@ final class ManagementStore {
     var overview: OverviewResponse?
     var overviewError: String?
     var overviewHistoryRefreshToken = UUID()
-    var supportsOverviewMonitoring = false
-    var supportsNodeRecordRemoval = false
-    var supportsJobRetryLinks = false
+
     private let nodeNotifications: NodeAlertNotifications?
     private var historyCache: [String: OverviewHistory] = [:]
     private var serviceGeneration = UUID()
     private var overviewRequestGeneration = UUID()
-    var supportsNodePackages = false
+
     var isConnected = false
     var isLoading = false
     var lastUpdated: Date?
@@ -143,7 +140,7 @@ final class ManagementStore {
         let _: APIHealth = try await client.get(APIEndpoints.readinessCheck)
         let version: APIVersion = try await client.get(APIEndpoints.getAPIVersion)
         currentAdminTokenID = version.currentAdminTokenId
-        guard version.apiVersion == "2.0.0" && version.managementProtocol == 2 else { throw APIClientError.incompatibleAPI(version.apiVersion) }
+        try version.requireCurrentManagementAPI()
         let normalizedAddress = url.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         let serviceChanged = normalizedAddress != self.serviceAddress
         let tokenChanged = previousToken != token
@@ -164,7 +161,7 @@ final class ManagementStore {
         loadedDirectories = []
         loadingDirectories = []
         clientSummary = nil
-        supportsClientSummary = version.features?.contains("client_summary") == true
+
         overviewRequestGeneration = UUID()
         authorizationGroupsRequestID = UUID()
         dnsRequestGeneration = UUID()
@@ -172,9 +169,7 @@ final class ManagementStore {
             historyCache = [:]
             overview = nil
             overviewError = nil
-            supportsOverviewMonitoring = false
-            supportsJobRetryLinks = false
-            supportsDNSManagement = false
+
             dnsRequestGeneration = UUID()
             dnsConnections = []
             dnsZones = []
@@ -182,8 +177,7 @@ final class ManagementStore {
             dnsUpdatedAt = nil
             dnsError = nil
             requestedDNSRecordID = nil
-            supportsNodeRecordRemoval = false
-            supportsSSHDNSSync = false
+
             serverMonitoring = nil
             serverMonitoringError = nil
             nodes = []
@@ -286,8 +280,8 @@ final class ManagementStore {
             let version: APIVersion = try await api.get(APIEndpoints.getAPIVersion)
             guard refreshGeneration == serviceGeneration, !Task.isCancelled else { return false }
             currentAdminTokenID = version.currentAdminTokenId
-            guard version.apiVersion == "2.0.0" && version.managementProtocol == 2 else { throw APIClientError.incompatibleAPI(version.apiVersion) }
-            supportsClientSummary = version.features?.contains("client_summary") == true
+            try version.requireCurrentManagementAPI()
+
             let changed=forceDirectories || directoryVersion != version.directoryVersion || !isConnected
             if changed && !forceDirectories { listPageCache.invalidate() }
             if changed {
@@ -298,12 +292,7 @@ final class ManagementStore {
                 directoryVersion=version.directoryVersion
             }
             guard refreshGeneration == serviceGeneration, !Task.isCancelled else { return false }
-            supportsDNSManagement = version.features?.contains("dns_management") == true
-            supportsNodePackages = version.features?.contains("node_packages") == true
-            supportsSSHDNSSync = version.features?.contains("ssh_dns_sync") == true
-            supportsOverviewMonitoring = version.features?.contains("overview_monitoring") == true
-            supportsJobRetryLinks = version.features?.contains("job_retry_links") == true
-            supportsNodeRecordRemoval = version.features?.contains("node_record_removal") == true
+
             isConnected = true
             if changed, !(await refreshAuthorizationGroups()) {
                 guard refreshGeneration == serviceGeneration, !Task.isCancelled else { return false }
@@ -318,8 +307,8 @@ final class ManagementStore {
                 guard refreshGeneration==serviceGeneration,!Task.isCancelled else {return false}
                 serverMonitoring=monitoring.value ?? serverMonitoring; serverMonitoringError=monitoring.error
             }
-            await (nodeNotifications ?? .shared).deliver(nodes: clientSummary?.notificationNodes ?? nodes, service: serviceAddress)
-            await (nodeNotifications ?? .shared).deliver(credentials: clientSummary?.notificationCredentials ?? credentials, service: serviceAddress)
+            await (nodeNotifications ?? .shared).deliver(nodes: clientSummary?.notificationNodes ?? [], service: serviceAddress)
+            await (nodeNotifications ?? .shared).deliver(credentials: clientSummary?.notificationCredentials ?? [], service: serviceAddress)
             guard await refreshOverview(bypassCache: forceDirectories) else {
                 guard refreshGeneration == serviceGeneration, !Task.isCancelled else { return false }
                 errorMessage = overviewError
@@ -344,7 +333,6 @@ final class ManagementStore {
 
     @discardableResult
     func refreshOverview(bypassCache: Bool = false) async -> Bool {
-        guard supportsOverviewMonitoring else { overview = nil; overviewError = nil; return true }
         guard let api else { return false }
         let generation = serviceGeneration
         let request = UUID()
@@ -453,7 +441,7 @@ final class ManagementStore {
 
     func removeNodeRecord(_ node: NodeSummary) async throws {
         let api = try requireConnectedAPI()
-        guard supportsNodeRecordRemoval else { throw APIClientError.server(L10n.text("请先更新管理服务以支持仅移除节点记录。")) }
+
         try await api.deleteNoContent(APIEndpoints.removeNodeRecord(id: node.id, expectedRevision: node.revision))
         await refresh()
     }
@@ -471,7 +459,7 @@ final class ManagementStore {
 
     func retryJob(_ job: JobSummary, on node: NodeSummary) async throws {
         let client = try requireConnectedAPI()
-        guard supportsJobRetryLinks else { throw APIClientError.server(L10n.text("请先更新管理服务以支持关联重试。")) }
+
         let _: JobReceipt = try await client.post(APIEndpoints.retryJob(id: job.id), body: RevisionRequest(expectedRevision: node.revision))
         await refresh()
     }
@@ -772,9 +760,7 @@ final class ManagementStore {
             let _: APIHealth = try await nextAPI.get(APIEndpoints.readinessCheck)
             let version: APIVersion = try await nextAPI.get(APIEndpoints.getAPIVersion)
             currentAdminTokenID = version.currentAdminTokenId
-            guard version.apiVersion == "2.0.0" && version.managementProtocol == 2 else {
-                throw APIClientError.incompatibleAPI(version.apiVersion)
-            }
+            try version.requireCurrentManagementAPI()
             try await synchronizeEvents(using: nextAPI)
         } catch {
             isConnected = false
@@ -826,17 +812,7 @@ final class ManagementStore {
         jobs = snapshot.jobs
         auditRecords = snapshot.auditRecords
         adminTokens = tokens
-        if !supportsClientSummary {
-            // Older servers have no independent counters/notification candidates.
-            // Preserve their complete-data behavior until the server is upgraded.
-            async let oldNodes: [NodeSummary] = client.collectPages(bypassCache: bypassCache) { APIEndpoints.listNodes(page: $0, pageSize: 200) }
-            async let oldUsers: [UserSummary] = client.collectPages(bypassCache: bypassCache) { APIEndpoints.listUsers(page: $0, pageSize: 200) }
-            async let oldCredentials: [CredentialSummary] = client.collectPages(bypassCache: bypassCache) { APIEndpoints.listCredentials(page: $0, pageSize: 200) }
-            let legacy = try await (oldNodes, oldUsers, oldCredentials)
-            guard generation == serviceGeneration, !Task.isCancelled else { throw CancellationError() }
-            nodes = legacy.0; users = legacy.1; credentials = legacy.2
-            loadedDirectories = [.nodes, .users, .credentials]
-        }
+
         try await refreshClientSummary(using: client)
         guard generation == serviceGeneration, !Task.isCancelled else { throw CancellationError() }
         lastUpdated = snapshot.updatedAt
@@ -848,7 +824,6 @@ final class ManagementStore {
     }
 
     private func refreshClientSummary(using client: APIClient) async throws {
-        guard supportsClientSummary else { clientSummary = nil; return }
         let generation = serviceGeneration
         // Preserve the last complete summary and propagate the actual failure.
         let value = try await client.get(APIEndpoints.getClientSummary)
@@ -856,7 +831,7 @@ final class ManagementStore {
         clientSummary = value
     }
 
-    // Full directories are needed only by legacy bulk-selection controls. Deduplicate
+    // Full directories are loaded only for explicit bulk-selection controls. Deduplicate
     // those explicit reads and invalidate them on committed configuration changes.
     func prepareDirectory(_ directory: Directory) async {
         guard !loadedDirectories.contains(directory), let client = try? requireConnectedAPI() else { return }
@@ -934,7 +909,7 @@ final class ManagementStore {
         serverMonitoring = snapshot.serverMonitoring
         clientSummary = snapshot.clientSummary
         overview = snapshot.overview
-        supportsOverviewMonitoring = snapshot.overview != nil
+
         lastUpdated = snapshot.updatedAt
     }
 

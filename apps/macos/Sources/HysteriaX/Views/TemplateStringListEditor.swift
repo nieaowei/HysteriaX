@@ -56,7 +56,6 @@ struct TemplateScalarListEditor: View {
             }
         } else {
             TemplateLineListInput(values: values, identifier: "templates.lines." + SubscriptionTemplateStore.pointer(path), integers: schema["type"].stringValue == "integer")
-            .id(store.layer)
         }
     }
 }

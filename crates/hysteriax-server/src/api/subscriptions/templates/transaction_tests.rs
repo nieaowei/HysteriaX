@@ -114,7 +114,7 @@ async fn every_template_mutation_rolls_back_on_success_audit_failure() {
             Path("default-mihomo".into()),
             Json(Save {
                 expected_revision: 1,
-                document: render::single_seed("mihomo")
+                document: render::seed("mihomo")
             })
         )
         .await

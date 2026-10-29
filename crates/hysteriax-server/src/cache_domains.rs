@@ -456,7 +456,7 @@ mod bucket_tests {
         .await
         .unwrap();
         user(&pool, "member").await;
-        sqlx::query("INSERT INTO nodes(id,name,ssh_host,ssh_port,ssh_username,ssh_auth_type,ssh_secret_enc,public_host,public_port,listen_addr,node_token_hash,node_token_enc,traffic_stats_secret_enc,desired_config_enc,created_at,updated_at) VALUES('node','Node','127.0.0.1',22,'root','private_key','unused','example.test',443,':443','hash','unused','unused','{}',now(),now())").execute(&pool).await.unwrap();
+        sqlx::query("WITH fixture_ssh AS (INSERT INTO credentials(id,name,kind,created_at,updated_at) VALUES('fixture-ssh','Fixture SSH','ssh_password',now(),now()) ON CONFLICT DO NOTHING), fixture_ssh_version AS (INSERT INTO credential_versions(credential_id,version,payload_enc,created_at) VALUES('fixture-ssh',1,'unused',now()) ON CONFLICT DO NOTHING) INSERT INTO nodes(id,name,ssh_host,ssh_port,ssh_username,public_host,public_port,listen_addr,node_token_hash,node_token_enc,traffic_stats_secret_enc,desired_config_enc,created_at,updated_at,ssh_credential_id,ssh_credential_version) VALUES ('node','Node','127.0.0.1',22,'root','example.test',443,':443','hash','unused','unused','{}',now(),now(),'fixture-ssh',1)").execute(&pool).await.unwrap();
         sqlx::query("INSERT INTO jobs(id,kind,node_id,payload_json,status,stage,available_at,created_at,updated_at) VALUES('progress','kick','node','{\"scope\":\"node\"}','queued','queued',now(),now(),now())").execute(&pool).await.unwrap();
         let before_upgrade:i64=sqlx::query_scalar("SELECT (SELECT count(*) FROM users)+(SELECT count(*) FROM nodes)+(SELECT count(*) FROM jobs)").fetch_one(&pool).await.unwrap();
         sqlx::raw_sql(include_str!(

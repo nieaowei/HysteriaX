@@ -29,7 +29,7 @@ private struct WorkbenchFixture: Decodable {
         catch APIClientError.server { }
         precondition(model.sourceMode && model.source == "mixed-port: [")
         model.source = validSource; try await model.switchMode(api)
-        precondition(model.document["schema_version"] == .integer(2) && !model.needsPlatformConversion)
+        precondition(model.document["schema_version"] == .integer(2))
         model.set(["mixed-port"], .integer(0))
         try await model.save(api)
         model.previewUserID = fixture.userId; model.previewPlatform = "windows"

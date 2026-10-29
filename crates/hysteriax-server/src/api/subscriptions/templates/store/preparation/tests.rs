@@ -74,7 +74,7 @@ async fn publication_preparation_does_not_wait_for_a_writer_and_checks_the_exact
     .expect("validation must not acquire the template write lock")
     .unwrap();
     blocker.rollback().await.unwrap();
-    let mut document = render::single_seed("mihomo");
+    let mut document = render::seed("mihomo");
     document.common["allow-lan"] = json!(true);
     let ciphertext = state
         .secrets

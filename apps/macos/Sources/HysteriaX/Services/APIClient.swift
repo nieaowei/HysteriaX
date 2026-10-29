@@ -20,6 +20,18 @@ enum APIClientError: LocalizedError {
     }
 }
 
+extension APIVersion {
+    func requireCurrentManagementAPI() throws {
+        guard apiVersion == "2.0.0", managementProtocol == 2 else {
+            throw APIClientError.incompatibleAPI(apiVersion)
+        }
+        let required: Set<String> = ["client_summary", "ssh_dns_sync", "overview_monitoring", "node_record_removal", "job_retry_links", "node_packages", "dns_management"]
+        guard required.isSubset(of: Set(features ?? [])) else {
+            throw APIClientError.server(L10n.text("管理服务版本过旧，请更新服务端后重试。"))
+        }
+    }
+}
+
 protocol APIPage: Decodable, Sendable {
     associatedtype Item: Sendable
     var items: [Item] { get }

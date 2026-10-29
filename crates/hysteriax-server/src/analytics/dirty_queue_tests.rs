@@ -8,7 +8,7 @@ async fn fixture() -> PgPool {
         .execute(&pool)
         .await
         .unwrap();
-    sqlx::query("INSERT INTO nodes(id,name,ssh_host,ssh_port,ssh_username,ssh_auth_type,ssh_secret_enc,public_host,public_port,listen_addr,node_token_hash,node_token_enc,traffic_stats_secret_enc,desired_config_enc,created_at,updated_at) SELECT 'n'||i,'Node '||i,'127.0.0.1',22,'root','private_key','unused','example.test',443,':443','hash'||i,'unused','unused','{}',now(),now() FROM generate_series(1,2)i").execute(&pool).await.unwrap();
+    sqlx::query("WITH fixture_ssh AS (INSERT INTO credentials(id,name,kind,created_at,updated_at) VALUES('fixture-ssh','Fixture SSH','ssh_password',now(),now()) ON CONFLICT DO NOTHING), fixture_ssh_version AS (INSERT INTO credential_versions(credential_id,version,payload_enc,created_at) VALUES('fixture-ssh',1,'unused',now()) ON CONFLICT DO NOTHING) INSERT INTO nodes(id,name,ssh_host,ssh_port,ssh_username,public_host,public_port,listen_addr,node_token_hash,node_token_enc,traffic_stats_secret_enc,desired_config_enc,created_at,updated_at,ssh_credential_id,ssh_credential_version) SELECT 'n'||i,'Node '||i,'127.0.0.1',22,'root','example.test',443,':443','hash'||i,'unused','unused','{}',now(),now(),'fixture-ssh',1 FROM generate_series(1,2)i").execute(&pool).await.unwrap();
     pool
 }
 async fn cycle(pool: &PgPool, id: uuid::Uuid, at: DateTime<Utc>, connections: i64) {

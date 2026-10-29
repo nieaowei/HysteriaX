@@ -27,7 +27,7 @@ struct DNSRecordsView: View {
     private var sortField: String { sortOrder.first?.keyPath == \DNSRecord.content ? "content" : "name" }
     private var sortDirection: String { sortOrder.first?.order == .reverse ? "desc" : "asc" }
     private var pageKey: String { store.listPageKey([String(page), String(pageSize), connectionID, zoneID, query, sortField, sortDirection]) }
-    private var pageRequestKey: String { "\(pageKey)|\(store.isConnected)|\(store.supportsDNSManagement)|\(store.dnsUpdatedAt?.timeIntervalSince1970 ?? 0)|\(retryPageToken)" }
+    private var pageRequestKey: String { "\(pageKey)|\(store.isConnected)|\(store.dnsUpdatedAt?.timeIntervalSince1970 ?? 0)|\(retryPageToken)" }
     private var currentPageResponse: DNSRecordsPage? { store.cachedListPage(pageKey, as: DNSRecordsPage.self) ?? (loadedPageKey == pageKey ? pageResponse : nil) }
     private var totalRecords: Int { store.isConnected ? (currentPageResponse?.total ?? 0) : snapshotRecords.count }
     private var pageCount: Int { max(1, (totalRecords + pageSize - 1) / pageSize) }
@@ -53,9 +53,7 @@ struct DNSRecordsView: View {
     }
 
     var body: some View {
-        if !store.supportsDNSManagement, store.isConnected {
-            ContentUnavailableView(L10n.text("需要升级管理服务"), systemImage: "network", description: Text(L10n.text("此服务尚不支持 DNS 记录管理。")))
-        } else {
+
             VStack(spacing: 0) {
                 MainVerticalSplitView(hasDetail: selected != nil) {
                     VStack(spacing: 0) {
@@ -111,7 +109,7 @@ struct DNSRecordsView: View {
                 loadedPageKey = nil
             }
             .onChange(of: store.requestedDNSRecordID) { _, _ in openRequestedRecord() }
-        }
+
     }
     private var recordsTable: some View {
         // Let the native table resize columns without rebuilding rows and sorting on every size change.
@@ -211,7 +209,7 @@ struct DNSRecordsView: View {
 
     private func loadPage() async {
         let requestKey = pageRequestKey
-        guard store.isConnected, store.supportsDNSManagement else { isLoadingPage = false; pageError = nil; return }
+        guard store.isConnected else { isLoadingPage = false; pageError = nil; return }
         isLoadingPage = true
         pageError = nil
         defer { if requestKey == pageRequestKey { isLoadingPage = false } }

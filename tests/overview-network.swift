@@ -60,8 +60,11 @@ final class OverviewTransport: URLProtocol, @unchecked Sendable {
             if path.hasSuffix("version") {
                 versionRequests += 1
                 if mode == "version-failure" { return (503, Data()) }
-                let features = mode == "legacy" ? "[]" : "[\"overview_monitoring\",\"job_retry_links\",\"node_record_removal\",\"client_summary\"]"
+                let features = mode == "legacy" ? "[]" : "[\"client_summary\",\"ssh_dns_sync\",\"overview_monitoring\",\"node_record_removal\",\"job_retry_links\",\"node_packages\",\"dns_management\"]"
                 return (200, Data("{\"api_version\":\"2.0.0\",\"management_protocol\":2,\"current_admin_token_id\":\"fixture-admin\",\"directory_version\":\"b3:test\",\"service_version\":\"test\",\"hysteria_version\":\"test\",\"mihomo_version\":\"test\",\"features\":\(features)}".utf8))
+            }
+            if path == "/api/v2/authorization-groups" {
+                return (200, Data(#"{"items":[],"total":0,"page":1,"page_size":50}"#.utf8))
             }
             if path == "/api/v2/client/summary" {
                 let fixture = try! JSONSerialization.jsonObject(with: nodes) as! [[String: Any]]
@@ -190,11 +193,10 @@ struct OverviewNetworkChecks {
             UserDefaults.standard.removeObject(forKey: "overviewHistory.\(store.serviceAddress)")
         }
         await store.refresh()
-        precondition(store.isConnected && store.supportsOverviewMonitoring && store.overview?.nodeCount == 1)
+        precondition(store.isConnected && store.overview?.nodeCount == 1, store.errorMessage ?? "overview unavailable")
         precondition(store.nodes.count == 50 && Set(store.nodes.map(\.id)).count == 50, "bootstrap must load only the first page")
         precondition(store.clientSummary?.nodeCount == 235 && store.clientSummary?.userTotal == 400)
         precondition(OverviewTransport.responses.recordedDirectoryCount() == 0, "bootstrap must not traverse directories")
-        precondition(store.supportsJobRetryLinks && store.supportsNodeRecordRemoval)
         // A committed creation must return its one-time token even while the
         // following refresh is blocked on the network.
         OverviewTransport.responses.setHoldVersions(true)
@@ -395,15 +397,16 @@ struct OverviewNetworkChecks {
         UserDefaults.standard.removeObject(forKey: "overviewHistory.\(store.serviceAddress)")
         store.serviceAddress = "https://overview-network-fixture.invalid"
         UserDefaults.standard.removeObject(forKey: "serviceAddress")
+        let directoryReads = OverviewTransport.responses.recordedDirectoryCount()
         OverviewTransport.responses.setMode("legacy")
         await store.refresh()
-        precondition(store.isConnected && !store.supportsOverviewMonitoring && !store.supportsJobRetryLinks && store.overview == nil)
-        precondition(store.nodes.count == 235, "legacy servers must retain complete-directory behavior until upgraded")
-        precondition(!store.supportsNodeRecordRemoval)
+        precondition(!store.isConnected, "outdated services must be rejected instead of loading complete directories")
+        precondition(store.errorMessage == L10n.text("管理服务版本过旧，请更新服务端后重试。"))
+        precondition(OverviewTransport.responses.recordedDirectoryCount() == directoryReads, "outdated service must not trigger full directory reads")
         let removalCount = OverviewTransport.responses.recordedRemovals().count
-        do { try await store.removeNodeRecord(store.nodes[0]); preconditionFailure("Legacy service must not receive a record-removal request") } catch {}
+        do { try await store.removeNodeRecord(store.nodes[0]); preconditionFailure("Disconnected service must not receive a record removal") } catch {}
         precondition(OverviewTransport.responses.recordedRemovals().count == removalCount)
-        do { try await store.retryJob(store.jobs[0], on: store.nodes[0]); preconditionFailure("Legacy service should require an update for linked retry") } catch {}
-        print("Advanced/legacy services, isolated failure, cached history, cancellation and service-switch checks passed")
+        do { try await store.retryJob(store.jobs[0], on: store.nodes[0]); preconditionFailure("Disconnected service must not receive a retry") } catch {}
+        print("Current/outdated services, isolated failure, cached history, cancellation and service-switch checks passed")
     }
 }

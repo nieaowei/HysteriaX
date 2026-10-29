@@ -6,7 +6,7 @@ struct NodeNotificationsButton: View {
     @State private var isPresented = false
 
     private var notificationNodes: [NodeSummary] {
-        (store.clientSummary?.notificationNodes ?? store.nodes).filter {
+        (store.clientSummary?.notificationNodes ?? []).filter {
             !($0.packageUsage?.alerts.isEmpty ?? true) || $0.packageUsage?.restricted == true
         }.sorted {
             if $0.packageUsage?.restricted != $1.packageUsage?.restricted {

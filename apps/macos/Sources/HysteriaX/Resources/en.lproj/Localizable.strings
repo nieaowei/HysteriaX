@@ -327,7 +327,6 @@
 "剩余 {0}" = "Remaining {0}";
 "剩余 {0} 天" = "{0} days remaining";
 "加载代理配置…" = "Loading proxy configuration…";
-"升级管理服务后可设置有效期和流量套餐。" = "Upgrade the management service to configure expiry and traffic plans.";
 "协议嗅探" = "Protocol sniffing";
 "即将到期" = "Expiring soon";
 "卸载" = "Uninstall";
@@ -508,7 +507,6 @@
 "当前凭据（不可用）" = "Current credential (unavailable)";
 "当前地址未连接" = "Not connected to this address";
 "当前有效订阅地址已复制；现有令牌没有轮换。" = "Current subscription URL copied; the token was not rotated.";
-"当前服务不支持高级概览监控，升级后可查看持续探测、在线统计与历史趋势。" = "This service does not support advanced overview monitoring. Upgrade for continuous probes, online statistics and historical trends.";
 "当前没有{0}。" = "No {0} currently.";
 "当前远端文件" = "Current remote file";
 "当前阶段" = "Current stage";
@@ -661,7 +659,6 @@
 "最新" = "Fresh";
 "最新版本" = "Latest version";
 "最近任务" = "Recent tasks";
-"最近任务中待处理" = "Pending in recent tasks";
 "最近使用" = "Last used";
 "最近探测：{0}" = "Last probe: {0}";
 "最近更新" = "Last updated";
@@ -753,7 +750,6 @@
 "正在连接节点并验证已保存的 SSH 主机指纹。" = "Connecting to the node and verifying its saved SSH host fingerprint.";
 "此任务为关联重试，成功后会移除原失败提醒。" = "This task is a linked retry. Success clears the original failure alert.";
 "此任务没有可确认的 SSH 指纹变更。" = "This task has no SSH fingerprint change to confirm.";
-"此服务尚不支持 DNS 记录管理。" = "This service does not support DNS record management yet.";
 "此服务端尚未提供多格式订阅，请先升级服务端。" = "Upgrade the server to support multiple subscription formats.";
 "此用户尚未生成订阅地址，请先生成订阅。" = "Generate a subscription URL for this user first.";
 "此用户尚未生成订阅地址，请先生成订阅再导出。" = "Generate a subscription URL for this user before exporting.";
@@ -885,7 +881,6 @@
 "管理服务设置" = "Management service settings";
 "管理服务返回 HTTP {0}。" = "Management service returned HTTP {0}.";
 "管理服务返回了无法识别的响应。" = "The management service returned an unrecognized response.";
-"管理服务需更新后才能关联重试" = "Update the management service to support linked retries";
 "管理此节点" = "Manage this node";
 "管理用户" = "Manage user";
 "管理记录已移除" = "Management record removed";
@@ -1020,8 +1015,6 @@
 "该凭据尚未被节点或配置使用。" = "This credential is not used by any node or configuration yet.";
 "语言" = "Language";
 "请先升级管理服务以使用套餐功能。" = "Upgrade the management service to use plans.";
-"请先更新管理服务以支持仅移除节点记录。" = "Update the management service to support removing node records only.";
-"请先更新管理服务以支持关联重试。" = "Update the management service to support linked retries.";
 "请先确认 SSH 主机指纹再{0}：{1}" = "Confirm the SSH host fingerprint before you {0}: {1}";
 "请先确认节点 SSH 主机指纹再应用凭据" = "Confirm the node's SSH host fingerprint before applying credentials";
 "请同时选择客户端证书和私钥。" = "Select both a client certificate and private key.";
@@ -1156,12 +1149,10 @@
 "限制已解除，跳过断开" = "Restriction lifted; disconnect skipped";
 "限制节点代理" = "Restrict node proxy";
 "集中管理凭据、引用、到期时间和更新结果。" = "Manage credentials, references, expiry and update results centrally.";
-"需关注节点" = "Nodes needing attention";
 "需处理事项" = "Issues needing attention";
 "需处理节点" = "Nodes needing attention";
 "需要 Cloudflare DNS 凭据" = "Cloudflare DNS credential required";
 "需要人工处理" = "Manual action required";
-"需要升级管理服务" = "Management service update required";
 "静态文件目录" = "Static file directory";
 "非默认接收窗口至少 16 KiB，初始窗口不能大于最大窗口；并发流至少 8，空闲超时须为 4 到 120 秒。" = "Nondefault receive windows must be at least 16 KiB. Initial windows cannot exceed maximum windows; concurrent streams must be at least 8, and idle timeout must be 4–120 seconds.";
 "额外 HTTP 监听地址" = "Additional HTTP listen address";
@@ -1942,8 +1933,6 @@
 "没有匹配的订阅模板" = "No Matching Subscription Templates";
 "连接服务后可查看订阅模板。" = "Connect to the service to view subscription templates.";
 "共 {0} 个模板 · 第 {1} / {2} 页" = "{0} templates · Page {1} of {2}";
-"转换为单份配置" = "Convert to One Configuration";
-"旧模板包含平台覆盖。请选择保留的配置，确认下方差异后转换；保存前可以撤销。" = "This legacy template contains platform overrides. Choose the configuration to keep and review the changes below. You can undo the conversion before saving.";
 "保留配置" = "Configuration to Keep";
 "采用这份配置" = "Use This Configuration";
 "源码编辑整份配置；节点注入规则在独立导航中管理。" = "Source edits the entire configuration. Manage node injection rules in their own navigation section.";
@@ -2136,7 +2125,6 @@
 "按顺序连接（default）" = "Sequential connection (default)";
 "空字符串" = "Empty string";
 "名称无效、已存在或使用了保留前缀。" = "The name is invalid, already exists, or uses a reserved prefix.";
-"请先转换为统一配置，再重命名注入规则引用的对象。" = "Convert to a unified configuration before renaming an object used by an injection rule.";
 "配置已变化，请重新发起级联删除。" = "The configuration has changed. Request cascade deletion again.";
 "级联删除预览" = "Cascade deletion preview";
 "将删除所选对象及依赖规则，并处理下列引用。整次操作可以一次撤销。" = "Delete the selected object and dependent rules, and update the references below. Undo restores the entire operation.";
@@ -2212,3 +2200,7 @@
 
 "已分配节点数" = "Assigned nodes";
 "该用户的全部授权节点共用一个连接密码，授权组变更不会轮换密码。" = "All authorized nodes for this user share one connection password. Authorization group changes do not rotate it.";
+
+"管理服务版本过旧，请更新服务端后重试。" = "The management service is outdated. Update the server and try again.";
+
+"此模板文档格式不受支持，仅支持 schema 2。" = "This template document format is unsupported. Only schema 2 is supported.";

@@ -517,7 +517,7 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        sqlx::query("INSERT INTO nodes (id, name, ssh_host, ssh_port, ssh_username, ssh_auth_type, ssh_secret_enc, public_host, public_port, listen_addr, node_token_hash, node_token_enc, traffic_stats_secret_enc, desired_config_enc, created_at, updated_at) VALUES ('node-one', 'Node one', '127.0.0.1', 22, 'root', 'private_key', 'ssh-secret', 'node.example.test', 443, ':443', 'node-hash', 'node-token', 'stats-secret', '{}', $1, $2)")
+        sqlx::query("WITH fixture_ssh AS (INSERT INTO credentials(id,name,kind,created_at,updated_at) VALUES('fixture-ssh','Fixture SSH','ssh_password',now(),now()) ON CONFLICT DO NOTHING), fixture_ssh_version AS (INSERT INTO credential_versions(credential_id,version,payload_enc,created_at) VALUES('fixture-ssh',1,'unused',now()) ON CONFLICT DO NOTHING) INSERT INTO nodes(id,name,ssh_host,ssh_port,ssh_username,public_host,public_port,listen_addr,node_token_hash,node_token_enc,traffic_stats_secret_enc,desired_config_enc,created_at,updated_at,ssh_credential_id,ssh_credential_version) VALUES ('node-one','Node one','127.0.0.1',22,'root','node.example.test',443,':443','node-hash','node-token','stats-secret','{}',$1,$2,'fixture-ssh',1)")
             .bind(timestamp)
             .bind(timestamp)
             .execute(&pool)
@@ -691,7 +691,7 @@ mod tests {
             .execute(&pool).await.unwrap();
 
         for (index, node_id) in ["node-one", "node-two"].into_iter().enumerate() {
-            sqlx::query("INSERT INTO nodes (id, name, ssh_host, ssh_port, ssh_username, ssh_auth_type, ssh_secret_enc, public_host, public_port, listen_addr, node_token_hash, node_token_enc, traffic_stats_secret_enc, desired_config_enc, created_at, updated_at) VALUES ($1, $2, $3, 22, 'root', 'private_key', 'ssh-secret', $4, 443, ':443', $5, 'node-token', 'stats-secret', '{}', $6, $7)")
+            sqlx::query("WITH fixture_ssh AS (INSERT INTO credentials(id,name,kind,created_at,updated_at) VALUES('fixture-ssh','Fixture SSH','ssh_password',now(),now()) ON CONFLICT DO NOTHING), fixture_ssh_version AS (INSERT INTO credential_versions(credential_id,version,payload_enc,created_at) VALUES('fixture-ssh',1,'unused',now()) ON CONFLICT DO NOTHING) INSERT INTO nodes(id,name,ssh_host,ssh_port,ssh_username,public_host,public_port,listen_addr,node_token_hash,node_token_enc,traffic_stats_secret_enc,desired_config_enc,created_at,updated_at,ssh_credential_id,ssh_credential_version) VALUES ($1,$2,$3,22,'root',$4,443,':443',$5,'node-token','stats-secret','{}',$6,$7,'fixture-ssh',1)")
                 .bind(node_id).bind(node_id).bind("127.0.0.1").bind("node.example.test")
                 .bind(format!("node-hash-{index}" )).bind(timestamp).bind(timestamp)
                 .execute(&pool).await.unwrap();

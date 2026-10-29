@@ -2,9 +2,9 @@
 
 本文按业务模块说明每张表存什么、由谁使用，以及关联和维护边界，供开发、排障和备份恢复时查阅。
 
-核对日期：2026-10-29。范围为当前迁移链（0001～0004）和维护初始化代码，包含 **104 张应用持久表、1 张 SQLx 管理表、6 个普通视图**。
+核对日期：2026-10-30。范围为当前迁移链（0001～0007）和维护初始化代码，包含 **106 张应用持久表、1 张 SQLx 管理表、6 个普通视图**。
 
-**版本边界：**基线合并原 0001～0074 SQL 迁移的最终结构，仅支持新建空库；原迁移链数据库不兼容，不支持原地升级。生产数据库仍属于原迁移链，本次代码整理不改变生产状态。SQL 基线与 Rust 维护初始化分开执行，正常 API 启动继续只校验就绪状态。
+**版本边界：**基线合并原 0001～0074 SQL 迁移的最终结构，仅支持新建空库；原迁移链数据库不兼容，不支持原地升级。本次清理未部署，生产状态以实际镜像及维护记录为准。SQL 基线与 Rust 维护初始化分开执行，正常 API 启动继续只校验就绪状态。
 
 ## 阅读约定与目录
 
@@ -74,9 +74,9 @@ flowchart LR
 
 | 表 | 键 | 用途与关键关联 | 维护边界 |
 | --- | --- | --- | --- |
-| `nodes` | `id` | 节点主档；SSH 端点及固定凭据版本、节点鉴权令牌、期望/已部署配置和修订、发布连接参数、部署与 mTLS 状态、流量捕获模式。 | 核心业务来源；期望配置不等于远端已部署配置。SSH 秘密在维护转换后改由凭据版本保存。 |
+| `nodes` | `id` | 节点主档；SSH 端点及固定凭据版本、节点鉴权令牌、期望/已部署配置和修订、发布连接参数、部署与 mTLS 状态、流量捕获模式。 | 核心业务来源；期望配置不等于远端已部署配置。SSH 秘密保存在凭据版本中，nodes 只保存版本引用。 |
 | `config_versions` | `id` | 节点配置历史；`(node_id, revision)` 唯一，保存加密快照、内容摘要和部署成功标记，供历史查看与回滚。 | 随节点级联删除；历史快照固定资源和凭据版本，删除需遵守引用约束。 |
-| `config_resources` | `id` | 节点配置附件，保存名称、类型、加密内容、摘要和大小；`(node_id, name)` 唯一。ACL、GeoIP、GeoSite 等由此提供。 | 随节点级联删除；旧证书/私钥资源由维护逻辑转换到凭据系统，不能把初始 DDL 类型列表当成当前使用规则。 |
+| `config_resources` | `id` | 节点配置附件，保存名称、类型、加密内容、摘要和大小；`(node_id, name)` 唯一。ACL、GeoIP、GeoSite 等由此提供。 | 随节点级联删除；当前 API 只接受普通配置资源；旧证书/私钥资源需要先通过独立升级工具转换，不能把初始 DDL 类型列表当成当前使用规则。 |
 | `config_resource_references` | `(kind, source_id, source, resource_id)` | 从节点期望/已部署配置及历史快照提取的资源引用；外键约束资源与来源属于同一节点。 | 与凭据引用共用来源刷新机制；来源事务必须完成引用索引，防止仍被快照使用的资源被删。 |
 | `node_packages` | `node_id` | 节点整机套餐配置和计量状态：周期、累计用量、下次重置、网卡计数基线、启动标识、限制状态。 | 一节点一行，随节点删除；这是整机配额计量，不能用用户流量总和替换。 |
 | `node_network_samples` | `id` | 整机网卡的历史增量，含套餐周期、收发字节、缺口原因和基线标记；也是 `source='network'` 统计的来源。 | 随节点删除；普通监控的 31 天清理不清此表，涉及套餐计量和统计。 |
@@ -89,12 +89,15 @@ flowchart LR
 
 | 表 | 键 | 用途与关键关联 | 维护边界 |
 | --- | --- | --- | --- |
-| `users` | `id` | 用户主档、启用状态、到期时间、配额、已计费用量、重置时间及访问撤销标记。 | `usage_bytes` 是配额鉴权所用的计费状态；不能从当前保留的历史明细随意覆盖。 |
-| `node_assignments` | `(user_id, node_id)` | 用户实际获权节点及节点专属认证摘要/密文；由授权组变更协调生成，供节点认证和订阅使用。 | 随用户/节点删除；组关系和有效授权必须通过业务事务同步。旧直接客户端证书字段在维护转换中移除。 |
+| `users` | `id` | 用户主档、用户级连接密码摘要/密文、启用状态、到期时间、配额、已计费用量、重置时间及访问撤销标记。 | `usage_bytes` 是配额鉴权所用的计费状态；不能从当前保留的历史明细随意覆盖。 |
+| `node_assignments` | `(user_id, node_id)` | 用户实际获权节点关系；由授权异步任务生成，供节点认证和订阅使用。 | 随用户/节点删除；有效授权还需检查来源与即时排除。连接密码已在 users；旧内嵌证书和逐节点证书绑定字段均已移除。 |
 | `subscription_credentials` | `id` | 用户订阅 URL 令牌的摘要、密文、创建与撤销时间。 | 令牌摘要唯一，随用户删除；订阅还需检查用户状态与实际节点授权。 |
 | `authorization_groups` | `id` | 授权组名称和修订，是批量管理用户与节点可见性的主实体。 | 删除会级联组成员关系；需通过业务流程协调有效授权及撤销。 |
 | `authorization_group_users` | `(group_id, user_id)` | 授权组的用户成员。 | 两端均有级联外键；与组节点集合共同决定授权结果。 |
 | `authorization_group_nodes` | `(group_id, node_id)` | 授权组的节点成员。 | 两端均有级联外键；多个组授予同一节点时不能只凭一组移除就撤销实际授权。 |
+| `authorization_changes` | `job_id` | 授权变更的动作、输入、阶段、分页游标和完成状态，关联现有任务系统。 | 分页提交并支持失败重试，避免一次展开用户与节点笛卡尔积。 |
+| `authorization_change_items` | `(job_id, kind, item_id)` | 本次变更的用户或节点增删项。 | 由授权变更持有并随变更删除；作为有索引的增量处理输入。 |
+| `authorization_exclusions` | `(job_id, group_id, user_id, node_id)` | 来源移除的即时拒绝屏障。 | 在异步任务清理实际分配前阻止新连接；其他有效来源仍可授权。 |
 | `user_access_checks` | `user_id` | 用户访问限制的到期检查索引，保存 `next_action_at`，避免反复扫描所有禁用、过期或超额用户。 | 派生调度状态；触发器随用户条件更新，维护模式负责初始化。 |
 | `user_access_restriction_epochs` | `user_id` | 用户访问撤销事件的单调代次，供分页撤销工作识别自己是否已经过时。 | 独立于时间戳和用户修订；随用户删除，不能重置后继续旧工作。 |
 | `node_limit_epochs` | `node_id` | 节点整机受限事件的单调代次，防止编辑套餐时误使未完成撤销分页失效。 | 独立于套餐计量/配置代次；随节点删除。 |
@@ -103,7 +106,7 @@ flowchart LR
 
 ## 凭据、分发与引用
 
-结构来源：[基线](../crates/hysteriax-server/migrations/0001_baseline.sql)。主要代码：[凭据模块](../crates/hysteriax-server/src/credentials/mod.rs)、[维护转换](../crates/hysteriax-server/src/credentials/migration.rs)、[引用索引](../crates/hysteriax-server/src/credentials/reference_index.rs)、[应用持久化](../crates/hysteriax-server/src/credentials/worker/persistence.rs)。
+结构来源：[基线](../crates/hysteriax-server/migrations/0001_baseline.sql)。主要代码：[凭据模块](../crates/hysteriax-server/src/credentials/mod.rs)、[引用索引](../crates/hysteriax-server/src/credentials/reference_index.rs)、[应用持久化](../crates/hysteriax-server/src/credentials/worker/persistence.rs)。
 
 | 表 | 键 | 用途与关键关联 | 维护边界 |
 | --- | --- | --- | --- |
@@ -113,11 +116,10 @@ flowchart LR
 | `credential_batch_items` | `(batch_id, node_id, user_id)` | 节点/用户目标的凭据应用项，保存预期修订、关联任务及 `applied_at/apply_stage`。 | 完成标记与应用变更需原子提交，重试不能再次改绑；随批次级联删除。 |
 | `dns_credential_batch_items` | `(batch_id, connection_id)` | DNS 连接的凭据轮换应用项，关联任务、预期修订和应用时间。 | 引用凭据批次、DNS 连接与任务；与节点应用项分开记录。 |
 | `credential_application_receipts` | `job_id` | 保存凭据应用完成时的来源、执行身份、阶段与结果，供任务交给同步流程后恢复原始应用结果。 | 已提交应用的完成证据；不能仅凭任务尚未最终成功就再次应用。 |
-| `credential_migrations` | `name` | 一次性凭据数据转换的完成标记，如 `credentials_v2`、`tls_pairs_v1`。 | 与 SQLx DDL 迁移记录不同；删除标记可能使数据转换重复执行。 |
 | `credential_reference_edges` | `(kind, source_id, source, field, credential_id, version)` | 配置引用具体凭据版本的索引，区分节点期望/已部署配置和历史快照，供引用展示与删除保护。 | 配置源是权威内容；外键与形状约束确保版本和历史来源有效。 |
 | `credential_reference_dirty` | `(kind, source_id)` | 配置来源待重建引用的队列，带单调 `generation`；同时驱动资源引用重建。 | 普通业务事务提交前必须刷新对应来源；维护初始化可分批处理，完成后才允许运行。不是可任意丢弃的异步提示。 |
 
-维护初始化还会修改部分结构：移除 `nodes` 的旧 SSH 秘密字段及 `node_assignments` 的旧客户端证书字段，收紧凭据类型。只阅读 `0001_initial.sql` 会得到过时字段含义，具体流程见 [凭据文档](credentials.md)。
+0007 在 SQL 中移除 `nodes` 旧 SSH 秘密字段及 `node_assignments` 旧客户端证书字段与逐节点证书绑定字段，收紧 SSH 引用与凭据类型约束，并删除历史转换标记表。服务不再运行历史 Rust 转换；测试库独立升级流程见 [迁移说明](../crates/hysteriax-server/migrations/README.md)。
 
 ## 托管 mTLS
 
@@ -245,7 +247,7 @@ DNS 连接凭据轮换还使用前述 [`dns_credential_batch_items`](#凭据分�
 | --- | --- | --- | --- |
 | `sampling_cycles` | `id` | 数据库时间对齐的采样周期、截止时间及冻结的期望节点数；`(kind, period_start)` 唯一。 | 周期创建时冻结节点成员工作，防止多实例重复创建及在线统计分母漂移。 |
 | `background_work` | `id` | 周期采样及非周期维护的持久工作，含载荷/游标、状态、执行者、代次、可执行/截止时间。 | 采样通常引用周期并关联节点；维护工作可无周期/节点。只有运行态有 owner，接管受资源租约保护。 |
-| `background_initialization` | `key` | 后台数据初始化完成标记，例如旧捕获批次接管和用户访问检查初始化。 | 普通启动校验这些标记；需维护模式完成初始化，不能伪造标记绕过未完成工作。 |
+| `background_initialization` | `key` | 后台数据初始化完成标记，当前用于用户访问检查初始化。 | 旧流量接管标记已移除；流量就绪直接校验未完成批次是否具有对应执行任务。用户访问检查标记仍由维护入口写入和校验。 |
 | `service_instances` | `instance_id` | 服务进程实例登记、启动时间与数据库心跳。 | 描述存活情况，不能单凭心跳或实例消失就重放外部副作用。 |
 | `resource_leases` | `resource_key` | 节点、任务、后台工作等资源的排他租约，含 owner、单调 generation、到期、work、blocked 和 epoch。 | 释放后保留行以保持 fencing 代次。blocked 或未确认外部操作会阻止重新执行；不能当缓存删除。 |
 | `execution_operations` | `operation_id` | 外部副作用的持久意图及证据，固定资源、执行者、代次、epoch、工作和步骤，跟踪 dispatching/verified/reconciling/needs_attention。 | `(work_id, step)` 唯一；普通操作不可因响应丢失盲目重放，需按证据复核。 |
@@ -322,7 +324,7 @@ DNS 连接凭据轮换还使用前述 [`dns_credential_batch_items`](#凭据分�
 | 凭据或资源无法删除 | 当前/历史引用索引、固定版本外键、mTLS 代及仍有效/不确定信任引用。 |
 | DNS 本地状态与远端不一致 | `dns_records` 的 desired/remote_snapshot、`dns_operations`、关联任务及执行证据。 |
 | SSE 漏事件或游标失效 | `job_events`、pending、publication 映射及 stream epoch/head；不要用事件 ID 代替发布序号。 |
-| 启动拒绝数据库 | `_sqlx_migrations`、`runtime_contract`、`credential_migrations`、`background_initialization` 及引用就绪状态。 |
+| 启动拒绝数据库 | `_sqlx_migrations`、`runtime_contract`、`background_initialization` 及引用就绪状态。 |
 
 备份应以完整数据库为单位，并独立保存对应主密钥。执行意图、DNS 操作、断连义务、mTLS 激活、应用回执、复核证据、租约版本与墓碑均不应按“缓存”处理。数据库恢复还须核对备份之后的外部副作用时间线，详见 [备份与恢复](backup-restore.md)。
 

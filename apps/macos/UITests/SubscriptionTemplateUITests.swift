@@ -96,7 +96,7 @@ final class SubscriptionTemplateUITests: XCTestCase {
         let packageData = try Data(contentsOf: packageURL)
         let package = try XCTUnwrap(JSONSerialization.jsonObject(with: packageData) as? [String:Any])
         XCTAssertEqual(package["package_version"] as? Int, 1)
-        XCTAssertNotNil((package["document"] as? [String:Any])?["platforms"])
+        XCTAssertEqual((package["document"] as? [String:Any])?["schema_version"] as? Int, 2)
         XCTAssertTrue(String(decoding: packageData, as: UTF8.self).contains("18446744073709551615"))
         try menu(app, "导入配置或模板…")
         try replace(app.textViews["templates.import.source"].firstMatch, String(decoding: packageData, as: UTF8.self))

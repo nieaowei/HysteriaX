@@ -7,7 +7,7 @@ mod bulk_tests;
 
 pub(super) async fn fixture(users: usize) -> PgPool {
     let pool = crate::db::test_pool_with_max_connections(8).await;
-    sqlx::query("INSERT INTO nodes(id,name,ssh_host,ssh_port,ssh_username,ssh_auth_type,ssh_secret_enc,public_host,public_port,listen_addr,node_token_hash,node_token_enc,traffic_stats_secret_enc,desired_config_enc,created_at,updated_at) SELECT id,id,'127.0.0.1',22,'root','password','secret','example.test',443,':443',id,id,'stats','{}',now(),now() FROM unnest(ARRAY['a','b']) id")
+    sqlx::query("WITH fixture_ssh AS (INSERT INTO credentials(id,name,kind,created_at,updated_at) VALUES('fixture-ssh','Fixture SSH','ssh_password',now(),now()) ON CONFLICT DO NOTHING), fixture_ssh_version AS (INSERT INTO credential_versions(credential_id,version,payload_enc,created_at) VALUES('fixture-ssh',1,'unused',now()) ON CONFLICT DO NOTHING) INSERT INTO nodes(id,name,ssh_host,ssh_port,ssh_username,public_host,public_port,listen_addr,node_token_hash,node_token_enc,traffic_stats_secret_enc,desired_config_enc,created_at,updated_at,ssh_credential_id,ssh_credential_version) SELECT id,id,'127.0.0.1',22,'root','example.test',443,':443',id,id,'stats','{}',now(),now(),'fixture-ssh',1 FROM unnest(ARRAY['a','b']) id")
         .execute(&pool).await.unwrap();
     sqlx::query("INSERT INTO users(id,name,created_at,updated_at) SELECT 'user-'||lpad(n::text,4,'0'),'User '||n,now(),now() FROM generate_series(1,$1) n")
         .bind(users as i32).execute(&pool).await.unwrap();
@@ -557,6 +557,10 @@ async fn timeout_after_capture_keeps_payload_and_quality_for_background_billing(
     .fetch_one(&pool)
     .await
     .unwrap();
+    sqlx::query("INSERT INTO sampling_cycles(id,kind,period_start,deadline_at,expected_nodes) VALUES($1,'traffic',clock_timestamp(),clock_timestamp()+interval '10 seconds',1)")
+        .bind(cycle).execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO background_work(id,kind,cycle_id,node_id,payload,deadline_at) VALUES($1,'traffic',$2,'a','{}',clock_timestamp()+interval '10 seconds')")
+        .bind(&id).bind(cycle).execute(&pool).await.unwrap();
     batches::reserve(&pool, &id, "a", Some(cycle))
         .await
         .unwrap();
@@ -582,7 +586,7 @@ async fn timeout_after_capture_keeps_payload_and_quality_for_background_billing(
     .unwrap();
     assert_eq!(after, before);
     assert!(batches::captured(&pool, &id).await.unwrap());
-    super::work::initialize(&pool).await.unwrap();
+
     let state = crate::state::AppState::new(
         pool.clone(),
         crate::security::SecretBox::from_base64("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")

@@ -11,9 +11,6 @@ async fn fixture() -> (crate::state::AppState, String, String) {
     let secrets =
         crate::security::SecretBox::from_base64("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
             .unwrap();
-    super::migration::migrate(&imported, &secrets)
-        .await
-        .unwrap();
     reference_index::initialize(&imported, &secrets)
         .await
         .unwrap();

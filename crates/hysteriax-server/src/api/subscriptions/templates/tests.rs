@@ -17,42 +17,36 @@ fn seed_templates_validate_and_render_every_platform() {
     }
 }
 #[test]
-fn overlay_preserves_explicit_values_and_replaces_arrays() {
-    let mut d = Document {
-        schema_version: 1,
-        common: json!({"flag":true,"n":3,"list":[1,2],"nested":{"a":1,"b":2},"unknown":{"x":true}}),
-        platforms: Default::default(),
+fn single_configuration_preserves_values_and_rejects_legacy_documents() {
+    let d = Document {
+        schema_version: 2,
+        common: json!({"flag":false,"n":0,"list":[],"nested":{"a":null},"unknown":{"x":true}}),
         injections: vec![],
     };
-    d.platforms.insert(
-        "windows".into(),
-        Overlay {
-            set: json!({"flag":false,"n":0,"list":[],"nested":{"a":null}}),
-            remove: vec!["/nested/b".into()],
-        },
-    );
-    let value = d.effective("windows").unwrap();
-    assert_eq!(
-        value,
-        json!({"flag":false,"n":0,"list":[],"nested":{"a":null},"unknown":{"x":true}})
-    );
     for format in ["mihomo", "singbox"] {
         assert_eq!(
-            parse(format, &serialize(format, &value).unwrap()).unwrap(),
-            value
+            parse(format, &serialize(format, &d.common).unwrap()).unwrap(),
+            d.common
         );
     }
-    d.platforms
-        .get_mut("windows")
-        .unwrap()
-        .remove
-        .push("/flag".into());
-    assert!(d.shape().is_err());
+    let mut old = d.clone();
+    old.schema_version = 1;
+    assert!(old.shape().is_err());
+    assert!(
+        serde_json::from_value::<Document>(
+            json!({"schema_version":1,"common":{},"platforms":{"windows":{"set":{},"remove":[]}}})
+        )
+        .is_err()
+    );
+    assert!(
+        serde_json::from_value::<Document>(json!({"schema_version":2,"common":{},"platforms":{}}))
+            .is_ok()
+    );
 }
 #[test]
 fn invalid_platform_and_references_are_locatable() {
     let mut d = seed("mihomo");
-    d.common["tproxy-port"] = json!(0);
+    d.common["tproxy-port"] = json!("invalid");
     d.common["proxy-groups"][0]["proxies"] = json!(["missing"]);
     let diagnostics = validate("mihomo", &d).unwrap();
     assert!(
@@ -259,9 +253,9 @@ async fn default_archival_requires_published_replacement_and_preserves_history()
     assert_eq!(versions["total"], 1);
 }
 #[tokio::test]
-async fn import_export_preserves_layers_unknown_fields_and_reports_node_removal() {
+async fn import_export_preserves_configuration_unknown_fields_and_reports_node_removal() {
     let state = fixture().await;
-    let document = render::single_seed("singbox");
+    let document = render::seed("singbox");
     let exported = body(
         export(State(state.clone()), Path("default-singbox".into()))
             .await
@@ -421,9 +415,9 @@ async fn public_download_selects_platform_uses_latest_publication_and_revokes_li
 }
 
 #[test]
-fn renames_update_references_and_injection_targets_in_every_layer() {
+fn renames_update_references_and_injection_targets_in_single_configuration() {
     let mut document = seed("mihomo");
-    document.platforms.entry("windows".into()).or_default().set = json!({"proxy-groups":[{"name":"SELECT","type":"select","proxies":[]},{"name":"PROXY","type":"select","proxies":["SELECT"]},{"name":"IPFake","type":"select","proxies":["PROXY","DIRECT"]}]});
+    document.common["proxy-groups"] = json!([{"name":"SELECT","type":"select","proxies":[]},{"name":"PROXY","type":"select","proxies":["SELECT"]},{"name":"IPFake","type":"select","proxies":["PROXY","DIRECT"]}]);
     rename(&mut document, "mihomo", "group", "SELECT", "SelectNew").unwrap();
     assert_eq!(document.injections[0].group, "SelectNew");
     for platform in PLATFORMS {
@@ -509,10 +503,16 @@ fn platform_catalog_checks_nested_os_fields_and_routing_dependencies() {
         validate("singbox", &document)
             .unwrap()
             .iter()
-            .any(|d| d.severity == "error"
-                && d.layer == "common"
-                && d.path == "/route/rules/0/process_name")
+            .all(|d| d.severity != "error")
     );
+    let (linux, _) = document.configuration("singbox", "linux").unwrap();
+    assert_eq!(
+        linux["route"]["rules"][0]["process_name"],
+        json!(["example"])
+    );
+    let (android, omissions) = document.configuration("singbox", "android").unwrap();
+    assert!(android["route"]["rules"].as_array().unwrap().is_empty());
+    assert!(!omissions.is_empty());
     let invalid = json!({"inbounds":[{"type":"tun","auto_redirect_input_mark":123}]});
     let diagnostics = platform_diagnostics("singbox", &invalid, "linux");
     assert!(diagnostics.iter().any(|d| d.message.contains("auto_route")));
@@ -567,7 +567,12 @@ async fn import_keeps_one_configuration_and_removes_external_node_providers() {
     ensure_valid(&validate("singbox", &document).unwrap()).unwrap();
     assert!(analyzed["platform_moves"].as_array().unwrap().is_empty());
     assert_eq!(document.schema_version, 2);
-    assert!(document.platforms.is_empty());
+    assert!(
+        serde_json::to_value(&document)
+            .unwrap()
+            .get("platforms")
+            .is_none()
+    );
     assert_eq!(
         document.common["route"]["rules"].as_array().unwrap().len(),
         1
@@ -680,7 +685,7 @@ fn mihomo_logical_rules_named_subrules_and_renames_are_validated_as_native_gramm
 #[test]
 fn linux_external_namespace_is_preserved_without_claiming_os_resolution() {
     let mut document = seed("singbox");
-    let tun = document.platforms.get_mut("linux").unwrap().set["inbounds"]
+    let tun = document.common["inbounds"]
         .as_array_mut()
         .unwrap()
         .iter_mut()
@@ -871,13 +876,11 @@ fn mutual_tun_constraints_and_mihomo_os_limits_are_visible_without_import_repair
             .iter()
             .any(|d| d.message.starts_with("conflicts with"))
     );
-    let mut document = Document {
-        schema_version: 1,
+    let document = Document {
+        schema_version: 2,
         common: config,
-        platforms: Default::default(),
         injections: vec![],
     };
-    let _ = partition_import("singbox", &mut document).unwrap();
     assert!(
         platform_diagnostics("singbox", &document.effective("linux").unwrap(), "linux")
             .iter()
@@ -1087,9 +1090,14 @@ fn generated_mihomo_nodes_are_typed_without_unknown_field_warnings() {
 #[test]
 fn single_configuration_seeds_validate_and_render_without_overlays() {
     for format in ["mihomo", "singbox"] {
-        let document = render::single_seed(format);
+        let document = render::seed(format);
         assert_eq!(document.schema_version, 2);
-        assert!(document.platforms.is_empty());
+        assert!(
+            serde_json::to_value(&document)
+                .unwrap()
+                .get("platforms")
+                .is_none()
+        );
         let original = document.common.clone();
         let diagnostics = validate(format, &document).unwrap();
         let errors: Vec<_> = diagnostics
@@ -1105,7 +1113,7 @@ fn single_configuration_seeds_validate_and_render_without_overlays() {
 
 #[test]
 fn single_configuration_projects_platform_fields_but_keeps_dependencies_and_types_strict() {
-    let mut document = render::single_seed("mihomo");
+    let mut document = render::seed("mihomo");
     document.common["tproxy-port"] = json!(7893);
     let (windows, omitted) = document.configuration("mihomo", "windows").unwrap();
     assert!(windows.get("tproxy-port").is_none());
@@ -1123,11 +1131,10 @@ fn single_configuration_projects_platform_fields_but_keeps_dependencies_and_type
             .iter()
             .any(|d| d.severity == "error" && d.path == "/tproxy-port")
     );
-    document
-        .platforms
-        .insert("windows".into(), Overlay::default());
-    assert!(document.shape().is_err());
-    let mut document = render::single_seed("singbox");
+    let mut invalid = serde_json::to_value(&document).unwrap();
+    invalid["platforms"] = json!({"windows":{}});
+    assert!(serde_json::from_value::<Document>(invalid).is_err());
+    let mut document = render::seed("singbox");
     let inbound = document.common["inbounds"]
         .as_array_mut()
         .unwrap()

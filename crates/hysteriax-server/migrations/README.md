@@ -8,7 +8,7 @@
 
 基线直接定义原 0074 SQL 执行完成后的表、视图、函数、触发器、约束和索引，只保留空库需要的初始数据：审计总计、独立缓存/事件 epoch，以及 17 个缓存域各 64 个桶。不包含旧数据回填、旧表的创建再删除、流量模式切换和一次性历史清理。
 
-SQL 基线不是完整运行时初始化。`--migrate-only` 仍按顺序完成初始管理员、凭据格式及其字段约束、订阅模板、引用索引、工作队列和运行时契约初始化，且不启动后台 worker、不访问远端节点。普通 API 启动只做兼容性检查。
+SQL 基线不是完整运行时初始化。`--migrate-only` 仍完成初始管理员、订阅模板、引用索引、用户访问检查和运行时契约初始化，且不启动后台 worker、不访问远端节点。普通 API 启动只做兼容性检查；维护入口不再执行旧凭据转换、密码回填或旧流量任务接管。
 
 ```sh
 cargo run -p hysteriax-server -- --migrate-only
@@ -18,7 +18,7 @@ cargo run -p hysteriax-server -- --migrate-only
 
 ## 后续迁移
 
-- 从 `0007_<description>.sql` 继续递增；已发布的 SQL 不再修改、重命名或重排。
+- 从 `0008_<description>.sql` 继续递增；已发布的 SQL 不再修改、重命名或重排。
 - SQLx 内嵌 SQL 并记录 SHA-384 checksum；启动逐项验证完整历史，重复执行维护不会重新应用已成功迁移。
 - 应用对象使用相对 schema 名称，以支持隔离测试 schema。`pg_trgm` 仍安装到 `public`，索引显式引用 `public.gin_trgm_ops`。
 - 新增或移除对象时同步更新 [数据库表用途](../../../docs/database-tables.md)，并验证当前基线上的后续升级。
@@ -54,17 +54,28 @@ python3 scripts/verify-migrations.py
 
 本次合并在独立 PostgreSQL 18 空库中回放原 SQL 链，再将原结构与基线结构按 PostgreSQL 规范化定义比较；105 张应用表的初始数据也逐表一致，随机 epoch 按生成语义核对。当前测试覆盖原生字段、初始化数据、重复迁移、历史篡改/缺失/失败/未来版本拒绝及旧迁移链拒绝。后续业务测试直接使用当前 schema，不再构建已移除的历史版本。
 
-`0005_async_authorization.sql` migrates connection passwords to users and adds
+`0005_async_authorization.sql` introduced user-level connection password fields,
 cursor-based authorization changes, indexed delta items, and immediate source
-exclusions. Stop all APIs before upgrading. For a test environment, run
-`scripts/migrate-async-authorization.sh` with `TEST_DATABASE_URL` and the existing
-`HYSTERIAX_MASTER_KEY`; it applies all migrations and completes the bounded
-password backfill without starting workers. One existing password is retained
-per user; clients must refresh subscriptions to use it on every node. The
-assignment password columns are removed. Interrupted backfills can be resumed.
+exclusions. Production completed the associated password conversion before the
+legacy conversion code was removed. Legacy test databases are retired; the
+current server does not backfill old assignment passwords or provide a bridge
+upgrade tool. New installations initialize an empty database with the full
+current migration chain.
 
 ## 0006 用户级连接凭据目录
 
 `0006_user_credential_directory.sql` 将 `credential_directory` 中的 `user_credential` 从每个用户—节点一条改为每个持有连接密码的用户一条，稳定 ID 为 `user:{user_id}`，名称为用户名称。没有节点分配的用户也可见。接口只为当前分页用户统计已分配节点数，通过 `reference_count` 返回，不返回密码、摘要或全部节点列表。仍在用户页执行原有密码轮换。
 
-迁移只替换目录视图，不修改密码、授权关系或已发布迁移。停止全部 API 后使用 `--migrate-only`；测试环境独立工具为 `scripts/migrate-user-credential-directory.sh`。新空库按 1～6 初始化，schema 5 测试库只应用 0006。
+迁移只替换目录视图，不修改密码、授权关系或已发布迁移。停止全部 API 后使用 `--migrate-only`。0006 本身只影响目录视图；当前新空库按 1～7 初始化。
+
+## 0007 清理历史数据转换
+
+删除服务内的旧凭据转换、旧 mTLS 重置、TLS 证书对合并、用户连接密码回填和旧流量任务接管逻辑。历史 SQL 文件与 checksum 保持不变；0007 对空库完成最终结构的收尾，删除旧字段、已清空的逐节点证书绑定字段和 `credential_migrations` 表，并收紧 SSH 引用和凭据类型约束。
+
+已完成维护初始化的 schema 5/6 数据库可直接停止 API 后执行当前服务 `--migrate-only`。存在未完成历史转换、缺失用户密码或孤立流量批次时，0007 事务失败，不能伪造标记绕过。
+
+生产已应用 0007，旧测试数据库已退役，独立旧库升级工具及依赖旧版本的验证脚本已删除。新环境直接初始化空库；已升级到 schema 7 的库可重复执行当前 `--migrate-only`。不再支持未完成历史转换的旧库升级。
+
+0007 已发布，其 SQL 原文和校验和保持不变。文件中的旧脚本路径仅是当时的错误提示，已不再是有效操作指引，不能据此运行旧工具或伪造转换标记。当前初始化、重复维护、密钥及迁移历史拒绝、恢复隔离由现有 Rust 测试和 `scripts/verify-migrations.py` 覆盖。
+
+当前仍保留凭据引用索引维护、用户访问检查重建、默认模板播种、恢复时的 epoch 隔离与只读运行校验。旧 mTLS 配置回放拒绝和不确定远程操作屏障也继续保留，避免重新执行已失效或结果未知的任务。模板仅支持 schema 2。

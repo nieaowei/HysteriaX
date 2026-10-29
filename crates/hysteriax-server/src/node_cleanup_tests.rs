@@ -170,8 +170,7 @@ async fn fixture(rows: i64) -> AppState {
     sqlx::query("CREATE TABLE node_cleanup_writer_probe(id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY)")
         .execute(&pool).await.unwrap();
     sqlx::raw_sql("INSERT INTO users(id,name,created_at,updated_at) VALUES('user','User',now(),now());
-        INSERT INTO nodes(id,name,ssh_host,ssh_port,ssh_username,ssh_auth_type,ssh_secret_enc,public_host,public_port,listen_addr,node_token_hash,node_token_enc,traffic_stats_secret_enc,desired_config_enc,created_at,updated_at)
-        SELECT 'n'||i,'Node '||i,'127.0.0.1',22,'root','private_key','unused','example.test',443,':443','hash'||i,'unused','unused','{}',now(),now() FROM generate_series(1,2)i;")
+        WITH fixture_ssh AS (INSERT INTO credentials(id,name,kind,created_at,updated_at) VALUES('fixture-ssh','Fixture SSH','ssh_password',now(),now()) ON CONFLICT DO NOTHING), fixture_ssh_version AS (INSERT INTO credential_versions(credential_id,version,payload_enc,created_at) VALUES('fixture-ssh',1,'unused',now()) ON CONFLICT DO NOTHING) INSERT INTO nodes(id,name,ssh_host,ssh_port,ssh_username,public_host,public_port,listen_addr,node_token_hash,node_token_enc,traffic_stats_secret_enc,desired_config_enc,created_at,updated_at,ssh_credential_id,ssh_credential_version) SELECT 'n'||i,'Node '||i,'127.0.0.1',22,'root','example.test',443,':443','hash'||i,'unused','unused','{}',now(),now(),'fixture-ssh',1 FROM generate_series(1,2)i;")
         .execute(&pool).await.unwrap();
     sqlx::query("INSERT INTO traffic_records(id,node_id,user_id,instance_id,baseline_tx,baseline_rx,delta_tx,delta_rx,sampled_at)
         SELECT n||i,n,'user','instance',0,0,10,20,'2026-01-01'::timestamptz+(i/100)*interval '1 second' FROM unnest(ARRAY['n1','n2'])n CROSS JOIN generate_series(1,$1::bigint)i")

@@ -20,9 +20,7 @@ pub(in crate::credentials::rotations) async fn fixture_with_pool(
         pool,
         SecretBox::from_base64("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA").unwrap(),
     );
-    crate::credentials::migration::migrate(&state.pool, &state.secrets)
-        .await
-        .unwrap();
+
     let (_, Json(ca)) = managed_mtls::create(
         State(state.clone()),
         Extension(AdminActor { id: "test".into() }),

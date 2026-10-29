@@ -203,7 +203,7 @@ async fn migration_keeps_another_operations_node_barrier() {
 #[tokio::test]
 async fn clearing_pairs_preserves_crossed_pairs_other_reasons_and_shared_jobs() {
     let state = tests::fixture().await;
-    sqlx::query("INSERT INTO nodes(id,name,ssh_host,ssh_port,ssh_username,ssh_auth_type,ssh_secret_enc,public_host,public_port,listen_addr,node_token_hash,node_token_enc,traffic_stats_secret_enc,desired_config_enc,created_at,updated_at) VALUES('node-2','Second','127.0.0.1',22,'root','private_key','unused','example.test',443,':443','hash-2','unused','unused','{}',now(),now())")
+    sqlx::query("WITH fixture_ssh AS (INSERT INTO credentials(id,name,kind,created_at,updated_at) VALUES('fixture-ssh','Fixture SSH','ssh_password',now(),now()) ON CONFLICT DO NOTHING), fixture_ssh_version AS (INSERT INTO credential_versions(credential_id,version,payload_enc,created_at) VALUES('fixture-ssh',1,'unused',now()) ON CONFLICT DO NOTHING) INSERT INTO nodes(id,name,ssh_host,ssh_port,ssh_username,public_host,public_port,listen_addr,node_token_hash,node_token_enc,traffic_stats_secret_enc,desired_config_enc,created_at,updated_at,ssh_credential_id,ssh_credential_version) VALUES ('node-2','Second','127.0.0.1',22,'root','example.test',443,':443','hash-2','unused','unused','{}',now(),now(),'fixture-ssh',1)")
         .execute(&state.pool).await.unwrap();
     let mut tx = state.pool.begin().await.unwrap();
     let first = enqueue_many(
@@ -273,7 +273,7 @@ async fn clearing_pairs_preserves_crossed_pairs_other_reasons_and_shared_jobs() 
 #[tokio::test]
 async fn enqueue_pairs_keeps_shared_running_generation_and_exact_pairs() {
     let state = tests::fixture().await;
-    sqlx::query("INSERT INTO nodes(id,name,ssh_host,ssh_port,ssh_username,ssh_auth_type,ssh_secret_enc,public_host,public_port,listen_addr,node_token_hash,node_token_enc,traffic_stats_secret_enc,desired_config_enc,created_at,updated_at) VALUES('node-2','Second','127.0.0.1',22,'root','private_key','unused','example.test',443,':443','hash-2','unused','unused','{}',now(),now())")
+    sqlx::query("WITH fixture_ssh AS (INSERT INTO credentials(id,name,kind,created_at,updated_at) VALUES('fixture-ssh','Fixture SSH','ssh_password',now(),now()) ON CONFLICT DO NOTHING), fixture_ssh_version AS (INSERT INTO credential_versions(credential_id,version,payload_enc,created_at) VALUES('fixture-ssh',1,'unused',now()) ON CONFLICT DO NOTHING) INSERT INTO nodes(id,name,ssh_host,ssh_port,ssh_username,public_host,public_port,listen_addr,node_token_hash,node_token_enc,traffic_stats_secret_enc,desired_config_enc,created_at,updated_at,ssh_credential_id,ssh_credential_version) VALUES ('node-2','Second','127.0.0.1',22,'root','example.test',443,':443','hash-2','unused','unused','{}',now(),now(),'fixture-ssh',1)")
         .execute(&state.pool).await.unwrap();
     let mut tx = state.pool.begin().await.unwrap();
     let running = enqueue_many(

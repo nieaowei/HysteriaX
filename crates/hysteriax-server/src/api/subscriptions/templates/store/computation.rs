@@ -148,7 +148,6 @@ pub(super) fn import_value(input: Import) -> Result<Value, ApiError> {
     let document = Document {
         schema_version: 2,
         common,
-        platforms: Default::default(),
         injections,
     };
     let platform_moves: Vec<Value> = vec![];

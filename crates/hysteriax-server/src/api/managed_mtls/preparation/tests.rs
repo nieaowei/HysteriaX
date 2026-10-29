@@ -5,9 +5,7 @@ async fn fixture() -> AppState {
     let secrets =
         crate::security::SecretBox::from_base64("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
             .unwrap();
-    credentials::migration::migrate(&pool, &secrets)
-        .await
-        .unwrap();
+
     AppState::new(pool, secrets)
 }
 async fn prepare(state: &AppState) -> PreparedAuthorityCreation {

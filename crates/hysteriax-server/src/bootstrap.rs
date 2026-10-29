@@ -129,7 +129,7 @@ mod tests {
         crate::credentials::reference_index::initialize(&pool, &secrets)
             .await
             .unwrap();
-        crate::traffic::work::initialize(&pool).await.unwrap();
+
         crate::traffic::access::initialize(&pool).await.unwrap();
         finalize(&pool, &secrets).await.unwrap();
         let event_epoch: String =

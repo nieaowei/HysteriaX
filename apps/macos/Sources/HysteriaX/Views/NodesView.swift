@@ -197,10 +197,8 @@ struct NodesView: View {
                     catch { actionError = error.localizedDescription }
                 }
             }
-            if store.supportsNodeRecordRemoval {
-                Button(L10n.text("仅移除管理记录"), role: .destructive) { showingRecordRemovalConfirmation = true }
-                    .accessibilityIdentifier("nodes.remove-record")
-            }
+            Button(L10n.text("仅移除管理记录"), role: .destructive) { showingRecordRemovalConfirmation = true }
+                .accessibilityIdentifier("nodes.remove-record")
         } message: {
             Text(L10n.text("卸载并删除需要 SSH 连接。仅移除管理记录不需要 SSH，远端服务可能继续运行。"))
         }
@@ -673,15 +671,11 @@ private struct NodeFormView: View {
                         CredentialPickerView(store: store, selection: $sshCredentialId, kinds: ["ssh_private_key", "ssh_password"], title: L10n.text("SSH 凭据"))
                     }
                     Section(L10n.text("有效期与流量套餐")) {
-                        if store.supportsNodePackages {
-                            NodePackageFields(draft: $packageDraft)
-                            if packageDraft.hasQuota { TextField(L10n.text("已有用量（GiB）"), text: $initialUsageGB) }
-                        } else { Text(L10n.text("升级管理服务后可设置有效期和流量套餐。")).foregroundStyle(.secondary) }
+                        NodePackageFields(draft: $packageDraft)
+                        if packageDraft.hasQuota { TextField(L10n.text("已有用量（GiB）"), text: $initialUsageGB) }
                     }
                     Section(L10n.text("公开连接")) {
-                        if store.supportsDNSManagement {
-                            DNSAllocationFields(store: store, draft: $dnsDraft, sshHost: sshHost)
-                        }
+                        DNSAllocationFields(store: store, draft: $dnsDraft, sshHost: sshHost)
                         if dnsDraft.mode == "external" {
                             TextField(L10n.text("公开地址"), text: $publicHost)
                                 .accessibilityLabel(L10n.text("公开地址"))
@@ -724,8 +718,8 @@ private struct NodeFormView: View {
                 let allocation = try dnsDraft.allocation(zones: store.dnsZones, records: store.dnsRecords)
                 let response = try await store.createNode(NodeCreateRequest(
                     dnsAllocation: allocation,
-                    package: store.supportsNodePackages ? packageDraft.package() : nil,
-                    initialUsageBytes: store.supportsNodePackages ? NodePackageDraft.bytes(initialUsageGB) : nil,
+                    package: packageDraft.package(),
+                    initialUsageBytes: NodePackageDraft.bytes(initialUsageGB),
                     name: name, sshHost: sshHost, sshPort: sshPort, sshUsername: sshUsername,
                     publicHost: publicHost, publicPort: publicPort, listenAddr: ":\(publicPort)",
                     sshCredentialId: sshCredentialId, sshCredentialVersion: store.credentials.first(where: { $0.id == sshCredentialId })?.latestVersion ?? 1

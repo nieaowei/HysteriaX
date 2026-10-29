@@ -3,9 +3,9 @@ use axum::{Json, extract::Path};
 
 async fn fixture() -> AppState {
     let state = crate::kick_requests::tests::fixture().await;
-    crate::connection_credentials::migrate(&state.pool, &state.secrets)
-        .await
-        .unwrap();
+    let credential = crate::connection_credentials::Credential::new(&state.secrets).unwrap();
+    sqlx::query("UPDATE users SET connection_credential_hash=$1,connection_credential_enc=$2 WHERE id='user'")
+        .bind(credential.hash).bind(credential.ciphertext).execute(&state.pool).await.unwrap();
     state
 }
 async fn queued(state: &AppState, ty: &str, target: &str, action: &str, input: Value) -> Value {
@@ -349,10 +349,6 @@ async fn bounded_pages_commit_progress_and_a_linked_retry_resumes_after_failure(
 async fn migration_selects_one_existing_password_and_removes_assignment_password_columns() {
     let state = fixture().await;
     let mut tx = state.pool.begin().await.unwrap();
-    let original: String = sqlx::query_scalar("SELECT current_schema()")
-        .fetch_one(&mut *tx)
-        .await
-        .unwrap();
     let schema = format!("credential_upgrade_{}", Uuid::new_v4().simple());
     sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
         .execute(&mut *tx)
@@ -378,12 +374,8 @@ async fn migration_selects_one_existing_password_and_removes_assignment_password
     .execute(&mut *tx)
     .await
     .unwrap();
-    sqlx::query(sqlx::AssertSqlSafe(format!(
-        "INSERT INTO nodes SELECT * FROM {original}.nodes"
-    )))
-    .execute(&mut *tx)
-    .await
-    .unwrap();
+    sqlx::query("INSERT INTO nodes(id,name,ssh_host,ssh_port,ssh_username,ssh_auth_type,ssh_secret_enc,public_host,public_port,listen_addr,node_token_hash,node_token_enc,traffic_stats_secret_enc,desired_config_enc,created_at,updated_at) VALUES('node','Node','localhost',22,'root','password','unused','example.test',443,':443','node-hash','unused','unused','{}',now(),now())")
+        .execute(&mut *tx).await.unwrap();
     let cipher = state.secrets.encrypt("preserved-password").unwrap();
     sqlx::query("INSERT INTO node_assignments(user_id,node_id,credential_hash,credential_enc,created_at) VALUES('user','node',$1,$2,now())")
         .bind(crate::security::token_digest("preserved-password")).bind(&cipher).execute(&mut *tx).await.unwrap();

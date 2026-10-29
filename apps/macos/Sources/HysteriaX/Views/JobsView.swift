@@ -276,7 +276,7 @@ struct JobsView: View {
             if job.kind.hasPrefix("dns-"), job.kind != "dns-credential-apply", job.status == "failed", job.retryJobId == nil {
                 Button(L10n.text("重试 DNS 操作")) {
                     Task { do { try await store.retryDNSJob(job) } catch { actionError = error.localizedDescription } }
-                }.disabled(!store.isConnected || !store.supportsDNSManagement)
+                }.disabled(!store.isConnected)
             }
             if job.kind == "authorization-change", job.status == "failed", job.retryJobId == nil {
                 Button(L10n.text("重试授权任务")) {
@@ -287,8 +287,8 @@ struct JobsView: View {
                let node = store.nodes.first(where: { $0.id == job.nodeID }) {
                 Button(L10n.text("重试：{0}", String(describing: (retryLabel(action))))) { retry(job, on: node, action: action) }
                     .accessibilityIdentifier("jobs.retry.\(job.id)")
-                    .disabled(!store.isConnected || !store.supportsJobRetryLinks || !NodeTaskFeedback.allowsAction(action, node: node) || (action != "ssh-test" && ["needs_fingerprint", "fingerprint_changed"].contains(node.state)))
-                    .help(store.supportsJobRetryLinks ? L10n.text("创建关联重试，成功后自动移除失败提醒") : L10n.text("管理服务需更新后才能关联重试"))
+                    .disabled(!store.isConnected || !NodeTaskFeedback.allowsAction(action, node: node) || (action != "ssh-test" && ["needs_fingerprint", "fingerprint_changed"].contains(node.state)))
+                    .help(L10n.text("创建关联重试，成功后自动移除失败提醒"))
             }
         }
         .fixedSize()

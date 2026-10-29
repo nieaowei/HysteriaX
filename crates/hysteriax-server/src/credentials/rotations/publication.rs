@@ -115,18 +115,14 @@ async fn page(pool: &PgPool, work: &Work) -> Result<()> {
         let now:DateTime<Utc>=sqlx::query_scalar("SELECT clock_timestamp()").fetch_one(&mut **tx).await?;
         if current {sqlx::query("UPDATE mtls_user_identities i SET next_action_at=CASE WHEN EXISTS(SELECT 1 FROM users u WHERE u.id=i.user_id AND u.enabled AND (u.expires_at IS NULL OR u.expires_at>$3) AND (u.quota_bytes IS NULL OR u.usage_bytes<u.quota_bytes)) THEN (SELECT CASE WHEN v.next_action_at<=$3 AND v.expires_at>=(SELECT expires_at-interval '5 minutes' FROM mtls_ca_generations WHERE ca_id=$1 AND ca_version=$2) THEN $3+interval '1 hour' ELSE greatest($3,v.next_action_at) END FROM mtls_user_version_publication v WHERE v.identity_id=i.id AND v.ca_version=$2 AND v.released AND NOT v.discarded ORDER BY v.credential_version DESC LIMIT 1) ELSE NULL END,maintenance_error=CASE WHEN (SELECT v.next_action_at<=$3 AND v.expires_at>=(SELECT expires_at-interval '5 minutes' FROM mtls_ca_generations WHERE ca_id=$1 AND ca_version=$2) FROM mtls_user_version_publication v WHERE v.identity_id=i.id AND v.ca_version=$2 AND v.released AND NOT v.discarded ORDER BY v.credential_version DESC LIMIT 1) THEN 'CA update required: cannot extend the existing certificate' ELSE NULL END,scheduled_ca_version=$2,revision=revision+1,updated_at=$3 WHERE i.ca_id=$1 AND i.id=ANY($4::text[]) AND NOT i.archived AND coalesce(i.scheduled_ca_version,0)<$2")
             .bind(&t.ca).bind(t.version).bind(now).bind(ids).execute(&mut **tx).await?;}
-        // Readers already observe release atomically through the generation.
-        // Materialize its legacy flag in separately bounded rows so a completed
-        // outbox also provides a verifiable old-image rollback compatibility gate.
-        sqlx::query("UPDATE mtls_user_versions SET released=true WHERE (identity_id,credential_version) IN (SELECT identity_id,credential_version FROM mtls_user_versions WHERE ca_id=$1 AND ca_version=$2 AND NOT released AND NOT discarded ORDER BY identity_id,credential_version LIMIT $3 FOR UPDATE SKIP LOCKED)")
-            .bind(&t.ca).bind(t.version).bind(PAGE).execute(&mut **tx).await?;
-        let pending_flags:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM mtls_user_versions WHERE ca_id=$1 AND ca_version=$2 AND NOT released AND NOT discarded)").bind(&t.ca).bind(t.version).fetch_one(&mut **tx).await?;
+        // Publication visibility is authoritative in the generation-backed view.
+        // This task only schedules identity maintenance; it never rewrites leaves.
         let remaining:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM mtls_user_identities i JOIN users u ON u.id=i.user_id WHERE i.ca_id=$1 AND NOT i.archived AND (i.scheduled_ca_version IS NULL OR i.scheduled_ca_version<$2))")
             .bind(&t.ca).bind(t.version).fetch_one(&mut **tx).await?;
         let cursor=rows.last().map(|r|r.get::<String,_>("user_id")).unwrap_or_default();
         let marker=rows.last().map(|r|r.get::<i64,_>("marker")).unwrap_or(-1);
         sqlx::query("UPDATE background_work SET payload=jsonb_set(jsonb_set(payload,'{cursor}',to_jsonb($2::text)),'{after_marker}',to_jsonb($3::bigint)) WHERE id=$1").bind(&work.id).bind(cursor).bind(marker).execute(&mut **tx).await?;
-        let more=pending_flags || current && remaining;
+        let more=current && remaining;
         work.finish_on(tx,more,if more {1}else{0},if current {None}else{Some("identity_publication_superseded")}).await
     })}).await
 }

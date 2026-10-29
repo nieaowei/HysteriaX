@@ -7,9 +7,7 @@ async fn state() -> AppState {
 
 async fn state_with_pool(pool: sqlx::PgPool) -> AppState {
     let secrets = SecretBox::from_base64("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA").unwrap();
-    credentials::migration::migrate(&pool, &secrets)
-        .await
-        .unwrap();
+
     crate::api::subscriptions::templates::initialize(&pool, &secrets)
         .await
         .unwrap();

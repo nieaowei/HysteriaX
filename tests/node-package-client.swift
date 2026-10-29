@@ -17,6 +17,7 @@ import Foundation
         let decoder = JSONDecoder()
         let versionWithoutFeatures = try decoder.decode(APIVersion.self, from: Data(#"{"api_version":"2.0.0","management_protocol":2,"directory_version":"b3:test","service_version":"0.1.0","hysteria_version":"app/v2.12.3","mihomo_version":"v1.19.31"}"#.utf8))
         precondition(versionWithoutFeatures.features == nil)
+        do { try versionWithoutFeatures.requireCurrentManagementAPI(); preconditionFailure("Outdated services must be rejected") } catch {}
         let legacy = try decoder.decode(NodeSummary.self, from: Data(#"{"id":"node","name":"Node","revision":1,"state":"deployed"}"#.utf8))
         precondition(legacy.package == nil && legacy.packageUsage == nil)
         let cached = try decoder.decode(NodeSummary.self, from: JSONEncoder().encode(legacy))

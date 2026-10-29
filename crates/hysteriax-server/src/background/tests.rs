@@ -17,9 +17,7 @@ async fn node(state: &AppState) -> String {
 async fn fixture() -> (AppState, String) {
     let pool = db::test_pool_with_max_connections(6).await;
     let secrets = SecretBox::from_base64("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA").unwrap();
-    crate::credentials::migration::migrate(&pool, &secrets)
-        .await
-        .unwrap();
+
     crate::credentials::reference_index::initialize(&pool, &secrets)
         .await
         .unwrap();

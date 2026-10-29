@@ -7,9 +7,7 @@ pub(super) async fn fixture() -> (AppState, String, String) {
     let secrets =
         crate::security::SecretBox::from_base64("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
             .unwrap();
-    crate::credentials::migration::migrate(&pool, &secrets)
-        .await
-        .unwrap();
+
     reference_index::initialize(&pool, &secrets).await.unwrap();
     let state = AppState::new(pool, secrets);
     let node = create_node(&state, "Node").await;

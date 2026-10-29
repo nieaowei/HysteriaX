@@ -5,9 +5,7 @@ async fn server() -> (AppState, String, tokio::task::JoinHandle<()>) {
     let secrets =
         crate::security::SecretBox::from_base64("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
             .unwrap();
-    crate::credentials::migration::migrate(&pool, &secrets)
-        .await
-        .unwrap();
+
     crate::credentials::reference_index::initialize(&pool, &secrets)
         .await
         .unwrap();

@@ -55,7 +55,7 @@ async fn work_fixture(state: &AppState, node: &str) -> Work {
 }
 
 async fn fixture_on(pool: sqlx::PgPool) -> AppState {
-    sqlx::query("INSERT INTO nodes(id,name,ssh_host,ssh_port,ssh_username,ssh_auth_type,ssh_secret_enc,public_host,public_port,listen_addr,node_token_hash,node_token_enc,traffic_stats_secret_enc,desired_config_enc,deployed_revision,created_at,updated_at) SELECT id,id,'127.0.0.1',22,'root','password','unused','example.test',443,':443',CASE WHEN id='a' THEN $1 ELSE id END,'unused','unused','{}',1,clock_timestamp(),clock_timestamp() FROM unnest(ARRAY['a','b'])id")
+    sqlx::query("WITH fixture_ssh AS (INSERT INTO credentials(id,name,kind,created_at,updated_at) VALUES('fixture-ssh','Fixture SSH','ssh_password',now(),now()) ON CONFLICT DO NOTHING), fixture_ssh_version AS (INSERT INTO credential_versions(credential_id,version,payload_enc,created_at) VALUES('fixture-ssh',1,'unused',now()) ON CONFLICT DO NOTHING) INSERT INTO nodes(id,name,ssh_host,ssh_port,ssh_username,public_host,public_port,listen_addr,node_token_hash,node_token_enc,traffic_stats_secret_enc,desired_config_enc,deployed_revision,created_at,updated_at,ssh_credential_id,ssh_credential_version) SELECT id,id,'127.0.0.1',22,'root','example.test',443,':443',CASE WHEN id='a' THEN $1 ELSE id END,'unused','unused','{}',1,clock_timestamp(),clock_timestamp(),'fixture-ssh',1 FROM unnest(ARRAY['a','b'])id")
         .bind(token_digest("node-auth")).execute(&pool).await.unwrap();
     AppState::new(
         pool,

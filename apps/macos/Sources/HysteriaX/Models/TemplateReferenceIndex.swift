@@ -1,6 +1,6 @@
 import Foundation
 
-/// Check deletion against each merged platform, including reference-bearing overlays outside the current editor.
+/// Check deletion against the single configuration and its reference graph.
 struct TemplateReferenceIndex {
     let format: String
     let schema: TemplateSchema
@@ -63,16 +63,7 @@ struct TemplateReferenceIndex {
         walk(config, definition: schema.root, path: [], depth: 0)
         return result
     }
-    static func effective(_ document: JSONValue, platform: String) -> JSONValue {
-        if platform == "common" { return document["common"] }
-        let overlay = document["platforms"][platform]
-        var result = JSONValue.merging(document["common"], overlay["set"].objectValue == nil ? .object([:]) : overlay["set"])
-        for path in overlay["remove"].arrayValue?.compactMap(\.stringValue) ?? [] {
-            let keys = path.dropFirst().components(separatedBy: "/").map { $0.replacingOccurrences(of: "~1", with: "/").replacingOccurrences(of: "~0", with: "~") }
-            result.set(keys, nil)
-        }
-        return result
-    }
+    static func effective(_ document: JSONValue) -> JSONValue { document["common"] }
     func exists(_ name: String, kind: String, in config: JSONValue) -> Bool {
         if format == "singbox", kind == "outbound", (config["endpoints"].arrayValue ?? []).contains(where: { $0["tag"] == .string(name) }) { return true }
         if format == "mihomo" {
@@ -85,27 +76,9 @@ struct TemplateReferenceIndex {
             item[format == "mihomo" ? "name" : "tag"].stringValue == name || item["tag"].arrayValue?.contains(.string(name)) == true
         }
     }
-    /// Write only changed fields; inherited arrays still become whole-array
-    /// overrides, while unrelated platform inheritance remains untouched.
-    static func applying(_ updated: JSONValue, to document: JSONValue, layer: String) -> JSONValue {
+    static func applying(_ updated: JSONValue, to document: JSONValue) -> JSONValue {
         var result = document
-        let before = effective(document, platform: layer)
-        func write(_ path: [String], _ value: JSONValue?) {
-            if layer == "common" { result.set(["common"] + path, value); return }
-            result.set(["platforms", layer, "set"] + path, value)
-            let pointer = SubscriptionTemplateStore.pointer(path)
-            var removals = result["platforms"][layer]["remove"].arrayValue?.compactMap(\.stringValue) ?? []
-            removals.removeAll { $0 == pointer || $0.hasPrefix(pointer + "/") || pointer.hasPrefix($0 + "/") }
-            if value == nil { removals.append(pointer) }
-            result.set(["platforms", layer, "remove"], .array(removals.map(JSONValue.string)))
-        }
-        func diff(_ old: JSONValue?, _ new: JSONValue?, _ path: [String]) {
-            guard old != new else { return }
-            if let a = old?.objectValue, let b = new?.objectValue {
-                for key in Set(a.keys).union(b.keys).sorted() { diff(a[key], b[key], path + [key]) }
-            } else { write(path, new) }
-        }
-        diff(before, updated, [])
+        result["common"] = updated
         return result
     }
     func renamed(_ config: JSONValue, identity: Identity, new: String) -> JSONValue {
@@ -215,9 +188,9 @@ struct TemplateReferenceIndex {
     }
     func blockingPaths(after document: JSONValue, before original: JSONValue, names: [String], kind: String) -> [String] {
         var result: Set<String> = []
-        for platform in TemplatePlatform.all {
-            let config = Self.effective(document, platform: platform)
-            let oldConfig = Self.effective(original, platform: platform)
+        do {
+            let config = Self.effective(document)
+            let oldConfig = Self.effective(original)
             func address(_ path: [String]) -> String {
                 var current: [String] = []; var previous: [String] = []
                 for part in path {
@@ -228,13 +201,13 @@ struct TemplateReferenceIndex {
                     }
                     current.append(part); previous.append(mapped)
                 }
-                return platform + ":/" + previous.map { $0.replacingOccurrences(of: "~", with: "~0").replacingOccurrences(of: "/", with: "~1") }.joined(separator: "/")
+                return "common:/" + previous.map { $0.replacingOccurrences(of: "~", with: "~0").replacingOccurrences(of: "/", with: "~1") }.joined(separator: "/")
             }
             for name in names where !exists(name, kind: kind, in: config) {
                 for reference in references(in: config) where reference.identity == Identity(kind: kind, name: name) {
                     result.insert(address(reference.path))
                 }
-                if kind == "outbound" { for (index, injection) in (document["injections"].arrayValue ?? []).enumerated() where injection["group"].stringValue == name { result.insert(platform + ":/injections/\(index)/group") } }
+                if kind == "outbound" { for (index, injection) in (document["injections"].arrayValue ?? []).enumerated() where injection["group"].stringValue == name { result.insert("injections:/\(index)/group") } }
             }
         }
         return result.sorted()

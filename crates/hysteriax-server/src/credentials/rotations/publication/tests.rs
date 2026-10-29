@@ -508,7 +508,7 @@ async fn a_newer_ca_publication_supersedes_old_schedule_work_and_keeps_retired_m
             "SELECT count(*) FROM mtls_user_versions WHERE released"
         )
         .await,
-        2
+        0
     );
 }
 
@@ -546,7 +546,7 @@ async fn completed_schedule_markers_use_an_empty_index_range_instead_of_revisiti
 }
 
 #[tokio::test]
-async fn compatibility_flags_are_materialized_in_one_hundred_row_pages_even_after_archival() {
+async fn archived_publication_finishes_without_locking_or_rewriting_retained_leaves() {
     let (state, ca, rotation) = fixture(1).await;
     stage(&state, &ca, "user-0001", 2).await;
     let (identity, credential): (String, String) = sqlx::query_as(
@@ -569,7 +569,29 @@ async fn compatibility_flags_are_materialized_in_one_hundred_row_pages_even_afte
         .fetch_all(&mut *held)
         .await
         .unwrap();
+    sqlx::query("SELECT id FROM mtls_user_identities FOR UPDATE")
+        .fetch_all(&mut *held)
+        .await
+        .unwrap();
     publish(&state, &ca, &rotation).await;
+    sqlx::query("UPDATE credentials SET archived=true WHERE id=$1")
+        .bind(&ca)
+        .execute(&state.pool)
+        .await
+        .unwrap();
+    let work = claim(&state, "schedule").await;
+    tokio::time::timeout(std::time::Duration::from_secs(2), page(&state.pool, &work))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        count(
+            &state,
+            "SELECT count(*) FROM mtls_user_versions WHERE released"
+        )
+        .await,
+        0
+    );
     assert_eq!(
         count(
             &state,
@@ -578,62 +600,12 @@ async fn compatibility_flags_are_materialized_in_one_hundred_row_pages_even_afte
         .await,
         301
     );
-    assert_eq!(
-        count(
-            &state,
-            "SELECT count(*) FROM mtls_user_versions WHERE released"
-        )
-        .await,
-        0
-    );
+    assert_eq!(count(&state, "SELECT count(*) FROM background_work WHERE kind='mtls-identity-publication-schedule' AND state='complete' AND error_code='identity_publication_superseded'").await, 1);
     held.rollback().await.unwrap();
-    sqlx::query("UPDATE credentials SET archived=true WHERE id=$1")
-        .bind(&ca)
-        .execute(&state.pool)
-        .await
-        .unwrap();
-    let first = claim(&state, "compatibility").await;
-    sqlx::raw_sql("CREATE FUNCTION reject_compatibility_flags() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.kind='mtls-identity-publication-schedule' AND NEW.state<>'running' THEN RAISE EXCEPTION 'reject compatibility confirmation'; END IF; RETURN NEW; END $$; CREATE TRIGGER reject_compatibility_flags BEFORE UPDATE ON background_work FOR EACH ROW EXECUTE FUNCTION reject_compatibility_flags();").execute(&state.pool).await.unwrap();
-    assert!(page(&state.pool, &first).await.is_err());
-    assert_eq!(
-        count(
-            &state,
-            "SELECT count(*) FROM mtls_user_versions WHERE released"
-        )
-        .await,
-        0
-    );
-    sqlx::raw_sql("DROP TRIGGER reject_compatibility_flags ON background_work; CREATE SEQUENCE compatibility_attempts; CREATE FUNCTION retry_compatibility_flags() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.kind='mtls-identity-publication-schedule' AND NEW.state<>'running' AND nextval('compatibility_attempts')=1 THEN RAISE EXCEPTION USING ERRCODE='40001',MESSAGE='native conflict'; END IF; RETURN NEW; END $$; CREATE TRIGGER retry_compatibility_flags BEFORE UPDATE ON background_work FOR EACH ROW EXECUTE FUNCTION retry_compatibility_flags();").execute(&state.pool).await.unwrap();
-    page(&state.pool, &first).await.unwrap();
-    assert_eq!(
-        count(&state, "SELECT last_value FROM compatibility_attempts").await,
-        2
-    );
-    assert_eq!(
-        count(
-            &state,
-            "SELECT count(*) FROM mtls_user_versions WHERE released"
-        )
-        .await,
-        100
-    );
-    for expected in [200, 300, 301] {
-        let work = claim(&state, "compatibility").await;
-        page(&state.pool, &work).await.unwrap();
-        assert_eq!(
-            count(
-                &state,
-                "SELECT count(*) FROM mtls_user_versions WHERE released"
-            )
-            .await,
-            expected
-        );
-    }
-    assert_eq!(count(&state,"SELECT count(*) FROM background_work WHERE kind='mtls-identity-publication-schedule' AND state='complete' AND error_code='identity_publication_superseded'").await,1);
 }
 
 #[tokio::test]
-async fn actual_certificate_selection_observes_publication_before_legacy_flags_are_materialized() {
+async fn actual_certificate_selection_uses_generation_publication_without_leaf_rewrites() {
     let (state, ca, rotation) = fixture(1).await;
     stage(&state, &ca, "user-0001", 2).await;
     super::super::trust::tests::nodes(&state, &ca, 1).await;

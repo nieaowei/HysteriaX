@@ -9,7 +9,7 @@ async fn initialized() -> (PgPool, crate::security::SecretBox) {
     crate::credentials::reference_index::initialize(&pool, &secrets)
         .await
         .unwrap();
-    crate::traffic::work::initialize(&pool).await.unwrap();
+
     crate::traffic::access::initialize(&pool).await.unwrap();
     crate::bootstrap::finalize(&pool, &secrets).await.unwrap();
     (pool, secrets)

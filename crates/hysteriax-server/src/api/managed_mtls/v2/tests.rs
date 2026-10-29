@@ -13,9 +13,7 @@ async fn state() -> AppState {
         crate::security::SecretBox::from_base64("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
             .unwrap();
     let pool = db::test_pool_with_max_connections(8).await;
-    credentials::migration::migrate(&pool, &secrets)
-        .await
-        .unwrap();
+
     credentials::reference_index::initialize(&pool, &secrets)
         .await
         .unwrap();

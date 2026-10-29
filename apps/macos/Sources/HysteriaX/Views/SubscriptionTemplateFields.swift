@@ -140,7 +140,7 @@ struct SubscriptionTemplateFields: View {
         let options = TemplateEditorGuidance.enumPickerOptions(schema, path: path, schema: store.schema, value: store.effective)
         return Picker(label, selection: Binding(get: { options.selection }, set: { token in
             if options.includesUnset && token == TemplateEnumPickerOptions.unsetToken {
-                store.setState(store.layer == "common" ? "inherit" : "remove", path: path, schema: definition)
+                store.setState("inherit", path: path, schema: definition)
                 return
             }
             guard let choice = options.values.first(where: { $0.pretty == token }) else { return }
@@ -160,7 +160,7 @@ struct SubscriptionTemplateFields: View {
         let names = store.referenceNames(kind)
         Picker(label, selection: Binding(get: { value.stringValue ?? "" }, set: { next in
             if next.isEmpty {
-                store.setState(store.layer == "common" ? "inherit" : "remove", path: path, schema: definition)
+                store.setState("inherit", path: path, schema: definition)
             } else {
                 store.set(path, .string(next))
             }
@@ -237,7 +237,6 @@ struct SubscriptionTemplateFields: View {
         }
         .onAppear { selectFocused(store.focusedPath) }
         .onChange(of: value) { _, _ in integerDraft = nil }
-        .onChange(of: store.layer) { _, _ in integerDraft = nil }
         .id(SubscriptionTemplateStore.pointer(path))
         .onChange(of: store.focusGeneration) { _, _ in
             selectFocused(store.focusedPath)

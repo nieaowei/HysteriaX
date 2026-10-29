@@ -4,7 +4,7 @@ pub(super) async fn fixture() -> (AppState, String) {
     let secrets =
         crate::security::SecretBox::from_base64("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
             .unwrap();
-    vault::migration::migrate(&pool, &secrets).await.unwrap();
+
     vault::reference_index::initialize(&pool, &secrets)
         .await
         .unwrap();

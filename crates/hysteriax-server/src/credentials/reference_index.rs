@@ -213,26 +213,6 @@ async fn refresh_batch_on(
     }
     Ok(count)
 }
-pub(crate) async fn flush_pending_on(
-    connection: &mut PgConnection,
-    secrets: &SecretBox,
-) -> Result<(), ApiError> {
-    let maintenance: bool = sqlx::query_scalar(
-        "SELECT coalesce(current_setting('hysteriax.reference_maintenance',true),'off')='on'",
-    )
-    .fetch_one(&mut *connection)
-    .await?;
-    if !maintenance {
-        return Err(ApiError::new(
-            axum::http::StatusCode::SERVICE_UNAVAILABLE,
-            "reference_maintenance_required",
-            "legacy reference conversion requires explicit maintenance",
-        ));
-    }
-    while refresh_batch_on(connection, secrets).await? > 0 {}
-    assert_clean_on(connection).await
-}
-
 pub async fn initialize(pool: &PgPool, secrets: &SecretBox) -> Result<(), ApiError> {
     let maintenance: bool = sqlx::query_scalar(
         "SELECT coalesce(current_setting('hysteriax.reference_maintenance',true),'off')='on'",
@@ -296,9 +276,7 @@ mod tests {
         let pool = crate::db::test_pool_with_max_connections(2).await;
         let secrets =
             SecretBox::from_base64("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA").unwrap();
-        super::super::migration::migrate(&pool, &secrets)
-            .await
-            .unwrap();
+
         let node = "upgrade-node";
         let mut tx = pool.begin().await.unwrap();
         let credential = super::super::insert(

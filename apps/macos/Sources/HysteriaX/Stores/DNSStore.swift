@@ -26,7 +26,6 @@ extension ManagementStore {
 
     @discardableResult
     func refreshDNS(bypassCache: Bool = false) async -> Bool {
-        guard supportsDNSManagement else { return true }
         guard isConnected else { return false }
         listPageCache.invalidate(types: [String(reflecting: DNSRecordsPage.self)])
         let generation = UUID()

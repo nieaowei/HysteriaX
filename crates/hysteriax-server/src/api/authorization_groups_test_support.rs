@@ -36,10 +36,14 @@ pub(crate) async fn create(
         "group",
         &id,
         "create",
-        json!({"name":name,"add_user_ids":input.user_ids,"add_node_ids":input.node_ids}),
+        json!({"name":name,"add_user_ids":&input.user_ids,"add_node_ids":input.node_ids}),
     )
     .await?;
-    crate::connection_credentials::migrate(&state.pool, &state.secrets).await?;
+    for user in &input.user_ids {
+        let credential = crate::connection_credentials::Credential::new(&state.secrets)?;
+        sqlx::query("UPDATE users SET connection_credential_hash=$2,connection_credential_enc=$3 WHERE id=$1 AND connection_credential_hash IS NULL")
+            .bind(user).bind(credential.hash).bind(credential.ciphertext).execute(&state.pool).await?;
+    }
     Ok((StatusCode::ACCEPTED, Json(result)))
 }
 pub(crate) async fn delete(

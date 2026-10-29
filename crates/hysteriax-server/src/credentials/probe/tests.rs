@@ -15,9 +15,7 @@ async fn fixture() -> (AppState, String, String) {
         pool,
         SecretBox::from_base64("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA").unwrap(),
     );
-    super::super::migration::migrate(&state.pool, &state.secrets)
-        .await
-        .unwrap();
+
     let (_, Json(ca)) = api::managed_mtls::create(
         State(state.clone()),
         Extension(AdminActor { id: "test".into() }),

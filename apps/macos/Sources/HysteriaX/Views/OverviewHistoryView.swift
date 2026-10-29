@@ -33,7 +33,7 @@ struct OverviewHistoryView: View {
     private var error: String? { state.error }
     private var loading: Bool { state.loading }
     private var selectedNodeID: String? { fixedNodeID ?? (nodeID.isEmpty ? nil : nodeID) }
-    private var requestKey: String { "\(store.serviceAddress)|\(store.isConnected)|\(store.supportsOverviewMonitoring)|\(range)|\(source)|\(selectedNodeID ?? "all")|\(store.overviewHistoryRefreshToken)|\(isActive)" }
+    private var requestKey: String { "\(store.serviceAddress)|\(store.isConnected)|\(range)|\(source)|\(selectedNodeID ?? "all")|\(store.overviewHistoryRefreshToken)|\(isActive)" }
 
     var body: some View {
         directoryContent
@@ -108,7 +108,7 @@ struct OverviewHistoryView: View {
             lastRefreshToken = store.overviewHistoryRefreshToken
             let query = "\(store.serviceAddress)|\(range)|\(source)|\(selectedNodeID ?? "all")"
             if query != state.loadedQuery { state.replaceHistory(store.cachedOverviewHistory(range: range, nodeID: selectedNodeID, source: source, metrics: metrics)); state.error = nil; state.loadedQuery = query }
-            guard store.supportsOverviewMonitoring, isActive else { return }
+            guard isActive else { return }
             while !Task.isCancelled {
                 if store.isConnected {
                     state.loading = true

@@ -77,21 +77,18 @@ async fn main() -> Result<()> {
         db::run_migrations(&pool).await?;
         bootstrap::check_migration_key(&pool, &secret_box).await?;
         initialize_admin_token(&pool).await?;
-        credentials::migration::migrate(&pool, &secret_box).await?;
-        connection_credentials::migrate(&pool, &secret_box).await?;
         api::subscriptions::templates::initialize(&pool, &secret_box)
             .await
             .map_err(|e| anyhow::anyhow!("initialize subscription templates: {}", e.message))?;
         credentials::reference_index::initialize(&pool, &secret_box)
             .await
             .map_err(|error| anyhow::anyhow!("initialize reference index: {}", error.message))?;
-        traffic::work::initialize(&pool).await?;
         traffic::access::initialize(&pool).await?;
         analytics::refresh(&pool)
             .await
             .context("initialize analytics")?;
         bootstrap::finalize(&pool, &secret_box).await?;
-        tracing::info!("database and credential migration completed; workers were not started");
+        tracing::info!("database maintenance completed; workers were not started");
         return Ok(());
     }
     bootstrap::check_runtime(&pool, &secret_box).await?;

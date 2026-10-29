@@ -472,6 +472,24 @@ async fn healthy_metadata_owner_prevents_premature_probe_switch_and_rotation_com
             .unwrap();
     assert_eq!(owner, "healthy-metadata-owner");
     commit(&state, &work, p).await.unwrap();
+    // A pass may defer an unavailable claim. Assert convergence through the
+    // same bounded worker steps, rather than requiring one scheduling attempt.
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            super::super::advance(&state, &rotation).await.unwrap();
+            let phase: String = sqlx::query_scalar("SELECT phase FROM mtls_rotations WHERE id=$1")
+                .bind(&rotation)
+                .fetch_one(&state.pool)
+                .await
+                .unwrap();
+            if phase == "complete" {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("completed metadata must allow rotation to converge");
     super::super::advance(&state, &rotation).await.unwrap();
     let phase: String = sqlx::query_scalar("SELECT phase FROM mtls_rotations WHERE id=$1")
         .bind(&rotation)

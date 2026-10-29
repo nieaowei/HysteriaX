@@ -21,9 +21,6 @@ pub(crate) async fn fixture() -> (AppState, String, String, String) {
 }
 
 async fn fixture_from_state(state: AppState) -> (AppState, String, String, String) {
-    credentials::migration::migrate(&state.pool, &state.secrets)
-        .await
-        .unwrap();
     let mut tx = state.pool.begin().await.unwrap();
     let ssh = credentials::insert(
         &mut tx,

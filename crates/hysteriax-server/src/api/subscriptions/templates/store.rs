@@ -14,7 +14,7 @@ use uuid::Uuid;
 pub async fn initialize(pool: &sqlx::PgPool, secrets: &SecretBox) -> Result<(), ApiError> {
     let mut seeds = Vec::new();
     for format in ["mihomo", "singbox"] {
-        let document = render::single_seed(format);
+        let document = render::seed(format);
         ensure_valid(&validate(format, &document)?)?;
         let encrypted = secrets
             .encrypt(&serde_json::to_string(&document).map_err(|_| ApiError::internal())?)?;
@@ -41,8 +41,13 @@ fn metadata(row: &PgRow) -> Value {
     json!({"id":row.get::<String,_>("id"),"name":row.get::<String,_>("name"),"format":row.get::<String,_>("format"),"revision":row.get::<i64,_>("revision"),"archived":row.get::<bool,_>("archived"),"is_default":row.get::<bool,_>("is_default"),"published_version":row.get::<Option<i64>,_>("published_version"),"updated_at":row.get::<chrono::DateTime<chrono::Utc>,_>("updated_at")})
 }
 fn decode(secrets: &SecretBox, cipher: &str) -> Result<Document, ApiError> {
-    serde_json::from_str(&secrets.decrypt(cipher)?).map_err(|_| ApiError::internal())
+    let document: Document = serde_json::from_str(&secrets.decrypt(cipher)?).map_err(|_| {
+        ApiError::bad_request("unsupported template document; schema_version 2 is required")
+    })?;
+    document.shape()?;
+    Ok(document)
 }
+
 async fn row(state: &AppState, id: &str) -> Result<PgRow, ApiError> {
     sqlx::query("SELECT * FROM subscription_templates WHERE id=$1")
         .bind(id)

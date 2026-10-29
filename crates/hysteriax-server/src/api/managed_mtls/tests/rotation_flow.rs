@@ -1545,7 +1545,6 @@ pub(crate) async fn metadata_fixture_with_pool(
     .await
     .unwrap();
     rotations::advance(&state, &rotation).await.unwrap();
-    assert_eq!(published(&state, &ca).await, 2);
     // Direct advancement is best effort: a transiently unavailable CA/work
     // claim can leave admission queued. Keep the node fenced until its child
     // actually exists, as required by this fixture's returned contract.
@@ -1558,6 +1557,7 @@ pub(crate) async fn metadata_fixture_with_pool(
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
     }).await.expect("metadata fixture must admit its fenced node before returning");
+    assert_eq!(published(&state, &ca).await, 2);
 
     db::write::<_, anyhow::Error, _>(&state.pool, move |tx| {
         let lease = lease.clone();

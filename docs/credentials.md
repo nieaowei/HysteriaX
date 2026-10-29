@@ -104,3 +104,20 @@ passphrases, and manually prepared shared-password changes.
 The current release supports a fresh PostgreSQL database initialized from `0001_baseline.sql`. It does not upgrade the former migration chain or import legacy credential stores. Existing backups require their matching old image and master key. See [installation](installation.md#database-baseline) for the compatibility boundary and [managed mTLS](managed-mtls.md) for current signing and recovery behavior.
 
 ACME 节点现在由独立 `hysteriax-acme` 进程读取 DNS 凭据并维护一张覆盖全部域名的 SAN 证书，可同时选择托管 mTLS。公共配置及凭据目录继续保留原有引用方式；部署时解析的秘密只写入证书账号的私有配置，不会进入 Hy2 YAML 预览。节点续期与用户/CA 身份续期相互独立。节点账户与私钥的独立备份要求见 [备份恢复](backup-restore.md)，维护及验证命令见 [节点 ACME](node-acme.md)。
+
+## Historical upgrades
+
+The current server no longer contains old inline-secret conversion, legacy mTLS
+reset, or standalone-certificate/key consolidation. Migration 0007 finalizes the
+schema in SQL and removes the old conversion marker table. Legacy test databases
+have been retired, so the standalone legacy upgrade tool and its historical
+verification script have been removed. New environments initialize an empty
+database; current environments use `--migrate-only` during maintenance. See
+[migration instructions](../crates/hysteriax-server/migrations/README.md).
+Current maintenance still initializes reference indexes and validates readiness.
+
+CA publication scheduling updates user maintenance deadlines only. It no longer
+backfills per-certificate `released` flags for old-image rollback. Current readers
+continue to use `mtls_user_version_publication`, so generation publication makes
+all its staged material visible atomically without rewriting each leaf. Existing
+explicit release facts and unpublished-generation discard protection are retained.

@@ -11,9 +11,7 @@ struct Case {
 async fn state() -> AppState {
     let pool = db::test_pool_with_max_connections(8).await;
     let secrets = SecretBox::from_base64("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA").unwrap();
-    crate::credentials::migration::migrate(&pool, &secrets)
-        .await
-        .unwrap();
+
     crate::credentials::reference_index::initialize(&pool, &secrets)
         .await
         .unwrap();
@@ -24,7 +22,7 @@ async fn state() -> AppState {
 }
 async fn fixture(kind: usize) -> (AppState, Case) {
     let state = state().await;
-    let document = render::single_seed("mihomo");
+    let document = render::seed("mihomo");
     let target = "/subscription-templates/default-mihomo";
     let (method, path, body, status) = match kind {
         0 => (

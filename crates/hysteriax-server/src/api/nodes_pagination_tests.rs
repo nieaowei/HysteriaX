@@ -22,7 +22,7 @@ async fn fixture() -> AppState {
     .unwrap();
     tx.commit().await.unwrap();
     let cipher = state.secrets.encrypt("{}").unwrap();
-    sqlx::query("INSERT INTO nodes(id,name,ssh_host,ssh_port,ssh_username,ssh_auth_type,ssh_secret_enc,public_host,public_port,listen_addr,node_token_hash,node_token_enc,traffic_stats_secret_enc,desired_config_enc,ssh_credential_id,ssh_credential_version,desired_revision,deployed_revision,state,last_sample_at,created_at,updated_at) SELECT 'node-'||lpad(i::text,3,'0'),CASE WHEN i=235 THEN '历史%_节点' ELSE 'Same' END,'host-'||lpad(i::text,3,'0')||'.example.test',22,'root','password','unused','example.test',443,':443','hash-'||i,'unused','unused',$1,$2,1,i,i-1,CASE WHEN i=235 THEN 'unreachable' WHEN i=2 THEN 'sync_failed' ELSE 'deployed' END,'2000-01-01'::timestamptz,now(),now() FROM generate_series(1,235) i")
+    sqlx::query("INSERT INTO nodes(id,name,ssh_host,ssh_port,ssh_username,public_host,public_port,listen_addr,node_token_hash,node_token_enc,traffic_stats_secret_enc,desired_config_enc,ssh_credential_id,ssh_credential_version,desired_revision,deployed_revision,state,last_sample_at,created_at,updated_at) SELECT 'node-'||lpad(i::text,3,'0'),CASE WHEN i=235 THEN '历史%_节点' ELSE 'Same' END,'host-'||lpad(i::text,3,'0')||'.example.test',22,'root','example.test',443,':443','hash-'||i,'unused','unused',$1,$2,1,i,i-1,CASE WHEN i=235 THEN 'unreachable' WHEN i=2 THEN 'sync_failed' ELSE 'deployed' END,'2000-01-01'::timestamptz,now(),now() FROM generate_series(1,235) i")
         .bind(cipher).bind(credential).execute(&state.pool).await.unwrap();
     state
 }

@@ -32,7 +32,7 @@ struct ServerConfigurationView: View {
                     Section(L10n.text("基本信息与 SSH")) {
                         TextField(L10n.text("服务器名称"), text: $draft.name)
                         TextField(L10n.text("SSH 地址"), text: $draft.sshHost)
-                        if store.supportsSSHDNSSync && detail.dnsBinding != nil {
+                        if detail.dnsBinding != nil {
                             Text(L10n.text("保存公网 SSH IP 会同步更新绑定域名下同地址族的 DNS 记录。"))
                                 .font(.caption).foregroundStyle(.secondary)
                         }
@@ -53,24 +53,22 @@ struct ServerConfigurationView: View {
                         }
                     }
                     .disabled(isSaving)
-                    if store.supportsDNSManagement {
-                        Section(L10n.text("公网地址与域名")) {
-                            LabeledContent(L10n.text("目标地址"), value: detail.connection.host)
-                            LabeledContent(L10n.text("已发布地址"), value: detail.publishedConnection?.publicHost ?? L10n.text("尚未部署"))
-                            if let binding = detail.dnsBinding {
-                                ForEach(binding.records) { record in
-                                    HStack {
-                                        Text("\(record.recordType) · \(record.stateLabel) · \(record.resolutionLabel)")
-                                        Spacer()
-                                        Button(L10n.text("查看 DNS 记录")) { store.showDNSRecord(record.id); dismiss() }
-                                    }
+                    Section(L10n.text("公网地址与域名")) {
+                        LabeledContent(L10n.text("目标地址"), value: detail.connection.host)
+                        LabeledContent(L10n.text("已发布地址"), value: detail.publishedConnection?.publicHost ?? L10n.text("尚未部署"))
+                        if let binding = detail.dnsBinding {
+                            ForEach(binding.records) { record in
+                                HStack {
+                                    Text("\(record.recordType) · \(record.stateLabel) · \(record.resolutionLabel)")
+                                    Spacer()
+                                    Button(L10n.text("查看 DNS 记录")) { store.showDNSRecord(record.id); dismiss() }
                                 }
                             }
-                            Button(L10n.text("分配或更换域名…")) { showingDNSBindingEditor = true }
-                            Text(L10n.text("域名变更单独保存。")).font(.caption).foregroundStyle(.secondary)
                         }
-                        .disabled(isSaving)
+                        Button(L10n.text("分配或更换域名…")) { showingDNSBindingEditor = true }
+                        Text(L10n.text("域名变更单独保存。")).font(.caption).foregroundStyle(.secondary)
                     }
+                    .disabled(isSaving)
                     Section(L10n.text("有效期与流量套餐")) {
                         NodePackageManagementView(store: store, detail: detail, onUpdated: { self.detail = $0 }, onSavingChanged: { isSaving = $0 })
                     }
