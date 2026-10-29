@@ -416,7 +416,7 @@ async fn load_subscription_nodes_snapshot(
     user_id: &str,
     eligible: Option<&[String]>,
 ) -> Result<Vec<SubscriptionNode>, ApiError> {
-    let rows = sqlx::query("SELECT n.id, n.name, n.public_host, n.public_port, n.listen_addr, n.tls_sni, n.tls_skip_verify, n.state, n.deployed_config_enc, n.published_connection, a.credential_enc, a.user_id FROM node_assignments a JOIN nodes n ON n.id = a.node_id WHERE a.user_id = $1 AND n.state NOT IN ('deleting', 'delete_failed') AND n.mtls_state='ready' AND n.deployed_revision IS NOT NULL AND n.deployed_config_enc IS NOT NULL AND ($2::text[] IS NULL OR n.id=ANY($2)) ORDER BY lower(n.name) COLLATE \"C\", n.name COLLATE \"C\", n.id")
+    let rows = sqlx::query("SELECT n.id, n.name, n.public_host, n.public_port, n.listen_addr, n.tls_sni, n.tls_skip_verify, n.state, n.deployed_config_enc, n.published_connection, u.connection_credential_enc AS credential_enc, a.user_id FROM node_assignments a JOIN users u ON u.id=a.user_id JOIN nodes n ON n.id = a.node_id WHERE hysteriax_authorized(a.user_id,a.node_id) AND u.connection_credential_enc IS NOT NULL AND a.user_id = $1 AND n.state NOT IN ('deleting', 'delete_failed') AND n.mtls_state='ready' AND n.deployed_revision IS NOT NULL AND n.deployed_config_enc IS NOT NULL AND ($2::text[] IS NULL OR n.id=ANY($2)) ORDER BY lower(n.name) COLLATE \"C\", n.name COLLATE \"C\", n.id")
         .bind(user_id).bind(eligible).fetch_all(&mut *crate::read_snapshot::begin(&state.pool).await?).await?;
     let projection_version =
         crate::cache_domains::version(&state.pool, &["node_config", "credentials", "resources"])
@@ -613,7 +613,7 @@ pub async fn hy2_auth(
     {
         return Ok(Json(AuthResponse::denied()));
     }
-    let assignment = sqlx::query("SELECT u.id, u.enabled, u.expires_at, u.quota_bytes, u.usage_bytes FROM node_assignments a JOIN users u ON u.id = a.user_id WHERE a.node_id = $1 AND a.credential_hash = $2")
+    let assignment = sqlx::query("SELECT u.id, u.enabled, u.expires_at, u.quota_bytes, u.usage_bytes FROM node_assignments a JOIN users u ON u.id = a.user_id WHERE a.node_id = $1 AND u.connection_credential_hash = $2 AND hysteriax_authorized(u.id,a.node_id)")
         .bind(&node_id).bind(auth_hash).fetch_optional(&state.pool).await?;
     let Some(assignment) = assignment else {
         return Ok(Json(AuthResponse::denied()));

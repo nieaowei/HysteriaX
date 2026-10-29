@@ -179,7 +179,7 @@ async fn signed_candidates_roll_back_together_and_native_retry_reuses_the_prepar
     let ca = ca["id"].as_str().unwrap();
     for user in ["alice", "bob"] {
         sqlx::query("INSERT INTO users(id,name,enabled,created_at,updated_at) VALUES($1,$1,true,clock_timestamp(),clock_timestamp())").bind(user).execute(&f.state.pool).await.unwrap();
-        sqlx::query("INSERT INTO node_assignments(user_id,node_id,credential_hash,credential_enc,created_at) VALUES($1,$2,$1,$3,clock_timestamp())")
+        sqlx::query("WITH assignment_fixture(user_id,node_id,credential_hash,credential_enc,created_at) AS MATERIALIZED (VALUES($1,$2,$1,$3,clock_timestamp())), password_fixture AS (UPDATE users u SET connection_credential_hash=c.credential_hash,connection_credential_enc=c.credential_enc FROM (SELECT DISTINCT ON(user_id) user_id,credential_hash,credential_enc FROM assignment_fixture ORDER BY user_id) c WHERE u.id=c.user_id), fixture_groups AS (INSERT INTO authorization_groups(id,name,created_at,updated_at) SELECT 'fixture-'||md5(user_id||chr(31)||node_id),'Fixture authorization',now(),now() FROM assignment_fixture ON CONFLICT(id) DO UPDATE SET name=EXCLUDED.name RETURNING id), fixture_members AS (INSERT INTO authorization_group_users(group_id,user_id,created_at) SELECT g.id,a.user_id,now() FROM assignment_fixture a JOIN fixture_groups g ON g.id='fixture-'||md5(a.user_id||chr(31)||a.node_id) ON CONFLICT DO NOTHING), fixture_nodes AS (INSERT INTO authorization_group_nodes(group_id,node_id,created_at) SELECT g.id,a.node_id,now() FROM assignment_fixture a JOIN fixture_groups g ON g.id='fixture-'||md5(a.user_id||chr(31)||a.node_id) ON CONFLICT DO NOTHING) INSERT INTO node_assignments(user_id,node_id,created_at) SELECT user_id,node_id,created_at FROM assignment_fixture")
             .bind(user).bind(&f.job.node_id).bind(f.state.secrets.encrypt("fixture").unwrap()).execute(&f.state.pool).await.unwrap();
     }
     let s = source(&f).await;
@@ -226,7 +226,7 @@ async fn signed_candidates_roll_back_together_and_native_retry_reuses_the_prepar
 async fn assign(f: &Fixture, user: &str, node: &str) {
     sqlx::query("INSERT INTO users(id,name,enabled,created_at,updated_at) VALUES($1,$1,true,clock_timestamp(),clock_timestamp()) ON CONFLICT DO NOTHING")
         .bind(user).execute(&f.state.pool).await.unwrap();
-    sqlx::query("INSERT INTO node_assignments(user_id,node_id,credential_hash,credential_enc,created_at) VALUES($1,$2,$1,$3,clock_timestamp())")
+    sqlx::query("WITH assignment_fixture(user_id,node_id,credential_hash,credential_enc,created_at) AS MATERIALIZED (VALUES($1,$2,$1,$3,clock_timestamp())), password_fixture AS (UPDATE users u SET connection_credential_hash=c.credential_hash,connection_credential_enc=c.credential_enc FROM (SELECT DISTINCT ON(user_id) user_id,credential_hash,credential_enc FROM assignment_fixture ORDER BY user_id) c WHERE u.id=c.user_id), fixture_groups AS (INSERT INTO authorization_groups(id,name,created_at,updated_at) SELECT 'fixture-'||md5(user_id||chr(31)||node_id),'Fixture authorization',now(),now() FROM assignment_fixture ON CONFLICT(id) DO UPDATE SET name=EXCLUDED.name RETURNING id), fixture_members AS (INSERT INTO authorization_group_users(group_id,user_id,created_at) SELECT g.id,a.user_id,now() FROM assignment_fixture a JOIN fixture_groups g ON g.id='fixture-'||md5(a.user_id||chr(31)||a.node_id) ON CONFLICT DO NOTHING), fixture_nodes AS (INSERT INTO authorization_group_nodes(group_id,node_id,created_at) SELECT g.id,a.node_id,now() FROM assignment_fixture a JOIN fixture_groups g ON g.id='fixture-'||md5(a.user_id||chr(31)||a.node_id) ON CONFLICT DO NOTHING) INSERT INTO node_assignments(user_id,node_id,created_at) SELECT user_id,node_id,created_at FROM assignment_fixture")
         .bind(user).bind(node).bind(f.state.secrets.encrypt("fixture").unwrap()).execute(&f.state.pool).await.unwrap();
 }
 async fn generation(f: &Fixture, node: &str) -> i64 {
@@ -269,7 +269,7 @@ async fn rolled_back_membership_and_credential_updates_leave_the_membership_fenc
         .await
         .unwrap();
     tx.rollback().await.unwrap();
-    sqlx::query("UPDATE node_assignments SET credential_hash='new-hash' WHERE user_id='alice'")
+    sqlx::query("UPDATE users SET connection_credential_hash='new-hash',revision=revision+1 WHERE id='alice'")
         .execute(&f.state.pool)
         .await
         .unwrap();
@@ -348,7 +348,7 @@ async fn generated_ca(f: &Fixture) -> String {
 async fn assign_many(f: &Fixture, count: i64) {
     sqlx::query("INSERT INTO users(id,name,enabled,created_at,updated_at) SELECT 'user-'||lpad(i::text,4,'0'),'Owner '||i,true,clock_timestamp(),clock_timestamp() FROM generate_series(1,$1::bigint) i")
         .bind(count).execute(&f.state.pool).await.unwrap();
-    sqlx::query("INSERT INTO node_assignments(user_id,node_id,credential_hash,credential_enc,created_at) SELECT id,$1,id,$2,clock_timestamp() FROM users")
+    sqlx::query("WITH assignment_fixture(user_id,node_id,credential_hash,credential_enc,created_at) AS MATERIALIZED (SELECT id,$1,id,$2,clock_timestamp() FROM users), password_fixture AS (UPDATE users u SET connection_credential_hash=c.credential_hash,connection_credential_enc=c.credential_enc FROM (SELECT DISTINCT ON(user_id) user_id,credential_hash,credential_enc FROM assignment_fixture ORDER BY user_id) c WHERE u.id=c.user_id), fixture_groups AS (INSERT INTO authorization_groups(id,name,created_at,updated_at) SELECT 'fixture-'||md5(user_id||chr(31)||node_id),'Fixture authorization',now(),now() FROM assignment_fixture ON CONFLICT(id) DO UPDATE SET name=EXCLUDED.name RETURNING id), fixture_members AS (INSERT INTO authorization_group_users(group_id,user_id,created_at) SELECT g.id,a.user_id,now() FROM assignment_fixture a JOIN fixture_groups g ON g.id='fixture-'||md5(a.user_id||chr(31)||a.node_id) ON CONFLICT DO NOTHING), fixture_nodes AS (INSERT INTO authorization_group_nodes(group_id,node_id,created_at) SELECT g.id,a.node_id,now() FROM assignment_fixture a JOIN fixture_groups g ON g.id='fixture-'||md5(a.user_id||chr(31)||a.node_id) ON CONFLICT DO NOTHING) INSERT INTO node_assignments(user_id,node_id,created_at) SELECT user_id,node_id,created_at FROM assignment_fixture")
         .bind(&f.job.node_id).bind(f.state.secrets.encrypt("fixture").unwrap()).execute(&f.state.pool).await.unwrap();
 }
 async fn run_prepare(f: &Fixture, ca: &str) -> Result<()> {
@@ -653,7 +653,7 @@ async fn two_deployments_share_one_identity_generation_and_all_pages_converge_wi
     assign_many(&f, 101).await;
     let ssh = fixture_api::create(&f.state, "ssh_password", json!({"secret":"fixture"})).await;
     let second_node = fixture_api::node(&f.state, "second signing node", &ssh, json!({})).await;
-    sqlx::query("INSERT INTO node_assignments(user_id,node_id,credential_hash,credential_enc,created_at) SELECT id,$1,id,$2,clock_timestamp() FROM users")
+    sqlx::query("WITH assignment_fixture(user_id,node_id,credential_hash,credential_enc,created_at) AS MATERIALIZED (SELECT id,$1,id,$2,clock_timestamp() FROM users), password_fixture AS (UPDATE users u SET connection_credential_hash=c.credential_hash,connection_credential_enc=c.credential_enc FROM (SELECT DISTINCT ON(user_id) user_id,credential_hash,credential_enc FROM assignment_fixture ORDER BY user_id) c WHERE u.id=c.user_id), fixture_groups AS (INSERT INTO authorization_groups(id,name,created_at,updated_at) SELECT 'fixture-'||md5(user_id||chr(31)||node_id),'Fixture authorization',now(),now() FROM assignment_fixture ON CONFLICT(id) DO UPDATE SET name=EXCLUDED.name RETURNING id), fixture_members AS (INSERT INTO authorization_group_users(group_id,user_id,created_at) SELECT g.id,a.user_id,now() FROM assignment_fixture a JOIN fixture_groups g ON g.id='fixture-'||md5(a.user_id||chr(31)||a.node_id) ON CONFLICT DO NOTHING), fixture_nodes AS (INSERT INTO authorization_group_nodes(group_id,node_id,created_at) SELECT g.id,a.node_id,now() FROM assignment_fixture a JOIN fixture_groups g ON g.id='fixture-'||md5(a.user_id||chr(31)||a.node_id) ON CONFLICT DO NOTHING) INSERT INTO node_assignments(user_id,node_id,created_at) SELECT user_id,node_id,created_at FROM assignment_fixture")
         .bind(&second_node).bind(f.state.secrets.encrypt("fixture").unwrap()).execute(&f.state.pool).await.unwrap();
     let mut tx = f.state.pool.begin().await.unwrap();
     crate::api::enqueue_job_in_tx(&mut tx, "sync", Some(&second_node), Some(1))

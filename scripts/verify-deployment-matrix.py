@@ -21,7 +21,7 @@ import uuid
 import urllib.request
 
 from postgres_test import PostgresTestSchema
-from credential_test_fixtures import grant_group
+from credential_test_fixtures import grant_group, user_connection_password
 from multi_instance_test_fixture import MultiInstanceServer
 from process_fault_test_fixture import run_installation_pause
 from pre_dispatch_fault_test_fixture import run_pre_dispatch_pause
@@ -665,7 +665,7 @@ def main():
                             if current["revision"] != revision:
                                 raise RuntimeError("matrix authorization business revision changed")
                             receipt = grant_group(expect, user_id, [node["node_id"]], api_prefix="/api/v2")
-                            return next(item["hy2_credential"] for item in receipt["created_credentials"] if item["node_id"] == node["node_id"])
+                            return user_connection_password(database, environment["HYSTERIAX_MASTER_KEY"], user_id)
 
                         credential_one = assign_matrix_user(user_one, node_one, 1)
                         credential_two = assign_matrix_user(user_two, node_two, 1)

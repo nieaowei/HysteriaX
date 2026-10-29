@@ -1413,11 +1413,11 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/UserAuthorizationGroupsUpdate' }
       responses:
-        '200':
-          description: Updated memberships, effective assignments, one-time credentials, and queued revocations
+        '202':
+          description: Authorization change accepted; poll the job for progress and retry failures. Required certificates and disconnections continue separately in the background.
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/UserAuthorizationGroupsMutationResponse' }
+              schema: { $ref: '#/components/schemas/AuthorizationChangeReceipt' }
         '400': { $ref: '#/components/responses/Error' }
         '404': { $ref: '#/components/responses/Error' }
         '409': { $ref: '#/components/responses/Error' }
@@ -1451,11 +1451,11 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/AuthorizationGroupCreate' }
       responses:
-        '201':
-          description: Empty group created; revocation task IDs only
+        '202':
+          description: Authorization change accepted; poll the job for progress and retry failures. Required certificates and disconnections continue separately in the background.
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/AuthorizationGroupMutationResponse' }
+              schema: { $ref: '#/components/schemas/AuthorizationChangeReceipt' }
         '400': { $ref: '#/components/responses/Error' }
         '409': { $ref: '#/components/responses/Error' }
   /authorization-groups/{group_id}:
@@ -1485,11 +1485,11 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/AuthorizationGroupUpdate' }
       responses:
-        '200':
-          description: Group changes committed; revocation task IDs only
+        '202':
+          description: Authorization change accepted; poll the job for progress and retry failures. Required certificates and disconnections continue separately in the background.
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/AuthorizationGroupMutationResponse' }
+              schema: { $ref: '#/components/schemas/AuthorizationChangeReceipt' }
         '400': { $ref: '#/components/responses/Error' }
         '404': { $ref: '#/components/responses/Error' }
         '409': { $ref: '#/components/responses/Error' }
@@ -1504,11 +1504,11 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/AuthorizationGroupDelete' }
       responses:
-        '200':
-          description: Group deleted; revocation task IDs only
+        '202':
+          description: Authorization change accepted; poll the job for progress and retry failures. Required certificates and disconnections continue separately in the background.
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/AuthorizationGroupMutationResponse' }
+              schema: { $ref: '#/components/schemas/AuthorizationChangeReceipt' }
         '400': { $ref: '#/components/responses/Error' }
         '404': { $ref: '#/components/responses/Error' }
         '409': { $ref: '#/components/responses/Error' }
@@ -2944,34 +2944,14 @@ components:
         page: { type: integer, minimum: 1 }
         page_size: { type: integer, minimum: 1, maximum: 200 }
         revision: { type: integer }
-    AuthorizationIdentityResult:
-      description: Authorization mutations admit durable background signing work. issued is false; pending indicates a missing certificate awaiting issuance or user eligibility. Existing valid certificates are reused.
-      type: object
-      required: [user_id, ca_credential_id, identity_id, issued, pending]
-      properties:
-        policy_revision: { type: integer }
-        ca_versions: { type: array, items: { type: integer } }
-        affected_node_ids: { type: array, items: { type: string } }
-        user_id: { type: string }
-        ca_credential_id: { type: string }
-        identity_id: { type: [string, 'null'] }
-        issued: { type: boolean }
-        pending: { type: boolean }
-    AuthorizationCreatedCredential:
-      type: object
-      required: [user_id, node_id, hy2_credential]
-      properties:
-        user_id: { type: string, format: uuid }
-        node_id: { type: string, format: uuid }
-        hy2_credential: { type: string, description: One-time Hysteria credential returned after effective authorization is created. }
-    AuthorizationGroupMutationResponse:
+    AuthorizationChangeReceipt:
       type: object
       additionalProperties: false
-      required: [revocation_job_ids]
+      required: [job_id, resource_id, status]
       properties:
-        revocation_job_ids:
-          type: array
-          items: { type: string, format: uuid }
+        job_id: { type: string, format: uuid }
+        resource_id: { type: string }
+        status: { type: string, enum: [queued] }
     NodesPage:
       type: object
       required: [items, total, page, page_size]
@@ -3179,27 +3159,6 @@ components:
           items: { $ref: '#/components/schemas/AuthorizationGroupReference' }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
-    UserAuthorizationGroupsMutationResponse:
-      type: object
-      required: [additions_count, removals_count, user_id, revision, group_ids, assignments, created_credentials, revocation_job_ids]
-      properties:
-        additions_count: { type: integer, minimum: 0 }
-        removals_count: { type: integer, minimum: 0 }
-        managed_identities: { type: array, items: { $ref: '#/components/schemas/AuthorizationIdentityResult' } }
-        user_id: { type: string, format: uuid }
-        revision: { type: integer }
-        group_ids:
-          type: array
-          items: { type: string }
-        assignments:
-          type: array
-          items: { $ref: '#/components/schemas/AssignmentInfo' }
-        created_credentials:
-          type: array
-          items: { $ref: '#/components/schemas/AuthorizationCreatedCredential' }
-        revocation_job_ids:
-          type: array
-          items: { type: string, format: uuid }
     JobFingerprintConfirmation:
       type: object
       additionalProperties: false
@@ -3322,22 +3281,14 @@ components:
         token: { type: string, description: One-time subscription token returned on rotation. }
         url: { type: string }
         note: { type: string }
-    RotatedCredential:
-      type: object
-      required: [node_id, credential]
-      properties:
-        node_id: { type: string, format: uuid }
-        credential: { type: string, description: One-time Hysteria credential. }
     RotatedCredentials:
       type: object
-      required: [user_id, revision, credentials, note]
+      required: [user_id, revision, credential, revocation_job_ids]
       properties:
         user_id: { type: string, format: uuid }
         revision: { type: integer }
-        credentials:
-          type: array
-          items: { $ref: '#/components/schemas/RotatedCredential' }
-        note: { type: string }
+        credential: { type: string, description: One shared connection password for every authorized node. }
+        revocation_job_ids: { type: array, items: { type: string } }
     JobReceipt:
       type: object
       required: [job_id, status]
@@ -4049,7 +4000,7 @@ components:
       - metadata
       - created_at
       properties:
-        reference_count: { type: integer }
+        reference_count: { type: integer, description: "Current referenced objects; user_credential entries count persisted node assignments. Each user has one user_credential with ID user:{user_id}, including users with zero assignments." }
         id:
           type: string
         name:

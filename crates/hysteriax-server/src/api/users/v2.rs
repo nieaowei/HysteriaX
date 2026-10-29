@@ -34,7 +34,7 @@ pub(crate) async fn create(
     )?;
     let input = serde_json::from_value(body)
         .map_err(|_| ApiError::bad_request("invalid user creation request"))?;
-    let prepared = PreparedUser::new(input)?;
+    let prepared = PreparedUser::new(input, &state.secrets)?;
     execute(&state, identity, move |tx| {
         let (prepared, actor) = (prepared.clone(), actor.id.clone());
         Box::pin(async move {

@@ -288,7 +288,7 @@ DNS 连接凭据轮换还使用前述 [`dns_credential_batch_items`](#凭据分�
 
 | 视图 | 来源/用途 | 定义 |
 | --- | --- | --- |
-| `credential_directory` | 将受管凭据、管理员令牌、订阅令牌和用户节点凭据合并为统一目录；CA 使用已发布版本计算状态。 | [基线](../crates/hysteriax-server/migrations/0001_baseline.sql)。 |
+| `credential_directory` | 将受管凭据、管理员令牌、订阅令牌和用户级连接凭据合并为统一目录；连接凭据每用户一条，与节点分配无关；CA 使用已发布版本计算状态。 | [基线](../crates/hysteriax-server/migrations/0001_baseline.sql)、[0006](../crates/hysteriax-server/migrations/0006_user_credential_directory.sql)。 |
 | `mtls_live_activation_trust` | 列出仍可能在远端生效的不确定激活信任；只有更晚已提交激活才排除旧不确定状态。 | [基线](../crates/hysteriax-server/migrations/0001_baseline.sql)。 |
 | `job_cache_versions` | `cache_entity_versions` 中 `kind='jobs'` 的兼容投影。 | [基线](../crates/hysteriax-server/migrations/0001_baseline.sql)。 |
 | `batch_cache_versions` | `cache_entity_versions` 中 `kind='credential_batches'` 的兼容投影。 | [基线](../crates/hysteriax-server/migrations/0001_baseline.sql)。 |

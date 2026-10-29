@@ -21,7 +21,7 @@ import time
 import uuid
 
 from postgres_test import PostgresTestSchema
-from credential_test_fixtures import grant_group
+from credential_test_fixtures import grant_group, user_connection_password
 
 ROOT = Path(__file__).resolve().parent.parent
 spec = importlib.util.spec_from_file_location("matrix", ROOT / "scripts/verify-deployment-matrix.py")
@@ -122,7 +122,8 @@ def main():
                 print("Initial public proxy probes healthy", flush=True)
                 assert healthy["latency_ms"] is not None
                 user = api("/api/v2/users", "POST", {"name": "Overview real user", "enabled": True})["id"]
-                credential = grant_group(api,user,[node])["created_credentials"][0]["hy2_credential"]
+                grant_group(api,user,[node])
+                credential = user_connection_password(database, environment["HYSTERIAX_MASTER_KEY"], user)
                 client_port = matrix.free_port()
                 client_config = temp / "user.yaml"
                 client_config.write_text(f"server: 127.0.0.1:{udp_port}\nauth: {credential}\ntls:\n  insecure: true\nsocks5:\n  listen: 127.0.0.1:{client_port}\n")

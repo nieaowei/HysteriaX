@@ -86,6 +86,24 @@ async fn retry_on(
         ));
     }
     let kind: String = original.get("kind");
+    if kind == "authorization-change" {
+        let child = super::enqueue_job_with_payload_in_tx(
+            tx,
+            &kind,
+            None,
+            None,
+            original.get("payload_json"),
+        )
+        .await?;
+        sqlx::query("UPDATE jobs SET retry_of_job_id=$1,resource_key=$2,resource_type=$3,resource_id=$4,resource_name=$5 WHERE id=$6")
+            .bind(&id).bind(original.get::<Option<String>,_>("resource_key")).bind(original.get::<Option<String>,_>("resource_type"))
+            .bind(original.get::<Option<String>,_>("resource_id")).bind(original.get::<Option<String>,_>("resource_name")).bind(&child).execute(&mut **tx).await?;
+        audit_retry_on(tx, &actor, &id, &child, json!({})).await?;
+        return Ok((
+            StatusCode::ACCEPTED,
+            Json(json!({"job_id":child,"status":"queued"})),
+        ));
+    }
     if kind.starts_with("dns-") {
         let mut payload: Value = original.get("payload_json");
         let operation = sqlx::query("SELECT * FROM dns_operations WHERE id=$1")

@@ -11,8 +11,12 @@ async fn fixture() -> AppState {
         .execute(&state.pool).await.unwrap();
     sqlx::query("INSERT INTO nodes(id,name,ssh_host,ssh_port,ssh_username,ssh_auth_type,ssh_secret_enc,public_host,public_port,listen_addr,node_token_hash,node_token_enc,traffic_stats_secret_enc,desired_config_enc,created_at,updated_at) SELECT 'node-'||i, 'Node '||i, '127.0.0.1',22,'root','private_key','unused','example.test',443,':443','hash-'||i,'unused','unused','{}',now(),now() FROM generate_series(1,2) i")
         .execute(&state.pool).await.unwrap();
-    sqlx::query("INSERT INTO node_assignments(user_id,node_id,credential_hash,credential_enc,created_at) VALUES('user-235','node-1','one','encrypted-secret',now()),('user-235','node-2','two','encrypted-secret',now())")
+    sqlx::query("WITH assignment_fixture(user_id,node_id,credential_hash,credential_enc,created_at) AS MATERIALIZED (VALUES('user-235','node-1','one','encrypted-secret',now()),('user-235','node-2','two','encrypted-secret',now())), password_fixture AS (UPDATE users u SET connection_credential_hash=c.credential_hash,connection_credential_enc=c.credential_enc FROM (SELECT DISTINCT ON(user_id) user_id,credential_hash,credential_enc FROM assignment_fixture ORDER BY user_id) c WHERE u.id=c.user_id), fixture_groups AS (INSERT INTO authorization_groups(id,name,created_at,updated_at) SELECT 'fixture-'||md5(user_id||chr(31)||node_id),'Fixture authorization',now(),now() FROM assignment_fixture ON CONFLICT(id) DO UPDATE SET name=EXCLUDED.name RETURNING id), fixture_members AS (INSERT INTO authorization_group_users(group_id,user_id,created_at) SELECT g.id,a.user_id,now() FROM assignment_fixture a JOIN fixture_groups g ON g.id='fixture-'||md5(a.user_id||chr(31)||a.node_id) ON CONFLICT DO NOTHING), fixture_nodes AS (INSERT INTO authorization_group_nodes(group_id,node_id,created_at) SELECT g.id,a.node_id,now() FROM assignment_fixture a JOIN fixture_groups g ON g.id='fixture-'||md5(a.user_id||chr(31)||a.node_id) ON CONFLICT DO NOTHING) INSERT INTO node_assignments(user_id,node_id,created_at) SELECT user_id,node_id,created_at FROM assignment_fixture")
         .execute(&state.pool).await.unwrap();
+    sqlx::query("DELETE FROM authorization_groups WHERE id LIKE 'fixture-%'")
+        .execute(&state.pool)
+        .await
+        .unwrap();
     sqlx::query("INSERT INTO authorization_groups(id,name,revision,created_at,updated_at) VALUES('group-1','Group',1,now(),now())")
         .execute(&state.pool).await.unwrap();
     sqlx::query("INSERT INTO authorization_group_users(group_id,user_id,created_at) VALUES('group-1','user-235',now())")

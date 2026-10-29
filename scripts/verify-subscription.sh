@@ -210,7 +210,7 @@ def main():
             user_id = json.loads(body)["id"]
             for authorized_node in (node_id,realm_node_id):
                 status,_=request_group(raw_request,base,admin,[user_id],[authorized_node])
-                if status!=200:raise RuntimeError("group authorization of parser fixture failed")
+                if status!=202:raise RuntimeError("group authorization of parser fixture failed")
             status, body = request(
                 base,
                 f"/api/v2/users/{user_id}/subscription",
@@ -308,7 +308,7 @@ def main():
                 check=True,
                 stdout=subprocess.DEVNULL,
             )
-            verify_formats(base, admin, database, temp, subscription, first_subscription, user_id, empty_token)
+            verify_formats(base, admin, database, temp, subscription, first_subscription, user_id, empty_token, master_key=environment["HYSTERIAX_MASTER_KEY"])
             print("Generated mTLS, ECH, port-hopping, and Realm subscriptions parse with pinned Mihomo v1.19.31; the Realm subscription includes handshake-timeout: 30.")
         finally:
             server.terminate()

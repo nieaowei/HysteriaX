@@ -1181,20 +1181,20 @@ enum APIEndpoints {
     static func deleteUser(id: String, expectedRevision: Int) -> APIOperation<NoRequest, NoResponse> {
         APIOperation(method: "DELETE", path: "api/v2/users/\(id)", queryParameters: ["expected_revision": String(expectedRevision)])
     }
-    static func updateUserAuthorizationGroups(id: String) -> APIOperation<UserAuthorizationGroupsUpdateRequest, UserAuthorizationGroupsMutationResponse> {
+    static func updateUserAuthorizationGroups(id: String) -> APIOperation<UserAuthorizationGroupsUpdateRequest, AuthorizationChangeReceipt> {
         APIOperation(method: "PUT", path: "api/v2/users/\(id)/authorization-groups", queryParameters: [:])
     }
     static func listAuthorizationGroups(page: Int? = nil, pageSize: Int? = nil, q: String? = nil, sort: String? = nil, order: String? = nil) -> APIOperation<NoRequest, AuthorizationGroupsPage> {
         APIOperation(method: "GET", path: "api/v2/authorization-groups", queryParameters: ["page": page.map { String($0) }, "page_size": pageSize.map { String($0) }, "q": q.map { String($0) }, "sort": sort.map { String($0) }, "order": order.map { String($0) }].compactMapValues { $0 })
     }
-    static let createAuthorizationGroup: APIOperation<AuthorizationGroupCreateRequest, AuthorizationGroupMutationResponse> = APIOperation<AuthorizationGroupCreateRequest, AuthorizationGroupMutationResponse>(method: "POST", path: "api/v2/authorization-groups", queryParameters: [:])
+    static let createAuthorizationGroup: APIOperation<AuthorizationGroupCreateRequest, AuthorizationChangeReceipt> = APIOperation<AuthorizationGroupCreateRequest, AuthorizationChangeReceipt>(method: "POST", path: "api/v2/authorization-groups", queryParameters: [:])
     static func getAuthorizationGroup(groupID: String) -> APIOperation<NoRequest, AuthorizationGroupSummary> {
         APIOperation(method: "GET", path: "api/v2/authorization-groups/\(groupID)", queryParameters: [:])
     }
-    static func updateAuthorizationGroup(groupID: String) -> APIOperation<AuthorizationGroupUpdateRequest, AuthorizationGroupMutationResponse> {
+    static func updateAuthorizationGroup(groupID: String) -> APIOperation<AuthorizationGroupUpdateRequest, AuthorizationChangeReceipt> {
         APIOperation(method: "PATCH", path: "api/v2/authorization-groups/\(groupID)", queryParameters: [:])
     }
-    static func deleteAuthorizationGroup(groupID: String) -> APIOperation<AuthorizationGroupDeleteRequest, AuthorizationGroupMutationResponse> {
+    static func deleteAuthorizationGroup(groupID: String) -> APIOperation<AuthorizationGroupDeleteRequest, AuthorizationChangeReceipt> {
         APIOperation(method: "DELETE", path: "api/v2/authorization-groups/\(groupID)", queryParameters: [:])
     }
     static func listAuthorizationGroupUsers(groupID: String, page: Int? = nil, pageSize: Int? = nil, q: String? = nil, sort: String? = nil, order: String? = nil, member: Bool? = nil, enabled: Bool? = nil) -> APIOperation<NoRequest, AuthorizationGroupUsersPage> {

@@ -42,6 +42,31 @@ async fn links_on(
     Ok(output)
 }
 
+/// A page locks only its linked CA parents after the caller locks the user.
+pub(crate) async fn lock_links_on(
+    tx: &mut Transaction<'_, Postgres>,
+    user: &str,
+    nodes: &[String],
+) -> Result<()> {
+    let cas: Vec<String> = links_on(tx, nodes)
+        .await?
+        .into_values()
+        .flatten()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    if cas.is_empty() {
+        return Ok(());
+    }
+    sqlx::query("SELECT id FROM credentials WHERE id=ANY($1) OR id IN (SELECT credential_id FROM mtls_user_identities WHERE user_id=$2 AND ca_id=ANY($1)) ORDER BY id FOR UPDATE")
+        .bind(&cas).bind(user).fetch_all(&mut **tx).await?;
+    sqlx::query("SELECT credential_id FROM mtls_authorities WHERE credential_id=ANY($1) ORDER BY credential_id FOR UPDATE")
+        .bind(&cas).fetch_all(&mut **tx).await?;
+    sqlx::query("SELECT id FROM mtls_user_identities WHERE user_id=$1 AND ca_id=ANY($2) ORDER BY id FOR UPDATE")
+        .bind(user).bind(&cas).fetch_all(&mut **tx).await?;
+    Ok(())
+}
+
 pub async fn plan_on(connection: &mut sqlx::PgConnection, additions: &[Pair]) -> Result<Plan> {
     if additions.is_empty() {
         return Ok(Plan::default());
@@ -307,42 +332,4 @@ pub async fn referenced_nodes_on(
 ) -> Result<Vec<String>> {
     Ok(sqlx::query_scalar("WITH links AS (SELECT node_id,ca_id FROM mtls_node_trust WHERE desired OR deployed UNION SELECT node_id,ca_id FROM mtls_live_activation_trust) SELECT DISTINCT a.node_id FROM node_assignments a JOIN links l ON l.node_id=a.node_id WHERE a.user_id=$1 AND l.ca_id=$2 ORDER BY a.node_id")
         .bind(user).bind(ca).fetch_all(connection).await?)
-}
-
-pub async fn annotate_results_on(
-    connection: &mut sqlx::PgConnection,
-    results: &mut Value,
-) -> Result<()> {
-    let identities = results
-        .as_array_mut()
-        .context("managed identity result must be an array")?;
-    if identities.is_empty() {
-        return Ok(());
-    }
-    let mut users = Vec::with_capacity(identities.len());
-    let mut cas = Vec::with_capacity(identities.len());
-    for identity in identities.iter() {
-        users.push(
-            identity["user_id"]
-                .as_str()
-                .context("identity owner missing")?
-                .to_owned(),
-        );
-        cas.push(
-            identity["ca_credential_id"]
-                .as_str()
-                .context("identity CA missing")?
-                .to_owned(),
-        );
-    }
-    let rows: Vec<(String,String,String)> = sqlx::query_as("WITH links AS (SELECT node_id,ca_id FROM mtls_node_trust WHERE desired OR deployed UNION SELECT node_id,ca_id FROM mtls_live_activation_trust) SELECT DISTINCT p.user_id,p.ca_id,a.node_id FROM unnest($1::text[],$2::text[]) AS p(user_id,ca_id) JOIN node_assignments a ON a.user_id=p.user_id JOIN links l ON l.node_id=a.node_id AND l.ca_id=p.ca_id ORDER BY p.user_id,p.ca_id,a.node_id")
-        .bind(&users).bind(&cas).fetch_all(connection).await?;
-    let mut nodes = BTreeMap::<(String, String), Vec<String>>::new();
-    for (user, ca, node) in rows {
-        nodes.entry((user, ca)).or_default().push(node);
-    }
-    for ((identity, user), ca) in identities.iter_mut().zip(users).zip(cas) {
-        identity["affected_node_ids"] = json!(nodes.get(&(user, ca)).cloned().unwrap_or_default());
-    }
-    Ok(())
 }

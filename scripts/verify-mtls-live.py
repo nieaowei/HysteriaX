@@ -20,7 +20,7 @@ import urllib.request
 import uuid
 import yaml
 
-from credential_test_fixtures import grant_group
+from credential_test_fixtures import grant_group, user_connection_password
 
 from postgres_test import PostgresTestSchema
 
@@ -747,7 +747,7 @@ def main():
                 user = expect("/api/v2/users", "POST", {"name": "mTLS acceptance user"}, (201,))
                 user_id = user["id"]
                 grant = grant_group(expect, user_id, [node_id])
-                credential = next(item["hy2_credential"] for item in grant["created_credentials"] if item["node_id"] == node_id)
+                credential = user_connection_password(database, environment["HYSTERIAX_MASTER_KEY"], user_id)
                 secrets_to_scrub.append(credential)
 
                 subscription = expect(
@@ -1427,7 +1427,7 @@ def main():
                 )
                 quota_user_id = quota_user["id"]
                 grant = grant_group(expect, quota_user_id, [node_id])
-                quota_credential = next(item["hy2_credential"] for item in grant["created_credentials"] if item["node_id"] == node_id)
+                quota_credential = user_connection_password(database, environment["HYSTERIAX_MASTER_KEY"], quota_user_id)
                 secrets_to_scrub.append(quota_credential)
                 quota_subscription = expect(
                     f"/api/v2/users/{quota_user_id}/subscription",
@@ -1657,11 +1657,7 @@ def main():
                     "POST",
                     {"expected_revision": credentials_revision},
                 )
-                replacement_credential = next(
-                    item["credential"]
-                    for item in rotated["credentials"]
-                    if item["node_id"] == node_id
-                )
+                replacement_credential = rotated["credential"]
                 secrets_to_scrub.append(replacement_credential)
                 old_auth_status, old_auth_body = request(
                     base,
@@ -1735,7 +1731,7 @@ def main():
                 fresh = expect("/api/v2/users", "POST", {"name":"Managed CA rotation traffic"}, (201,))
                 fresh_id = fresh["id"]
                 fresh_grant = grant_group(expect, fresh_id, [node_id])
-                fresh_auth = next(item["hy2_credential"] for item in fresh_grant["created_credentials"] if item["node_id"] == node_id)
+                fresh_auth = user_connection_password(database, environment["HYSTERIAX_MASTER_KEY"], fresh_id)
                 secrets_to_scrub.append(fresh_auth)
                 fresh_sub = expect(f"/api/v2/users/{fresh_id}/subscription", "POST", {"expected_revision":2})["token"]
                 secrets_to_scrub.append(fresh_sub)

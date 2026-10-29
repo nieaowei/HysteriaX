@@ -1,4 +1,5 @@
 use super::*;
+use crate::security::token_digest;
 
 async fn fixture() -> AppState {
     let pool = crate::db::test_pool().await;

@@ -6,6 +6,7 @@ mod bootstrap;
 mod cache;
 mod cache_domains;
 mod config;
+mod connection_credentials;
 mod credentials;
 mod db;
 mod deployment;
@@ -77,6 +78,7 @@ async fn main() -> Result<()> {
         bootstrap::check_migration_key(&pool, &secret_box).await?;
         initialize_admin_token(&pool).await?;
         credentials::migration::migrate(&pool, &secret_box).await?;
+        connection_credentials::migrate(&pool, &secret_box).await?;
         api::subscriptions::templates::initialize(&pool, &secret_box)
             .await
             .map_err(|e| anyhow::anyhow!("initialize subscription templates: {}", e.message))?;

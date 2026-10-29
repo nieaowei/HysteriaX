@@ -278,6 +278,11 @@ struct JobsView: View {
                     Task { do { try await store.retryDNSJob(job) } catch { actionError = error.localizedDescription } }
                 }.disabled(!store.isConnected || !store.supportsDNSManagement)
             }
+            if job.kind == "authorization-change", job.status == "failed", job.retryJobId == nil {
+                Button(L10n.text("重试授权任务")) {
+                    Task { do { selectedJobID = try await store.retryAuthorizationJob(job) } catch { actionError = error.localizedDescription } }
+                }.disabled(!store.isConnected)
+            }
             if let action = retryAction(for: job),
                let node = store.nodes.first(where: { $0.id == job.nodeID }) {
                 Button(L10n.text("重试：{0}", String(describing: (retryLabel(action))))) { retry(job, on: node, action: action) }

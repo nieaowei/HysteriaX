@@ -11,6 +11,7 @@ enum JobDisplayText {
         case "dns-record-delete": L10n.text("删除 DNS 记录")
         case "dns-record-check": L10n.text("验证 DNS 解析")
         case "dns-credential-apply": L10n.text("更新 DNS 连接凭据")
+        case "authorization-change": L10n.text("变更授权")
         case "ssh-test": L10n.text("SSH 测试")
         case "credential-apply": L10n.text("应用凭据")
         case "deploy": L10n.text("部署")
@@ -47,6 +48,8 @@ enum JobDisplayText {
 
     static func stage(_ value: String) -> String {
         let labels = [
+            "authorization_applying": L10n.text("正在应用授权"),
+            "authorization_applied": L10n.text("授权关系已生效"),
             "credential_applied": L10n.text("凭据已应用"),
             "credential_deployment_queued": L10n.text("凭据部署已排队"),
             "credential_revocation_queued": L10n.text("连接撤销已排队"),
@@ -306,6 +309,8 @@ enum JobDisplayText {
 enum AuditDisplayText {
     private static var actionLabels: [String: String] {
         [
+            "authorization_change.queued": L10n.text("提交授权变更"),
+            "authorization_change.applied": L10n.text("授权关系已生效"),
             "template.created": L10n.text("创建订阅模板"),
             "template.metadata_updated": L10n.text("修改订阅模板"),
             "template.default_changed": L10n.text("切换默认订阅模板"),

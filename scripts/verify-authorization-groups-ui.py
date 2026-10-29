@@ -45,7 +45,10 @@ with tempfile.TemporaryDirectory(prefix="hx-group-ui-") as folder:
     node_detail = dict(id="node-1",name="香港",revision=1,deployed_revision=1,state="deployed",mtls_state="recovery_required",mtls_error="Remote activation outcome is unconfirmed",mtls_generation=2,mtls=dict(target=mtls_settings,deployed=mtls_settings,trust=[dict(ca_credential_id="ca-1",ca_credential_version=2,desired=True,deployed=True)]),config=dict(tls=dict(cert="credential://tls-1/1/certificate",key="credential://tls-1/1/private_key",sniGuard="disable"),mtls=mtls_settings),yaml_preview="listen: :443",ssh=dict(host="127.0.0.1",port=22,username="root",auth_type="password",credential_id="ssh-1",credential_version=1),connection=dict(host="127.0.0.1",port=443,listen_addr=":443",skip_cert_verify=True),created_at=stamp,updated_at=stamp)
     node_detail["public"] = node_detail.pop("connection")
     nodes[0].update(state="deployed",deployed_revision=1,mtls_state="recovery_required",mtls_error=node_detail["mtls_error"],mtls_generation=2)
-    responses.update(credentials=[ca,probe,tls], ca=ca_detail,node_detail=node_detail,ca_receipt=dict(id="ca-1",revision=1,version=1,published=True), policy_receipt=dict(id="ca-1",policy_revision=2,policy=dict(client_validity_days=90,renew_before_hours=168)))
+    user_credential = dict(id="user:user-1", name="Alice", kind="user_credential", revision=1, latest_version=1,
+                           owner_user_id="user-1", reference_count=1, archived=False, status="active", metadata={}, created_at=stamp)
+    responses.update(credentials=[ca,probe,tls,user_credential], ca=ca_detail,node_detail=node_detail,ca_receipt=dict(id="ca-1",revision=1,version=1,published=True), policy_receipt=dict(id="ca-1",policy_revision=2,policy=dict(client_validity_days=90,renew_before_hours=168)))
+    responses.update(authorization_job={"job":{"id":"authorization-1","kind":"authorization-change","status":"succeeded","stage":"authorization_applied","attempts":1,"created_at":stamp,"updated_at":stamp},"logs":[]})
     responses.update(ready={"status":"ready","database":"ok","management_protocol":2},
                      event_head={"cursor":"v2:00000000-0000-0000-0000-000000000001:0",
                                  "epoch":"00000000-0000-0000-0000-000000000001","publication_seq":0})
@@ -66,7 +69,7 @@ final class AuthorizationFixtureProtocol: URLProtocol, @unchecked Sendable {
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {
-        let paths = ["/readyz":"ready", "/api/v2/events/head":"event_head", "/api/v2/events":"empty", "/api/v2/version":"version", "/api/v2/authorization-groups":"groups", "/api/v2/authorization-groups/group-1":"group", "/api/v2/authorization-groups/group-1/users":"users", "/api/v2/authorization-groups/group-1/nodes":"nodes", "/api/v2/users":"users", "/api/v2/users/user-1":"user", "/api/v2/nodes":"nodes", "/api/v2/nodes/node-1":"node_detail", "/api/v2/nodes/node-1/resources":"empty", "/api/v2/credentials":"credentials", "/api/v2/credentials/ca-1":"ca", "/api/v2/credentials/ca-identities":"ca_receipt", "/api/v2/credentials/ca-1/ca-policy":"policy_receipt", "/api/v2/credentials/ca-1/ca-versions":"ca_receipt", "/api/v2/jobs":"empty", "/api/v2/audit":"empty", "/api/v2/admin/tokens":"empty"]
+        let paths = ["/readyz":"ready", "/api/v2/events/head":"event_head", "/api/v2/events":"empty", "/api/v2/version":"version", "/api/v2/authorization-groups":"groups", "/api/v2/authorization-groups/group-1":"group", "/api/v2/authorization-groups/group-1/users":"users", "/api/v2/authorization-groups/group-1/nodes":"nodes", "/api/v2/users":"users", "/api/v2/users/user-1":"user", "/api/v2/nodes":"nodes", "/api/v2/nodes/node-1":"node_detail", "/api/v2/nodes/node-1/resources":"empty", "/api/v2/credentials":"credentials", "/api/v2/credentials/ca-1":"ca", "/api/v2/credentials/ca-identities":"ca_receipt", "/api/v2/credentials/ca-1/ca-policy":"policy_receipt", "/api/v2/credentials/ca-1/ca-versions":"ca_receipt", "/api/v2/jobs/authorization-1":"authorization_job", "/api/v2/jobs":"empty", "/api/v2/audit":"empty", "/api/v2/admin/tokens":"empty"]
         let path = request.url!.path
         if path.contains("authorization-groups"), request.httpMethod != "GET" { Self.state.markCommitted() }
         let folder = ProcessInfo.processInfo.environment["HYSTERIAX_AUTHORIZATION_FIXTURE_DIRECTORY"]!
@@ -194,6 +197,12 @@ final class AuthorizationFixtureProtocol: URLProtocol, @unchecked Sendable {
             data = try! JSONSerialization.data(withJSONObject:node)
         }
         var status = paths[path] == nil && !["/api/v2/users", "/api/v2/credentials", "/api/v2/nodes"].contains(path) ? 404 : 200
+        if path == "/api/v2/jobs/authorization-1", ProcessInfo.processInfo.environment["HYSTERIAX_TEST_AUTH_JOB_STATE"] == "running" {
+            var detail = try! JSONSerialization.jsonObject(with:data) as! [String:Any]
+            var job = detail["job"] as! [String:Any]
+            job["status"] = "running"; job["stage"] = "authorization_applying"; detail["job"] = job
+            data = try! JSONSerialization.data(withJSONObject:detail)
+        }
         if path == "/api/v2/nodes/node-1" && request.httpMethod == "PATCH" {
             let stream = request.httpBodyStream
             var body = request.httpBody ?? Data()
@@ -202,8 +211,9 @@ final class AuthorizationFixtureProtocol: URLProtocol, @unchecked Sendable {
             data = Data(#"{"id":"node-1","name":"香港","revision":2,"state":"syncing","sync_job_queued":true}"#.utf8)
         }
         if path == "/api/v2/authorization-groups" && request.httpMethod == "POST" {
-            data = Data(#"{"revocation_job_ids":[]}"#.utf8)
-            status = 201
+            data = Data(#"{"job_id":"authorization-1","resource_id":"group-1","status":"queued"}"#.utf8)
+            status = 202
+            status = 202
         }
         if path == "/api/v2/authorization-groups/group-1" && request.httpMethod == "PATCH" {
             let stream = request.httpBodyStream
@@ -212,16 +222,19 @@ final class AuthorizationFixtureProtocol: URLProtocol, @unchecked Sendable {
             let input = try! JSONSerialization.jsonObject(with:body) as! [String:Any]
             precondition(input["preview_token"] == nil && input["user_ids"] == nil && input["node_ids"] == nil)
             precondition(input["expected_revision"] as? Int == 1)
-            data = Data(#"{"revocation_job_ids":[]}"#.utf8)
+            data = Data(#"{"job_id":"authorization-1","resource_id":"group-1","status":"queued"}"#.utf8)
+            status = 202
         }
         if path.contains("authorization-groups"), path.hasSuffix("/preview") {
             preconditionFailure("authorization previews are retired")
         }
         if path == "/api/v2/authorization-groups/group-1" && request.httpMethod == "DELETE" {
-            data = Data(#"{"revocation_job_ids":[]}"#.utf8)
+            data = Data(#"{"job_id":"authorization-1","resource_id":"group-1","status":"queued"}"#.utf8)
+            status = 202
         }
         if path == "/api/v2/users/user-1/authorization-groups" && request.httpMethod == "PUT" {
-            data = Data(#"{"user_id":"user-1","revision":2,"group_ids":[],"assignments":[],"additions_count":0,"removals_count":1,"created_credentials":[],"revocation_job_ids":[]}"#.utf8)
+            data = Data(#"{"job_id":"authorization-1","resource_id":"user-1","status":"queued"}"#.utf8)
+            status = 202
             status = 200
         }
         if request.url!.path == "/api/v2/events" { data = Data() }

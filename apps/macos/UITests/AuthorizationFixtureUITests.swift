@@ -77,6 +77,7 @@ final class AuthorizationFixtureUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchEnvironment["HYSTERIAX_AUTHORIZATION_FIXTURE_DIRECTORY"] = "__AUTHORIZATION_FIXTURES__"
         app.launchEnvironment["HYSTERIAX_TEST_REFRESH_DELAY_SECONDS"] = "8"
+        app.launchEnvironment["HYSTERIAX_TEST_AUTH_JOB_STATE"] = "running"
         app.launchEnvironment["HYSTERIAX_TEST_SLOW_DIRECTORY"] = "1"
         app.launchArguments += ["-appLanguage", "zh-Hans"]
         app.launch()
@@ -93,6 +94,9 @@ final class AuthorizationFixtureUITests: XCTestCase {
         app.buttons["authorizationGroups.editor.save"].firstMatch.click()
         let summary = app.descendants(matching: .any)["authorizationGroups.editor.resultSummary"].firstMatch
         XCTAssertTrue(summary.waitForExistence(timeout: 4), "Saved result must not wait for the eight-second monitoring read")
+        let status = app.descendants(matching: .any)["authorization.task.status"].firstMatch
+        XCTAssertTrue(status.waitForExistence(timeout: 4))
+        XCTAssertTrue(displayedText(status).contains("处理中"), displayedText(status))
         XCTAssertTrue(app.buttons["完成"].firstMatch.isEnabled)
         let directoryStarted = NSPredicate { _, _ in FileManager.default.fileExists(atPath: "__AUTHORIZATION_FIXTURES__/directory-refresh-started") }
         expectation(for: directoryStarted, evaluatedWith: app)
@@ -122,7 +126,9 @@ final class AuthorizationFixtureUITests: XCTestCase {
         XCTAssertTrue(save.isEnabled); save.click()
         let membership = app.descendants(matching: .any)["users.groups.resultSummary"].firstMatch
         XCTAssertTrue(membership.waitForExistence(timeout: 10))
-        XCTAssertTrue(displayedText(membership).contains("移除 1 条连接授权"), displayedText(membership))
+        let taskStatus = app.descendants(matching: .any)["authorization.task.status"].firstMatch
+        XCTAssertTrue(taskStatus.waitForExistence(timeout: 4))
+        XCTAssertTrue(displayedText(taskStatus).contains("授权"), displayedText(taskStatus))
         app.buttons["完成"].firstMatch.click()
         app.radioButtons["授权组"].firstMatch.click()
         let group = app.descendants(matching: .any)["authorizationGroups.row.group-1"].firstMatch
@@ -130,7 +136,7 @@ final class AuthorizationFixtureUITests: XCTestCase {
         app.buttons["authorizationGroups.delete"].firstMatch.click()
         let result = app.descendants(matching: .any)["authorizationGroups.delete.resultSummary"].firstMatch
         XCTAssertTrue(result.waitForExistence(timeout: 10))
-        XCTAssertTrue(displayedText(result).contains("授权组已删除"), displayedText(result))
+        XCTAssertTrue(displayedText(result).contains("授权变更已提交"), displayedText(result))
     }
 
     @MainActor
@@ -154,7 +160,7 @@ final class AuthorizationFixtureUITests: XCTestCase {
         XCTAssertTrue(save.isEnabled); save.click()
         let summary = app.descendants(matching: .any)["authorizationGroups.editor.resultSummary"].firstMatch
         XCTAssertTrue(summary.waitForExistence(timeout: 10))
-        XCTAssertTrue(displayedText(summary).contains("授权组已更新"), displayedText(summary))
+        XCTAssertTrue(displayedText(summary).contains("授权变更已提交"), displayedText(summary))
     }
 
     @MainActor
@@ -214,7 +220,7 @@ final class AuthorizationFixtureUITests: XCTestCase {
         save.click()
         let summary = app.descendants(matching: .any)["authorizationGroups.editor.resultSummary"].firstMatch
         XCTAssertTrue(summary.waitForExistence(timeout: 10))
-        XCTAssertTrue(displayedText(summary).contains("授权组已更新"), displayedText(summary))
+        XCTAssertTrue(displayedText(summary).contains("授权变更已提交"), displayedText(summary))
         XCTAssertTrue(app.descendants(matching: .any)["authorization.mutationReceipt"].firstMatch.exists)
         app.buttons["完成"].firstMatch.click()
 
@@ -392,6 +398,28 @@ final class AuthorizationFixtureUITests: XCTestCase {
         XCTAssertFalse(app.menuItems["部署"].firstMatch.isEnabled)
         XCTAssertFalse(app.menuItems["回滚"].firstMatch.isEnabled)
         app.typeKey(.escape, modifierFlags:[])
+    }
+
+    @MainActor
+    func testUserConnectionCredentialShowsOneUserAndLinksToUserManagement() {
+        let app = XCUIApplication()
+        app.launchEnvironment["HYSTERIAX_AUTHORIZATION_FIXTURE_DIRECTORY"] = "__AUTHORIZATION_FIXTURES__"
+        app.launchArguments += ["-appLanguage", "zh-Hans"]
+        app.launch()
+        addTeardownBlock { await MainActor.run { app.terminate() } }
+        let sidebar = app.descendants(matching: .any)["sidebar.credentials"].firstMatch
+        XCTAssertTrue(sidebar.waitForExistence(timeout: 10)); sidebar.click()
+        app.radioButtons["用户凭据"].firstMatch.click()
+        let user = app.staticTexts["Alice"].firstMatch
+        XCTAssertTrue(user.waitForExistence(timeout: 10)); user.click()
+        let count = app.staticTexts["credentials.user.nodeCount"].firstMatch
+        XCTAssertTrue(count.waitForExistence(timeout: 5))
+        XCTAssertEqual(displayedText(count), "1")
+        XCTAssertTrue(app.staticTexts["该用户的全部授权节点共用一个连接密码，授权组变更不会轮换密码。"].firstMatch.exists)
+        let manage = app.buttons["credentials.manageUser"].firstMatch
+        XCTAssertTrue(manage.exists); manage.click()
+        XCTAssertTrue(app.descendants(matching: .any)["users.detail"].firstMatch.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["users.manageAuthorizationGroups"].firstMatch.exists)
     }
 
     @MainActor

@@ -1,4 +1,4 @@
-//! Bounded management reads. Mutation planning keeps its separate complete graph.
+//! Bounded management reads; mutations use indexed, durable delta tasks.
 use super::*;
 use axum::extract::Query;
 

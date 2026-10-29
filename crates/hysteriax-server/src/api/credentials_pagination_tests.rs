@@ -21,7 +21,7 @@ async fn fixture_with_connections(connections: u32) -> AppState {
     let cipher = state.secrets.encrypt(&config.to_string()).unwrap();
     sqlx::query("INSERT INTO nodes(id,name,ssh_host,ssh_port,ssh_username,ssh_auth_type,ssh_secret_enc,public_host,public_port,listen_addr,node_token_hash,node_token_enc,traffic_stats_secret_enc,desired_config_enc,deployed_config_enc,ssh_credential_id,ssh_credential_version,created_at,updated_at) VALUES('node','Node','127.0.0.1',22,'root','private_key','unused','example.test',443,':443','hash','unused','unused',$1,$1,'00000000-0000-4000-8000-000000000001',1,now(),now())")
         .bind(cipher).execute(&state.pool).await.unwrap();
-    sqlx::query("INSERT INTO node_assignments(user_id,node_id,credential_hash,credential_enc,created_at) VALUES('user','node','PRIVATE-USER-HASH','PRIVATE-USER-MUST-NOT-LEAK',now())").execute(&state.pool).await.unwrap();
+    sqlx::query("WITH assignment_fixture(user_id,node_id,credential_hash,credential_enc,created_at) AS MATERIALIZED (VALUES('user','node','PRIVATE-USER-HASH','PRIVATE-USER-MUST-NOT-LEAK',now())), password_fixture AS (UPDATE users u SET connection_credential_hash=c.credential_hash,connection_credential_enc=c.credential_enc FROM (SELECT DISTINCT ON(user_id) user_id,credential_hash,credential_enc FROM assignment_fixture ORDER BY user_id) c WHERE u.id=c.user_id), fixture_groups AS (INSERT INTO authorization_groups(id,name,created_at,updated_at) SELECT 'fixture-'||md5(user_id||chr(31)||node_id),'Fixture authorization',now(),now() FROM assignment_fixture ON CONFLICT(id) DO UPDATE SET name=EXCLUDED.name RETURNING id), fixture_members AS (INSERT INTO authorization_group_users(group_id,user_id,created_at) SELECT g.id,a.user_id,now() FROM assignment_fixture a JOIN fixture_groups g ON g.id='fixture-'||md5(a.user_id||chr(31)||a.node_id) ON CONFLICT DO NOTHING), fixture_nodes AS (INSERT INTO authorization_group_nodes(group_id,node_id,created_at) SELECT g.id,a.node_id,now() FROM assignment_fixture a JOIN fixture_groups g ON g.id='fixture-'||md5(a.user_id||chr(31)||a.node_id) ON CONFLICT DO NOTHING) INSERT INTO node_assignments(user_id,node_id,created_at) SELECT user_id,node_id,created_at FROM assignment_fixture").execute(&state.pool).await.unwrap();
     crate::credentials::reference_index::initialize(&state.pool, &state.secrets)
         .await
         .unwrap();
@@ -138,7 +138,7 @@ async fn credentials_pagination_covers_mixed_catalog_and_stable_ties() {
     );
     assert!(ids.contains(&"admin:token".to_owned()));
     assert!(ids.contains(&"subscription:subscription".to_owned()));
-    assert!(ids.contains(&"user:user:node".to_owned()));
+    assert!(ids.contains(&"user:user".to_owned()));
     let last = page(&state, json!({"page":i64::MAX})).await;
     assert_eq!(last["page"], 5);
     assert_eq!(last["items"].as_array().unwrap().len(), 38);
@@ -279,4 +279,133 @@ async fn directory_status_order_matches_live_summaries_and_bad_expiry_falls_back
         .unwrap();
     assert_eq!(fallback["status"], "expiring");
     assert!(fallback["expires_at"].is_string());
+}
+
+#[tokio::test]
+async fn user_credentials_are_stable_per_user_with_zero_or_many_nodes_and_rotation() {
+    let state = fixture().await;
+    sqlx::query("INSERT INTO nodes(id,name,ssh_host,ssh_port,ssh_username,ssh_auth_type,ssh_secret_enc,public_host,public_port,listen_addr,node_token_hash,node_token_enc,traffic_stats_secret_enc,desired_config_enc,created_at,updated_at) SELECT 'extra-'||i,'Extra '||i,'127.0.0.1',22,'root','password','unused','example.test',443,':443','node-hash-'||i,'unused','unused',$1,now(),now() FROM generate_series(1,1000) i")
+        .bind(state.secrets.encrypt("{}").unwrap()).execute(&state.pool).await.unwrap();
+    sqlx::query("INSERT INTO node_assignments(user_id,node_id,created_at) SELECT 'user',id,now() FROM nodes WHERE id LIKE 'extra-%'")
+        .execute(&state.pool).await.unwrap();
+    sqlx::query("INSERT INTO users(id,name,enabled,connection_credential_hash,connection_credential_enc,created_at,updated_at) VALUES('unassigned','No nodes',true,'unassigned-hash','PRIVATE-UNASSIGNED-PASSWORD',now(),now())")
+        .execute(&state.pool).await.unwrap();
+    crate::credentials::reference_index::initialize(&state.pool, &state.secrets)
+        .await
+        .unwrap();
+    let result = page(&state, json!({"category":"user","kind":"user_credential"})).await;
+    assert_eq!(result["total"], 2);
+    assert_eq!(result["items"].as_array().unwrap().len(), 2);
+    let current = result["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|v| v["id"] == "user:user")
+        .unwrap();
+    assert_eq!(current["name"], "User");
+    assert_eq!(current["reference_count"], 1001);
+    assert_eq!(current["metadata"], json!({}));
+    assert_eq!(current["owner_user_id"], "user");
+    assert!(
+        result.to_string().len() < 2000,
+        "node fanout must not expand list responses"
+    );
+    assert!(!result.to_string().contains("PRIVATE-"));
+    let empty = page(&state, json!({"kind":"user_credential","q":"No nodes"})).await;
+    assert_eq!(empty["total"], 1);
+    assert_eq!(empty["items"][0]["reference_count"], 0);
+    assert_eq!(empty["items"][0]["status"], "active");
+    let first = page(&state, json!({"kind":"user_credential","page_size":1})).await;
+    let second = page(
+        &state,
+        json!({"kind":"user_credential","page_size":1,"page":2}),
+    )
+    .await;
+    assert_ne!(first["items"][0]["id"], second["items"][0]["id"]);
+    assert_eq!(second["page"], 2);
+    // A password rotation changes the user revision, never the catalog identity.
+    let _rotation = super::super::users::rotate_credentials(
+        State(state.clone()),
+        Path("user".into()),
+        Json(serde_json::from_value(json!({"expected_revision":1})).unwrap()),
+    )
+    .await
+    .unwrap();
+    let rotated = page(&state, json!({"kind":"user_credential","q":"User"})).await;
+    assert_eq!(rotated["total"], 1);
+    assert_eq!(rotated["items"][0]["id"], "user:user");
+    assert_eq!(rotated["items"][0]["revision"], 2);
+    assert_eq!(rotated["items"][0]["reference_count"], 1001);
+    sqlx::query("DELETE FROM node_assignments WHERE user_id='user'")
+        .execute(&state.pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "UPDATE users SET name='Renamed',enabled=true,quota_bytes=1,usage_bytes=1 WHERE id='user'",
+    )
+    .execute(&state.pool)
+    .await
+    .unwrap();
+    let renamed = page(&state, json!({"kind":"user_credential","q":"Renamed"})).await;
+    assert_eq!(renamed["items"][0]["id"], "user:user");
+    assert_eq!(renamed["items"][0]["reference_count"], 0);
+    assert_eq!(renamed["items"][0]["status"], "quota_exhausted");
+}
+
+#[tokio::test]
+async fn directory_upgrade_replaces_node_entries_without_changing_passwords_or_assignments() {
+    let state = fixture().await;
+    let baseline = include_str!("../../migrations/0001_baseline.sql");
+    let old_view = baseline
+        .split("CREATE VIEW credential_directory AS")
+        .nth(1)
+        .unwrap()
+        .split("-- TABLE: credential_migrations")
+        .next()
+        .unwrap();
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+        "CREATE OR REPLACE VIEW credential_directory AS{old_view}"
+    )))
+    .execute(&state.pool)
+    .await
+    .unwrap();
+    let legacy: String =
+        sqlx::query_scalar("SELECT id FROM credential_directory WHERE kind='user_credential'")
+            .fetch_one(&state.pool)
+            .await
+            .unwrap();
+    assert_eq!(legacy, "user:user:node");
+    let before: (String, String) = sqlx::query_as(
+        "SELECT connection_credential_hash,connection_credential_enc FROM users WHERE id='user'",
+    )
+    .fetch_one(&state.pool)
+    .await
+    .unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../migrations/0006_user_credential_directory.sql"
+    ))
+    .execute(&state.pool)
+    .await
+    .unwrap();
+    let after: (String, String) = sqlx::query_as(
+        "SELECT connection_credential_hash,connection_credential_enc FROM users WHERE id='user'",
+    )
+    .fetch_one(&state.pool)
+    .await
+    .unwrap();
+    assert_eq!(before, after);
+    assert_eq!(page(&state, json!({})).await["total"], 238);
+    let current = page(&state, json!({"kind":"user_credential"})).await;
+    assert_eq!(current["items"][0]["id"], "user:user");
+    assert_eq!(current["items"][0]["reference_count"], 1);
+    sqlx::raw_sql(include_str!(
+        "../../migrations/0006_user_credential_directory.sql"
+    ))
+    .execute(&state.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        page(&state, json!({"category":"operations"})).await["total"],
+        201
+    );
 }

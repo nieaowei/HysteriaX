@@ -148,7 +148,7 @@ async fn migrate_on(tx: &mut Transaction<'_, Postgres>, secrets: &SecretBox) -> 
             .await?;
     }
 
-    let assignments = sqlx::query("SELECT * FROM node_assignments")
+    let assignments = sqlx::query("SELECT connection_credential_enc AS credential_enc FROM users WHERE connection_credential_enc IS NOT NULL")
         .fetch_all(&mut **tx)
         .await?;
     for row in assignments {

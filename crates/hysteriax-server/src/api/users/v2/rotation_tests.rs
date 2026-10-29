@@ -62,13 +62,12 @@ async fn assert_material(state: &AppState, subscription: bool, response: &Value)
             1
         );
         assert_eq!(count(state, "SELECT count(*) FROM job_events").await, 1);
-        assert_eq!(response["credentials"][0]["node_id"], "node");
-        response["credentials"][0]["credential"].as_str().unwrap()
+        response["credential"].as_str().unwrap()
     };
     let query = if subscription {
         "SELECT token_hash,token_enc FROM subscription_credentials WHERE revoked_at IS NULL"
     } else {
-        "SELECT credential_hash,credential_enc FROM node_assignments WHERE user_id='user' AND node_id='node'"
+        "SELECT connection_credential_hash,connection_credential_enc FROM users WHERE id='user'"
     };
     let (hash, cipher): (String, String) =
         sqlx::query_as(query).fetch_one(&state.pool).await.unwrap();

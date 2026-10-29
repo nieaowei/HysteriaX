@@ -29,7 +29,7 @@ async fn corrupt_legacy_inline_clients_are_discarded_before_validation_and_actua
     .execute(&pool)
     .await
     .unwrap();
-    sqlx::query("INSERT INTO node_assignments(user_id,node_id,credential_hash,credential_enc,client_certificate_enc,client_private_key_enc,created_at) VALUES('alice','legacy','unchanged-hash',$1,'broken-ciphertext',NULL,now())").bind(secret.encrypt("connection-password").unwrap()).execute(&pool).await.unwrap();
+    sqlx::query("WITH assignment_fixture(user_id,node_id,credential_hash,credential_enc,client_certificate_enc,client_private_key_enc,created_at) AS MATERIALIZED (VALUES('alice','legacy','unchanged-hash',$1,'broken-ciphertext',NULL,now())), password_fixture AS (UPDATE users u SET connection_credential_hash=c.credential_hash,connection_credential_enc=c.credential_enc FROM (SELECT DISTINCT ON(user_id) user_id,credential_hash,credential_enc FROM assignment_fixture ORDER BY user_id) c WHERE u.id=c.user_id), fixture_groups AS (INSERT INTO authorization_groups(id,name,created_at,updated_at) SELECT 'fixture-'||md5(user_id||chr(31)||node_id),'Fixture authorization',now(),now() FROM assignment_fixture ON CONFLICT(id) DO UPDATE SET name=EXCLUDED.name RETURNING id), fixture_members AS (INSERT INTO authorization_group_users(group_id,user_id,created_at) SELECT g.id,a.user_id,now() FROM assignment_fixture a JOIN fixture_groups g ON g.id='fixture-'||md5(a.user_id||chr(31)||a.node_id) ON CONFLICT DO NOTHING), fixture_nodes AS (INSERT INTO authorization_group_nodes(group_id,node_id,created_at) SELECT g.id,a.node_id,now() FROM assignment_fixture a JOIN fixture_groups g ON g.id='fixture-'||md5(a.user_id||chr(31)||a.node_id) ON CONFLICT DO NOTHING) INSERT INTO node_assignments(user_id,node_id,client_certificate_enc,client_private_key_enc,created_at) SELECT user_id,node_id,client_certificate_enc,client_private_key_enc,created_at FROM assignment_fixture").bind(secret.encrypt("connection-password").unwrap()).execute(&pool).await.unwrap();
     sqlx::query("INSERT INTO jobs(id,kind,node_id,target_revision,status,stage,available_at,created_at,updated_at) VALUES('old-sync','sync','legacy',1,'queued','queued',now(),now(),now())").execute(&pool).await.unwrap();
     migration::migrate(&pool, &secret).await.unwrap();
     let row = sqlx::query("SELECT * FROM nodes WHERE id='legacy'")
@@ -59,7 +59,7 @@ async fn corrupt_legacy_inline_clients_are_discarded_before_validation_and_actua
     let history: Value = serde_json::from_str(&secret.decrypt(&cipher).unwrap()).unwrap();
     assert_eq!(history["legacy_mtls_reset"], true);
     assert!(history["server_config"]["tls"].get("clientCA").is_none());
-    let row = sqlx::query("SELECT * FROM node_assignments WHERE user_id='alice'")
+    let row = sqlx::query("SELECT a.*,u.connection_credential_hash AS credential_hash,u.connection_credential_enc AS credential_enc FROM node_assignments a JOIN users u ON u.id=a.user_id WHERE user_id='alice'")
         .fetch_one(&pool)
         .await
         .unwrap();

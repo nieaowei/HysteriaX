@@ -7,7 +7,7 @@ struct UserAuthorizationGroupMembershipView: View {
 
     @State private var groupIDs: Set<String>
     @State private var selectedNames: [String: String]
-    @State private var receipt: UserAuthorizationGroupsMutationResponse?
+    @State private var receipt: AuthorizationChangeReceipt?
     @State private var selectingGroups = false
     @State private var isSaving = false
     @State private var errorMessage: String?
@@ -25,20 +25,14 @@ struct UserAuthorizationGroupMembershipView: View {
 
     private var directoryContent: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text(receipt == nil ? L10n.text("管理用户所属授权组") : L10n.text("用户授权已更新"))
+            Text(receipt == nil ? L10n.text("管理用户所属授权组") : L10n.text("授权变更已提交"))
                 .font(.title2.bold())
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
             if let receipt {
-                Text(L10n.text("新增 {0} 条连接授权 · 移除 {1} 条连接授权", String(receipt.additionsCount), String(receipt.removalsCount)))
-                    .font(.callout.weight(.medium))
+                AuthorizationMutationReceiptView(store: store, jobID: receipt.jobId)
                     .accessibilityIdentifier("users.groups.resultSummary")
-                AuthorizationMutationReceiptView(
-                    store: store,
-                    createdCredentials: receipt.createdCredentials,
-                    revocationJobIDs: receipt.revocationJobIds
-                )
             } else {
                 Text(L10n.text("为 {0} 选择所属组。有效节点由所有授权组取并集；离开一个组后，只要其他组仍提供同一节点权限就不会撤权。", String(describing: (user.name))))
                     .font(.callout).foregroundStyle(.secondary)

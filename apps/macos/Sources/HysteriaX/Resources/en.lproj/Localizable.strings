@@ -2189,3 +2189,26 @@
 "已选 {0} 人" = "{0} people selected";
 "添加所选 {0} 项" = "Add {0} selected items";
 "移除所选 {0} 项" = "Remove {0} selected items";
+
+"授权变更已提交" = "Authorization change submitted";
+
+"授权关系已生效" = "Authorization applied";
+
+"授权任务失败" = "Authorization task failed";
+
+"授权变更处理中" = "Applying authorization change";
+
+"所需证书和断连由后台继续处理；证书就绪后刷新订阅。" = "Certificates and disconnections continue in the background. Refresh your subscription when certificates are ready.";
+
+"重试授权任务" = "Retry authorization task";
+
+"刷新状态" = "Refresh status";
+
+"变更授权" = "Change authorization";
+
+"正在应用授权" = "Applying authorization";
+
+"提交授权变更" = "Submit authorization change";
+
+"已分配节点数" = "Assigned nodes";
+"该用户的全部授权节点共用一个连接密码，授权组变更不会轮换密码。" = "All authorized nodes for this user share one connection password. Authorization group changes do not rotate it.";

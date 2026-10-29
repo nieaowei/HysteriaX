@@ -7,18 +7,18 @@ struct AuthorizationGroupDeletionView: View {
     var onDeleted: () -> Void = {}
 
     @State private var isDeleting = false
-    @State private var result: AuthorizationGroupMutationResponse?
+    @State private var result: AuthorizationChangeReceipt?
     @State private var errorMessage: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text(L10n.text("删除结果")).font(.title2.bold())
             if let result {
-                Text(L10n.text("授权组已删除"))
+                Text(L10n.text("授权变更已提交"))
                     .font(.callout.weight(.medium))
                     .accessibilityIdentifier("authorizationGroups.delete.resultSummary")
                 ScrollView {
-                    AuthorizationMutationReceiptView(store: store, createdCredentials: [], revocationJobIDs: result.revocationJobIds)
+                    AuthorizationMutationReceiptView(store: store, jobID: result.jobId)
                 }
             } else if isDeleting {
                 ProgressView(L10n.text("正在删除…"))

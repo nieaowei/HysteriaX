@@ -28,7 +28,7 @@ def fetch(base, path, ua=None):
         return error.code, error.read(), error.headers
 
 
-def run(base, admin, database, temp, advanced_token, revoked_token, advanced_user_id, empty_token):
+def run(base, admin, database, temp, advanced_token, revoked_token, advanced_user_id, empty_token, *, master_key):
     def api(path, payload=None, method=None, expected=200):
 
         def raw_request(base, path, token, method, payload):
@@ -110,10 +110,11 @@ def run(base, admin, database, temp, advanced_token, revoked_token, advanced_use
         "config": {"tls": {"cert": f"credential://{identity['id']}/1/certificate", "key": f"credential://{identity['id']}/1/private_key"}},
     }, expected=201)["node"]["id"]
     user = api("/api/v2/users", {"name": "Basic subscription fixture"}, expected=201)["id"]
-    from credential_test_fixtures import grant_group, mark_fixture_nodes_deployed
+    from credential_test_fixtures import grant_group, user_connection_password, mark_fixture_nodes_deployed
     def group_request(path,method="GET",body=None,statuses=(200,)):
         return api(path,body,method,statuses[0])
-    credential = grant_group(group_request,user,[node])["created_credentials"][0]["hy2_credential"]
+    grant_group(group_request,user,[node])
+    credential = user_connection_password(database, master_key, user)
     receipt = api(f"/api/v2/users/{user}/subscription", {"expected_revision": 2})
     token = receipt["token"]
     if "auto_url" in receipt or not receipt["url"].endswith(f"/sub/{token}"):

@@ -20,7 +20,7 @@ import uuid
 
 from psycopg.types.json import Jsonb
 from postgres_test import PostgresTestSchema
-from credential_test_fixtures import grant_group
+from credential_test_fixtures import grant_group, user_connection_password
 
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -126,7 +126,7 @@ def main():
                 def group_api(path,method="GET",payload=None,statuses=(200,)):
                     return expect(path,method,payload,statuses[0])
                 receipt=grant_group(group_api,user_id,[node_id])
-                return next(item["hy2_credential"] for item in receipt["created_credentials"] if item["node_id"]==node_id)
+                return user_connection_password(database, environment["HYSTERIAX_MASTER_KEY"], user_id)
 
             def auth(node_id, node_token, credential):
                 status, body = request(
@@ -453,7 +453,7 @@ def main():
                     "POST",
                     {"expected_revision": 4},
                 )
-                new_credential = rotation["credentials"][0]["credential"]
+                new_credential = rotation["credential"]
                 if auth(node1, token1, credential1).get("ok") is not False:
                     raise RuntimeError("rotated Hysteria credential remained valid")
                 if auth(node1, token1, new_credential).get("id") != user1:

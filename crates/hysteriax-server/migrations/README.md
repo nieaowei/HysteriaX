@@ -18,7 +18,7 @@ cargo run -p hysteriax-server -- --migrate-only
 
 ## 后续迁移
 
-- 从 `0005_<description>.sql` 继续递增；已发布的 SQL 不再修改、重命名或重排。
+- 从 `0007_<description>.sql` 继续递增；已发布的 SQL 不再修改、重命名或重排。
 - SQLx 内嵌 SQL 并记录 SHA-384 checksum；启动逐项验证完整历史，重复执行维护不会重新应用已成功迁移。
 - 应用对象使用相对 schema 名称，以支持隔离测试 schema。`pg_trgm` 仍安装到 `public`，索引显式引用 `public.gin_trgm_ops`。
 - 新增或移除对象时同步更新 [数据库表用途](../../../docs/database-tables.md)，并验证当前基线上的后续升级。
@@ -53,3 +53,18 @@ python3 scripts/verify-migrations.py
 ```
 
 本次合并在独立 PostgreSQL 18 空库中回放原 SQL 链，再将原结构与基线结构按 PostgreSQL 规范化定义比较；105 张应用表的初始数据也逐表一致，随机 epoch 按生成语义核对。当前测试覆盖原生字段、初始化数据、重复迁移、历史篡改/缺失/失败/未来版本拒绝及旧迁移链拒绝。后续业务测试直接使用当前 schema，不再构建已移除的历史版本。
+
+`0005_async_authorization.sql` migrates connection passwords to users and adds
+cursor-based authorization changes, indexed delta items, and immediate source
+exclusions. Stop all APIs before upgrading. For a test environment, run
+`scripts/migrate-async-authorization.sh` with `TEST_DATABASE_URL` and the existing
+`HYSTERIAX_MASTER_KEY`; it applies all migrations and completes the bounded
+password backfill without starting workers. One existing password is retained
+per user; clients must refresh subscriptions to use it on every node. The
+assignment password columns are removed. Interrupted backfills can be resumed.
+
+## 0006 用户级连接凭据目录
+
+`0006_user_credential_directory.sql` 将 `credential_directory` 中的 `user_credential` 从每个用户—节点一条改为每个持有连接密码的用户一条，稳定 ID 为 `user:{user_id}`，名称为用户名称。没有节点分配的用户也可见。接口只为当前分页用户统计已分配节点数，通过 `reference_count` 返回，不返回密码、摘要或全部节点列表。仍在用户页执行原有密码轮换。
+
+迁移只替换目录视图，不修改密码、授权关系或已发布迁移。停止全部 API 后使用 `--migrate-only`；测试环境独立工具为 `scripts/migrate-user-credential-directory.sh`。新空库按 1～6 初始化，schema 5 测试库只应用 0006。

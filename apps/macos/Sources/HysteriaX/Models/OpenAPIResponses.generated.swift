@@ -407,69 +407,15 @@ struct AuthorizationGroupNodesPage: Codable, Sendable {
     }
 }
 
-struct AuthorizationIdentityResult: Codable, Sendable {
-    let policyRevision: Int?
-    let caVersions: [Int]?
-    let affectedNodeIds: [String]?
-    let userId: String
-    let caCredentialId: String
-    let identityId: String?
-    let issued: Bool
-    let pending: Bool
+struct AuthorizationChangeReceipt: Codable, Sendable {
+    let jobId: String
+    let resourceId: String
+    let status: String
 
     enum CodingKeys: String, CodingKey {
-        case policyRevision = "policy_revision"
-        case caVersions = "ca_versions"
-        case affectedNodeIds = "affected_node_ids"
-        case userId = "user_id"
-        case caCredentialId = "ca_credential_id"
-        case identityId = "identity_id"
-        case issued
-        case pending
-    }
-}
-
-struct AuthorizationCreatedCredential: Codable, Sendable {
-    let userId: String
-    let nodeID: String
-    let hy2Credential: String
-
-    enum CodingKeys: String, CodingKey {
-        case userId = "user_id"
-        case nodeID = "node_id"
-        case hy2Credential = "hy2_credential"
-    }
-}
-
-struct AuthorizationGroupMutationResponse: Codable, Sendable {
-    let revocationJobIds: [String]
-
-    enum CodingKeys: String, CodingKey {
-        case revocationJobIds = "revocation_job_ids"
-    }
-}
-
-struct UserAuthorizationGroupsMutationResponse: Codable, Sendable {
-    let additionsCount: Int
-    let removalsCount: Int
-    let managedIdentities: [AuthorizationIdentityResult]?
-    let userId: String
-    let revision: Int
-    let groupIds: [String]
-    let assignments: [AssignmentInfo]
-    let createdCredentials: [AuthorizationCreatedCredential]
-    let revocationJobIds: [String]
-
-    enum CodingKeys: String, CodingKey {
-        case additionsCount = "additions_count"
-        case removalsCount = "removals_count"
-        case managedIdentities = "managed_identities"
-        case userId = "user_id"
-        case revision
-        case groupIds = "group_ids"
-        case assignments
-        case createdCredentials = "created_credentials"
-        case revocationJobIds = "revocation_job_ids"
+        case jobId = "job_id"
+        case resourceId = "resource_id"
+        case status
     }
 }
 
@@ -1405,27 +1351,17 @@ struct SubscriptionReceipt: Codable, Sendable {
     }
 }
 
-struct RotatedCredential: Codable, Sendable {
-    let nodeID: String
-    let credential: String
-
-    enum CodingKeys: String, CodingKey {
-        case nodeID = "node_id"
-        case credential
-    }
-}
-
 struct RotatedCredentials: Codable, Sendable {
     let userId: String
     let revision: Int
-    let credentials: [RotatedCredential]
-    let note: String
+    let credential: String
+    let revocationJobIds: [String]
 
     enum CodingKeys: String, CodingKey {
         case userId = "user_id"
         case revision
-        case credentials
-        case note
+        case credential
+        case revocationJobIds = "revocation_job_ids"
     }
 }
 

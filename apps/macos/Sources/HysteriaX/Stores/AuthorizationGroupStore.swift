@@ -1,6 +1,16 @@
 import Foundation
 
 extension ManagementStore {
+    func authorizationTaskDidFinish() {
+        guard let client = try? requireConnectedAPI() else { return }
+        authorizationMutationDidCommit(using: client)
+    }
+
+    func retryAuthorizationJob(_ job: JobSummary) async throws -> String {
+        let result: JobReceipt = try await requireConnectedAPI().post(APIEndpoints.retryJob(id: job.id), body: RevisionRequest(expectedRevision: 1))
+        return result.jobId
+    }
+
     @discardableResult
     func refreshAuthorizationGroups() async -> Bool {
         guard let client = try? requireConnectedAPI() else { return false }
@@ -54,9 +64,9 @@ extension ManagementStore {
         try await requireConnectedAPI().get(APIEndpoints.getUser(id: userID))
     }
 
-    func createAuthorizationGroup(name: String) async throws -> AuthorizationGroupMutationResponse {
+    func createAuthorizationGroup(name: String) async throws -> AuthorizationChangeReceipt {
         let client = try requireConnectedAPI()
-        let result: AuthorizationGroupMutationResponse = try await client.post(
+        let result: AuthorizationChangeReceipt = try await client.post(
             APIEndpoints.createAuthorizationGroup,
             body: AuthorizationGroupCreateRequest(name: name)
         )
@@ -71,9 +81,9 @@ extension ManagementStore {
         removeUserIDs: [String] = [],
         addNodeIDs: [String] = [],
         removeNodeIDs: [String] = []
-    ) async throws -> AuthorizationGroupMutationResponse {
+    ) async throws -> AuthorizationChangeReceipt {
         let client = try requireConnectedAPI()
-        let result: AuthorizationGroupMutationResponse = try await client.patch(
+        let result: AuthorizationChangeReceipt = try await client.patch(
             APIEndpoints.updateAuthorizationGroup(groupID: group.id),
             body: AuthorizationGroupUpdateRequest(
                 expectedRevision: group.revision,
@@ -90,22 +100,22 @@ extension ManagementStore {
 
     func deleteAuthorizationGroup(
         _ group: AuthorizationGroupSummary
-    ) async throws -> AuthorizationGroupMutationResponse {
+    ) async throws -> AuthorizationChangeReceipt {
         let client = try requireConnectedAPI()
-        let result: AuthorizationGroupMutationResponse = try await client.delete(
+        let result: AuthorizationChangeReceipt = try await client.delete(
             APIEndpoints.deleteAuthorizationGroup(groupID: group.id),
             body: AuthorizationGroupDeleteRequest(expectedRevision: group.revision)
         )
-        authorizationMutationDidCommit(using: client, deletedGroupID: group.id)
+        authorizationMutationDidCommit(using: client)
         return result
     }
 
     func updateUserAuthorizationGroups(
         _ user: UserSummary,
         groupIDs: [String]
-    ) async throws -> UserAuthorizationGroupsMutationResponse {
+    ) async throws -> AuthorizationChangeReceipt {
         let client = try requireConnectedAPI()
-        let result: UserAuthorizationGroupsMutationResponse = try await client.put(
+        let result: AuthorizationChangeReceipt = try await client.put(
             APIEndpoints.updateUserAuthorizationGroups(id: user.id),
             body: UserAuthorizationGroupsUpdateRequest(
                 expectedRevision: user.revision,

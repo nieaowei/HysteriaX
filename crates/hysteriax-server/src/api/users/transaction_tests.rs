@@ -32,7 +32,7 @@ async fn assign(state: &AppState, user: &str) -> String {
         .await
         .unwrap();
     let node = node["node"]["id"].as_str().unwrap().to_owned();
-    sqlx::query("INSERT INTO node_assignments(user_id,node_id,credential_hash,credential_enc,created_at) VALUES($1,$2,'old-hash',$3,now())").bind(user).bind(&node).bind(state.secrets.encrypt("old-secret").unwrap()).execute(&state.pool).await.unwrap();
+    sqlx::query("WITH assignment_fixture(user_id,node_id,credential_hash,credential_enc,created_at) AS MATERIALIZED (VALUES($1,$2,'old-hash',$3,now())), password_fixture AS (UPDATE users u SET connection_credential_hash=c.credential_hash,connection_credential_enc=c.credential_enc FROM (SELECT DISTINCT ON(user_id) user_id,credential_hash,credential_enc FROM assignment_fixture ORDER BY user_id) c WHERE u.id=c.user_id), fixture_groups AS (INSERT INTO authorization_groups(id,name,created_at,updated_at) SELECT 'fixture-'||md5(user_id||chr(31)||node_id),'Fixture authorization',now(),now() FROM assignment_fixture ON CONFLICT(id) DO UPDATE SET name=EXCLUDED.name RETURNING id), fixture_members AS (INSERT INTO authorization_group_users(group_id,user_id,created_at) SELECT g.id,a.user_id,now() FROM assignment_fixture a JOIN fixture_groups g ON g.id='fixture-'||md5(a.user_id||chr(31)||a.node_id) ON CONFLICT DO NOTHING), fixture_nodes AS (INSERT INTO authorization_group_nodes(group_id,node_id,created_at) SELECT g.id,a.node_id,now() FROM assignment_fixture a JOIN fixture_groups g ON g.id='fixture-'||md5(a.user_id||chr(31)||a.node_id) ON CONFLICT DO NOTHING) INSERT INTO node_assignments(user_id,node_id,created_at) SELECT user_id,node_id,created_at FROM assignment_fixture").bind(user).bind(&node).bind(state.secrets.encrypt("old-secret").unwrap()).execute(&state.pool).await.unwrap();
     node
 }
 fn edit(name: &str) -> PatchUser {
@@ -190,7 +190,7 @@ async fn audit_failure_rolls_back_credential_rotation_secrets_revision_and_kicks
         .await
         .is_err()
     );
-    let row=sqlx::query("SELECT credential_hash,credential_enc FROM node_assignments WHERE user_id=$1 AND node_id=$2").bind(&user).bind(node).fetch_one(&state.pool).await.unwrap();
+    let row=sqlx::query("SELECT connection_credential_hash AS credential_hash,connection_credential_enc AS credential_enc FROM users WHERE id=$1 AND EXISTS(SELECT 1 FROM node_assignments WHERE user_id=$1 AND node_id=$2)").bind(&user).bind(node).fetch_one(&state.pool).await.unwrap();
     assert_eq!(row.get::<String, _>("credential_hash"), "old-hash");
     assert_eq!(
         state
@@ -223,9 +223,9 @@ async fn rotation_retries_without_returning_rolled_back_credentials_or_duplicati
     )
     .await
     .unwrap();
-    let credential = response["credentials"][0]["credential"].as_str().unwrap();
+    let credential = response["credential"].as_str().unwrap();
     let row =
-        sqlx::query("SELECT credential_hash,credential_enc FROM node_assignments WHERE user_id=$1")
+        sqlx::query("SELECT connection_credential_hash AS credential_hash,connection_credential_enc AS credential_enc FROM users WHERE id=$1")
             .bind(&user)
             .fetch_one(&state.pool)
             .await

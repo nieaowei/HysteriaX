@@ -48,6 +48,12 @@ pub struct JobOutput {
 }
 
 pub async fn run_job(pool: &PgPool, secrets: &SecretBox, job: &JobInput) -> Result<JobOutput> {
+    if job.kind == "authorization-change" {
+        return Box::pin(crate::api::authorization_groups::changes::run(
+            pool, secrets, job,
+        ))
+        .await;
+    }
     if job.kind == "record-remove" {
         return crate::node_cleanup::run_job(pool, job).await;
     }

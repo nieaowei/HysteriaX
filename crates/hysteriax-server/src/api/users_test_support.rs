@@ -5,7 +5,7 @@ pub(crate) async fn create(
     State(state): State<AppState>,
     Json(input): Json<CreateUser>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
-    let prepared = PreparedUser::new(input)?;
+    let prepared = PreparedUser::new(input, &state.secrets)?;
     let actor = super::super::audit_actor();
     let response = db::serializable::<_, ApiError, _>(&state.pool, move |tx| {
         let (prepared, actor) = (prepared.clone(), actor.clone());

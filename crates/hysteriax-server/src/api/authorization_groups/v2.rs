@@ -21,7 +21,7 @@ struct CreateGroupRequest {
     name: String,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct PatchGroupRequest {
     expected_revision: i64,
@@ -77,172 +77,6 @@ impl PatchGroupRequest {
             && self.add_node_ids.is_empty()
             && self.remove_node_ids.is_empty()
     }
-
-    fn apply(self, current: GroupInfo) -> GroupProposal {
-        fn apply_ids(current: Vec<String>, add: Vec<String>, remove: Vec<String>) -> Vec<String> {
-            let mut ids: BTreeSet<String> = current.into_iter().collect();
-            for id in remove {
-                ids.remove(&id);
-            }
-            ids.extend(add);
-            ids.into_iter().collect()
-        }
-        GroupProposal {
-            name: self.name.unwrap_or(current.name),
-            user_ids: apply_ids(current.user_ids, self.add_user_ids, self.remove_user_ids),
-            node_ids: apply_ids(current.node_ids, self.add_node_ids, self.remove_node_ids),
-        }
-    }
-}
-
-#[derive(Clone)]
-enum GroupChange {
-    Update(String, PatchGroupRequest),
-    Delete(String, DeleteGroupRequest),
-}
-impl GroupChange {
-    async fn normalize(
-        self,
-        state: &AppState,
-    ) -> Result<(String, Option<String>, Option<i64>, GroupProposal), ApiError> {
-        Ok(match self {
-            Self::Update(id, input) => {
-                let current = load_group(&state.pool, &id)
-                    .await?
-                    .ok_or_else(|| ApiError::not_found("authorization group"))?;
-                check_revision(current.revision, Some(input.expected_revision))?;
-                let revision = input.expected_revision;
-                (
-                    "update".into(),
-                    Some(id),
-                    Some(revision),
-                    input.apply(current),
-                )
-            }
-            Self::Delete(id, input) => (
-                "delete".into(),
-                Some(id),
-                Some(input.expected_revision),
-                GroupProposal {
-                    name: String::new(),
-                    user_ids: Vec::new(),
-                    node_ids: Vec::new(),
-                },
-            ),
-        })
-    }
-}
-
-// Creating an empty group and renaming one never touch authorization material.
-async fn commit_metadata(
-    state: &AppState,
-    identity: RequestIdentity,
-    id: String,
-    expected_revision: Option<i64>,
-    name: String,
-) -> Result<Response, ApiError> {
-    let status = if expected_revision.is_none() {
-        StatusCode::CREATED
-    } else {
-        StatusCode::OK
-    };
-    execute(state, identity, move |tx| {
-        let (id, name) = (id.clone(), name.clone());
-        Box::pin(async move {
-            let timestamp = now();
-            let detail = if let Some(expected) = expected_revision {
-                let row = sqlx::query("SELECT name,revision FROM authorization_groups WHERE id=$1 FOR UPDATE")
-                    .bind(&id).fetch_optional(&mut **tx).await?
-                    .ok_or_else(|| ApiError::not_found("authorization group"))?;
-                check_revision(row.get("revision"), Some(expected))?;
-                let old: String = row.get("name");
-                if old != name {
-                    sqlx::query("UPDATE authorization_groups SET name=$2,revision=revision+1,updated_at=$3 WHERE id=$1")
-                        .bind(&id).bind(&name).bind(timestamp).execute(&mut **tx).await?;
-                }
-                json!({"old_name":old,"name":name})
-            } else {
-                sqlx::query("INSERT INTO authorization_groups(id,name,revision,created_at,updated_at) VALUES($1,$2,1,$3,$3)")
-                    .bind(&id).bind(&name).bind(timestamp).execute(&mut **tx).await?;
-                json!({"name":name})
-            };
-            audit_group(tx, if expected_revision.is_none() { "authorization_group.created" } else { "authorization_group.updated" }, &id, detail, timestamp).await?;
-            Ok(StoredResponse::json(status, json!({"revocation_job_ids":[]})))
-        })
-    }).await?.into_http()
-}
-
-async fn commit_group(
-    state: &AppState,
-    identity: RequestIdentity,
-    change: GroupChange,
-) -> Result<Response, ApiError> {
-    let started = std::time::Instant::now();
-    let (action, id, revision, proposal) = match change.normalize(state).await {
-        Ok(change) => change,
-        Err(error) => {
-            if let Some(response) = replay(state, &identity).await? {
-                return response.into_http();
-            }
-            return Err(error);
-        }
-    };
-    let preparation = prepare_group_change(state, &action, id.as_deref(), &proposal).await;
-    let (prepared, assignments) = match preparation {
-        Ok(prepared) => prepared,
-        Err(error) => {
-            if let Some(response) = replay(state, &identity).await? {
-                return response.into_http();
-            }
-            return Err(error);
-        }
-    };
-    let status = if action == "create" {
-        StatusCode::CREATED
-    } else {
-        StatusCode::OK
-    };
-    let preparation_ms = started.elapsed().as_millis() as u64;
-    let operation = action.clone();
-    let execution_started = std::time::Instant::now();
-    let creation_id = Uuid::new_v4().to_string();
-    let app = state.clone();
-    let result = execute(state, identity, move |tx| {
-        let (app, action, id, proposal, prepared, creation_id) = (
-            app.clone(),
-            action.clone(),
-            id.clone(),
-            proposal.clone(),
-            prepared.clone(),
-            creation_id.clone(),
-        );
-        let assignments = assignments.clone();
-        Box::pin(async move {
-            let value = super::commit_group_on(
-                tx,
-                &app,
-                &action,
-                id.as_deref(),
-                revision,
-                proposal,
-                prepared,
-                &creation_id,
-                assignments,
-            )
-            .await?;
-            Ok(StoredResponse::json(status, value))
-        })
-    })
-    .await;
-    tracing::info!(
-        operation,
-        preparation_ms,
-        transaction_ms = execution_started.elapsed().as_millis() as u64,
-        total_ms = started.elapsed().as_millis() as u64,
-        success = result.is_ok(),
-        "authorization group mutation finished"
-    );
-    result?.into_http()
 }
 
 pub(crate) async fn create(
@@ -257,16 +91,26 @@ pub(crate) async fn create(
         &actor.id,
         "groups.create",
         &headers,
-        json!({"method":"POST","uri":uri.to_string(),"body":body}),
+        json!({"uri":uri.to_string(),"body":body}),
     )?;
-    if let Some(response) = replay(&state, &identity).await? {
-        return response.into_http();
+    if let Some(result) = replay(&state, &identity).await? {
+        return result.into_http();
     }
     let input: CreateGroupRequest = parse(body)?;
     let name = validate_name(&input.name)?.to_owned();
-    commit_metadata(&state, identity, Uuid::new_v4().to_string(), None, name).await
+    let id = Uuid::new_v4().to_string();
+    execute(&state, identity, move |tx| {
+        let (id, name, actor) = (id.clone(), name.clone(), actor.id.clone());
+        Box::pin(async move {
+            let result =
+                super::changes::admit(tx, "group", &id, "create", json!({"name":name}), &actor)
+                    .await?;
+            Ok(StoredResponse::json(StatusCode::ACCEPTED, result))
+        })
+    })
+    .await?
+    .into_http()
 }
-
 pub(crate) async fn change(
     State(state): State<AppState>,
     Extension(actor): Extension<AdminActor>,
@@ -276,44 +120,48 @@ pub(crate) async fn change(
     headers: HeaderMap,
     Json(body): Json<Value>,
 ) -> Result<Response, ApiError> {
-    let operation = match method.as_str() {
-        "PATCH" => "groups.update",
-        "DELETE" => "groups.delete",
-        _ => return Err(ApiError::not_found("authorization group action")),
+    let operation = if method == Method::PATCH {
+        "groups.update"
+    } else {
+        "groups.delete"
     };
     let identity = RequestIdentity::from_headers(
         &state.secrets,
         &actor.id,
         operation,
         &headers,
-        json!({"method":method.as_str(),"uri":uri.to_string(),"id":id,"body":body}),
+        json!({"uri":uri.to_string(),"body":body}),
     )?;
-    if let Some(response) = replay(&state, &identity).await? {
-        return response.into_http();
+    if let Some(result) = replay(&state, &identity).await? {
+        return result.into_http();
     }
-    let change = if method == Method::PATCH {
+    let (action, input) = if method == Method::PATCH {
         let input: PatchGroupRequest = parse::<PatchGroupRequest>(body)?.normalize()?;
-        if input.relations_unchanged() {
-            return commit_metadata(
-                &state,
-                identity,
-                id,
-                Some(input.expected_revision),
-                input.name.expect("validated name"),
-            )
-            .await;
-        }
-        GroupChange::Update(id, input)
+        (
+            "update",
+            serde_json::to_value(input).map_err(|_| ApiError::internal())?,
+        )
     } else {
-        GroupChange::Delete(id, parse(body)?)
+        let input: DeleteGroupRequest = parse(body)?;
+        (
+            "delete",
+            json!({"expected_revision":input.expected_revision}),
+        )
     };
-    commit_group(&state, identity, change).await
+    execute(&state, identity, move |tx| {
+        let (id, input, actor) = (id.clone(), input.clone(), actor.id.clone());
+        Box::pin(async move {
+            let result = super::changes::admit(tx, "group", &id, action, input, &actor).await?;
+            Ok(StoredResponse::json(StatusCode::ACCEPTED, result))
+        })
+    })
+    .await?
+    .into_http()
 }
-
 pub(crate) async fn update_memberships(
     State(state): State<AppState>,
     Extension(actor): Extension<AdminActor>,
-    Path(user): Path<String>,
+    Path(id): Path<String>,
     OriginalUri(uri): OriginalUri,
     headers: HeaderMap,
     Json(body): Json<Value>,
@@ -323,10 +171,10 @@ pub(crate) async fn update_memberships(
         &actor.id,
         "groups.update_memberships",
         &headers,
-        json!({"method":"PUT","uri":uri.to_string(),"id":user,"body":body}),
+        json!({"uri":uri.to_string(),"body":body}),
     )?;
-    if let Some(response) = replay(&state, &identity).await? {
-        return response.into_http();
+    if let Some(result) = replay(&state, &identity).await? {
+        return result.into_http();
     }
     let input: MembershipUpdateRequest = parse(body)?;
     if input.expected_revision < 1 {
@@ -335,42 +183,15 @@ pub(crate) async fn update_memberships(
     let proposal = normalized_membership(MembershipProposal {
         group_ids: input.group_ids,
     })?;
-    let revision = input.expected_revision;
-    let (prepared, assignments) = match prepare_membership_change(&state, &user, &proposal).await {
-        Ok(prepared) => prepared,
-        Err(error) => {
-            if let Some(response) = replay(&state, &identity).await? {
-                return response.into_http();
-            }
-            return Err(error);
-        }
-    };
-    let app = state.clone();
+    let body = json!({"expected_revision":input.expected_revision,"group_ids":proposal.group_ids});
     execute(&state, identity, move |tx| {
-        let (app, user, proposal, prepared) = (
-            app.clone(),
-            user.clone(),
-            proposal.clone(),
-            prepared.clone(),
-        );
-        let assignments = assignments.clone();
+        let (id, body, actor) = (id.clone(), body.clone(), actor.id.clone());
         Box::pin(async move {
-            let value = super::commit_membership_on(
-                tx,
-                &app,
-                &user,
-                revision,
-                proposal,
-                prepared,
-                assignments,
-            )
-            .await?;
-            Ok(StoredResponse::json(StatusCode::OK, value))
+            let result =
+                super::changes::admit(tx, "user", &id, "memberships", body, &actor).await?;
+            Ok(StoredResponse::json(StatusCode::ACCEPTED, result))
         })
     })
     .await?
     .into_http()
 }
-
-#[cfg(test)]
-mod tests;

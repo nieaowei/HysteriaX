@@ -78,8 +78,7 @@ async fn page_values_on(
     managed: &[String],
     admins: &[String],
     subscriptions: &[String],
-    assignment_users: &[String],
-    assignment_nodes: &[String],
+    users: &[String],
 ) -> Result<Vec<Value>, ApiError> {
     let rows = sqlx::query("SELECT c.*,v.metadata FROM credentials c LEFT JOIN mtls_authorities a ON a.credential_id=c.id AND c.kind='ca_identity' JOIN credential_versions v ON v.credential_id=c.id AND v.version=coalesce(a.published_version,c.latest_version) WHERE c.id=ANY($1) ORDER BY lower(c.name) COLLATE \"C\",c.id").bind(managed).fetch_all(&mut *connection).await?;
     let mut counts =
@@ -138,8 +137,8 @@ async fn page_values_on(
     for row in sqlx::query("SELECT s.id,s.user_id,s.created_at,s.revoked_at,u.name,u.enabled,u.expires_at,u.quota_bytes,u.usage_bytes FROM subscription_credentials s JOIN users u ON u.id=s.user_id WHERE s.id=ANY($1) ORDER BY s.created_at").bind(subscriptions).fetch_all(&mut *connection).await? {
         entries.push(json!({"id":format!("subscription:{}",row.get::<String,_>("id")),"name":format!("{} · 订阅",row.get::<String,_>("name")),"kind":"subscription_token","owner_user_id":row.get::<String,_>("user_id"),"status":if row.get::<Option<DateTime<Utc>>,_>("revoked_at").is_some(){"revoked"}else{user_status(&row)},"expires_at":row.get::<Option<DateTime<Utc>>,_>("expires_at"),"created_at":row.get::<DateTime<Utc>,_>("created_at"),"metadata":{},"revision":1,"latest_version":1,"archived":false}));
     }
-    for row in sqlx::query("SELECT a.user_id,a.node_id,a.created_at,u.name,n.name node_name,u.revision,u.enabled,u.expires_at,u.quota_bytes,u.usage_bytes FROM node_assignments a JOIN unnest($1::text[],$2::text[]) chosen(user_id,node_id) ON chosen.user_id=a.user_id AND chosen.node_id=a.node_id JOIN users u ON u.id=a.user_id JOIN nodes n ON n.id=a.node_id ORDER BY a.created_at").bind(assignment_users).bind(assignment_nodes).fetch_all(&mut *connection).await? {
-        entries.push(json!({"id":format!("user:{}:{}",row.get::<String,_>("user_id"),row.get::<String,_>("node_id")),"name":format!("{} · {}",row.get::<String,_>("name"),row.get::<String,_>("node_name")),"kind":"user_credential","owner_user_id":row.get::<String,_>("user_id"),"status":user_status(&row),"expires_at":row.get::<Option<DateTime<Utc>>,_>("expires_at"),"created_at":row.get::<DateTime<Utc>,_>("created_at"),"metadata":{"node_id":row.get::<String,_>("node_id")},"revision":row.get::<i64,_>("revision"),"latest_version":1,"archived":false}));
+    for row in sqlx::query("SELECT u.id user_id,u.name,u.created_at,u.revision,u.enabled,u.expires_at,u.quota_bytes,u.usage_bytes,(SELECT count(*) FROM node_assignments a WHERE a.user_id=u.id) node_count FROM users u WHERE u.id=ANY($1) AND u.connection_credential_hash IS NOT NULL AND u.connection_credential_enc IS NOT NULL").bind(users).fetch_all(&mut *connection).await? {
+        entries.push(json!({"id":format!("user:{}",row.get::<String,_>("user_id")),"name":row.get::<String,_>("name"),"kind":"user_credential","owner_user_id":row.get::<String,_>("user_id"),"status":user_status(&row),"expires_at":row.get::<Option<DateTime<Utc>>,_>("expires_at"),"created_at":row.get::<DateTime<Utc>,_>("created_at"),"metadata":{},"reference_count":row.get::<i64,_>("node_count"),"revision":row.get::<i64,_>("revision"),"latest_version":1,"archived":false}));
     }
     Ok(entries)
 }
@@ -219,35 +218,23 @@ pub(crate) async fn list(
             "{leading} {direction},lower(name) COLLATE \"C\" {direction},name COLLATE \"C\" {direction},id COLLATE \"C\" {direction}"
         )
     };
-    let selected = sqlx::query(sqlx::AssertSqlSafe(format!("SELECT id,source,entity_id,node_id FROM credential_directory WHERE {filter} ORDER BY {ordering} LIMIT $5 OFFSET $6")))
+    let selected = sqlx::query(sqlx::AssertSqlSafe(format!("SELECT id,source,entity_id FROM credential_directory WHERE {filter} ORDER BY {ordering} LIMIT $5 OFFSET $6")))
         .bind(category).bind(kind).bind(&pattern).bind(query.include_internal.unwrap_or(false)).bind(page_size).bind((page-1)*page_size)
         .fetch_all(&mut *tx).await?;
     let mut managed = Vec::new();
     let mut admins = Vec::new();
     let mut subscriptions = Vec::new();
-    let mut assignment_users = Vec::new();
-    let mut assignment_nodes = Vec::new();
+    let mut users = Vec::new();
     for row in &selected {
         match row.get::<&str, _>("source") {
             "managed" => managed.push(row.get::<String, _>("entity_id")),
             "admin" => admins.push(row.get::<String, _>("entity_id")),
             "subscription" => subscriptions.push(row.get::<String, _>("entity_id")),
-            "assignment" => {
-                assignment_users.push(row.get::<String, _>("entity_id"));
-                assignment_nodes.push(row.get::<String, _>("node_id"));
-            }
+            "user" => users.push(row.get::<String, _>("entity_id")),
             _ => return Err(ApiError::internal()),
         }
     }
-    let entries = page_values_on(
-        &mut tx,
-        &managed,
-        &admins,
-        &subscriptions,
-        &assignment_users,
-        &assignment_nodes,
-    )
-    .await?;
+    let entries = page_values_on(&mut tx, &managed, &admins, &subscriptions, &users).await?;
     let mut entries: std::collections::BTreeMap<String, Value> = entries
         .into_iter()
         .map(|value| (value["id"].as_str().unwrap_or_default().to_owned(), value))

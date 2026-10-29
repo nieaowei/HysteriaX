@@ -1,119 +1,71 @@
-import AppKit
 import SwiftUI
 
 struct AuthorizationMutationReceiptView: View {
+    @Environment(\.dismiss) private var dismiss
     @Bindable var store: ManagementStore
-    let createdCredentials: [AuthorizationCreatedCredential]
-    let revocationJobIDs: [String]
+    let jobID: String
+    @State private var activeJobID: String?
+    @State private var job: JobSummary?
+    @State private var errorMessage: String?
+    @State private var refreshToken = UUID()
+    @State private var isRetrying = false
 
-    @State private var message: String?
-
-    private var matchingJobs: [JobSummary] {
-        store.jobs.filter { revocationJobIDs.contains($0.id) }
-    }
+    private var currentID: String { activeJobID ?? jobID }
+    private var succeeded: Bool { job?.status == "succeeded" }
+    private var failed: Bool { job?.status == "failed" }
 
     var body: some View {
         GroupBox {
-            LazyVStack(alignment: .leading, spacing: 12) {
-                Label(L10n.text("授权已更新"), systemImage: "checkmark.circle.fill")
-                    .font(.callout.weight(.semibold))
-                    .foregroundStyle(.green)
-
-                if !revocationJobIDs.isEmpty {
-                    Label(revocationStatus, systemImage: matchingJobs.contains(where: { $0.status == "failed" }) ? "exclamationmark.triangle.fill" : "hourglass")
-                        .font(.callout)
-                        .foregroundStyle(matchingJobs.contains(where: { $0.status == "failed" }) ? Color.orange : Color.secondary)
-                    if matchingJobs.contains(where: { $0.status == "failed" }) {
-                        Text(L10n.text("请在任务页检查失败的撤权任务并重试。"))
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                    DisclosureGroup(L10n.text("撤权任务 ID（{0}）", String(revocationJobIDs.count))) {
-                        LazyVStack(alignment: .leading, spacing: 6) {
-                            ForEach(revocationJobIDs, id: \.self) { id in
-                                let job = matchingJobs.first { $0.id == id }
-                                HStack {
-                                    Text(job?.kind ?? L10n.text("撤权任务"))
-                                    Spacer()
-                                    Text(job.map { JobDisplayText.status($0.status) } ?? L10n.text("等待读取"))
-                                        .foregroundStyle(job?.status == "failed" ? Color.orange : Color.secondary)
-                                }
-                                Text(id).font(.caption.monospaced()).textSelection(.enabled)
-                            }
-                        }
-                        .padding(.top, 6)
-                    }
-                    .font(.caption)
-                } else {
-                    Text(L10n.text("没有需要撤销的现有连接。"))
-                        .font(.caption).foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 12) {
+                Label(succeeded ? L10n.text("授权关系已生效") : failed ? L10n.text("授权任务失败") : L10n.text("授权变更处理中"),
+                      systemImage: succeeded ? "checkmark.circle.fill" : failed ? "exclamationmark.triangle.fill" : "hourglass")
+                    .accessibilityIdentifier("authorization.task.status")
+                    .foregroundStyle(succeeded ? Color.green : failed ? Color.orange : Color.primary)
+                if let job {
+                    Text(JobDisplayText.stage(job.stage)).font(.callout)
+                    if let message = job.errorMessage { Text(JobDisplayText.errorMessage(message)).foregroundStyle(.orange).textSelection(.enabled) }
                 }
-
-                if !createdCredentials.isEmpty {
-                    Divider()
-                    Text(L10n.text("新建连接密码只显示这一次。请逐项复制并安全保存。"))
-                        .font(.callout).foregroundStyle(.secondary)
-                    ForEach(Array(Set(createdCredentials.map(\.userId))).sorted(), id: \.self) { id in
-                        HStack {
-                            Text(userName(id))
-                            Spacer()
-                            Button(L10n.text("复制订阅")) {
-                                Task {
-                                    do {
-                                        let user = try await store.authorizationUserDetail(id)
-                                        let url = try await store.currentSubscriptionURL(for: user)
-                                        NSPasteboard.general.clearContents()
-                                        NSPasteboard.general.setString(url, forType: .string)
-                                        message = L10n.text("已复制到剪贴板")
-                                    } catch { message = error.localizedDescription }
-                                }
+                Text(L10n.text("所需证书和断连由后台继续处理；证书就绪后刷新订阅。"))
+                    .font(.caption).foregroundStyle(.secondary)
+                Text(currentID).font(.caption.monospaced()).textSelection(.enabled)
+                if let errorMessage { Text(errorMessage).foregroundStyle(.orange).textSelection(.enabled) }
+                HStack {
+                    Button(L10n.text("查看任务")) { store.requestedJobID = currentID; dismiss() }
+                    if failed, let job {
+                        Button(L10n.text("重试授权任务")) {
+                            isRetrying = true
+                            Task {
+                                defer { isRetrying = false }
+                                do { activeJobID = try await store.retryAuthorizationJob(job); errorMessage = nil }
+                                catch { errorMessage = error.localizedDescription }
                             }
-                            .disabled(!store.isConnected)
-                        }
+                        }.disabled(isRetrying || !store.isConnected)
                     }
-                    if let message { Text(message).font(.caption).foregroundStyle(.secondary) }
-                    DisclosureGroup(L10n.text("连接密码")) {
-                        LazyVStack(alignment: .leading, spacing: 10) {
-                            ForEach(Array(createdCredentials.enumerated()), id: \.offset) { _, item in
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text("\(userName(item.userId)) · \(nodeName(item.nodeID))")
-                                        .font(.callout.weight(.medium))
-                                    Text(item.hy2Credential)
-                                        .font(.system(.caption, design: .monospaced))
-                                        .textSelection(.enabled)
-                                        .frame(maxWidth: .infinity, alignment: .leading)
-                                        .padding(8)
-                                        .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
-                                }
-                            }
-                        }
-                    }
-
+                    if errorMessage != nil { Button(L10n.text("刷新状态")) { refreshToken = UUID() } }
                 }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.vertical, 4)
+            }.frame(maxWidth: .infinity, alignment: .leading)
         }
         .accessibilityIdentifier("authorization.mutationReceipt")
+        .task(id: "\(store.serviceAddress)|\(store.isConnected)|\(currentID)|\(refreshToken)") { await observe() }
     }
 
-    private var revocationStatus: String {
-        if matchingJobs.contains(where: { $0.status == "failed" }) {
-            return L10n.text("部分撤权任务失败。用户权限已更新，请检查任务状态。")
+    private func observe() async {
+        let service = store.serviceAddress
+        let id = currentID
+        do {
+            while !Task.isCancelled {
+                let detail = try await store.jobDetail(id)
+                guard !Task.isCancelled, store.serviceAddress == service else { return }
+                job = detail.job
+                errorMessage = nil
+                if let retryID = detail.job.retryJobId { activeJobID = retryID; return }
+                if detail.job.status == "succeeded" { store.authorizationTaskDidFinish(); return }
+                if ["failed", "cancelled", "rolled_back"].contains(detail.job.status) { return }
+                try await Task.sleep(for: .seconds(1))
+            }
+        } catch is CancellationError {} catch {
+            guard !Task.isCancelled, store.serviceAddress == service else { return }
+            errorMessage = error.localizedDescription
         }
-        if matchingJobs.count == revocationJobIDs.count && !matchingJobs.isEmpty && matchingJobs.allSatisfy({ $0.status == "succeeded" }) {
-            return L10n.text("撤权任务已完成，在线连接已断开。")
-        }
-        if matchingJobs.contains(where: { $0.status == "running" }) {
-            return L10n.text("撤权任务正在运行，在线连接将在执行后断开。")
-        }
-        return L10n.text("撤权任务已排队；在线连接将在任务执行后断开。")
-    }
-
-    private func userName(_ id: String) -> String {
-        store.users.first(where: { $0.id == id })?.name ?? id
-    }
-
-    private func nodeName(_ id: String) -> String {
-        store.nodes.first(where: { $0.id == id })?.name ?? id
     }
 }

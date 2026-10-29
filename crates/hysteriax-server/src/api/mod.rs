@@ -388,7 +388,7 @@ async fn api_version(
     Ok(Json(json!({
         "api_version": "2.0.0",
         "management_protocol":crate::bootstrap::MANAGEMENT_PROTOCOL,
-        "features": ["idempotent_management", "publication_cursors", "subscription_templates", "job_fingerprint_confirmation", "ssh_test_confirmation", "ssh_dns_sync", "client_summary", "node_packages", "overview_monitoring", "job_retry_links", "credentials", "node_record_removal", "dns_management", "authorization_groups", "managed_mtls"],
+        "features": ["idempotent_management", "publication_cursors", "subscription_templates", "job_fingerprint_confirmation", "ssh_test_confirmation", "ssh_dns_sync", "client_summary", "node_packages", "overview_monitoring", "job_retry_links", "credentials", "node_record_removal", "dns_management", "authorization_groups", "async_authorization_changes", "user_connection_credentials", "managed_mtls"],
         "directory_version":directory_version,
         "current_admin_token_id": actor.id,
         "service_version": env!("CARGO_PKG_VERSION"),

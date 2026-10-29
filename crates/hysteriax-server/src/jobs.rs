@@ -498,7 +498,10 @@ async fn execute_one(state: AppState, job: JobInput) -> bool {
             let message = safe_error(&state.pool, &state.secrets, &job, &error).await;
             let retry_after = crate::dns::provider::retry_delay(&error);
             let retry = (deployment::retryable(&error)
-                || (job.kind == "record-remove" && crate::node_cleanup::retryable(&error)))
+                || (job.kind == "record-remove" && crate::node_cleanup::retryable(&error))
+                || (job.kind == "authorization-change"
+                    && (crate::node_cleanup::retryable(&error)
+                        || crate::db::RetryableTransactionError::retryable_transaction(&error))))
                 && if job.kind == "kick" {
                     crate::kick_requests::retry_delay(job.attempts).is_some()
                 } else {
@@ -1145,21 +1148,16 @@ async fn safe_error(
                 {
                     redact_config_secrets(&mut message, &snapshot);
                 }
+
                 if let Ok(assignments) = sqlx::query(
-                    "SELECT credential_enc FROM node_assignments WHERE node_id = $1",
-                )
-                .bind(node_id)
-                .fetch_all(pool)
-                .await
-                {
+                    "SELECT u.connection_credential_enc AS credential_enc FROM users u JOIN node_assignments a ON a.user_id=u.id WHERE a.node_id = $1",
+                ).bind(node_id).fetch_all(pool).await {
                     for assignment in assignments {
-                        if let Ok(Some(encrypted)) = assignment.try_get::<Option<String>, _>("credential_enc")
-                            && let Ok(secret) = secrets.decrypt(&encrypted)
-                        {
-                            secret_values.push(secret);
-                        }
+                        if let Ok(Some(encrypted))=assignment.try_get::<Option<String>,_>("credential_enc")
+                            && let Ok(secret)=secrets.decrypt(&encrypted) {secret_values.push(secret);}
                     }
                 }
+
     }
     if let Ok(versions) =
         sqlx::query_scalar::<_, String>("SELECT payload_enc FROM credential_versions")
@@ -1821,7 +1819,7 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::query("INSERT INTO node_assignments (user_id, node_id, credential_hash, credential_enc, client_certificate_enc, client_private_key_enc, created_at) VALUES ('redaction-user', 'redaction-node', 'credential-hash', $1, $2, $3, '2026-01-01T00:00:00Z')")
+        sqlx::query("WITH assignment_fixture(user_id,node_id,credential_hash,credential_enc,client_certificate_enc,client_private_key_enc,created_at) AS MATERIALIZED (VALUES ('redaction-user', 'redaction-node', 'credential-hash', $1, $2, $3, '2026-01-01T00:00:00Z'::timestamptz)), password_fixture AS (UPDATE users u SET connection_credential_hash=c.credential_hash,connection_credential_enc=c.credential_enc FROM (SELECT DISTINCT ON(user_id) user_id,credential_hash,credential_enc FROM assignment_fixture ORDER BY user_id) c WHERE u.id=c.user_id), fixture_groups AS (INSERT INTO authorization_groups(id,name,created_at,updated_at) SELECT 'fixture-'||md5(user_id||chr(31)||node_id),'Fixture authorization',now(),now() FROM assignment_fixture ON CONFLICT(id) DO UPDATE SET name=EXCLUDED.name RETURNING id), fixture_members AS (INSERT INTO authorization_group_users(group_id,user_id,created_at) SELECT g.id,a.user_id,now() FROM assignment_fixture a JOIN fixture_groups g ON g.id='fixture-'||md5(a.user_id||chr(31)||a.node_id) ON CONFLICT DO NOTHING), fixture_nodes AS (INSERT INTO authorization_group_nodes(group_id,node_id,created_at) SELECT g.id,a.node_id,now() FROM assignment_fixture a JOIN fixture_groups g ON g.id='fixture-'||md5(a.user_id||chr(31)||a.node_id) ON CONFLICT DO NOTHING) INSERT INTO node_assignments(user_id,node_id,client_certificate_enc,client_private_key_enc,created_at) SELECT user_id,node_id,client_certificate_enc,client_private_key_enc,created_at FROM assignment_fixture")
             .bind(encrypted(values[9]))
             .bind(encrypted(values[10]))
             .bind(encrypted(values[11]))

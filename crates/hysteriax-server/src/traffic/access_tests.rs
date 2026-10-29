@@ -14,7 +14,7 @@ async fn fixture(users: usize, nodes: usize) -> AppState {
     if nodes > 2 {
         sqlx::query("INSERT INTO nodes(id,name,ssh_host,ssh_port,ssh_username,ssh_auth_type,ssh_secret_enc,public_host,public_port,listen_addr,node_token_hash,node_token_enc,traffic_stats_secret_enc,desired_config_enc,created_at,updated_at) SELECT 'n-'||lpad(i::text,3,'0'),'Node '||i,'127.0.0.1',22,'root','password','unused','example.test',443,':443','hash-n-'||i,'unused','unused','{}',now(),now() FROM generate_series(1,$1)i")
             .bind((nodes-2) as i32).execute(&pool).await.unwrap();
-        sqlx::query("INSERT INTO node_assignments(user_id,node_id,credential_hash,credential_enc,created_at) SELECT u.id,n.id,u.id||n.id,'unused',now() FROM users u CROSS JOIN nodes n WHERE n.id LIKE 'n-%'")
+        sqlx::query("WITH assignment_fixture(user_id,node_id,credential_hash,credential_enc,created_at) AS MATERIALIZED (SELECT u.id,n.id,u.id||n.id,'unused',now() FROM users u CROSS JOIN nodes n WHERE n.id LIKE 'n-%'), password_fixture AS (UPDATE users u SET connection_credential_hash=c.credential_hash,connection_credential_enc=c.credential_enc FROM (SELECT DISTINCT ON(user_id) user_id,credential_hash,credential_enc FROM assignment_fixture ORDER BY user_id) c WHERE u.id=c.user_id), fixture_groups AS (INSERT INTO authorization_groups(id,name,created_at,updated_at) SELECT 'fixture-'||md5(user_id||chr(31)||node_id),'Fixture authorization',now(),now() FROM assignment_fixture ON CONFLICT(id) DO UPDATE SET name=EXCLUDED.name RETURNING id), fixture_members AS (INSERT INTO authorization_group_users(group_id,user_id,created_at) SELECT g.id,a.user_id,now() FROM assignment_fixture a JOIN fixture_groups g ON g.id='fixture-'||md5(a.user_id||chr(31)||a.node_id) ON CONFLICT DO NOTHING), fixture_nodes AS (INSERT INTO authorization_group_nodes(group_id,node_id,created_at) SELECT g.id,a.node_id,now() FROM assignment_fixture a JOIN fixture_groups g ON g.id='fixture-'||md5(a.user_id||chr(31)||a.node_id) ON CONFLICT DO NOTHING) INSERT INTO node_assignments(user_id,node_id,created_at) SELECT user_id,node_id,created_at FROM assignment_fixture")
             .execute(&pool).await.unwrap();
     }
     AppState::new(
@@ -536,7 +536,7 @@ async fn authoritative_auth_rejects_quota_before_fanout_while_monitoring_credent
         .execute(&state.pool)
         .await
         .unwrap();
-    sqlx::query("UPDATE node_assignments SET credential_hash=$1 WHERE node_id='a'")
+    sqlx::query("UPDATE users SET connection_credential_hash=$1 WHERE id IN (SELECT user_id FROM node_assignments WHERE node_id='a')")
         .bind(token_digest("user-token"))
         .execute(&state.pool)
         .await

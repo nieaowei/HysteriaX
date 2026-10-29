@@ -12,7 +12,7 @@ struct AuthorizationGroupEditorView: View {
     @State private var draft: AuthorizationRelationDraft
     @State private var isSaving = false
     @State private var errorMessage: String?
-    @State private var receipt: AuthorizationGroupMutationResponse?
+    @State private var receipt: AuthorizationChangeReceipt?
 
     init(store: ManagementStore, group: AuthorizationGroupSummary?, intent: AuthorizationGroupEditorIntent,
          memberMode: AuthorizationMemberEditorMode = .members, removedUserIDs: Set<String> = [],
@@ -34,10 +34,10 @@ struct AuthorizationGroupEditorView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text(receipt == nil ? title : L10n.text("授权组已更新")).font(.title2.bold())
+            Text(receipt == nil ? title : L10n.text("授权变更已提交")).font(.title2.bold())
             if let receipt {
-                Text(L10n.text("授权组已更新")).accessibilityIdentifier("authorizationGroups.editor.resultSummary")
-                AuthorizationMutationReceiptView(store: store, createdCredentials: [], revocationJobIDs: receipt.revocationJobIds)
+                Text(L10n.text("授权变更已提交")).accessibilityIdentifier("authorizationGroups.editor.resultSummary")
+                AuthorizationMutationReceiptView(store: store, jobID: receipt.jobId)
             } else if relations, let group {
                 Text(group.name).font(.headline)
                 AuthorizationRelationBrowser(store: store, group: group, users: intent == .users, editing: true, mode: $memberMode, draft: $draft)
@@ -91,7 +91,10 @@ struct AuthorizationGroupEditorView: View {
                         addNodeIDs: intent == .nodes ? draft.added.keys.sorted() : [],
                         removeNodeIDs: intent == .nodes ? draft.removed.keys.sorted() : [])
                     onSaved(group.id)
-                } else { receipt = try await store.createAuthorizationGroup(name: name) }
+                } else {
+                    receipt = try await store.createAuthorizationGroup(name: name)
+                    if let receipt { onSaved(receipt.resourceId) }
+                }
             } catch {
                 errorMessage = L10n.text("保存失败，草稿已保留。请检查错误后重试；如有版本冲突，请重新打开编辑。\n{0}", error.localizedDescription)
             }

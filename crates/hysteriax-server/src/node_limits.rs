@@ -954,7 +954,7 @@ mod tests {
         .await
         .unwrap();
         let credential = "credential";
-        sqlx::query("INSERT INTO node_assignments(user_id,node_id,credential_hash,credential_enc,created_at) VALUES ('user',$1,$2,'unused',now())").bind(&id).bind(crate::security::token_digest(credential)).execute(&state.pool).await.unwrap();
+        sqlx::query("WITH assignment_fixture(user_id,node_id,credential_hash,credential_enc,created_at) AS MATERIALIZED (VALUES ('user',$1,$2,'unused',now())), password_fixture AS (UPDATE users u SET connection_credential_hash=c.credential_hash,connection_credential_enc=c.credential_enc FROM (SELECT DISTINCT ON(user_id) user_id,credential_hash,credential_enc FROM assignment_fixture ORDER BY user_id) c WHERE u.id=c.user_id), fixture_groups AS (INSERT INTO authorization_groups(id,name,created_at,updated_at) SELECT 'fixture-'||md5(user_id||chr(31)||node_id),'Fixture authorization',now(),now() FROM assignment_fixture ON CONFLICT(id) DO UPDATE SET name=EXCLUDED.name RETURNING id), fixture_members AS (INSERT INTO authorization_group_users(group_id,user_id,created_at) SELECT g.id,a.user_id,now() FROM assignment_fixture a JOIN fixture_groups g ON g.id='fixture-'||md5(a.user_id||chr(31)||a.node_id) ON CONFLICT DO NOTHING), fixture_nodes AS (INSERT INTO authorization_group_nodes(group_id,node_id,created_at) SELECT g.id,a.node_id,now() FROM assignment_fixture a JOIN fixture_groups g ON g.id='fixture-'||md5(a.user_id||chr(31)||a.node_id) ON CONFLICT DO NOTHING) INSERT INTO node_assignments(user_id,node_id,created_at) SELECT user_id,node_id,created_at FROM assignment_fixture").bind(&id).bind(crate::security::token_digest(credential)).execute(&state.pool).await.unwrap();
         let request = || {
             Json(
                 serde_json::from_value(json!({"addr":"127.0.0.1:1","auth":credential,"tx":0}))
@@ -990,7 +990,7 @@ mod tests {
             "name":"Unlimited node","ssh_host":"127.0.0.1","ssh_port":22,"ssh_username":"root","ssh_auth_type":"password","ssh_secret":"unused","public_host":"other.example.test","public_port":443,"listen_addr":":443"
         })).await)).await.unwrap();
         let other_id = other["node"]["id"].as_str().unwrap();
-        sqlx::query("INSERT INTO node_assignments(user_id,node_id,credential_hash,credential_enc,created_at) SELECT user_id,$1,credential_hash,credential_enc,created_at FROM node_assignments WHERE node_id=$2")
+        sqlx::query("WITH assignment_fixture(user_id,node_id,credential_hash,credential_enc,created_at) AS MATERIALIZED (SELECT a.user_id,$1,u.connection_credential_hash,u.connection_credential_enc,a.created_at FROM node_assignments a JOIN users u ON u.id=a.user_id WHERE a.node_id=$2), password_fixture AS (UPDATE users u SET connection_credential_hash=c.credential_hash,connection_credential_enc=c.credential_enc FROM (SELECT DISTINCT ON(user_id) user_id,credential_hash,credential_enc FROM assignment_fixture ORDER BY user_id) c WHERE u.id=c.user_id), fixture_groups AS (INSERT INTO authorization_groups(id,name,created_at,updated_at) SELECT 'fixture-'||md5(user_id||chr(31)||node_id),'Fixture authorization',now(),now() FROM assignment_fixture ON CONFLICT(id) DO UPDATE SET name=EXCLUDED.name RETURNING id), fixture_members AS (INSERT INTO authorization_group_users(group_id,user_id,created_at) SELECT g.id,a.user_id,now() FROM assignment_fixture a JOIN fixture_groups g ON g.id='fixture-'||md5(a.user_id||chr(31)||a.node_id) ON CONFLICT DO NOTHING), fixture_nodes AS (INSERT INTO authorization_group_nodes(group_id,node_id,created_at) SELECT g.id,a.node_id,now() FROM assignment_fixture a JOIN fixture_groups g ON g.id='fixture-'||md5(a.user_id||chr(31)||a.node_id) ON CONFLICT DO NOTHING) INSERT INTO node_assignments(user_id,node_id,created_at) SELECT user_id,node_id,created_at FROM assignment_fixture")
             .bind(other_id).bind(&id).execute(&state.pool).await.unwrap();
         let other_auth = crate::api::subscriptions::hy2_auth(
             State(state.clone()),
@@ -1003,7 +1003,7 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(serde_json::to_value(other_auth.0).unwrap()["ok"], true);
-        sqlx::query("UPDATE node_assignments SET credential_enc=$1 WHERE user_id='user'")
+        sqlx::query("UPDATE users SET connection_credential_enc=$1 WHERE id='user'")
             .bind(state.secrets.encrypt(credential).unwrap())
             .execute(&state.pool)
             .await

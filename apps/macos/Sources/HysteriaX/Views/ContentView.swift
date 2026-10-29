@@ -145,6 +145,13 @@ struct ContentView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .task { await store.refresh() }
+        .onChange(of: store.requestedJobID) { _, id in
+            if let id {
+                overviewDestination = OverviewDestination(section: "jobs", entityID: id)
+                selectedSection = "jobs"
+                store.requestedJobID = nil
+            }
+        }
         .onChange(of: store.requestedSection) { _, section in
             if let section { selectedSection = section; store.requestedSection = nil }
         }

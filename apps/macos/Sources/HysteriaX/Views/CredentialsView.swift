@@ -145,7 +145,7 @@ struct CredentialsView: View {
                         TableColumn(L10n.text("类型"), value: \.typeTitle)
                         TableColumn(L10n.text("状态"), value: \.statusTitle)
                         TableColumn(L10n.text("当前引用对象数")) { entry in
-                            Text(entry.isManaged ? String(entry.referenceCount ?? 0) : "—")
+                            Text(entry.isManaged || entry.kind == "user_credential" ? String(entry.referenceCount ?? 0) : "—")
                                 .help(L10n.text("统计当前引用对象，同一节点只计一次；不含历史配置和待执行更新批次。"))
                         }
                         TableColumn(L10n.text("到期")) { entry in Text(entry.expiresAt.map { DateDisplayText.local($0) } ?? L10n.text("未知")) }
@@ -265,6 +265,13 @@ struct CredentialsView: View {
                             .help(L10n.text("包含当前引用、历史配置和待执行更新批次；同一对象的不同引用位置分别计数。"))
                     }
                     detailMetric(entry.kind == "ca_identity" ? L10n.text("当前发布 CA 到期") : L10n.text("到期时间"), value: entry.expiresAt.map { DateDisplayText.local($0) } ?? L10n.text("未知"))
+                    if entry.kind == "user_credential" {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(L10n.text("已分配节点数")).font(.caption).foregroundStyle(.secondary)
+                            Text(entry.referenceCount.map(String.init) ?? "—").font(.callout).textSelection(.enabled)
+                                .accessibilityIdentifier("credentials.user.nodeCount")
+                        }
+                    }
                     if let userID = entry.ownerUserId {
                         detailMetric(L10n.text("所属用户"), value: store.users.first { $0.id == userID }?.name ?? userID)
                     }
@@ -350,6 +357,10 @@ struct CredentialsView: View {
     }
 
     @ViewBuilder private func businessDetail(_ entry: CredentialSummary) -> some View {
+        if entry.kind == "user_credential" {
+            Text(L10n.text("该用户的全部授权节点共用一个连接密码，授权组变更不会轮换密码。"))
+                .font(.callout).foregroundStyle(.secondary)
+        }
         if let user = entry.ownerUserId {
             GroupBox(L10n.text("用户凭据管理")) {
                 HStack {
@@ -357,6 +368,7 @@ struct CredentialsView: View {
                         .font(.callout).foregroundStyle(.secondary)
                     Spacer()
                     Button(L10n.text("管理用户")) { onJump("user", user) }
+                        .accessibilityIdentifier("credentials.manageUser")
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.vertical, 4)

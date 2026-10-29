@@ -31,6 +31,7 @@ final class ManagementStore {
     }
     var serviceAddress = UserDefaults.standard.string(forKey: "serviceAddress") ?? ""
     var requestedSection: String?
+    var requestedJobID: String?
     var supportsDNSManagement = false
     var dnsConnections: [DNSConnection] = []
     var dnsZones: [DNSZone] = []
@@ -491,8 +492,11 @@ final class ManagementStore {
     }
 
     func jobDetail(_ jobID: String) async throws -> JobDetailResponse {
-        let api = try requireConnectedAPI()
-        return try await api.get(APIEndpoints.getJob(id: jobID))
+        let client = try requireConnectedAPI()
+        let generation = serviceGeneration
+        let detail = try await client.get(APIEndpoints.getJob(id: jobID), bypassCache: true)
+        guard generation == serviceGeneration, api === client, !Task.isCancelled else { throw CancellationError() }
+        return detail
     }
 
     func executionOperations(workID: String, after: String? = nil) async throws -> ExecutionOperationsPage {
@@ -720,7 +724,7 @@ final class ManagementStore {
             body: RevisionRequest(expectedRevision: user.revision)
         )
         await refresh()
-        return response.credentials.map { "\($0.nodeID): \($0.credential)" }.joined(separator: "\n")
+        return response.credential
     }
 
     func delete(_ user: UserSummary) async throws {
