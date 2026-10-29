@@ -54,9 +54,7 @@ pub(super) async fn group(state: &AppState, name: &str, users: &[&str], nodes: &
         ),
     )
     .await
-    .unwrap()
-    .1
-    .0;
+    .unwrap();
     groups::group_named(state, name).await
 }
 async fn audit(state: &AppState, name: &str) -> Value {

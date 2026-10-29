@@ -960,7 +960,7 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(result, json!({"revocation_job_ids":[]}));
-        group_named(&state, name).await
+        group_named(state, name).await
     }
 
     #[tokio::test]
