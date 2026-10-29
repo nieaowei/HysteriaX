@@ -5,8 +5,8 @@ async fn direct_membership_changes_keep_last_source_and_reject_stale_revision() 
     let state = tests::fixture().await;
     let first = tests::create_group(&state, "First").await;
     let second = tests::create_group(&state, "Second").await;
-    let first_id = first["group"]["id"].as_str().unwrap();
-    let second_id = second["group"]["id"].as_str().unwrap();
+    let first_id = first["id"].as_str().unwrap();
+    let second_id = second["id"].as_str().unwrap();
     let revision: i64 = sqlx::query_scalar("SELECT revision FROM users WHERE id='user'")
         .fetch_one(&state.pool)
         .await
@@ -70,7 +70,7 @@ async fn preview_table_migration_drops_existing_tokens_and_preserves_authorizati
     sqlx::raw_sql("ALTER TABLE authorization_group_previews ADD PRIMARY KEY(token); CREATE INDEX authorization_group_previews_expiry_cursor_idx ON authorization_group_previews(expires_at,token); ALTER TABLE authorization_group_previews ADD FOREIGN KEY(group_id) REFERENCES authorization_groups(id) ON DELETE CASCADE; ALTER TABLE authorization_group_previews ADD FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE;")
         .execute(&state.pool).await.unwrap();
     sqlx::query("INSERT INTO authorization_group_previews(token,action,group_id,request_json,guard_json,result_json,created_at,expires_at) VALUES('obsolete','delete',$1,'{}','{}','{}',now(),now()+interval '10 minutes')")
-        .bind(created["group"]["id"].as_str().unwrap()).execute(&state.pool).await.unwrap();
+        .bind(created["id"].as_str().unwrap()).execute(&state.pool).await.unwrap();
     sqlx::raw_sql(include_str!(
         "../../../migrations/0003_remove_authorization_previews.sql"
     ))
@@ -98,7 +98,7 @@ async fn thousand_member_grant_batches_statements_and_preserves_each_password() 
         .execute(&state.pool).await.unwrap();
     let (_, Json(receipt)) = create(
         State(state.clone()),
-        Json(CreateGroupRequest {
+        Json(FixtureGroupCreate {
             name: "Batch grant".into(),
             user_ids: users.clone(),
             node_ids: vec!["node".into()],
@@ -106,7 +106,7 @@ async fn thousand_member_grant_batches_statements_and_preserves_each_password() 
     )
     .await
     .unwrap();
-    assert_eq!(receipt["additions_count"], 1000);
+    assert_eq!(receipt, json!({"revocation_job_ids":[]}));
     let statements: Vec<(String, i32)> =
         sqlx::query_as("SELECT kind,calls FROM authorization_statement_counts ORDER BY kind")
             .fetch_all(&state.pool)
@@ -120,33 +120,17 @@ async fn thousand_member_grant_batches_statements_and_preserves_each_password() 
             ("users:UPDATE".into(), 1)
         ]
     );
-    let passwords: std::collections::BTreeMap<String, String> = receipt["created_credentials"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|v| {
-            (
-                v["user_id"].as_str().unwrap().to_owned(),
-                v["hy2_credential"].as_str().unwrap().to_owned(),
-            )
-        })
-        .collect();
-    assert_eq!(
-        passwords
-            .values()
-            .collect::<std::collections::BTreeSet<_>>()
-            .len(),
-        1000
-    );
     let rows: Vec<(String,String,String,i64)> = sqlx::query_as("SELECT a.user_id,a.credential_hash,a.credential_enc,u.revision FROM node_assignments a JOIN users u ON u.id=a.user_id WHERE a.user_id=ANY($1) ORDER BY a.user_id")
         .bind(users).fetch_all(&state.pool).await.unwrap();
     assert_eq!(rows.len(), 1000);
-    for (user, hash, cipher, revision) in rows {
-        let password = &passwords[&user];
-        assert_eq!(hash, token_digest(password));
-        assert_eq!(state.secrets.decrypt(&cipher).unwrap(), *password);
+    let mut passwords = BTreeSet::new();
+    for (_user, hash, cipher, revision) in rows {
+        let password = state.secrets.decrypt(&cipher).unwrap();
+        assert_eq!(hash, token_digest(&password));
+        passwords.insert(password);
         assert_eq!(revision, 2);
     }
+    assert_eq!(passwords.len(), 1000);
 }
 
 #[tokio::test]
@@ -158,7 +142,7 @@ async fn adding_group_nodes_does_not_wait_for_monitoring_non_key_node_lock() {
         .unwrap();
     let (_, Json(initial)) = create(
         State(state.clone()),
-        Json(CreateGroupRequest {
+        Json(FixtureGroupCreate {
             name: "Concurrent monitoring".into(),
             user_ids: vec!["user".into()],
             node_ids: vec![],
@@ -166,7 +150,9 @@ async fn adding_group_nodes_does_not_wait_for_monitoring_non_key_node_lock() {
     )
     .await
     .unwrap();
-    let id = initial["group"]["id"].as_str().unwrap().to_owned();
+    assert_eq!(initial, json!({"revocation_job_ids":[]}));
+    let initial = group_named(&state, "Concurrent monitoring").await;
+    let id = initial["id"].as_str().unwrap().to_owned();
     let mut monitoring = state.pool.begin().await.unwrap();
     sqlx::query("SELECT id FROM nodes WHERE id='node' FOR NO KEY UPDATE")
         .fetch_one(&mut *monitoring)
@@ -177,7 +163,7 @@ async fn adding_group_nodes_does_not_wait_for_monitoring_non_key_node_lock() {
         update(
             State(state.clone()),
             Path(id.clone()),
-            Json(UpdateGroupRequest {
+            Json(FixtureGroupReplace {
                 expected_revision: 1,
                 name: "Concurrent monitoring".into(),
                 user_ids: vec!["user".into()],
@@ -190,13 +176,20 @@ async fn adding_group_nodes_does_not_wait_for_monitoring_non_key_node_lock() {
     let Json(receipt) = saved
         .expect("node authorization must not wait for monitoring's non-key lock")
         .unwrap();
-    assert_eq!(receipt["additions_count"], 1);
-    assert_eq!(receipt["group"]["revision"], 2);
-    assert_eq!(receipt["created_credentials"].as_array().unwrap().len(), 1);
+    assert_eq!(receipt, json!({"revocation_job_ids":[]}));
+    assert_eq!(
+        group_named(&state, "Concurrent monitoring").await["revision"],
+        2
+    );
+    let assignments: i64 = sqlx::query_scalar("SELECT count(*) FROM node_assignments")
+        .fetch_one(&state.pool)
+        .await
+        .unwrap();
+    assert_eq!(assignments, 1);
     let Json(removed) = update(
         State(state.clone()),
         Path(id),
-        Json(UpdateGroupRequest {
+        Json(FixtureGroupReplace {
             expected_revision: 2,
             name: "Concurrent monitoring".into(),
             user_ids: vec!["user".into()],
@@ -205,7 +198,7 @@ async fn adding_group_nodes_does_not_wait_for_monitoring_non_key_node_lock() {
     )
     .await
     .unwrap();
-    assert_eq!(removed["removals_count"], 1);
+    assert_eq!(removed.as_object().unwrap().len(), 1);
     assert_eq!(removed["revocation_job_ids"].as_array().unwrap().len(), 1);
 }
 

@@ -1437,7 +1437,7 @@ paths:
       operationId: createAuthorizationGroup
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
-      summary: Create an authorization group directly
+      summary: Create an empty authorization group
       requestBody:
         required: true
         content:
@@ -1445,7 +1445,7 @@ paths:
             schema: { $ref: '#/components/schemas/AuthorizationGroupCreate' }
       responses:
         '201':
-          description: Created group, one-time credentials, and queued revocations
+          description: Empty group created; revocation task IDs only
           content:
             application/json:
               schema: { $ref: '#/components/schemas/AuthorizationGroupMutationResponse' }
@@ -1467,11 +1467,11 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/AuthorizationGroupSummary' }
         '404': { $ref: '#/components/responses/Error' }
-    put:
+    patch:
       operationId: updateAuthorizationGroup
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
-      summary: Replace an authorization group's members and nodes
+      summary: Rename an authorization group or add/remove members and nodes
       requestBody:
         required: true
         content:
@@ -1479,7 +1479,7 @@ paths:
             schema: { $ref: '#/components/schemas/AuthorizationGroupUpdate' }
       responses:
         '200':
-          description: Updated group, one-time credentials, and queued revocations
+          description: Group changes committed; revocation task IDs only
           content:
             application/json:
               schema: { $ref: '#/components/schemas/AuthorizationGroupMutationResponse' }
@@ -1498,7 +1498,7 @@ paths:
             schema: { $ref: '#/components/schemas/AuthorizationGroupDelete' }
       responses:
         '200':
-          description: Deleted group, effective assignment changes, one-time credentials, and queued revocations
+          description: Group deleted; revocation task IDs only
           content:
             application/json:
               schema: { $ref: '#/components/schemas/AuthorizationGroupMutationResponse' }
@@ -2570,29 +2570,30 @@ components:
         expected_revision: { type: integer, minimum: 1 }
     AuthorizationGroupCreate:
       type: object
-      required: [name, user_ids, node_ids]
-      properties:
-        name: { type: string }
-        user_ids:
-          type: array
-          items: { type: string, format: uuid }
-        node_ids:
-          type: array
-          items: { type: string, format: uuid }
+      required: [name]
       additionalProperties: false
+      properties:
+        name: { type: string, minLength: 1, maxLength: 180 }
     AuthorizationGroupUpdate:
       type: object
-      required: [expected_revision, name, user_ids, node_ids]
+      description: Partial update. Omitted fields preserve current values. Add/remove sets must be disjoint; at least one change is required.
+      required: [expected_revision]
+      additionalProperties: false
       properties:
         expected_revision: { type: integer, minimum: 1 }
-        name: { type: string }
-        user_ids:
+        name: { type: string, minLength: 1, maxLength: 180 }
+        add_user_ids:
           type: array
           items: { type: string, format: uuid }
-        node_ids:
+        remove_user_ids:
           type: array
           items: { type: string, format: uuid }
-      additionalProperties: false
+        add_node_ids:
+          type: array
+          items: { type: string, format: uuid }
+        remove_node_ids:
+          type: array
+          items: { type: string, format: uuid }
     AuthorizationGroupDelete:
       type: object
       required: [expected_revision]
@@ -2875,17 +2876,9 @@ components:
         hy2_credential: { type: string, description: One-time Hysteria credential returned after effective authorization is created. }
     AuthorizationGroupMutationResponse:
       type: object
-      required: [group, additions_count, removals_count, created_credentials, revocation_job_ids]
+      additionalProperties: false
+      required: [revocation_job_ids]
       properties:
-        managed_identities: { type: array, items: { $ref: '#/components/schemas/AuthorizationIdentityResult' } }
-        group:
-          $ref: '#/components/schemas/AuthorizationGroupSummary'
-          type: [object, 'null']
-        additions_count: { type: integer, minimum: 0 }
-        removals_count: { type: integer, minimum: 0 }
-        created_credentials:
-          type: array
-          items: { $ref: '#/components/schemas/AuthorizationCreatedCredential' }
         revocation_job_ids:
           type: array
           items: { type: string, format: uuid }

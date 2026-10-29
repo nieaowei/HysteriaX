@@ -62,7 +62,7 @@ private final class GroupFixtureProtocol: URLProtocol, @unchecked Sendable {
     func finishLoading() {
         let path = request.url!.path
         let method = request.httpMethod ?? "GET"
-        let receipt = #"{"group":null,"additions_count":0,"removals_count":1,"created_credentials":[],"revocation_job_ids":["kick-1"]}"#
+        let receipt = #"{"revocation_job_ids":["kick-1"]}"#
         var status = 200
         let data: Data
         if path == "/api/v2/credentials/ca-identities" || path.hasSuffix("/ca-versions") {
@@ -72,7 +72,7 @@ private final class GroupFixtureProtocol: URLProtocol, @unchecked Sendable {
             data = Data(#"{"id":"ca","policy_revision":4,"policy":{"client_validity_days":90,"renew_before_hours":168}}"#.utf8)
         }
         else if path.hasSuffix("/preview") { preconditionFailure("authorization previews are retired") }
-        else if method == "DELETE" || method == "POST" && path == "/api/v2/authorization-groups" || method == "PUT" && path.contains("/authorization-groups/") { data = Data(receipt.utf8) }
+        else if method == "DELETE" || method == "POST" && path == "/api/v2/authorization-groups" || method == "PATCH" && path.contains("/authorization-groups/") { data = Data(receipt.utf8) }
         else if method == "PUT" && path.hasSuffix("/authorization-groups") { data = Data(#"{"user_id":"user","revision":2,"group_ids":[],"assignments":[],"additions_count":0,"removals_count":1,"created_credentials":[],"revocation_job_ids":["kick-1"]}"#.utf8) }
         else if path == "/api/v2/version" { data = Data(#"{"api_version":"2.0.0","management_protocol":2,"directory_version":"b3:test","features":["authorization_groups","managed_mtls"],"service_version":"fixture","hysteria_version":"fixture","mihomo_version":"fixture"}"#.utf8) }
         else if path == "/api/v2/authorization-groups" && Self.state.failGroups { status = 503; data = Data(#"{"error":{"code":"temporary","message":"groups unavailable"}}"#.utf8) }
@@ -107,10 +107,10 @@ struct AuthorizationGroupClientChecks {
         store.users = [oldUser]
         await store.refreshAuthorizationGroups()
         precondition(GroupFixtureProtocol.state.requests.contains { $0.1 == "/api/v2/authorization-groups" })
-        _ = try await store.createAuthorizationGroup(name:"Test", userIDs:["user"], nodeIDs:["node"])
+        _ = try await store.createAuthorizationGroup(name:"Test")
         let createRequest = GroupFixtureProtocol.state.requests.first { $0.0 == "POST" && $0.1 == "/api/v2/authorization-groups" }!
         let sent = try JSONSerialization.jsonObject(with:createRequest.2) as! [String:Any]
-        precondition(sent["preview_token"] == nil && sent["user_ids"] as? [String] == ["user"])
+        precondition(Set(sent.keys) == ["name"] && sent["name"] as? String == "Test")
         let reissue=ManagedUserReissueRequest(caCredentialId:"ca",expectedRevisions:["ca":.integer(3)])
         let encoded=try JSONSerialization.jsonObject(with:JSONEncoder().encode(reissue)) as! [String:Any]
         precondition((encoded["expected_revisions"] as? [String:Int])?["ca"] == 3)
@@ -118,17 +118,27 @@ struct AuthorizationGroupClientChecks {
         precondition(source.sourceGroups?.count == 2, "all sources must decode without a revision")
         let group = try JSONDecoder().decode(AuthorizationGroupSummary.self, from: Data(#"{"id":"migration-abc","name":"Migrated","revision":1,"user_ids":["user"],"node_ids":["node"],"user_count":1,"node_count":1,"created_at":"2026-10-07T00:00:00Z","updated_at":"2026-10-07T00:00:00Z"}"#.utf8))
         let beforeUpdate = GroupFixtureProtocol.state.requests.count
-        let updated = try await store.updateAuthorizationGroup(group, name: group.name, userIDs: [], nodeIDs: group.nodeIds)
-        precondition(updated.removalsCount == 1 && updated.revocationJobIds == ["kick-1"])
+        let updated = try await store.updateAuthorizationGroup(group, removeUserIDs: ["user"])
+        precondition(updated.revocationJobIds == ["kick-1"])
         let updates = Array(GroupFixtureProtocol.state.requests.dropFirst(beforeUpdate))
         precondition(!updates.contains { $0.1.hasSuffix("/preview") }, "updates must not create hidden previews")
-        let updateRequest = updates.first { $0.0 == "PUT" }!
+        let updateRequest = updates.first { $0.0 == "PATCH" }!
         let updateBody = try JSONSerialization.jsonObject(with: updateRequest.2) as! [String:Any]
         precondition(updateBody["preview_token"] == nil)
         precondition(updateBody["expected_revision"] as? Int == 1)
-        precondition(updateBody["user_ids"] as? [String] == [])
+        precondition(Set(updateBody.keys) == ["expected_revision", "remove_user_ids"])
+        precondition(updateBody["remove_user_ids"] as? [String] == ["user"])
+        _ = try await store.updateAuthorizationGroup(group, name: "Renamed")
+        let renameRequest = GroupFixtureProtocol.state.requests.last { $0.0 == "PATCH" && $0.1.contains("/authorization-groups/") }!
+        let renameBody = try JSONSerialization.jsonObject(with: renameRequest.2) as! [String:Any]
+        precondition(Set(renameBody.keys) == ["expected_revision", "name"])
+        _ = try await store.updateAuthorizationGroup(group, addNodeIDs: ["node-2"], removeNodeIDs: ["node"])
+        let nodeRequest = GroupFixtureProtocol.state.requests.last { $0.0 == "PATCH" && $0.1.contains("/authorization-groups/") }!
+        let nodeBody = try JSONSerialization.jsonObject(with: nodeRequest.2) as! [String:Any]
+        precondition(Set(nodeBody.keys) == ["expected_revision", "add_node_ids", "remove_node_ids"])
+        precondition(nodeBody["add_node_ids"] as? [String] == ["node-2"])
         let deleted = try await store.deleteAuthorizationGroup(group)
-        precondition(deleted.group == nil && deleted.revocationJobIds == ["kick-1"])
+        precondition(deleted.revocationJobIds == ["kick-1"])
         let deleteRequest = GroupFixtureProtocol.state.requests.first { $0.0 == "DELETE" }!
         let deleteBody = try JSONSerialization.jsonObject(with: deleteRequest.2) as! [String:Any]
         precondition(deleteBody["preview_token"] == nil)
@@ -167,8 +177,8 @@ struct AuthorizationGroupClientChecks {
             var completed = false
             let mutation = Task {
                 switch operation {
-                case 0: _ = try await store.createAuthorizationGroup(name: "Immediate", userIDs: [], nodeIDs: [])
-                case 1: _ = try await store.updateAuthorizationGroup(group, name: group.name, userIDs: [], nodeIDs: [])
+                case 0: _ = try await store.createAuthorizationGroup(name: "Immediate")
+                case 1: _ = try await store.updateAuthorizationGroup(group, removeNodeIDs: ["node"])
                 case 2: _ = try await store.deleteAuthorizationGroup(group)
                 default: _ = try await store.updateUserAuthorizationGroups(user, groupIDs: [])
                 }

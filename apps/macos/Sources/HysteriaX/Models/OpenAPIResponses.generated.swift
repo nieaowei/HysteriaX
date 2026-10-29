@@ -374,19 +374,9 @@ struct AuthorizationCreatedCredential: Codable, Sendable {
 }
 
 struct AuthorizationGroupMutationResponse: Codable, Sendable {
-    let managedIdentities: [AuthorizationIdentityResult]?
-    let group: AuthorizationGroupSummary?
-    let additionsCount: Int
-    let removalsCount: Int
-    let createdCredentials: [AuthorizationCreatedCredential]
     let revocationJobIds: [String]
 
     enum CodingKeys: String, CodingKey {
-        case managedIdentities = "managed_identities"
-        case group
-        case additionsCount = "additions_count"
-        case removalsCount = "removals_count"
-        case createdCredentials = "created_credentials"
         case revocationJobIds = "revocation_job_ids"
     }
 }

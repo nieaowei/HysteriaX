@@ -210,7 +210,7 @@ def main():
             user_id = json.loads(body)["id"]
             for authorized_node in (node_id,realm_node_id):
                 status,_=request_group(raw_request,base,admin,[user_id],[authorized_node])
-                if status!=201:raise RuntimeError("group authorization of parser fixture failed")
+                if status!=200:raise RuntimeError("group authorization of parser fixture failed")
             status, body = request(
                 base,
                 f"/api/v2/users/{user_id}/subscription",

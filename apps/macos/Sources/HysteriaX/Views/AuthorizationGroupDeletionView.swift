@@ -14,11 +14,11 @@ struct AuthorizationGroupDeletionView: View {
         VStack(alignment: .leading, spacing: 16) {
             Text(L10n.text("删除结果")).font(.title2.bold())
             if let result {
-                Text(L10n.text("新增 {0} 条连接授权 · 移除 {1} 条连接授权", String(result.additionsCount), String(result.removalsCount)))
+                Text(L10n.text("授权组已删除"))
                     .font(.callout.weight(.medium))
                     .accessibilityIdentifier("authorizationGroups.delete.resultSummary")
                 ScrollView {
-                    AuthorizationMutationReceiptView(store: store, createdCredentials: result.createdCredentials, revocationJobIDs: result.revocationJobIds)
+                    AuthorizationMutationReceiptView(store: store, createdCredentials: [], revocationJobIDs: result.revocationJobIds)
                 }
             } else if isDeleting {
                 ProgressView(L10n.text("正在删除…"))

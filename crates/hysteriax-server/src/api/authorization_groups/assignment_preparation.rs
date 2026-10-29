@@ -230,11 +230,12 @@ mod tests {
             })
             .await
             .unwrap();
-            assert_eq!(receipt["group"]["id"], expected);
-            assert_eq!(
-                receipt["created_credentials"][0]["hy2_credential"],
-                material.plaintext
-            );
+            assert_eq!(receipt, json!({"revocation_job_ids":[]}));
+            let stored_id: String = sqlx::query_scalar("SELECT id FROM authorization_groups")
+                .fetch_one(&state.pool)
+                .await
+                .unwrap();
+            assert_eq!(stored_id, expected);
             let row=sqlx::query("SELECT credential_hash,credential_enc,created_at FROM node_assignments WHERE user_id='user' AND node_id='node'").fetch_one(&state.pool).await.unwrap();
             assert_eq!(row.get::<String, _>("credential_hash"), material.digest);
             assert_eq!(row.get::<String, _>("credential_enc"), material.ciphertext);

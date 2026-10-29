@@ -37,15 +37,23 @@ struct AuthorizationGroupEditorView: View {
         _nodeIDs = State(initialValue: Set(group?.nodeIds ?? []))
     }
 
-    private var canEditUsers: Bool { intent == .create || intent == .users }
-    private var canEditNodes: Bool { intent == .create || intent == .nodes }
-    private var isReadyToSave: Bool { !isSaving }
+    private var canEditUsers: Bool { intent == .users }
+    private var canEditNodes: Bool { intent == .nodes }
+    private var isReadyToSave: Bool {
+        guard !isSaving else { return false }
+        switch intent {
+        case .create: return !proposedName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        case .rename: return proposedName.trimmingCharacters(in: .whitespacesAndNewlines) != group?.name
+        case .users: return userIDs != originalUserIDs
+        case .nodes: return nodeIDs != Set(group?.nodeIds ?? [])
+        }
+    }
 
     private var editorSize: CGSize {
         let hasDetails = receipt != nil
         switch intent {
         case .create:
-            return CGSize(width: 760, height: 560)
+            return CGSize(width: 560, height: hasDetails ? 480 : 340)
         case .users:
             return CGSize(width: 880, height: 620)
         case .rename:
@@ -57,7 +65,7 @@ struct AuthorizationGroupEditorView: View {
 
     private var requiredDirectories: [ManagementStore.Directory] {
         switch intent {
-        case .create: [.nodes, .users]
+        case .create: []
         case .users: [.users]
         case .nodes: [.nodes]
         case .rename: []
@@ -130,10 +138,10 @@ struct AuthorizationGroupEditorView: View {
     private var editorContent: some View {
         if let receipt {
             VStack(alignment: .leading, spacing: 12) {
-                Text(L10n.text("新增 {0} 条连接授权 · 移除 {1} 条连接授权", String(receipt.additionsCount), String(receipt.removalsCount)))
+                Text(L10n.text("授权组已更新"))
                     .font(.callout.weight(.medium))
                     .accessibilityIdentifier("authorizationGroups.editor.resultSummary")
-                AuthorizationMutationReceiptView(store: store, createdCredentials: receipt.createdCredentials, revocationJobIDs: receipt.revocationJobIds)
+                AuthorizationMutationReceiptView(store: store, createdCredentials: [], revocationJobIDs: receipt.revocationJobIds)
             }
         } else {
             VStack(alignment: .leading, spacing: 16) {
@@ -147,12 +155,14 @@ struct AuthorizationGroupEditorView: View {
                                     .accessibilityIdentifier("authorizationGroups.editor.name")
                             }
                         } else if let group { LabeledContent(L10n.text("授权组名称"), value: group.name) }
-                        if canEditUsers {
-                            selectionRow(title: L10n.text("成员用户"), count: userIDs.count, buttonTitle: L10n.text("选择用户…"), identifier: "authorizationGroups.editor.users") { selectingUsers = true }
-                        } else { LabeledContent(L10n.text("成员用户"), value: L10n.text("{0} 位", String(userIDs.count))) }
-                        if canEditNodes {
-                            selectionRow(title: L10n.text("授权节点"), count: nodeIDs.count, buttonTitle: L10n.text("选择节点…"), identifier: "authorizationGroups.editor.nodes") { selectingNodes = true }
-                        } else { LabeledContent(L10n.text("授权节点"), value: L10n.text("{0} 个", String(nodeIDs.count))) }
+                        if intent == .users || intent == .nodes {
+                            if canEditUsers {
+                                selectionRow(title: L10n.text("成员用户"), count: userIDs.count, buttonTitle: L10n.text("选择用户…"), identifier: "authorizationGroups.editor.users") { selectingUsers = true }
+                            } else { LabeledContent(L10n.text("成员用户"), value: L10n.text("{0} 位", String(userIDs.count))) }
+                            if canEditNodes {
+                                selectionRow(title: L10n.text("授权节点"), count: nodeIDs.count, buttonTitle: L10n.text("选择节点…"), identifier: "authorizationGroups.editor.nodes") { selectingNodes = true }
+                            } else { LabeledContent(L10n.text("授权节点"), value: L10n.text("{0} 个", String(nodeIDs.count))) }
+                        }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading).padding(8)
                     .disabled(isSaving)
@@ -172,7 +182,7 @@ struct AuthorizationGroupEditorView: View {
 
     private var description: String {
         switch intent {
-        case .create: L10n.text("选择成员和节点；可以先创建空组，再分别管理用户或节点。")
+        case .create: L10n.text("填写名称创建空组，再分别添加成员和节点。")
         case .rename: L10n.text("修改授权组名称后保存。")
         case .users: L10n.text("调整本组成员；其他授权组授予的权限会保留。")
         case .nodes: L10n.text("调整本组节点；同一连接仍由其他授权组授予时不会撤权。")
@@ -198,19 +208,17 @@ struct AuthorizationGroupEditorView: View {
                 if let group {
                     result = try await store.updateAuthorizationGroup(
                         group,
-                        name: proposedName,
-                        userIDs: userIDs.sorted(),
-                        nodeIDs: nodeIDs.sorted()
+                        name: intent == .rename ? proposedName : nil,
+                        addUserIDs: intent == .users ? userIDs.subtracting(originalUserIDs).sorted() : [],
+                        removeUserIDs: intent == .users ? originalUserIDs.subtracting(userIDs).sorted() : [],
+                        addNodeIDs: intent == .nodes ? nodeIDs.subtracting(Set(group.nodeIds)).sorted() : [],
+                        removeNodeIDs: intent == .nodes ? Set(group.nodeIds).subtracting(nodeIDs).sorted() : []
                     )
                 } else {
-                    result = try await store.createAuthorizationGroup(
-                        name: proposedName,
-                        userIDs: userIDs.sorted(),
-                        nodeIDs: nodeIDs.sorted()
-                    )
+                    result = try await store.createAuthorizationGroup(name: proposedName)
                 }
                 receipt = result
-                if let groupID = result.group?.id ?? group?.id { onSaved(groupID) }
+                if let groupID = group?.id { onSaved(groupID) }
             } catch {
                 errorMessage = L10n.text("保存失败，草稿已保留。请检查错误后重试；如有版本冲突，请重新打开编辑。\n{0}", String(describing: (error.localizedDescription)))
             }

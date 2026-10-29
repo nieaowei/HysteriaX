@@ -135,7 +135,7 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/api/v2/authorization-groups/{id}",
             get(authorization_groups::get)
-                .put(authorization_groups::v2::change)
+                .patch(authorization_groups::v2::change)
                 .delete(authorization_groups::v2::change),
         )
         .route(

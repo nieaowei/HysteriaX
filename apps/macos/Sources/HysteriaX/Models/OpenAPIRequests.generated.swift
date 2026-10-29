@@ -637,49 +637,49 @@ struct UserPatchRequest: Encodable, Sendable {
 
 struct AuthorizationGroupCreateRequest: Encodable, Sendable {
     let name: String
-    let userIds: [String]
-    let nodeIds: [String]
 
     init(
-        name: String,
-        userIds: [String],
-        nodeIds: [String]
+        name: String
     ) {
         self.name = name
-        self.userIds = userIds
-        self.nodeIds = nodeIds
     }
 
     enum CodingKeys: String, CodingKey {
         case name
-        case userIds = "user_ids"
-        case nodeIds = "node_ids"
     }
 }
 
 struct AuthorizationGroupUpdateRequest: Encodable, Sendable {
     let expectedRevision: Int
-    let name: String
-    let userIds: [String]
-    let nodeIds: [String]
+    let name: String?
+    let addUserIds: [String]?
+    let removeUserIds: [String]?
+    let addNodeIds: [String]?
+    let removeNodeIds: [String]?
 
     init(
         expectedRevision: Int,
-        name: String,
-        userIds: [String],
-        nodeIds: [String]
+        name: String? = nil,
+        addUserIds: [String]? = nil,
+        removeUserIds: [String]? = nil,
+        addNodeIds: [String]? = nil,
+        removeNodeIds: [String]? = nil
     ) {
         self.expectedRevision = expectedRevision
         self.name = name
-        self.userIds = userIds
-        self.nodeIds = nodeIds
+        self.addUserIds = addUserIds
+        self.removeUserIds = removeUserIds
+        self.addNodeIds = addNodeIds
+        self.removeNodeIds = removeNodeIds
     }
 
     enum CodingKeys: String, CodingKey {
         case expectedRevision = "expected_revision"
         case name
-        case userIds = "user_ids"
-        case nodeIds = "node_ids"
+        case addUserIds = "add_user_ids"
+        case removeUserIds = "remove_user_ids"
+        case addNodeIds = "add_node_ids"
+        case removeNodeIds = "remove_node_ids"
     }
 }
 
@@ -1190,7 +1190,7 @@ enum APIEndpoints {
         APIOperation(method: "GET", path: "api/v2/authorization-groups/\(groupID)", queryParameters: [:])
     }
     static func updateAuthorizationGroup(groupID: String) -> APIOperation<AuthorizationGroupUpdateRequest, AuthorizationGroupMutationResponse> {
-        APIOperation(method: "PUT", path: "api/v2/authorization-groups/\(groupID)", queryParameters: [:])
+        APIOperation(method: "PATCH", path: "api/v2/authorization-groups/\(groupID)", queryParameters: [:])
     }
     static func deleteAuthorizationGroup(groupID: String) -> APIOperation<AuthorizationGroupDeleteRequest, AuthorizationGroupMutationResponse> {
         APIOperation(method: "DELETE", path: "api/v2/authorization-groups/\(groupID)", queryParameters: [:])

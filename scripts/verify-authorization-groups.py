@@ -50,8 +50,16 @@ def main():
             return json.loads(body) if body else None
 
         def group(name, users, nodes):
-            draft = {"name": name, "user_ids": users, "node_ids": nodes}
-            return expect("/api/v2/authorization-groups", "POST", draft, 201)
+            receipt = expect("/api/v2/authorization-groups", "POST", {"name": name}, 201)
+            assert receipt == {"revocation_job_ids": []}
+            current = next(item for item in expect("/api/v2/authorization-groups") if item["name"] == name)
+            if users or nodes:
+                patch = {"expected_revision": current["revision"]}
+                if users: patch["add_user_ids"] = users
+                if nodes: patch["add_node_ids"] = nodes
+                assert expect("/api/v2/authorization-groups/" + current["id"], "PATCH", patch) == {"revocation_job_ids": []}
+                current = expect("/api/v2/authorization-groups/" + current["id"])
+            return current
 
         def remove(group_data):
             path = "/api/v2/authorization-groups/" + group_data["id"]
@@ -77,11 +85,9 @@ def main():
                 "public_host": "node.example.test", "public_port": 443, "listen_addr": ":443", "config": {}}, 201, fixtures=True)["node"]["id"]
             users = [expect("/api/v2/users", "POST", {"name": name}, 201)["id"] for name in ("Alice", "Bob")]
             first = group("Both users", users, [node])
-            assert first["additions_count"] == 2 and len(first["created_credentials"]) == 2
             with db.connect() as connection:
                 original = connection.execute("SELECT user_id,credential_hash FROM node_assignments ORDER BY user_id").fetchall()
             second = group("Overlap", [users[0]], [node])
-            assert second["additions_count"] == 0 and second["created_credentials"] == []
             alice = expect("/api/v2/users/" + users[0])
             assert len(alice["assignments"][0]["source_groups"]) == 2
             # Retired writes must fail without altering authorization state.
@@ -89,7 +95,7 @@ def main():
                                           ("DELETE", f"/api/v2/users/{users[0]}/assignments/{node}", {"expected_revision": alice["revision"]})):
                 code, _ = raw_request(base, path, admin, method, payload)
                 assert 400 <= code < 500
-            remove(first["group"])
+            remove(first)
             assert len(expect("/api/v2/users/" + users[0])["assignments"]) == 1
             assert expect("/api/v2/users/" + users[1])["assignments"] == []
             with db.connect() as connection:
@@ -101,17 +107,17 @@ def main():
             expect(f"/api/v2/users/{users[0]}", "PATCH", {"expected_revision": alice["revision"], "name": "Alice edited"})
             expect(f"/api/v2/users/{users[0]}/authorization-groups", "PUT", membership, 409)
             assert len(expect("/api/v2/users/" + users[0])["assignments"]) == 1
-            final = remove(second["group"])
-            assert final["removals_count"] == 1
+            final = remove(second)
+            assert set(final) == {"revocation_job_ids"} and len(final["revocation_job_ids"]) == 1
             assert expect("/api/v2/users/" + users[0])["assignments"] == []
             # Regrant produces exactly one new pair, and old pending revocation cannot remove it.
-            regrant = group("Regrant", [users[0]], [node])["group"]
+            regrant = group("Regrant", [users[0]], [node])
             with db.connect() as connection:
                 count = connection.execute("SELECT count(*) FROM node_assignments WHERE user_id=%s AND node_id=%s", (users[0], node)).fetchone()[0]
                 stale_kicks = connection.execute("SELECT count(*) FROM kick_requests WHERE user_id=%s AND node_id=%s AND state NOT IN ('completed','cancelled') AND reasons ? 'authorization_group_removed'", (users[0], node)).fetchone()[0]
             assert count == 1 and stale_kicks == 0
             # User membership updates and group editing are genuine bulk operations.
-            empty = group("Empty group", [], [node])["group"]
+            empty = group("Empty group", [], [node])
             alice = expect("/api/v2/users/" + users[0])
             membership = {"expected_revision": alice["revision"], "group_ids": [regrant["id"], empty["id"]]}
             joined = expect(f"/api/v2/users/{users[0]}/authorization-groups", "PUT", membership)
@@ -119,10 +125,11 @@ def main():
             assert len(joined["assignments"][0]["source_groups"]) == 2
             empty = expect("/api/v2/authorization-groups/" + empty["id"])
             draft = {"expected_revision": empty["revision"], "name": "Expanded group",
-                     "user_ids": users, "node_ids": [node]}
+                     "add_user_ids": [users[1]]}
             path = "/api/v2/authorization-groups/" + empty["id"]
-            expanded = expect(path, "PUT", draft)
-            assert expanded["additions_count"] == 1
+            expanded = expect(path, "PATCH", draft)
+            assert expanded == {"revocation_job_ids": []}
+            assert len(expect("/api/v2/users/" + users[1])["assignments"]) == 1
             bob = expect("/api/v2/users/" + users[1])
             membership = {"expected_revision": bob["revision"], "group_ids": []}
             expect(f"/api/v2/users/{users[1]}/authorization-groups", "PUT", membership)
@@ -142,12 +149,11 @@ def main():
             code, _ = raw_request(base, "/api/v2/authorization-groups", admin, "POST", invalid)
             assert 400 <= code < 500
             result = group("mTLS complete", users, [mtls_node["id"]])
-            assert result["additions_count"] == 2 and len(result["managed_identities"]) == 2
-            assert all(item["ca_versions"] == [1] and item["affected_node_ids"] == [mtls_node["id"]] for item in result["managed_identities"])
             actor_id=expect("/api/v2/version")["current_admin_token_id"]
             with db.connect() as connection:
-                audit=connection.execute("SELECT actor,detail_json FROM audit_records WHERE action='authorization_group.created' AND entity_id=%s",(result["group"]["id"],)).fetchone()
-            assert audit[0] == actor_id and audit[1]["managed_identities"]
+                audit=connection.execute("SELECT actor,detail_json FROM audit_records WHERE action='authorization_group.updated' AND entity_id=%s",(result["id"],)).fetchone()
+            assert audit[0] == actor_id and len(audit[1]["managed_identities"]) == 2
+            assert all(item["ca_versions"] == [1] and item["affected_node_ids"] == [mtls_node["id"]] for item in audit[1]["managed_identities"])
 
             with db.connect() as connection:
                 actual = connection.execute("SELECT user_id,ca_id FROM mtls_user_identities ORDER BY user_id").fetchall()
@@ -156,7 +162,7 @@ def main():
                 info=expect("/api/v2/users/"+user_id)
                 assert info["managed_certificates"][0]["ca_credential_id"] == ca["id"]
             # Deleting entities cascades memberships and updates group revisions.
-            mtls_group = result["group"]
+            mtls_group = result
             bob = expect("/api/v2/users/" + users[1])
             expect(f"/api/v2/users/{users[1]}?expected_revision={bob['revision']}", "DELETE", status=204)
             latest = expect("/api/v2/authorization-groups/" + mtls_group["id"])

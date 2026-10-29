@@ -43,7 +43,8 @@ async fn commit(
         serde_json::from_value(json!({"name":name,"user_ids":users,"node_ids":nodes})).unwrap(),
         prepared.clone(),
     )
-    .await
+    .await?;
+    Ok(groups::group_named(state, name).await)
 }
 pub(super) async fn group(state: &AppState, name: &str, users: &[&str], nodes: &[&str]) -> Value {
     groups::create(
@@ -55,11 +56,16 @@ pub(super) async fn group(state: &AppState, name: &str, users: &[&str], nodes: &
     .await
     .unwrap()
     .1
-    .0
+    .0;
+    groups::group_named(state, name).await
+}
+async fn audit(state: &AppState, name: &str) -> Value {
+    sqlx::query_scalar("SELECT detail_json FROM audit_records WHERE entity_id=(SELECT id FROM authorization_groups WHERE name=$1) ORDER BY created_at DESC LIMIT 1")
+        .bind(name).fetch_one(&state.pool).await.unwrap()
 }
 async fn remove(state: &AppState, group: &Value) {
-    let id = group["group"]["id"].as_str().unwrap();
-    let revision = group["group"]["revision"].as_i64().unwrap();
+    let id = group["id"].as_str().unwrap();
+    let revision = group["revision"].as_i64().unwrap();
     let _ = groups::delete(
         State(state.clone()),
         Path(id.into()),
@@ -164,10 +170,13 @@ async fn inactive_first_grant_is_pending_and_recovers_without_blocking_group_sav
     let p = prepare(&state, "Pending", &["paused"], &[n]).await;
     assert_eq!(p.plan.automatic_issue_count, 0);
     assert_eq!(p.plan.pending_issue_count, 1);
-    let result = commit(&state, "Pending", &["paused"], &[n], &p)
+    let _result = commit(&state, "Pending", &["paused"], &[n], &p)
         .await
         .unwrap();
-    assert_eq!(result["managed_identities"][0]["pending"], true);
+    assert_eq!(
+        audit(&state, "Pending").await["managed_identities"][0]["pending"],
+        true
+    );
     assert_eq!(identity_count(&state).await, 1);
     assert_eq!(version_count(&state).await, 0);
     sqlx::query("UPDATE users SET enabled=TRUE,revision=revision+1 WHERE id='paused'")
@@ -481,18 +490,24 @@ async fn retried_grant_preserves_one_prepared_managed_identity_and_version() {
     let n = node["id"].as_str().unwrap();
     let p = prepare(&state, "Retry grant", &["alice"], &[n]).await;
     sqlx::raw_sql("CREATE SEQUENCE managed_grant_attempts; CREATE FUNCTION retry_managed_grant_audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.action='authorization_group.created' AND nextval('managed_grant_attempts')=1 THEN RAISE EXCEPTION 'injected conflict' USING ERRCODE='40001'; END IF; RETURN NEW; END $$; CREATE TRIGGER retry_managed_grant_audit BEFORE INSERT ON audit_records FOR EACH ROW EXECUTE FUNCTION retry_managed_grant_audit();").execute(&state.pool).await.unwrap();
-    let result = commit(&state, "Retry grant", &["alice"], &[n], &p)
+    let _result = commit(&state, "Retry grant", &["alice"], &[n], &p)
         .await
         .unwrap();
     assert_eq!(identity_count(&state).await, 1);
     assert_eq!(version_count(&state).await, 1);
-    assert_eq!(result["managed_identities"][0]["issued"], true);
+    assert_eq!(
+        audit(&state, "Retry grant").await["managed_identities"][0]["issued"],
+        true
+    );
     let id: String =
         sqlx::query_scalar("SELECT id FROM mtls_user_identities WHERE user_id='alice'")
             .fetch_one(&state.pool)
             .await
             .unwrap();
-    assert_eq!(result["managed_identities"][0]["identity_id"], id);
+    assert_eq!(
+        audit(&state, "Retry grant").await["managed_identities"][0]["identity_id"],
+        id
+    );
     assert_eq!(
         sqlx::query_scalar::<_, i64>(
             "SELECT count(*) FROM audit_records WHERE action='authorization_group.created'"
@@ -519,14 +534,16 @@ async fn direct_group_update_issues_and_archives_identity_without_preview() {
     let node = managed_node(&state, &ca).await;
     let node_id = node["id"].as_str().unwrap();
     let empty = group(&state, "Direct", &[], &[node_id]).await;
-    let id = empty["group"]["id"].as_str().unwrap();
+    let id = empty["id"].as_str().unwrap();
     assert_eq!(identity_count(&state).await, 0);
     for (revision, users, additions, removals) in [(1, vec!["alice"], 1, 0), (2, vec![], 0, 1)] {
         let Json(receipt) = groups::update(State(state.clone()), Path(id.into()), Json(
             serde_json::from_value(json!({"expected_revision":revision,"name":"Direct","user_ids":users,"node_ids":[node_id]})).unwrap()
         )).await.unwrap();
-        assert_eq!(receipt["additions_count"], additions);
-        assert_eq!(receipt["removals_count"], removals);
+        assert_eq!(receipt.as_object().unwrap().len(), 1);
+        let detail = audit(&state, "Direct").await;
+        assert_eq!(detail["additions_count"], additions);
+        assert_eq!(detail["removals_count"], removals);
         assert_eq!(identity_count(&state).await, 1);
         assert_eq!(version_count(&state).await, 1);
         let archived: bool =
@@ -581,7 +598,7 @@ async fn paged_member_certificates_roll_back_together_and_rejoin_reuses_both_ca_
     let granted = commit(&state, "Paged", &names, &[node_id], &prepared)
         .await
         .unwrap();
-    assert_eq!(granted["additions_count"], 260);
+    assert_eq!(audit(&state, "Paged").await["additions_count"], 260);
     assert_eq!(identity_count(&state).await, 260);
     assert_eq!(version_count(&state).await, 520);
     let statements: i32 = sqlx::query_scalar(
@@ -600,25 +617,30 @@ async fn paged_member_certificates_roll_back_together_and_rejoin_reuses_both_ca_
             .fetch_all(&state.pool)
             .await
             .unwrap();
-    for result in granted["managed_identities"].as_array().unwrap() {
+    for result in audit(&state, "Paged").await["managed_identities"]
+        .as_array()
+        .unwrap()
+    {
         assert!(
             ids.iter()
                 .any(|(user, id)| result["user_id"] == *user && result["identity_id"] == *id)
         );
     }
-    let group_id = granted["group"]["id"].as_str().unwrap();
+    let group_id = granted["id"].as_str().unwrap();
     for (revision, members, additions, removals) in
         [(1, Vec::<&str>::new(), 0, 260), (2, names.clone(), 260, 0)]
     {
         let Json(receipt)=groups::update(State(state.clone()),Path(group_id.into()),Json(serde_json::from_value(json!({"expected_revision":revision,"name":"Paged","user_ids":members,"node_ids":[node_id]})).unwrap())).await.unwrap();
-        assert_eq!(receipt["additions_count"], additions);
-        assert_eq!(receipt["removals_count"], removals);
+        assert_eq!(receipt.as_object().unwrap().len(), 1);
+        let detail = audit(&state, "Paged").await;
+        assert_eq!(detail["additions_count"], additions);
+        assert_eq!(detail["removals_count"], removals);
         assert_eq!(version_count(&state).await, 520);
         if members.is_empty() {
             assert_eq!(receipt["revocation_job_ids"].as_array().unwrap().len(), 1);
         } else {
             assert!(
-                receipt["managed_identities"]
+                audit(&state, "Paged").await["managed_identities"]
                     .as_array()
                     .unwrap()
                     .iter()

@@ -165,31 +165,23 @@ final class AuthorizationFixtureProtocol: URLProtocol, @unchecked Sendable {
             data = Data(#"{"id":"node-1","name":"香港","revision":2,"state":"syncing","sync_job_queued":true}"#.utf8)
         }
         if path == "/api/v2/authorization-groups" && request.httpMethod == "POST" {
-            let groupData = try! Data(contentsOf: URL(fileURLWithPath: folder + "/group.json"))
-            var group = try! JSONSerialization.jsonObject(with: groupData) as! [String:Any]
-            group["id"] = "group-created"
-            data = try! JSONSerialization.data(withJSONObject: ["group":group, "additions_count":1, "removals_count":0, "created_credentials":[], "revocation_job_ids":[]])
+            data = Data(#"{"revocation_job_ids":[]}"#.utf8)
             status = 201
         }
-        if path == "/api/v2/authorization-groups/group-1" && request.httpMethod == "PUT" {
+        if path == "/api/v2/authorization-groups/group-1" && request.httpMethod == "PATCH" {
             let stream = request.httpBodyStream
             var body = request.httpBody ?? Data()
             if let stream { stream.open(); defer { stream.close() }; var buffer = [UInt8](repeating:0,count:4096); while stream.hasBytesAvailable { let n=stream.read(&buffer,maxLength:buffer.count); if n<=0 { break }; body.append(contentsOf:buffer.prefix(n)) } }
             let input = try! JSONSerialization.jsonObject(with:body) as! [String:Any]
-            precondition(input["preview_token"] == nil)
-            let old = try! JSONSerialization.jsonObject(with: Data(contentsOf:URL(fileURLWithPath:folder+"/group.json"))) as! [String:Any]
-            let oldPairs = Set((old["user_ids"] as! [String]).flatMap { user in (old["node_ids"] as! [String]).map { user + ":" + $0 } })
-            let newPairs = Set((input["user_ids"] as! [String]).flatMap { user in (input["node_ids"] as! [String]).map { user + ":" + $0 } })
-            var group = old
-            group["user_ids"] = input["user_ids"]; group["node_ids"] = input["node_ids"]
-            group["revision"] = 2
-            data = try! JSONSerialization.data(withJSONObject:["group":group,"additions_count":newPairs.subtracting(oldPairs).count,"removals_count":oldPairs.subtracting(newPairs).count,"created_credentials":[],"revocation_job_ids":[]])
+            precondition(input["preview_token"] == nil && input["user_ids"] == nil && input["node_ids"] == nil)
+            precondition(input["expected_revision"] as? Int == 1)
+            data = Data(#"{"revocation_job_ids":[]}"#.utf8)
         }
         if path.contains("authorization-groups"), path.hasSuffix("/preview") {
             preconditionFailure("authorization previews are retired")
         }
         if path == "/api/v2/authorization-groups/group-1" && request.httpMethod == "DELETE" {
-            data = Data(#"{"group":null,"additions_count":0,"removals_count":201,"created_credentials":[],"revocation_job_ids":[]}"#.utf8)
+            data = Data(#"{"revocation_job_ids":[]}"#.utf8)
         }
         if path == "/api/v2/users/user-1/authorization-groups" && request.httpMethod == "PUT" {
             data = Data(#"{"user_id":"user-1","revision":2,"group_ids":[],"assignments":[],"additions_count":0,"removals_count":1,"created_credentials":[],"revocation_job_ids":[]}"#.utf8)

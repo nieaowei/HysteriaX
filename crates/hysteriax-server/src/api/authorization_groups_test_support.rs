@@ -3,7 +3,7 @@ use super::*;
 
 pub(crate) async fn create(
     State(state): State<AppState>,
-    Json(input): Json<CreateGroupRequest>,
+    Json(input): Json<FixtureGroupCreate>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
     let proposal = normalized_proposal(GroupProposal {
         name: input.name,
@@ -17,7 +17,7 @@ pub(crate) async fn create(
 pub(crate) async fn update(
     State(state): State<AppState>,
     Path(group_id): Path<String>,
-    Json(input): Json<UpdateGroupRequest>,
+    Json(input): Json<FixtureGroupReplace>,
 ) -> Result<Json<Value>, ApiError> {
     let proposal = normalized_proposal(GroupProposal {
         name: input.name,
@@ -150,7 +150,7 @@ async fn commit_membership(
 /// Exercise the same staged signing/commit boundary as direct HTTP mutations.
 pub(crate) async fn create_prepared(
     state: &AppState,
-    input: CreateGroupRequest,
+    input: FixtureGroupCreate,
     prepared: crate::credentials::authorization::Prepared,
 ) -> Result<Value, ApiError> {
     let proposal = normalized_proposal(GroupProposal {
@@ -185,4 +185,13 @@ pub(crate) async fn create_prepared(
         })
     })
     .await
+}
+
+pub(crate) async fn group_named(state: &AppState, name: &str) -> Value {
+    let id: String = sqlx::query_scalar("SELECT id FROM authorization_groups WHERE name=$1")
+        .bind(name)
+        .fetch_one(&state.pool)
+        .await
+        .unwrap();
+    group_json(&load_group(&state.pool, &id).await.unwrap().unwrap())
 }

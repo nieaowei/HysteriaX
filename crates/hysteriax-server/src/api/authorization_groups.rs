@@ -26,17 +26,19 @@ struct GroupProposal {
     node_ids: Vec<String>,
 }
 
+#[cfg(test)]
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct CreateGroupRequest {
+pub(crate) struct FixtureGroupCreate {
     name: String,
     user_ids: Vec<String>,
     node_ids: Vec<String>,
 }
 
+#[cfg(test)]
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct UpdateGroupRequest {
+pub(crate) struct FixtureGroupReplace {
     expected_revision: i64,
     name: String,
     user_ids: Vec<String>,
@@ -153,6 +155,7 @@ pub async fn get(
     Ok(Json(group_json(&group)))
 }
 
+#[cfg(test)]
 fn normalized_proposal(mut proposal: GroupProposal) -> Result<GroupProposal, ApiError> {
     proposal.name = validate_name(&proposal.name)?.to_owned();
     normalize_ids(&mut proposal.user_ids, "user_ids")?;
@@ -575,8 +578,8 @@ async fn commit_group_on(
     )
     .await
     .map_err(authorization_transaction_error)?;
-    let (created_credentials, revocation_job_ids, touched_users) =
-        reconcile_assignments(tx, &affected_users, &effective_after, &assignments).await?;
+    let (_, revocation_job_ids, touched_users) =
+        reconcile_assignments(tx, &affected_users, &effective_after, &assignments, false).await?;
     crate::credentials::authorization::annotate_results_on(tx, &mut managed_identities).await?;
     let mut revision_users: BTreeSet<String> = if group_changed {
         affected_users.iter().cloned().collect()
@@ -620,22 +623,7 @@ async fn commit_group_on(
         )
         .await?;
     }
-    let group = if action == "delete" {
-        Value::Null
-    } else {
-        let row = load_group_tx(tx, target_group_id.as_deref().expect("group ID"))
-            .await?
-            .ok_or_else(|| ApiError::not_found("authorization group"))?;
-        group_json(&row)
-    };
-    let response = json!({
-        "group":group,
-        "additions_count":actual_additions.len(),
-        "removals_count":actual_removals.len(),
-        "managed_identities":managed_identities,
-        "created_credentials":created_credentials,
-        "revocation_job_ids":revocation_job_ids,
-    });
+    let response = json!({"revocation_job_ids":revocation_job_ids});
     Ok(response)
 }
 
@@ -686,6 +674,7 @@ async fn reconcile_assignments(
     affected_users: &[String],
     effective_after: &HashSet<Pair>,
     prepared: &PreparedAssignments,
+    include_created_credentials: bool,
 ) -> Result<(Vec<Value>, Vec<String>, BTreeSet<String>), ApiError> {
     let rows = if affected_users.is_empty() {
         Vec::new()
@@ -716,9 +705,11 @@ async fn reconcile_assignments(
             grant_nodes.push(node_id.clone());
             digests.push(credential.digest.clone());
             ciphertexts.push(credential.ciphertext.clone());
-            created.push(
-                json!({"user_id":user_id,"node_id":node_id,"hy2_credential":credential.plaintext}),
-            );
+            if include_created_credentials {
+                created.push(
+                    json!({"user_id":user_id,"node_id":node_id,"hy2_credential":credential.plaintext}),
+                );
+            }
             touched.insert(user_id.clone());
         }
         sqlx::query("INSERT INTO node_assignments(user_id,node_id,credential_hash,credential_enc,created_at) SELECT user_id,node_id,digest,ciphertext,$5 FROM unnest($1::text[],$2::text[],$3::text[],$4::text[]) AS a(user_id,node_id,digest,ciphertext) ORDER BY user_id,node_id")
@@ -872,8 +863,14 @@ async fn commit_membership_on(
     )
     .await
     .map_err(authorization_transaction_error)?;
-    let (created_credentials, revocation_job_ids, touched_users) =
-        reconcile_assignments(tx, &[user_id.to_owned()], &effective_after, &assignments).await?;
+    let (created_credentials, revocation_job_ids, touched_users) = reconcile_assignments(
+        tx,
+        &[user_id.to_owned()],
+        &effective_after,
+        &assignments,
+        true,
+    )
+    .await?;
     crate::credentials::authorization::annotate_results_on(tx, &mut managed_identities).await?;
     if current_set != target_set || !touched_users.is_empty() {
         bump_user_revisions(tx, &BTreeSet::from([user_id.to_owned()]), timestamp).await?;
@@ -962,7 +959,8 @@ mod tests {
         )
         .await
         .unwrap();
-        result
+        assert_eq!(result, json!({"revocation_job_ids":[]}));
+        group_named(&state, name).await
     }
 
     #[tokio::test]
@@ -974,9 +972,7 @@ mod tests {
             .await
             .unwrap();
         let second = create_group(&state, "Second").await;
-        assert_eq!(second["additions_count"], 0);
-        assert_eq!(second["created_credentials"], json!([]));
-        for (index, group) in [&first["group"], &second["group"]].into_iter().enumerate() {
+        for (index, group) in [&first, &second].into_iter().enumerate() {
             let id = group["id"].as_str().unwrap();
             let Json(receipt) = delete(
                 State(state.clone()),
@@ -987,7 +983,11 @@ mod tests {
             )
             .await
             .unwrap();
-            assert_eq!(receipt["removals_count"], index);
+            assert_eq!(receipt.as_object().unwrap().len(), 1);
+            assert_eq!(
+                receipt["revocation_job_ids"].as_array().unwrap().len(),
+                index
+            );
             if index == 0 {
                 let current: String =
                     sqlx::query_scalar("SELECT credential_hash FROM node_assignments")
@@ -1020,7 +1020,7 @@ mod tests {
             .unwrap();
         let mut tx = state.pool.begin().await.unwrap();
         let (created, jobs, touched) =
-            reconcile_assignments(&mut tx, &users, &HashSet::new(), &prepared)
+            reconcile_assignments(&mut tx, &users, &HashSet::new(), &prepared, false)
                 .await
                 .unwrap();
         assert!(created.is_empty());
@@ -1036,7 +1036,7 @@ mod tests {
     async fn member_and_node_changes_save_without_previews_and_report_actual_effects() {
         let state = fixture().await;
         let created = create_group(&state, "Group").await;
-        let id = created["group"]["id"].as_str().unwrap();
+        let id = created["id"].as_str().unwrap();
         for (revision, users, nodes, additions, removals) in [
             (1, vec!["user"], vec![], 0, 1),
             (2, vec!["user"], vec!["node"], 1, 0),
@@ -1046,7 +1046,7 @@ mod tests {
             let Json(receipt) = update(
                 State(state.clone()),
                 Path(id.into()),
-                Json(UpdateGroupRequest {
+                Json(FixtureGroupReplace {
                     expected_revision: revision,
                     name: "Group".into(),
                     user_ids: users.into_iter().map(str::to_owned).collect(),
@@ -1055,9 +1055,13 @@ mod tests {
             )
             .await
             .unwrap();
-            assert_eq!(receipt["additions_count"], additions);
-            assert_eq!(receipt["removals_count"], removals);
-            assert_eq!(receipt["group"]["revision"], revision + 1);
+            assert_eq!(receipt.as_object().unwrap().len(), 1);
+            assert_eq!(group_named(&state, "Group").await["revision"], revision + 1);
+            let count: i64 = sqlx::query_scalar("SELECT count(*) FROM node_assignments")
+                .fetch_one(&state.pool)
+                .await
+                .unwrap();
+            assert_eq!(count, additions);
             if removals > 0 {
                 assert!(!receipt["revocation_job_ids"].as_array().unwrap().is_empty());
             }
@@ -1066,7 +1070,7 @@ mod tests {
             update(
                 State(state.clone()),
                 Path(id.into()),
-                Json(UpdateGroupRequest {
+                Json(FixtureGroupReplace {
                     expected_revision: 1,
                     name: "Stale".into(),
                     user_ids: vec![],
@@ -1081,13 +1085,13 @@ mod tests {
     #[test]
     fn authorization_requests_reject_obsolete_preview_tokens() {
         let mut create = json!({"name":"Direct","user_ids":[],"node_ids":[]});
-        assert!(serde_json::from_value::<CreateGroupRequest>(create.clone()).is_ok());
+        assert!(serde_json::from_value::<FixtureGroupCreate>(create.clone()).is_ok());
         create["preview_token"] = json!("obsolete");
-        assert!(serde_json::from_value::<CreateGroupRequest>(create).is_err());
+        assert!(serde_json::from_value::<FixtureGroupCreate>(create).is_err());
         let mut update = json!({"expected_revision":1,"name":"Direct","user_ids":[],"node_ids":[]});
-        assert!(serde_json::from_value::<UpdateGroupRequest>(update.clone()).is_ok());
+        assert!(serde_json::from_value::<FixtureGroupReplace>(update.clone()).is_ok());
         update["preview_token"] = json!("obsolete");
-        assert!(serde_json::from_value::<UpdateGroupRequest>(update).is_err());
+        assert!(serde_json::from_value::<FixtureGroupReplace>(update).is_err());
         let mut delete = json!({"expected_revision":1});
         assert!(serde_json::from_value::<DeleteGroupRequest>(delete.clone()).is_ok());
         delete["preview_token"] = json!("obsolete");

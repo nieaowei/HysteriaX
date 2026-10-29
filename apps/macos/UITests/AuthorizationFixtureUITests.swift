@@ -59,54 +59,10 @@ final class AuthorizationFixtureUITests: XCTestCase {
         name.typeKey("v", modifierFlags: .command)
         NSPasteboard.general.clearContents()
         if let previousClipboard { NSPasteboard.general.setString(previousClipboard, forType: .string) }
-        app.buttons["authorizationGroups.editor.users"].firstMatch.click()
-        let all = app.buttons["authorization.selectAllFiltered"].firstMatch
-        XCTAssertTrue(all.waitForExistence(timeout: 5))
-        all.click()
-        app.buttons["authorization.selection.done"].firstMatch.click()
-        app.buttons["authorizationGroups.editor.nodes"].firstMatch.click()
-        let ordinary = app.descendants(matching: .any)["authorization.selection.node-1"].firstMatch
-        XCTAssertTrue(ordinary.waitForExistence(timeout: 5))
-        ordinary.click()
-        app.buttons["authorization.selection.done"].firstMatch.click()
-        // Cancelling the nested picker must discard its own selection edits.
-        app.buttons["authorizationGroups.editor.nodes"].firstMatch.click()
-        app.descendants(matching: .any)["authorization.selection.node-2"].firstMatch.click()
-        app.buttons["authorization.selection.cancel"].firstMatch.click()
-        app.buttons["authorizationGroups.editor.nodes"].firstMatch.click()
-        let cancelledNode = app.descendants(matching: .any)["authorization.selection.node-2"].firstMatch
-        XCTAssertTrue(cancelledNode.waitForExistence(timeout: 5))
-        let cancelledValue = (cancelledNode.value as? String).flatMap(Int.init) ?? (cancelledNode.value as? NSNumber)?.intValue
-        XCTAssertEqual(cancelledValue, 0)
-        app.buttons["authorization.selection.done"].firstMatch.click()
-        XCTAssertFalse(app.buttons["authorizationGroups.editor.preview"].firstMatch.exists)
+        XCTAssertFalse(app.buttons["authorizationGroups.editor.users"].firstMatch.exists)
+        XCTAssertFalse(app.buttons["authorizationGroups.editor.nodes"].firstMatch.exists)
         let save = app.buttons["authorizationGroups.editor.save"].firstMatch
-        XCTAssertTrue(save.waitForExistence(timeout: 5))
-        let ready = NSPredicate(format: "enabled == true")
-        expectation(for: ready, evaluatedWith: save)
-        waitForExpectations(timeout: 5)
-        let editor = XCTAttachment(screenshot: app.sheets.firstMatch.screenshot())
-        editor.name = "Direct authorization group editor"
-        editor.lifetime = .keepAlways
-        add(editor)
-        // Managed nodes issue shared identities automatically; no certificate picker is required.
-        app.buttons["authorizationGroups.editor.nodes"].firstMatch.click()
-        let mtls = app.descendants(matching: .any)["authorization.selection.node-2"].firstMatch
-        XCTAssertTrue(mtls.waitForExistence(timeout: 5))
-        mtls.click()
-        app.buttons["authorization.selection.done"].firstMatch.click()
         XCTAssertTrue(save.isEnabled)
-        expectation(for: ready, evaluatedWith: save)
-        waitForExpectations(timeout: 5)
-        let certificates = XCTAttachment(screenshot: app.sheets.firstMatch.screenshot())
-        certificates.name = "Managed shared identity issuance permits group commit"
-        certificates.lifetime = .keepAlways
-        add(certificates)
-        app.buttons["authorizationGroups.editor.nodes"].firstMatch.click()
-        app.descendants(matching: .any)["authorization.selection.node-2"].firstMatch.click()
-        app.buttons["authorization.selection.done"].firstMatch.click()
-        expectation(for: ready, evaluatedWith: save)
-        waitForExpectations(timeout: 5)
         save.click()
         XCTAssertTrue(app.descendants(matching: .any)["authorization.mutationReceipt"].firstMatch.waitForExistence(timeout: 10))
         let receipt = XCTAttachment(screenshot: app.sheets.firstMatch.screenshot())
@@ -175,7 +131,7 @@ final class AuthorizationFixtureUITests: XCTestCase {
         app.buttons["authorizationGroups.delete"].firstMatch.click()
         let result = app.descendants(matching: .any)["authorizationGroups.delete.resultSummary"].firstMatch
         XCTAssertTrue(result.waitForExistence(timeout: 10))
-        XCTAssertTrue(displayedText(result).contains("移除 201 条连接授权"), displayedText(result))
+        XCTAssertTrue(displayedText(result).contains("授权组已删除"), displayedText(result))
     }
 
     @MainActor
@@ -200,7 +156,7 @@ final class AuthorizationFixtureUITests: XCTestCase {
         XCTAssertTrue(save.isEnabled); save.click()
         let summary = app.descendants(matching: .any)["authorizationGroups.editor.resultSummary"].firstMatch
         XCTAssertTrue(summary.waitForExistence(timeout: 10))
-        XCTAssertTrue(displayedText(summary).contains("新增 0 条连接授权 · 移除 201 条连接授权"), displayedText(summary))
+        XCTAssertTrue(displayedText(summary).contains("授权组已更新"), displayedText(summary))
     }
 
     @MainActor

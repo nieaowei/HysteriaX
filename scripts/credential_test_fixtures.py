@@ -81,17 +81,31 @@ def request_with_credentials(raw_request, base, path, token=None, method="GET", 
 
 
 def grant_group(expect, user_id, node_ids, name=None, *, api_prefix="/api/v2"):
-    """Exercise the actual direct group creation protocol; no retired assignment route."""
-    draft = {"name": name or "Live grant " + uuid.uuid4().hex[:12],
-             "user_ids": [user_id], "node_ids": list(node_ids)}
-    return expect(api_prefix + "/authorization-groups", "POST", draft, (201,))
+    """Create an empty group, then grant only the requested relationships."""
+    name = name or "Live grant " + uuid.uuid4().hex[:12]
+    path = api_prefix + "/authorization-groups"
+    expect(path, "POST", {"name": name}, (201,))
+    group = next(item for item in expect(path) if item["name"] == name)
+    patch = {"expected_revision": group["revision"], "add_user_ids": [user_id]}
+    if node_ids: patch["add_node_ids"] = list(node_ids)
+    return expect(path + "/" + group["id"], "PATCH", patch, (200,))
 
 
 def request_group(raw_request, base, token, user_ids, node_ids, name=None):
-    """Return the actual group receipt, preserving real HTTP failure statuses."""
-    draft = {"name":name or "Live grant " + uuid.uuid4().hex[:12],
-             "user_ids":list(user_ids), "node_ids":list(node_ids)}
-    return raw_request(base,"/api/v2/authorization-groups",token,"POST",draft)
+    """Return the grant HTTP status and receipt, preserving failures."""
+    name = name or "Live grant " + uuid.uuid4().hex[:12]
+    path = "/api/v2/authorization-groups"
+    status, body = raw_request(base, path, token, "POST", {"name": name})
+    if status != 201: return status, body
+    created = status, body
+    status, body = raw_request(base, path, token, "GET")
+    if status != 200: return status, body
+    group = next(item for item in json.loads(body) if item["name"] == name)
+    patch = {"expected_revision": group["revision"]}
+    if user_ids: patch["add_user_ids"] = list(user_ids)
+    if node_ids: patch["add_node_ids"] = list(node_ids)
+    if len(patch) == 1: return created
+    return raw_request(base, path + "/" + group["id"], token, "PATCH", patch)
 
 
 def mark_fixture_nodes_deployed(connection, node_ids):

@@ -682,7 +682,7 @@ async fn cleanup_deadline_includes_archived_longer_history_not_only_latest_certi
     .await
     .unwrap();
     issue(&state, "alice", &ca, true).await;
-    let id = grant["group"]["id"].as_str().unwrap();
+    let id = grant["id"].as_str().unwrap();
     let _ = crate::api::authorization_groups::delete(
         State(state.clone()),
         Path(id.into()),

@@ -37,6 +37,11 @@ end
 %w[AuthorizationGroupCreate AuthorizationGroupUpdate AuthorizationGroupDelete UserAuthorizationGroupsUpdate].each do |name|
   check(!schemas.fetch(name).fetch('properties').key?('preview_token'), "obsolete preview token in #{name}")
 end
+check(spec.dig('paths', '/authorization-groups/{group_id}', 'put').nil?, 'full group replacement must be retired')
+check(spec.dig('paths', '/authorization-groups/{group_id}', 'patch', 'operationId') == 'updateAuthorizationGroup', 'group updates must use PATCH')
+check(schemas.dig('AuthorizationGroupCreate','properties').keys == ['name'], 'create accepts only a name')
+check(schemas.dig('AuthorizationGroupUpdate','required') == ['expected_revision'], 'patch requires only the group version')
+check(schemas.dig('AuthorizationGroupUpdate','properties').keys.sort == %w[expected_revision name add_user_ids remove_user_ids add_node_ids remove_node_ids].sort, 'patch must expose only deltas')
 check(schemas.dig('ExecutionRecheckResult','required').include?('resource_blocked'), 'verification must expose its resource barrier')
 schemas.each do |name, schema|
   check(!schema.fetch('properties', {}).key?('idempotency_key'), "obsolete body identity in #{name}")

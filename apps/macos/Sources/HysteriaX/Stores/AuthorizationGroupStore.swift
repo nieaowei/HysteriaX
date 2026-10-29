@@ -40,41 +40,37 @@ extension ManagementStore {
         try await requireConnectedAPI().get(APIEndpoints.getUser(id: userID))
     }
 
-    func createAuthorizationGroup(
-        name: String,
-        userIDs: [String],
-        nodeIDs: [String]
-    ) async throws -> AuthorizationGroupMutationResponse {
+    func createAuthorizationGroup(name: String) async throws -> AuthorizationGroupMutationResponse {
         let client = try requireConnectedAPI()
         let result: AuthorizationGroupMutationResponse = try await client.post(
             APIEndpoints.createAuthorizationGroup,
-            body: AuthorizationGroupCreateRequest(
-                name: name,
-                userIds: userIDs,
-                nodeIds: nodeIDs
-            )
+            body: AuthorizationGroupCreateRequest(name: name)
         )
-        authorizationMutationDidCommit(using: client, group: result.group)
+        authorizationMutationDidCommit(using: client)
         return result
     }
 
     func updateAuthorizationGroup(
         _ group: AuthorizationGroupSummary,
-        name: String,
-        userIDs: [String],
-        nodeIDs: [String]
+        name: String? = nil,
+        addUserIDs: [String] = [],
+        removeUserIDs: [String] = [],
+        addNodeIDs: [String] = [],
+        removeNodeIDs: [String] = []
     ) async throws -> AuthorizationGroupMutationResponse {
         let client = try requireConnectedAPI()
-        let result: AuthorizationGroupMutationResponse = try await client.put(
+        let result: AuthorizationGroupMutationResponse = try await client.patch(
             APIEndpoints.updateAuthorizationGroup(groupID: group.id),
             body: AuthorizationGroupUpdateRequest(
                 expectedRevision: group.revision,
                 name: name,
-                userIds: userIDs,
-                nodeIds: nodeIDs
+                addUserIds: addUserIDs.isEmpty ? nil : addUserIDs.sorted(),
+                removeUserIds: removeUserIDs.isEmpty ? nil : removeUserIDs.sorted(),
+                addNodeIds: addNodeIDs.isEmpty ? nil : addNodeIDs.sorted(),
+                removeNodeIds: removeNodeIDs.isEmpty ? nil : removeNodeIDs.sorted()
             )
         )
-        authorizationMutationDidCommit(using: client, group: result.group)
+        authorizationMutationDidCommit(using: client)
         return result
     }
 

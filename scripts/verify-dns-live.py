@@ -267,8 +267,11 @@ def main():
         user = api.write("POST", "/api/v2/users", {"name": f"DNS live user {run}"})
         manifest["user_ids"].append(user["id"])
         save()
-        draft = {"name":f"DNS live authorization {run}","user_ids":[user["id"]],"node_ids":[node_id]}
-        api.write("POST","/api/v2/authorization-groups",draft)
+        group_name = f"DNS live authorization {run}"
+        api.write("POST", "/api/v2/authorization-groups", {"name": group_name})
+        group = next(item for item in api.get("/api/v2/authorization-groups") if item["name"] == group_name)
+        api.write("PATCH", "/api/v2/authorization-groups/" + group["id"],
+                  {"expected_revision": group["revision"], "add_user_ids": [user["id"]], "add_node_ids": [node_id]})
         current_user = api.get("/api/v2/users/" + user["id"])
         subscription = api.write("POST", "/api/v2/users/" + user["id"] + "/subscription", {"expected_revision": current_user["revision"]})
         token = subscription["token"]
