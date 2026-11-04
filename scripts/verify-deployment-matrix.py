@@ -699,10 +699,11 @@ def main():
                         print("Deployed two-node/three-user auth isolation passed", flush=True)
 
                         subscription = expect(
-                            f"/api/v2/users/{shared_user}/subscription",
+                            f"/api/v2/users/{shared_user}/credentials/rotate",
                             "POST",
                             {"expected_revision": 3},
                         )
+                        shared_one = shared_two = subscription["credential"]
                         subscription_token = subscription["token"]
                         status, subscription_yaml = request(
                             base,
@@ -719,7 +720,7 @@ def main():
                             cert_path.write_text(material[0]);key_path.write_text(material[1]);cert_path.chmod(0o600);key_path.chmod(0o600)
                             return cert_path,key_path
                         shared_files = save_material(shared_material,"shared-generation-1")
-                        user_one_sub = expect(f"/api/v2/users/{user_one}/subscription","POST",{"expected_revision":expect(f"/api/v2/users/{user_one}")["revision"]})["token"]
+                        user_one_sub = expect(f"/api/v2/users/{user_one}/credentials/rotate","POST",{"expected_revision":expect(f"/api/v2/users/{user_one}")["revision"]})["token"]
                         status,one_yaml = request(base,f"/sub/{user_one_sub}?format=mihomo&platform=linux",method="GET")
                         one_proxy = yaml.safe_load(one_yaml)["proxies"][0]
                         if one_proxy["certificate"]==shared_material[0] or one_proxy["private-key"]==shared_material[1]:raise RuntimeError("different matrix users share client material")

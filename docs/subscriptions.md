@@ -6,6 +6,8 @@ Server and Mac client must use compatible versions. The current SQL baseline cre
 
 The only public subscription route is `GET /sub/{token}`. The old `/sub/{token}/clash.yaml` route returns **404**. Management responses return one canonical `url`; `auto_url` and Mac legacy fallbacks are removed. Replace saved legacy links with a template/platform link from the upgraded Mac app or selection page. This feature does not deploy a server or change deployed nodes.
 
+Connection passwords and subscription tokens are stored together and rotated together through `POST /api/v2/users/{id}/credentials/rotate`. Rotation revokes the old subscription URL and connection password and queues session disconnection. The two values remain independent. New users receive both; `GET /api/v2/users/{id}/subscription` reads the current URL. The former subscription POST is removed.
+
 ## Addresses and qualification
 
 Example: `/sub/{token}?template=default-mihomo&platform=windows`.

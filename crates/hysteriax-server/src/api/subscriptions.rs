@@ -17,11 +17,6 @@ mod formats;
 pub(crate) mod templates;
 use formats::{ClientInfo, SubscriptionFormat, SubscriptionNode, SubscriptionRealm};
 
-#[derive(Deserialize)]
-pub struct RotateSubscription {
-    expected_revision: i64,
-}
-
 #[derive(Serialize)]
 struct ClashProxy {
     name: String,
@@ -99,7 +94,7 @@ pub async fn get_user(
         .fetch_optional(&mut *tx)
         .await?
         .ok_or_else(|| ApiError::not_found("user"))?;
-    let credential = sqlx::query("SELECT id, token_enc, created_at FROM subscription_credentials WHERE user_id = $1 AND revoked_at IS NULL ORDER BY created_at DESC,id DESC LIMIT 1")
+    let credential = sqlx::query("SELECT id, secret_enc AS token_enc, created_at FROM user_credentials WHERE kind='subscription' AND user_id = $1 AND revoked_at IS NULL ORDER BY created_at DESC,id DESC LIMIT 1")
         .bind(&user_id).fetch_optional(&mut *tx).await?;
     tx.commit().await?;
     let active = if let Some(row) = credential {
@@ -115,9 +110,6 @@ pub async fn get_user(
         json!({"user_id": user.get::<String, _>("id"), "revision": user.get::<i64, _>("revision"), "active": active}),
     ))
 }
-
-mod rotation;
-pub(super) use rotation::rotate_v2;
 
 pub async fn download_auto(
     State(state): State<AppState>,
@@ -269,7 +261,7 @@ fn subscription_response(result: Result<Response, ApiError>, automatic: bool) ->
 async fn validate_subscription(state: &AppState, token: &str) -> Result<String, ApiError> {
     let token_hash = token_digest(token);
     let credential = sqlx::query(
-        "SELECT user_id FROM subscription_credentials WHERE token_hash = $1 AND revoked_at IS NULL",
+        "SELECT user_id FROM user_credentials WHERE kind='subscription' AND secret_hash = $1 AND revoked_at IS NULL",
     )
     .bind(token_hash)
     .fetch_optional(&mut *crate::read_snapshot::begin(&state.pool).await?)
@@ -416,7 +408,7 @@ async fn load_subscription_nodes_snapshot(
     user_id: &str,
     eligible: Option<&[String]>,
 ) -> Result<Vec<SubscriptionNode>, ApiError> {
-    let rows = sqlx::query("SELECT n.id, n.name, n.public_host, n.public_port, n.listen_addr, n.tls_sni, n.tls_skip_verify, n.state, n.deployed_config_enc, n.published_connection, u.connection_credential_enc AS credential_enc, a.user_id FROM node_assignments a JOIN users u ON u.id=a.user_id JOIN nodes n ON n.id = a.node_id WHERE hysteriax_authorized(a.user_id,a.node_id) AND u.connection_credential_enc IS NOT NULL AND a.user_id = $1 AND n.state NOT IN ('deleting', 'delete_failed') AND n.mtls_state='ready' AND n.deployed_revision IS NOT NULL AND n.deployed_config_enc IS NOT NULL AND ($2::text[] IS NULL OR n.id=ANY($2)) ORDER BY lower(n.name) COLLATE \"C\", n.name COLLATE \"C\", n.id")
+    let rows = sqlx::query("SELECT n.id, n.name, n.public_host, n.public_port, n.listen_addr, n.tls_sni, n.tls_skip_verify, n.state, n.deployed_config_enc, n.published_connection, c.secret_enc AS credential_enc, a.user_id FROM node_assignments a JOIN user_credentials c ON c.user_id=a.user_id AND c.kind='connection' AND c.revoked_at IS NULL JOIN nodes n ON n.id = a.node_id WHERE hysteriax_authorized(a.user_id,a.node_id) AND a.user_id = $1 AND n.state NOT IN ('deleting', 'delete_failed') AND n.mtls_state='ready' AND n.deployed_revision IS NOT NULL AND n.deployed_config_enc IS NOT NULL AND ($2::text[] IS NULL OR n.id=ANY($2)) ORDER BY lower(n.name) COLLATE \"C\", n.name COLLATE \"C\", n.id")
         .bind(user_id).bind(eligible).fetch_all(&mut *crate::read_snapshot::begin(&state.pool).await?).await?;
     let projection_version =
         crate::cache_domains::version(&state.pool, &["node_config", "credentials", "resources"])
@@ -613,7 +605,7 @@ pub async fn hy2_auth(
     {
         return Ok(Json(AuthResponse::denied()));
     }
-    let assignment = sqlx::query("SELECT u.id, u.enabled, u.expires_at, u.quota_bytes, u.usage_bytes FROM node_assignments a JOIN users u ON u.id = a.user_id WHERE a.node_id = $1 AND u.connection_credential_hash = $2 AND hysteriax_authorized(u.id,a.node_id)")
+    let assignment = sqlx::query("SELECT u.id, u.enabled, u.expires_at, u.quota_bytes, u.usage_bytes FROM node_assignments a JOIN users u ON u.id = a.user_id JOIN user_credentials c ON c.user_id=u.id AND c.kind='connection' AND c.revoked_at IS NULL WHERE a.node_id = $1 AND c.secret_hash = $2 AND hysteriax_authorized(u.id,a.node_id)")
         .bind(&node_id).bind(auth_hash).fetch_optional(&state.pool).await?;
     let Some(assignment) = assignment else {
         return Ok(Json(AuthResponse::denied()));
@@ -779,7 +771,7 @@ fn is_expired(value: Option<DateTime<Utc>>) -> bool {
     value.is_some_and(|expiration| expiration <= Utc::now())
 }
 
-fn auto_subscription_url(token: &str) -> String {
+pub(crate) fn auto_subscription_url(token: &str) -> String {
     let base =
         std::env::var("HYSTERIAX_PUBLIC_URL").unwrap_or_else(|_| "https://localhost".to_owned());
     format!("{}/sub/{token}", base.trim_end_matches('/'))
@@ -871,16 +863,3 @@ mod tests {
         assert_eq!(proxy_value["handshake-timeout"].as_u64(), Some(30));
     }
 }
-
-#[cfg(test)]
-mod transaction_tests;
-
-// Direct domain fixtures are test-only; production writes use protocol-2 handlers.
-#[cfg(test)]
-#[path = "subscriptions_test_support.rs"]
-mod test_support;
-#[cfg(test)]
-pub(crate) use test_support::*;
-
-#[cfg(test)]
-use crate::db;

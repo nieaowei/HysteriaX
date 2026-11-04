@@ -99,7 +99,7 @@ def user_connection_password(database, master_key, user_id):
     """Read only this disposable fixture's shared user password; never print it."""
     from nacl.bindings import crypto_aead_xchacha20poly1305_ietf_decrypt
     with database.connect() as connection:
-        encrypted = connection.execute("SELECT connection_credential_enc FROM users WHERE id=%s", (user_id,)).fetchone()[0]
+        encrypted = connection.execute("SELECT secret_enc FROM user_credentials WHERE kind='connection' AND revoked_at IS NULL AND user_id=%s", (user_id,)).fetchone()[0]
     raw = base64.b64decode(encrypted + "=" * (-len(encrypted) % 4))
     key = base64.b64decode(master_key + "=" * (-len(master_key) % 4))
     return crypto_aead_xchacha20poly1305_ietf_decrypt(raw[24:], None, raw[:24], key).decode()

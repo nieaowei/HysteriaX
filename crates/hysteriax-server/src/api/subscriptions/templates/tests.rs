@@ -310,7 +310,7 @@ async fn public_download_selects_platform_uses_latest_publication_and_revokes_li
     .execute(&state.pool)
     .await
     .unwrap();
-    sqlx::query("INSERT INTO subscription_credentials(id,user_id,token_hash,token_enc,created_at) VALUES('sub','alice',$1,$2,now())").bind(crate::security::token_digest("token")).bind(state.secrets.encrypt("token").unwrap()).execute(&state.pool).await.unwrap();
+    sqlx::query("INSERT INTO user_credentials(kind,id,user_id,secret_hash,secret_enc,created_at) VALUES('subscription','sub','alice',$1,$2,now())").bind(crate::security::token_digest("token")).bind(state.secrets.encrypt("token").unwrap()).execute(&state.pool).await.unwrap();
     async fn download(state: &AppState, query: &str) -> Response {
         super::super::download_auto(
             State(state.clone()),
@@ -402,10 +402,12 @@ async fn public_download_selects_platform_uses_latest_publication_and_revokes_li
         .unwrap();
     let config: serde_json::Value = serde_yaml::from_slice(&bytes).unwrap();
     assert_eq!(config["mixed-port"], 9999);
-    sqlx::query("UPDATE subscription_credentials SET revoked_at=now() WHERE id='sub'")
-        .execute(&state.pool)
-        .await
-        .unwrap();
+    sqlx::query(
+        "UPDATE user_credentials SET revoked_at=now() WHERE kind='subscription' AND id='sub'",
+    )
+    .execute(&state.pool)
+    .await
+    .unwrap();
     assert_eq!(
         download(&state, "template=default-mihomo&platform=linux")
             .await

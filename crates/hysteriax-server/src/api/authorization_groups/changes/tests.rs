@@ -3,8 +3,8 @@ use axum::{Json, extract::Path};
 
 async fn fixture() -> AppState {
     let state = crate::kick_requests::tests::fixture().await;
-    let credential = crate::connection_credentials::Credential::new(&state.secrets).unwrap();
-    sqlx::query("UPDATE users SET connection_credential_hash=$1,connection_credential_enc=$2 WHERE id='user'")
+    let credential = crate::user_credentials::Credential::new(&state.secrets).unwrap();
+    sqlx::query("INSERT INTO user_credentials(id,user_id,kind,secret_hash,secret_enc,created_at) VALUES('connection:user','user','connection',$1,$2,now())")
         .bind(credential.hash).bind(credential.ciphertext).execute(&state.pool).await.unwrap();
     state
 }
@@ -37,7 +37,7 @@ async fn allowed(state: &AppState) -> bool {
 async fn all_changes_are_queued_and_shared_password_is_unchanged_by_grants() {
     let state = fixture().await;
     let before: (String, String) = sqlx::query_as(
-        "SELECT connection_credential_hash,connection_credential_enc FROM users WHERE id='user'",
+        "SELECT secret_hash,secret_enc FROM user_credentials WHERE kind='connection' AND revoked_at IS NULL AND user_id='user'",
     )
     .fetch_one(&state.pool)
     .await
@@ -62,7 +62,7 @@ async fn all_changes_are_queued_and_shared_password_is_unchanged_by_grants() {
     );
     assert!(allowed(&state).await);
     let after: (String, String) = sqlx::query_as(
-        "SELECT connection_credential_hash,connection_credential_enc FROM users WHERE id='user'",
+        "SELECT secret_hash,secret_enc FROM user_credentials WHERE kind='connection' AND revoked_at IS NULL AND user_id='user'",
     )
     .fetch_one(&state.pool)
     .await
@@ -255,7 +255,7 @@ async fn credential_rotation_updates_one_user_password_and_leaves_assignments_in
     .await
     .unwrap();
     let hash: String =
-        sqlx::query_scalar("SELECT connection_credential_hash FROM users WHERE id='user'")
+        sqlx::query_scalar("SELECT secret_hash FROM user_credentials WHERE kind='connection' AND revoked_at IS NULL AND user_id='user'")
             .fetch_one(&state.pool)
             .await
             .unwrap();

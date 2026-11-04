@@ -460,10 +460,11 @@ def main():
                     raise RuntimeError("replacement Hysteria credential was not accepted")
 
                 user2_subscription = expect(
-                    f"/api/v2/users/{user2}/subscription",
+                    f"/api/v2/users/{user2}/credentials/rotate",
                     "POST",
                     {"expected_revision": 2},
                 )
+                credential2 = user2_subscription["credential"]
                 future_expiry = "2099-01-01T00:00:00Z"
                 past_expiry = "2000-01-01T00:00:00Z"
                 cleared_quota = expect(

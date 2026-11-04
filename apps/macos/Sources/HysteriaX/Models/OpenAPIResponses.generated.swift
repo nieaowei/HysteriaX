@@ -1335,32 +1335,20 @@ struct ResourceReceipt: Codable, Sendable {
     }
 }
 
-struct SubscriptionReceipt: Codable, Sendable {
-    let userId: String
-    let revision: Int
-    let token: String
-    let url: String
-    let note: String
-
-    enum CodingKeys: String, CodingKey {
-        case userId = "user_id"
-        case revision
-        case token
-        case url
-        case note
-    }
-}
-
 struct RotatedCredentials: Codable, Sendable {
     let userId: String
     let revision: Int
     let credential: String
+    let token: String
+    let url: String
     let revocationJobIds: [String]
 
     enum CodingKeys: String, CodingKey {
         case userId = "user_id"
         case revision
         case credential
+        case token
+        case url
         case revocationJobIds = "revocation_job_ids"
     }
 }

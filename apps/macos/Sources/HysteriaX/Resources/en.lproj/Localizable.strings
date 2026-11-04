@@ -587,7 +587,7 @@
 "新的订阅地址已复制，旧地址已撤销。" = "New subscription URL copied; the old URL was revoked.";
 "新的额度周期已从零开始。" = "The new quota period starts at zero.";
 "新节点连接密码（请及时保存）" = "New node connection passwords (save now)";
-"新连接密码已复制。旧密码已撤销，请立即保存新值。" = "New connection password copied. The old password was revoked; save the new value now.";
+"新连接密码已复制；旧连接密码和旧订阅地址均已撤销，请重新复制订阅地址并更新客户端。" = "New connection password copied. Both the old password and subscription URL were revoked; copy the new subscription URL and update your clients.";
 "方向" = "Direction";
 "无未解决统计缺口" = "No unresolved statistics gaps";
 "无法加载代理配置" = "Cannot load proxy configuration";
@@ -751,8 +751,8 @@
 "此任务为关联重试，成功后会移除原失败提醒。" = "This task is a linked retry. Success clears the original failure alert.";
 "此任务没有可确认的 SSH 指纹变更。" = "This task has no SSH fingerprint change to confirm.";
 "此服务端尚未提供多格式订阅，请先升级服务端。" = "Upgrade the server to support multiple subscription formats.";
-"此用户尚未生成订阅地址，请先生成订阅。" = "Generate a subscription URL for this user first.";
-"此用户尚未生成订阅地址，请先生成订阅再导出。" = "Generate a subscription URL for this user before exporting.";
+"此用户尚无订阅地址，请在用户菜单中轮换连接与订阅凭据。" = "This user has no subscription URL. Rotate connection and subscription credentials in the User menu.";
+"此用户尚无订阅地址，请在用户菜单中轮换连接与订阅凭据后再导出。" = "This user has no subscription URL. Rotate connection and subscription credentials in the User menu before exporting.";
 "此管理服务 API 版本（{0}）与客户端不兼容。" = "Management service API version ({0}) is incompatible with this client.";
 "此类型暂不支持编辑、删除和节点绑定。" = "This type does not yet support editing, deletion or node binding.";
 "此记录关联节点。修改解析目标会影响连接；域名、类型和代理状态需通过节点重新分配修改。" = "This record is linked to a node. Changing its target affects connectivity. Reassign the node's domain to change the name, type or proxy status.";
@@ -794,7 +794,6 @@
 "版本历史（{0}）" = "Version history ({0})";
 "状态" = "Status";
 "环境检查通过" = "Environment check passed";
-"生成/轮换订阅地址" = "Generate / rotate subscription URL";
 "生成服务配置" = "Generate service configuration";
 "用于用户订阅中的客户端 TLS 设置；SNI 留空时默认使用公开地址。" = "Client TLS settings for user subscriptions. An empty SNI defaults to the public address.";
 "用户" = "User";
@@ -1064,9 +1063,7 @@
 "跳过解析器 TLS 验证" = "Skip resolver TLS verification";
 "跳过证书验证" = "Skip certificate verification";
 "踢下线" = "Disconnect";
-"轮换订阅令牌" = "Rotate subscription token";
-"轮换连接凭据" = "Rotate connection credential";
-"轮换连接密码" = "Rotate connection password";
+"轮换连接与订阅凭据" = "Rotate connection and subscription credentials";
 "运营凭据" = "Operational credentials";
 "运行概况" = "Summary";
 "返回内容" = "Response body";

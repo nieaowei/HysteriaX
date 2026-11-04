@@ -214,16 +214,15 @@ final class HysteriaXLiveUITests: XCTestCase {
         acknowledgeNotice(app)
         XCTAssertTrue(identified(app, "user.selected.summary").waitForExistence(timeout: 15))
 
-        chooseMenuAction(app, menu: "订阅", action: "生成/轮换订阅地址")
-        let subscriptionDone = button(app, "完成")
-        XCTAssertTrue(subscriptionDone.waitForExistence(timeout: 15))
-        subscriptionDone.click()
-        let subscriptionToken = try await activeSubscriptionToken(userID, credentials: credentials)
+        var subscriptionToken = try await activeSubscriptionToken(userID, credentials: credentials)
         let subscriptionBeforeRotation = try await subscriptionYAML(subscriptionToken, credentials: credentials)
         XCTAssertEqual(subscriptionBeforeRotation.components(separatedBy: "type: hysteria2").count - 1, 2)
 
-        chooseMenuAction(app, menu: "用户", action: "轮换连接密码")
+        chooseMenuAction(app, menu: "用户", action: "轮换连接与订阅凭据")
         acknowledgeNotice(app)
+        let (oldSubscriptionStatus, _) = try await request(base: credentials.serviceAddress, path: "/sub/\(subscriptionToken)?format=uri")
+        XCTAssertEqual(oldSubscriptionStatus, 404)
+        subscriptionToken = try await activeSubscriptionToken(userID, credentials: credentials)
         let subscriptionAfterRotation = try await subscriptionYAML(subscriptionToken, credentials: credentials)
         XCTAssertNotEqual(subscriptionAfterRotation, subscriptionBeforeRotation)
 
@@ -306,8 +305,7 @@ final class HysteriaXLiveUITests: XCTestCase {
     private func chooseMenuAction(_ app: XCUIApplication, menu: String, action: String) {
         let menuIdentifier = menu == "订阅" ? "users.subscriptionMenu" : "users.actionsMenu"
         let actionIdentifiers = [
-            "生成/轮换订阅地址": "users.subscription.rotate",
-            "轮换连接密码": "users.actions.rotateCredentials",
+            "轮换连接与订阅凭据": "users.actions.rotateCredentials",
             "停用": "users.actions.toggleEnabled",
             "删除用户…": "users.actions.delete",
         ]

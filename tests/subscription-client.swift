@@ -19,6 +19,20 @@ final class SubscriptionURLProtocol: URLProtocol, @unchecked Sendable {
 @main struct SubscriptionClientTests {
     static func main() async throws {
         let decoder = JSONDecoder()
+        let pair = try decoder.decode(RotatedCredentials.self, from: Data(#"{"user_id":"user","revision":2,"credential":"new-password","token":"new-token","url":"https://example.test/sub/new-token","revocation_job_ids":["kick"]}"#.utf8))
+        precondition(pair.credential != pair.token && pair.url.hasSuffix(pair.token))
+        let features = ["client_summary", "ssh_dns_sync", "overview_monitoring", "node_record_removal", "job_retry_links", "node_packages", "dns_management"]
+        for joint in [false, true] {
+            let data = try JSONSerialization.data(withJSONObject: ["api_version":"2.0.0", "management_protocol":2, "service_version":"test", "hysteria_version":"test", "mihomo_version":"test", "directory_version":"b3:test", "features":features + (joint ? ["joint_user_credentials"] : [])])
+            let version = try decoder.decode(APIVersion.self, from: data)
+            do {
+                try version.requireCurrentManagementAPI()
+                precondition(joint, "a server without joint rotation must be rejected")
+            } catch {
+                precondition(!joint, "a server with joint rotation must be accepted")
+            }
+        }
+
         let current = try decoder.decode(ActiveSubscription.self, from: Data(#"{"id":"id","token":"token","url":"https://example.test/sub/token","created_at":"2026-10-18T00:00:00Z"}"#.utf8))
         precondition(current.url == "https://example.test/sub/token")
         for format in SubscriptionFileFormat.allCases {

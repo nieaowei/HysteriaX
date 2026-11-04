@@ -16,12 +16,12 @@ async fn fixture_with_connections(connections: u32) -> AppState {
         .execute(&state.pool).await.unwrap();
     sqlx::query("INSERT INTO credential_versions(credential_id,version,payload_enc,metadata,created_at) SELECT id,1,'PRIVATE-PAYLOAD-MUST-NOT-LEAK','{}',now() FROM credentials").execute(&state.pool).await.unwrap();
     sqlx::query("INSERT INTO admin_tokens(id,token_hash,label,created_at,revoked_at) VALUES('token','PRIVATE-TOKEN-HASH','Admin',now(),now())").execute(&state.pool).await.unwrap();
-    sqlx::query("INSERT INTO subscription_credentials(id,user_id,token_hash,token_enc,created_at) VALUES('subscription','user','PRIVATE-SUBSCRIPTION-HASH','PRIVATE-SUBSCRIPTION-MUST-NOT-LEAK',now())").execute(&state.pool).await.unwrap();
+    sqlx::query("INSERT INTO user_credentials(kind,id,user_id,secret_hash,secret_enc,created_at) VALUES('subscription','subscription','user','PRIVATE-SUBSCRIPTION-HASH','PRIVATE-SUBSCRIPTION-MUST-NOT-LEAK',now())").execute(&state.pool).await.unwrap();
     let config = json!({"tls":{"certificate":"credential://00000000-0000-4000-8000-000000000001/1/password"}});
     let cipher = state.secrets.encrypt(&config.to_string()).unwrap();
     sqlx::query("INSERT INTO nodes(id,name,ssh_host,ssh_port,ssh_username,public_host,public_port,listen_addr,node_token_hash,node_token_enc,traffic_stats_secret_enc,desired_config_enc,deployed_config_enc,ssh_credential_id,ssh_credential_version,created_at,updated_at) VALUES ('node','Node','127.0.0.1',22,'root','example.test',443,':443','hash','unused','unused',$1,$1,'00000000-0000-4000-8000-000000000001',1,now(),now())")
         .bind(cipher).execute(&state.pool).await.unwrap();
-    sqlx::query("WITH assignment_fixture(user_id,node_id,credential_hash,credential_enc,created_at) AS MATERIALIZED (VALUES('user','node','PRIVATE-USER-HASH','PRIVATE-USER-MUST-NOT-LEAK',now())), password_fixture AS (UPDATE users u SET connection_credential_hash=c.credential_hash,connection_credential_enc=c.credential_enc FROM (SELECT DISTINCT ON(user_id) user_id,credential_hash,credential_enc FROM assignment_fixture ORDER BY user_id) c WHERE u.id=c.user_id), fixture_groups AS (INSERT INTO authorization_groups(id,name,created_at,updated_at) SELECT 'fixture-'||md5(user_id||chr(31)||node_id),'Fixture authorization',now(),now() FROM assignment_fixture ON CONFLICT(id) DO UPDATE SET name=EXCLUDED.name RETURNING id), fixture_members AS (INSERT INTO authorization_group_users(group_id,user_id,created_at) SELECT g.id,a.user_id,now() FROM assignment_fixture a JOIN fixture_groups g ON g.id='fixture-'||md5(a.user_id||chr(31)||a.node_id) ON CONFLICT DO NOTHING), fixture_nodes AS (INSERT INTO authorization_group_nodes(group_id,node_id,created_at) SELECT g.id,a.node_id,now() FROM assignment_fixture a JOIN fixture_groups g ON g.id='fixture-'||md5(a.user_id||chr(31)||a.node_id) ON CONFLICT DO NOTHING) INSERT INTO node_assignments(user_id,node_id,created_at) SELECT user_id,node_id,created_at FROM assignment_fixture").execute(&state.pool).await.unwrap();
+    sqlx::query("WITH assignment_fixture(user_id,node_id,credential_hash,credential_enc,created_at) AS MATERIALIZED (VALUES('user','node','PRIVATE-USER-HASH','PRIVATE-USER-MUST-NOT-LEAK',now())), password_fixture AS (INSERT INTO user_credentials(id,user_id,kind,secret_hash,secret_enc,created_at) SELECT 'connection:'||user_id,user_id,'connection',credential_hash,credential_enc,now() FROM (SELECT DISTINCT ON(user_id) user_id,credential_hash,credential_enc FROM assignment_fixture ORDER BY user_id) c ON CONFLICT(user_id,kind) WHERE revoked_at IS NULL DO UPDATE SET secret_hash=EXCLUDED.secret_hash,secret_enc=EXCLUDED.secret_enc), fixture_groups AS (INSERT INTO authorization_groups(id,name,created_at,updated_at) SELECT 'fixture-'||md5(user_id||chr(31)||node_id),'Fixture authorization',now(),now() FROM assignment_fixture ON CONFLICT(id) DO UPDATE SET name=EXCLUDED.name RETURNING id), fixture_members AS (INSERT INTO authorization_group_users(group_id,user_id,created_at) SELECT g.id,a.user_id,now() FROM assignment_fixture a JOIN fixture_groups g ON g.id='fixture-'||md5(a.user_id||chr(31)||a.node_id) ON CONFLICT DO NOTHING), fixture_nodes AS (INSERT INTO authorization_group_nodes(group_id,node_id,created_at) SELECT g.id,a.node_id,now() FROM assignment_fixture a JOIN fixture_groups g ON g.id='fixture-'||md5(a.user_id||chr(31)||a.node_id) ON CONFLICT DO NOTHING) INSERT INTO node_assignments(user_id,node_id,created_at) SELECT user_id,node_id,created_at FROM assignment_fixture").execute(&state.pool).await.unwrap();
     crate::credentials::reference_index::initialize(&state.pool, &state.secrets)
         .await
         .unwrap();
@@ -288,7 +288,7 @@ async fn user_credentials_are_stable_per_user_with_zero_or_many_nodes_and_rotati
         .bind(state.secrets.encrypt("{}").unwrap()).execute(&state.pool).await.unwrap();
     sqlx::query("INSERT INTO node_assignments(user_id,node_id,created_at) SELECT 'user',id,now() FROM nodes WHERE id LIKE 'extra-%'")
         .execute(&state.pool).await.unwrap();
-    sqlx::query("INSERT INTO users(id,name,enabled,connection_credential_hash,connection_credential_enc,created_at,updated_at) VALUES('unassigned','No nodes',true,'unassigned-hash','PRIVATE-UNASSIGNED-PASSWORD',now(),now())")
+    sqlx::query("WITH added AS (INSERT INTO users(id,name,enabled,created_at,updated_at) VALUES('unassigned','No nodes',true,now(),now()) RETURNING id) INSERT INTO user_credentials(id,user_id,kind,secret_hash,secret_enc,created_at) SELECT 'connection:'||id,id,'connection','unassigned-hash','PRIVATE-UNASSIGNED-PASSWORD',now() FROM added")
         .execute(&state.pool).await.unwrap();
     crate::credentials::reference_index::initialize(&state.pool, &state.secrets)
         .await
@@ -350,62 +350,4 @@ async fn user_credentials_are_stable_per_user_with_zero_or_many_nodes_and_rotati
     assert_eq!(renamed["items"][0]["id"], "user:user");
     assert_eq!(renamed["items"][0]["reference_count"], 0);
     assert_eq!(renamed["items"][0]["status"], "quota_exhausted");
-}
-
-#[tokio::test]
-async fn directory_upgrade_replaces_node_entries_without_changing_passwords_or_assignments() {
-    let state = fixture().await;
-    let baseline = include_str!("../../migrations/0001_baseline.sql");
-    let old_view = baseline
-        .split("CREATE VIEW credential_directory AS")
-        .nth(1)
-        .unwrap()
-        .split("-- TABLE: credential_migrations")
-        .next()
-        .unwrap();
-    sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
-        "CREATE OR REPLACE VIEW credential_directory AS{old_view}"
-    )))
-    .execute(&state.pool)
-    .await
-    .unwrap();
-    let legacy: String =
-        sqlx::query_scalar("SELECT id FROM credential_directory WHERE kind='user_credential'")
-            .fetch_one(&state.pool)
-            .await
-            .unwrap();
-    assert_eq!(legacy, "user:user:node");
-    let before: (String, String) = sqlx::query_as(
-        "SELECT connection_credential_hash,connection_credential_enc FROM users WHERE id='user'",
-    )
-    .fetch_one(&state.pool)
-    .await
-    .unwrap();
-    sqlx::raw_sql(include_str!(
-        "../../migrations/0006_user_credential_directory.sql"
-    ))
-    .execute(&state.pool)
-    .await
-    .unwrap();
-    let after: (String, String) = sqlx::query_as(
-        "SELECT connection_credential_hash,connection_credential_enc FROM users WHERE id='user'",
-    )
-    .fetch_one(&state.pool)
-    .await
-    .unwrap();
-    assert_eq!(before, after);
-    assert_eq!(page(&state, json!({})).await["total"], 238);
-    let current = page(&state, json!({"kind":"user_credential"})).await;
-    assert_eq!(current["items"][0]["id"], "user:user");
-    assert_eq!(current["items"][0]["reference_count"], 1);
-    sqlx::raw_sql(include_str!(
-        "../../migrations/0006_user_credential_directory.sql"
-    ))
-    .execute(&state.pool)
-    .await
-    .unwrap();
-    assert_eq!(
-        page(&state, json!({"category":"operations"})).await["total"],
-        201
-    );
 }

@@ -1209,9 +1209,6 @@ enum APIEndpoints {
     static func getSubscription(id: String) -> APIOperation<NoRequest, SubscriptionStatus> {
         APIOperation(method: "GET", path: "api/v2/users/\(id)/subscription", queryParameters: [:])
     }
-    static func rotateSubscription(id: String) -> APIOperation<RevisionRequest, SubscriptionReceipt> {
-        APIOperation(method: "POST", path: "api/v2/users/\(id)/subscription", queryParameters: [:])
-    }
     static func getUserUsage(id: String) -> APIOperation<NoRequest, UserUsageResponse> {
         APIOperation(method: "GET", path: "api/v2/users/\(id)/usage", queryParameters: [:])
     }

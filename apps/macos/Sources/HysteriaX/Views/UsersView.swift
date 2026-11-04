@@ -372,8 +372,6 @@ private struct UserDirectoryView: View {
             Menu(L10n.text("订阅")) {
                 Button(L10n.text("选择模板与目标平台…")) { subscriptionUser = user }
                     .accessibilityIdentifier("users.subscription.copy")
-                Button(L10n.text("生成/轮换订阅地址")) { rotateSubscription(user) }
-                    .accessibilityIdentifier("users.subscription.rotate")
                 ForEach([SubscriptionFileFormat.uri, .base64], id: \.rawValue) { format in
                     Button(format.title) { copyCurrentSubscription(user, format: format) }
                 }
@@ -384,8 +382,8 @@ private struct UserDirectoryView: View {
                 Button(L10n.text("编辑用户…")) { showingEditUser = true }
                     .accessibilityLabel(L10n.text("编辑用户"))
                     .accessibilityIdentifier("users.actions.edit")
-                Button(L10n.text("轮换连接密码")) { rotateCredentials(user) }
-                    .accessibilityLabel(L10n.text("轮换连接密码"))
+                Button(L10n.text("轮换连接与订阅凭据")) { rotateCredentials(user) }
+                    .accessibilityLabel(L10n.text("轮换连接与订阅凭据"))
                     .accessibilityIdentifier("users.actions.rotateCredentials")
                 Button(L10n.text("重置额度")) { resetQuota(user) }
                     .accessibilityLabel(L10n.text("重置额度"))
@@ -514,15 +512,6 @@ private struct UserDirectoryView: View {
         }
     }
 
-    private func rotateSubscription(_ user: UserSummary) {
-        Task {
-            do {
-                _ = try await store.rotateSubscription(for: user)
-                subscriptionUser = user
-            } catch { showError(error) }
-        }
-    }
-
     private func exportSubscription(_ user: UserSummary, format: SubscriptionFileFormat) {
         Task {
             do {
@@ -545,7 +534,7 @@ private struct UserDirectoryView: View {
         Task {
             do {
                 let credentials = try await store.rotateCredentials(for: user)
-                copy(credentials, message: L10n.text("新连接密码已复制。旧密码已撤销，请立即保存新值。"))
+                copy(credentials, message: L10n.text("新连接密码已复制；旧连接密码和旧订阅地址均已撤销，请重新复制订阅地址并更新客户端。"))
             } catch { showError(error) }
         }
     }

@@ -6,8 +6,8 @@ use sqlx::{Postgres, Row, Transaction};
 pub(super) async fn prepare(
     state: &AppState,
     _user: &str,
-) -> Result<crate::connection_credentials::Credential, ApiError> {
-    Ok(crate::connection_credentials::Credential::new(
+) -> Result<crate::user_credentials::CredentialPair, ApiError> {
+    Ok(crate::user_credentials::CredentialPair::new(
         &state.secrets,
     )?)
 }
@@ -15,7 +15,7 @@ pub(super) async fn commit_on(
     tx: &mut Transaction<'static, Postgres>,
     user_id: String,
     expected: i64,
-    prepared: crate::connection_credentials::Credential,
+    prepared: crate::user_credentials::CredentialPair,
     actor: String,
 ) -> Result<Value, ApiError> {
     if expected < 1 {
@@ -26,8 +26,20 @@ pub(super) async fn commit_on(
     if revision != expected {
         return Err(ApiError::conflict("user changed; reload before rotating"));
     }
-    sqlx::query("UPDATE users SET connection_credential_hash=$2,connection_credential_enc=$3,revision=revision+1,updated_at=$4 WHERE id=$1")
-        .bind(&user_id).bind(&prepared.hash).bind(&prepared.ciphertext).bind(now()).execute(&mut **tx).await?;
+    let timestamp = now();
+    sqlx::query(
+        "UPDATE user_credentials SET revoked_at=$2 WHERE user_id=$1 AND revoked_at IS NULL",
+    )
+    .bind(&user_id)
+    .bind(timestamp)
+    .execute(&mut **tx)
+    .await?;
+    prepared.insert_on(tx, &user_id, timestamp).await?;
+    sqlx::query("UPDATE users SET revision=revision+1,updated_at=$2 WHERE id=$1")
+        .bind(&user_id)
+        .bind(timestamp)
+        .execute(&mut **tx)
+        .await?;
     let pairs: Vec<(String, String)> = sqlx::query_as(
         "SELECT user_id,node_id FROM node_assignments WHERE user_id=$1 ORDER BY node_id",
     )
@@ -45,6 +57,6 @@ pub(super) async fn commit_on(
     )
     .await?;
     Ok(
-        json!({"user_id":user_id,"revision":revision+1,"credential":prepared.plaintext,"revocation_job_ids":jobs}),
+        json!({"user_id":user_id,"revision":revision+1,"credential":prepared.connection.plaintext,"token":prepared.subscription.plaintext,"url":super::super::subscriptions::auto_subscription_url(&prepared.subscription.plaintext),"revocation_job_ids":jobs}),
     )
 }

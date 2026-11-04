@@ -751,8 +751,10 @@ def main():
                 secrets_to_scrub.append(credential)
 
                 subscription = expect(
-                    f"/api/v2/users/{user_id}/subscription", "POST", {"expected_revision": 2}
+                    f"/api/v2/users/{user_id}/credentials/rotate", "POST", {"expected_revision": 2}
                 )
+                credential = subscription["credential"]
+                secrets_to_scrub.append(credential)
                 sub_token = subscription["token"]
                 secrets_to_scrub.append(sub_token)
                 status, subscription_yaml = request(
@@ -1430,10 +1432,12 @@ def main():
                 quota_credential = user_connection_password(database, environment["HYSTERIAX_MASTER_KEY"], quota_user_id)
                 secrets_to_scrub.append(quota_credential)
                 quota_subscription = expect(
-                    f"/api/v2/users/{quota_user_id}/subscription",
+                    f"/api/v2/users/{quota_user_id}/credentials/rotate",
                     "POST",
                     {"expected_revision": 2},
                 )
+                quota_credential = quota_subscription["credential"]
+                secrets_to_scrub.append(quota_credential)
                 quota_subscription_token = quota_subscription["token"]
                 secrets_to_scrub.append(quota_subscription_token)
                 status, quota_yaml = request(base, f"/sub/{quota_subscription_token}?format=mihomo&platform=linux")
@@ -1706,6 +1710,11 @@ def main():
                     )
                     if denied.returncode == 0:
                         raise RuntimeError("a rotated-out client still forwarded proxy traffic")
+                old_subscription_status, _ = request(base, f"/sub/{quota_subscription_token}?format=uri", method="GET")
+                if old_subscription_status != 404:
+                    raise RuntimeError("joint rotation did not revoke the old subscription URL")
+                quota_subscription_token = rotated["token"]
+                secrets_to_scrub.append(quota_subscription_token)
                 rotation_subscription_status, rotation_subscription_body = request(
                     base, f"/sub/{quota_subscription_token}?format=mihomo&platform=linux", method="GET"
                 )
@@ -1733,7 +1742,9 @@ def main():
                 fresh_grant = grant_group(expect, fresh_id, [node_id])
                 fresh_auth = user_connection_password(database, environment["HYSTERIAX_MASTER_KEY"], fresh_id)
                 secrets_to_scrub.append(fresh_auth)
-                fresh_sub = expect(f"/api/v2/users/{fresh_id}/subscription", "POST", {"expected_revision":2})["token"]
+                fresh_pair = expect(f"/api/v2/users/{fresh_id}/credentials/rotate", "POST", {"expected_revision":2})
+                fresh_auth, fresh_sub = fresh_pair["credential"], fresh_pair["token"]
+                secrets_to_scrub.append(fresh_auth)
                 secrets_to_scrub.append(fresh_sub)
                 def fresh_material(label):
                     status, body = request(base, f"/sub/{fresh_sub}?format=mihomo&platform=linux")

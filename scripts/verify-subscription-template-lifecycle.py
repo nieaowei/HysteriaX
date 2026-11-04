@@ -85,7 +85,7 @@ def main():
             postgres("createdb", source_db); created.append(source_db)
             start(source_db)
             user = api("/users", {"name": "Lifecycle fixture"}, expected=201)
-            subscription = api(f"/users/{user['id']}/subscription", {"expected_revision": 1})
+            subscription = api(f"/users/{user['id']}/credentials/rotate", {"expected_revision": 1})
             secret = "fixture-template-secret-" + secrets.token_hex(16)
             document = {"schema_version": 2, "common": {"mixed-port": 8100, "secret": secret, "future": {"counter": 18446744073709551615}, "proxies": [], "proxy-groups": [{"name": "Select", "type": "select", "proxies": []}], "rules": ["MATCH,Select"]}, "injections": [{"group": "Select"}]}
             metadata = api("/subscription-templates", {"expected_revision": 0, "name": "Lifecycle published template", "format": "mihomo", "document": document}, expected=201)

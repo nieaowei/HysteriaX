@@ -629,21 +629,11 @@ final class ManagementStore {
         await refresh()
     }
 
-    func rotateSubscription(for user: UserSummary) async throws -> String {
-        let api = try requireConnectedAPI()
-        let response: SubscriptionReceipt = try await api.post(
-            APIEndpoints.rotateSubscription(id: user.id),
-            body: RevisionRequest(expectedRevision: user.revision)
-        )
-        await refresh()
-        return response.url
-    }
-
     func currentSubscriptionURL(for user: UserSummary, format: SubscriptionFileFormat? = nil, template: String? = nil, platform: String? = nil) async throws -> String {
         let api = try requireConnectedAPI()
         let subscription: SubscriptionStatus = try await api.get(APIEndpoints.getSubscription(id: user.id))
         guard let active = subscription.active else {
-            throw APIClientError.server(L10n.text("此用户尚未生成订阅地址，请先生成订阅。"))
+            throw APIClientError.server(L10n.text("此用户尚无订阅地址，请在用户菜单中轮换连接与订阅凭据。"))
         }
         if let format {
             return try format.subscriptionURL(baseURL: active.url, template: template, platform: platform)
@@ -655,7 +645,7 @@ final class ManagementStore {
         let api = try requireConnectedAPI()
         let subscription: SubscriptionStatus = try await api.get(APIEndpoints.getSubscription(id: user.id))
         guard let active = subscription.active else {
-            throw APIClientError.server(L10n.text("此用户尚未生成订阅地址，请先生成订阅再导出。"))
+            throw APIClientError.server(L10n.text("此用户尚无订阅地址，请在用户菜单中轮换连接与订阅凭据后再导出。"))
         }
         _ = try format.subscriptionURL(baseURL: active.url, template: template, platform: platform)
         let operation = APIEndpoints.downloadAutomaticSubscription(token: active.token, template: template, format: format.rawValue, platform: platform)

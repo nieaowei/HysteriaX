@@ -213,7 +213,7 @@ def main():
                 if status!=202:raise RuntimeError("group authorization of parser fixture failed")
             status, body = request(
                 base,
-                f"/api/v2/users/{user_id}/subscription",
+                f"/api/v2/users/{user_id}/credentials/rotate",
                 admin,
                 "POST",
                 {"expected_revision": 3},
@@ -223,7 +223,7 @@ def main():
             first_subscription = json.loads(body)["token"]
             status, body = request(
                 base,
-                f"/api/v2/users/{user_id}/subscription",
+                f"/api/v2/users/{user_id}/credentials/rotate",
                 admin,
                 "POST",
                 {"expected_revision": 4},
@@ -252,7 +252,7 @@ def main():
             empty_user_id = json.loads(body)["id"]
             status, body = request(
                 base,
-                f"/api/v2/users/{empty_user_id}/subscription",
+                f"/api/v2/users/{empty_user_id}/credentials/rotate",
                 admin,
                 "POST",
                 {"expected_revision": 1},

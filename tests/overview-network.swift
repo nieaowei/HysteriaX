@@ -60,7 +60,7 @@ final class OverviewTransport: URLProtocol, @unchecked Sendable {
             if path.hasSuffix("version") {
                 versionRequests += 1
                 if mode == "version-failure" { return (503, Data()) }
-                let features = mode == "legacy" ? "[]" : "[\"client_summary\",\"ssh_dns_sync\",\"overview_monitoring\",\"node_record_removal\",\"job_retry_links\",\"node_packages\",\"dns_management\"]"
+                let features = mode == "legacy" ? "[]" : "[\"client_summary\",\"ssh_dns_sync\",\"overview_monitoring\",\"node_record_removal\",\"job_retry_links\",\"node_packages\",\"dns_management\",\"joint_user_credentials\"]"
                 return (200, Data("{\"api_version\":\"2.0.0\",\"management_protocol\":2,\"current_admin_token_id\":\"fixture-admin\",\"directory_version\":\"b3:test\",\"service_version\":\"test\",\"hysteria_version\":\"test\",\"mihomo_version\":\"test\",\"features\":\(features)}".utf8))
             }
             if path == "/api/v2/authorization-groups" {

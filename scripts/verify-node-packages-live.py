@@ -133,7 +133,8 @@ def main():
                 user = api("/api/v2/users", "POST", {"name": "Package live user"})["id"]
                 grant_group(api,user,[node_id])
                 credential = user_connection_password(database, environment["HYSTERIAX_MASTER_KEY"], user)
-                sub = api(f"/api/v2/users/{user}/subscription", "POST", {"expected_revision": 2})["token"]
+                pair = api(f"/api/v2/users/{user}/credentials/rotate", "POST", {"expected_revision": 2})
+                credential, sub = pair["credential"], pair["token"]
 
                 def auth():
                     return api(f"/hy2/auth/{node_id}/{node_token}", "POST", {"addr": "", "auth": credential, "tx": 0}, token=None)["ok"]

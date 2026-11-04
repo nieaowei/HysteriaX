@@ -115,7 +115,8 @@ def run(base, admin, database, temp, advanced_token, revoked_token, advanced_use
         return api(path,body,method,statuses[0])
     grant_group(group_request,user,[node])
     credential = user_connection_password(database, master_key, user)
-    receipt = api(f"/api/v2/users/{user}/subscription", {"expected_revision": 2})
+    receipt = api(f"/api/v2/users/{user}/credentials/rotate", {"expected_revision": 2})
+    credential = receipt["credential"]
     token = receipt["token"]
     if "auto_url" in receipt or not receipt["url"].endswith(f"/sub/{token}"):
         raise RuntimeError("rotation response did not expose the canonical URL")

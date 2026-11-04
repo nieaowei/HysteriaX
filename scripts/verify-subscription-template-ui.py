@@ -65,7 +65,7 @@ def main():
                 layout_draft = request(base, token, "/api/v2/subscription-templates/default-singbox/draft")
                 request(base, token, "/api/v2/subscription-templates/default-singbox", {"expected_revision": layout_draft["template"]["revision"], "name": "0008 Layout - " + "Long template name " * 5}, method="PATCH")
                 user = request(base, token, "/api/v2/users", {"name": "0005 UI User"})
-                subscription = request(base, token, f"/api/v2/users/{user['id']}/subscription", {"expected_revision": 1})
+                subscription = request(base, token, f"/api/v2/users/{user['id']}/credentials/rotate", {"expected_revision": 1})
                 document = {"schema_version": 2, "common": {"tproxy-port": 7893, "mixed-port": 7888, "log-level": "silent", "proxies": [], "proxy-groups": [{"name": "Select", "type": "select", "proxies": []}], "rules": ["MATCH,Select"]}, "injections": [{"group": "Select"}]}
                 template = request(base, token, "/api/v2/subscription-templates", {"expected_revision": 0, "name": "0005 UI Template", "format": "mihomo", "document": document})
                 quit_first = request(base, token, "/api/v2/subscription-templates", {"expected_revision": 0, "name": "0008 Quit A", "format": "mihomo", "document": document})

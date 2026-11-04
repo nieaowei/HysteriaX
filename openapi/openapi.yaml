@@ -1566,7 +1566,8 @@ paths:
       operationId: rotateUserCredentials
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
-      summary: Rotate user credentials
+      summary: Rotate connection password and subscription token together
+      description: Atomically revokes both old secrets, issues two independent replacements, and queues disconnection of existing sessions. Retries with the same idempotency key return the committed pair.
       requestBody:
         required: true
         content:
@@ -1590,22 +1591,6 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/SubscriptionStatus' }
-    post:
-      operationId: rotateSubscription
-      parameters:
-        - $ref: '#/components/parameters/IdempotencyKey'
-      summary: Rotate subscription
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: '#/components/schemas/Revision' }
-      responses:
-        '200':
-          description: New subscription token and URL
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/SubscriptionReceipt' }
   /users/{id}/usage:
     parameters:
       - $ref: '#/components/parameters/Id'
@@ -3274,22 +3259,15 @@ components:
         content_sha256: { type: string }
         size_bytes: { type: integer, format: int64 }
         reference: { type: string }
-    SubscriptionReceipt:
-      type: object
-      required: [user_id, revision, token, url, note]
-      properties:
-        user_id: { type: string, format: uuid }
-        revision: { type: integer }
-        token: { type: string, description: One-time subscription token returned on rotation. }
-        url: { type: string }
-        note: { type: string }
     RotatedCredentials:
       type: object
-      required: [user_id, revision, credential, revocation_job_ids]
+      required: [user_id, revision, credential, token, url, revocation_job_ids]
       properties:
         user_id: { type: string, format: uuid }
         revision: { type: integer }
         credential: { type: string, description: One shared connection password for every authorized node. }
+        token: { type: string, description: New independent subscription token. }
+        url: { type: string, description: New canonical subscription URL. }
         revocation_job_ids: { type: array, items: { type: string } }
     JobReceipt:
       type: object

@@ -143,7 +143,7 @@ struct PreparedUser {
     expires_at: Option<DateTime<Utc>>,
     quota_bytes: Option<i64>,
     timestamp: DateTime<Utc>,
-    credential: crate::connection_credentials::Credential,
+    credential: crate::user_credentials::CredentialPair,
 }
 
 impl PreparedUser {
@@ -157,14 +157,17 @@ impl PreparedUser {
             expires_at: normalize_expiry(input.expires_at)?,
             quota_bytes: input.quota_bytes,
             timestamp: now(),
-            credential: crate::connection_credentials::Credential::new(secrets)?,
+            credential: crate::user_credentials::CredentialPair::new(secrets)?,
         })
     }
 
     async fn commit_on(&self, tx: &mut sqlx::PgConnection, actor: &str) -> Result<Value, ApiError> {
-        sqlx::query("INSERT INTO users(id,name,enabled,expires_at,quota_bytes,usage_bytes,revision,created_at,updated_at,connection_credential_hash,connection_credential_enc) VALUES($1,$2,$3,$4,$5,0,1,$6,$6,$7,$8)")
+        sqlx::query("INSERT INTO users(id,name,enabled,expires_at,quota_bytes,usage_bytes,revision,created_at,updated_at) VALUES($1,$2,$3,$4,$5,0,1,$6,$6)")
             .bind(&self.id).bind(&self.name).bind(self.enabled).bind(self.expires_at)
-            .bind(self.quota_bytes).bind(self.timestamp).bind(&self.credential.hash).bind(&self.credential.ciphertext).execute(&mut *tx).await?;
+            .bind(self.quota_bytes).bind(self.timestamp).execute(&mut *tx).await?;
+        self.credential
+            .insert_on(tx, &self.id, self.timestamp)
+            .await?;
         super::audit_on(
             tx,
             actor,

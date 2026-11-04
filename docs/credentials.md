@@ -121,3 +121,9 @@ backfills per-certificate `released` flags for old-image rollback. Current reade
 continue to use `mtls_user_version_publication`, so generation publication makes
 all its staged material visible atomically without rewriting each leaf. Existing
 explicit release facts and unpublished-generation discard protection are retained.
+
+## User connection and subscription credentials
+
+Both secret types live in `user_credentials`, distinguished by `kind`. New users receive an independent connection password and subscription token in one transaction. `POST /api/v2/users/{id}/credentials/rotate` revokes both old values, issues both replacements, increments the user revision once, and queues disconnection of existing sessions. Its encrypted idempotency receipt replays the committed pair. `GET /api/v2/users/{id}/subscription` reads the current subscription; independent subscription rotation is removed. The Mac user menu exposes one joint rotation action. After rotation, copy the new subscription URL and update clients.
+
+Schema 9 preserves existing encrypted secrets and revoked subscription history, and removes the old user password columns and subscription table. Existing users without a subscription receive one on their first joint rotation. The credential directory remains a read-only summary; no extra generic credential versions or node distribution batches are created. The one-off test upgrade script was removed after production rollout. Published SQL migrations and the preservation regression remain; fresh environments initialize the full migration chain, and normal maintenance uses `--migrate-only` with the original master key.

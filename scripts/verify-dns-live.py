@@ -276,7 +276,7 @@ def main():
                   {"expected_revision": group["revision"], "add_user_ids": [user["id"]], "add_node_ids": [node_id]})
         api.job(granted["job_id"])
         current_user = api.get("/api/v2/users/" + user["id"])
-        subscription = api.write("POST", "/api/v2/users/" + user["id"] + "/subscription", {"expected_revision": current_user["revision"]})
+        subscription = api.write("POST", "/api/v2/users/" + user["id"] + "/credentials/rotate", {"expected_revision": current_user["revision"]})
         token = subscription["token"]
     else:
         node_id = manifest["node_ids"][0]

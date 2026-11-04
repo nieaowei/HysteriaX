@@ -28,7 +28,7 @@ spec.fetch('paths').each do |path, item|
     check(refs.count('#/components/parameters/IdempotencyKey') == 1, "missing or repeated header identity: #{method} #{path}")
   end
 end
-check(writes.length == 58 && writes.to_set.length == 58, 'expected all 58 distinct management write operations')
+check(writes.length == 57 && writes.to_set.length == 57, 'expected all 57 distinct management write operations')
 check(writes.include?('reverifyExecutionOperation'), 'missing explicit remote verification write')
 schemas = spec.dig('components', 'schemas')
 %w[/authorization-groups/preview /authorization-groups/{group_id}/preview /users/{id}/authorization-groups/preview].each do |path|
@@ -59,4 +59,7 @@ check(schemas.dig('EventStreamHead', 'properties', 'cursor', '$ref') == '#/compo
   check(operation.fetch('responses').key?('410'), "missing resynchronization response for #{path}")
 end
 check(spec.dig('paths', '/events/head', 'get', 'operationId') == 'getEventStreamHead', 'missing stream head operation')
-puts 'Management v2 contract: 58 header identities, typed handshake/cursors, unchanged callback/download roots passed.'
+
+check(spec.dig('paths', '/users/{id}/subscription', 'post').nil?, 'independent subscription rotation must be retired')
+check(%w[credential token url revocation_job_ids].all? { |field| schemas.fetch('RotatedCredentials').fetch('required').include?(field) }, 'joint rotation must return both credentials')
+puts 'Management v2 contract: 57 header identities, joint user credential rotation, typed handshake/cursors, unchanged callback/download roots passed.'

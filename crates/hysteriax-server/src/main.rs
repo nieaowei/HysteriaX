@@ -6,7 +6,6 @@ mod bootstrap;
 mod cache;
 mod cache_domains;
 mod config;
-mod connection_credentials;
 mod credentials;
 mod db;
 mod deployment;
@@ -30,6 +29,7 @@ mod security;
 mod ssh;
 mod state;
 mod traffic;
+mod user_credentials;
 
 use std::{env, future::IntoFuture, time::Duration};
 

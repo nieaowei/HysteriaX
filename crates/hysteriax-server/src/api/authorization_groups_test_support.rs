@@ -40,8 +40,8 @@ pub(crate) async fn create(
     )
     .await?;
     for user in &input.user_ids {
-        let credential = crate::connection_credentials::Credential::new(&state.secrets)?;
-        sqlx::query("UPDATE users SET connection_credential_hash=$2,connection_credential_enc=$3 WHERE id=$1 AND connection_credential_hash IS NULL")
+        let credential = crate::user_credentials::Credential::new(&state.secrets)?;
+        sqlx::query("INSERT INTO user_credentials(id,user_id,kind,secret_hash,secret_enc,created_at) VALUES('connection:'||$1,$1,'connection',$2,$3,now()) ON CONFLICT(user_id,kind) WHERE revoked_at IS NULL DO NOTHING")
             .bind(user).bind(credential.hash).bind(credential.ciphertext).execute(&state.pool).await?;
     }
     Ok((StatusCode::ACCEPTED, Json(result)))

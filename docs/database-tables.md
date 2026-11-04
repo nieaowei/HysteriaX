@@ -2,9 +2,9 @@
 
 本文按业务模块说明每张表存什么、由谁使用，以及关联和维护边界，供开发、排障和备份恢复时查阅。
 
-核对日期：2026-10-30。范围为当前迁移链（0001～0007）和维护初始化代码，包含 **106 张应用持久表、1 张 SQLx 管理表、6 个普通视图**。
+核对日期：2026-11-04。范围为当前迁移链（0001～0009）和维护初始化代码，包含 **105 张应用持久表、1 张 SQLx 管理表、6 个普通视图**。
 
-**版本边界：**基线合并原 0001～0074 SQL 迁移的最终结构，仅支持新建空库；原迁移链数据库不兼容，不支持原地升级。本次清理未部署，生产状态以实际镜像及维护记录为准。SQL 基线与 Rust 维护初始化分开执行，正常 API 启动继续只校验就绪状态。
+**版本边界：**基线合并原 0001～0074 SQL 迁移的最终结构，仅支持新建空库；原迁移链数据库不兼容，不支持原地升级。2026-11-04 已部署生产 schema 9，详细状态见 production 发布记录。SQL 基线与 Rust 维护初始化分开执行，正常 API 启动继续只校验就绪状态。
 
 ## 阅读约定与目录
 
@@ -17,8 +17,8 @@
 | --- | ---: | --- |
 | 管理鉴权与幂等 | 2 | [管理鉴权与幂等](#管理鉴权与幂等) |
 | 节点、配置与套餐 | 8 | [节点、配置与套餐](#节点配置与套餐) |
-| 用户、授权与撤销 | 9 | [用户、授权与撤销](#用户授权与撤销) |
-| 凭据、分发与引用 | 9 | [凭据、分发与引用](#凭据分发与引用) |
+| 用户、授权与撤销 | 12 | [用户、授权与撤销](#用户授权与撤销) |
+| 凭据、分发与引用 | 8 | [凭据、分发与引用](#凭据分发与引用) |
 | 托管 mTLS | 16 | [托管 mTLS](#托管-mtls) |
 | DNS | 5 | [DNS](#dns) |
 | 订阅模板 | 3 | [订阅模板](#订阅模板) |
@@ -26,9 +26,9 @@
 | 监控采样 | 5 | [监控采样](#监控采样) |
 | 统计读模型与刷新队列 | 15 | [统计读模型与刷新队列](#统计读模型与刷新队列) |
 | 任务、事件与审计 | 8 | [任务、事件与审计](#任务事件与审计) |
-| 后台调度、执行与维护 | 13 | [后台调度、执行与维护](#后台调度执行与维护) |
+| 后台调度、执行与维护 | 12 | [后台调度、执行与维护](#后台调度执行与维护) |
 | 缓存版本 | 6 | [缓存版本](#缓存版本) |
-| 合计 | **104** | 另见 [SQLx 管理表](#sqlx-管理表)、[视图](#视图) 和 [已移除表与临时表](#已移除表与临时表) |
+| 合计 | **105** | 另见 [SQLx 管理表](#sqlx-管理表)、[视图](#视图) 和 [已移除表与临时表](#已移除表与临时表) |
 
 ## 主要数据关系
 
@@ -42,7 +42,7 @@ flowchart LR
     gn --> nodes[nodes]
     users --> assignments[node_assignments]
     nodes --> assignments
-    users --> subscriptions[subscription_credentials]
+    users --> subscriptions[user_credentials]
     nodes --> configs[config_versions]
     credentials[credentials] --> versions[credential_versions]
     versions --> nodes
@@ -89,9 +89,9 @@ flowchart LR
 
 | 表 | 键 | 用途与关键关联 | 维护边界 |
 | --- | --- | --- | --- |
-| `users` | `id` | 用户主档、用户级连接密码摘要/密文、启用状态、到期时间、配额、已计费用量、重置时间及访问撤销标记。 | `usage_bytes` 是配额鉴权所用的计费状态；不能从当前保留的历史明细随意覆盖。 |
-| `node_assignments` | `(user_id, node_id)` | 用户实际获权节点关系；由授权异步任务生成，供节点认证和订阅使用。 | 随用户/节点删除；有效授权还需检查来源与即时排除。连接密码已在 users；旧内嵌证书和逐节点证书绑定字段均已移除。 |
-| `subscription_credentials` | `id` | 用户订阅 URL 令牌的摘要、密文、创建与撤销时间。 | 令牌摘要唯一，随用户删除；订阅还需检查用户状态与实际节点授权。 |
+| `users` | `id` | 用户主档、启用状态、到期时间、配额、已计费用量、重置时间及访问撤销标记。 | `usage_bytes` 是配额鉴权所用的计费状态；不能从当前保留的历史明细随意覆盖。 |
+| `node_assignments` | `(user_id, node_id)` | 用户实际获权节点关系；由授权异步任务生成，供节点认证和订阅使用。 | 随用户/节点删除；有效授权还需检查来源与即时排除。连接密码和订阅 Token 统一在 user_credentials；旧内嵌证书和逐节点证书绑定字段均已移除。 |
+| `user_credentials` | `id` | 用户连接密码和订阅 Token 的摘要、密文、类型、签发及撤销时间。 | 每用户每类型最多一份有效值；有效摘要按类型唯一；两种凭据联合轮换，随用户删除。 |
 | `authorization_groups` | `id` | 授权组名称和修订，是批量管理用户与节点可见性的主实体。 | 删除会级联组成员关系；需通过业务流程协调有效授权及撤销。 |
 | `authorization_group_users` | `(group_id, user_id)` | 授权组的用户成员。 | 两端均有级联外键；与组节点集合共同决定授权结果。 |
 | `authorization_group_nodes` | `(group_id, node_id)` | 授权组的节点成员。 | 两端均有级联外键；多个组授予同一节点时不能只凭一组移除就撤销实际授权。 |
@@ -170,7 +170,7 @@ DNS 连接凭据轮换还使用前述 [`dns_credential_batch_items`](#凭据分�
 | `subscription_template_versions` | `(template_id, version)` | 不可变的已发布模板加密文档，供实际订阅生成读取。 | 主表 `published_version` 通过延迟复合外键引用；编辑草稿不改变已发布输出。 |
 | `subscription_template_initialization` | `id=1` | 默认模板已经初始化的单行标记。 | 维护时只播种一次；恢复或重启不能通过删标记重置用户模板及发布状态。 |
 
-订阅 URL 令牌保存在 `subscription_credentials`，实际节点访问来自 `node_assignments`，两者均不在模板表内。参见 [订阅](subscriptions.md)。
+连接密码与订阅 URL 令牌统一保存在 `user_credentials`，实际节点访问来自 `node_assignments`，两者均不在模板表内。参见 [订阅](subscriptions.md)。
 
 ## 流量账本与捕获
 
@@ -257,7 +257,6 @@ DNS 连接凭据轮换还使用前述 [`dns_credential_batch_items`](#凭据分�
 | `node_authorization_versions` | `node_id` | 节点有效授权成员的单调版本，支持分页部署身份准备时判断来源是否变化。 | 由 `node_assignments` 成员变更触发更新；独立于缓存/监控版本，随节点删除及 ID 更新。 |
 | `dirty_key_versions` | `(queue, entity_key)` | 各脏队列逻辑键的持续单调版本目录。队列项被确认移除后仍能避免版本从头开始。 | `hysteriax_mark_dirty` 同步更新目录和具体队列；不能只比较来源 ID 后清队列。 |
 | `analytics_retry_guards` | `root_id` | 重试链根级互斥锁行，协调同链刷新和脏数据读取。 | 派生并发控制元数据；不是任务状态表。 |
-| `monitoring_leases` | `node_id` | 0004 创建的旧监控 owner/到期租约表。 | 当前运行时代码未发现读写，表仍保留；现有采样由 `background_work + resource_leases` 协调。不能仅凭此文认定可从生产删除。 |
 
 基线不包含全局业务写锁：没有 `hysteriax_serialize_writes` 触发器及函数。SQLx 维护迁移互斥、资源租约、行锁、约束和事务重试继续生效。流程见 [架构](architecture.md)。
 
@@ -290,7 +289,7 @@ DNS 连接凭据轮换还使用前述 [`dns_credential_batch_items`](#凭据分�
 
 | 视图 | 来源/用途 | 定义 |
 | --- | --- | --- |
-| `credential_directory` | 将受管凭据、管理员令牌、订阅令牌和用户级连接凭据合并为统一目录；连接凭据每用户一条，与节点分配无关；CA 使用已发布版本计算状态。 | [基线](../crates/hysteriax-server/migrations/0001_baseline.sql)、[0006](../crates/hysteriax-server/migrations/0006_user_credential_directory.sql)。 |
+| `credential_directory` | 将受管凭据、管理员令牌、订阅令牌和用户级连接凭据合并为统一目录；连接凭据每用户一条，与节点分配无关；CA 使用已发布版本计算状态。 | [基线](../crates/hysteriax-server/migrations/0001_baseline.sql)、[0006](../crates/hysteriax-server/migrations/0006_user_credential_directory.sql)、[0009](../crates/hysteriax-server/migrations/0009_unify_user_credentials.sql)。 |
 | `mtls_live_activation_trust` | 列出仍可能在远端生效的不确定激活信任；只有更晚已提交激活才排除旧不确定状态。 | [基线](../crates/hysteriax-server/migrations/0001_baseline.sql)。 |
 | `job_cache_versions` | `cache_entity_versions` 中 `kind='jobs'` 的兼容投影。 | [基线](../crates/hysteriax-server/migrations/0001_baseline.sql)。 |
 | `batch_cache_versions` | `cache_entity_versions` 中 `kind='credential_batches'` 的兼容投影。 | [基线](../crates/hysteriax-server/migrations/0001_baseline.sql)。 |
@@ -302,6 +301,7 @@ DNS 连接凭据轮换还使用前述 [`dns_credential_batch_items`](#凭据分�
 | 对象 | 历史用途 | 当前情况 |
 | --- | --- | --- |
 | `authorization_group_previews` | 授权变更的预览令牌、摘要和过期记录。 | 0003 删除表、全部记录、索引与约束；授权变更统一直接执行。 |
+| `monitoring_leases` | 每节点监控 owner 与到期租约。 | 2026-10-22 代理采样重构后由 `background_work`、`resource_leases` 和 `monitoring_probe_tokens` 取代；0008 删除表、过期残留行、索引与约束。 |
 | `cache_generation` | 单行全局/配置缓存版本。 | 0045 删除，改用 epoch、桶版本和实体版本。 |
 | `cache_domain_versions` | 单行每域缓存版本。 | 0045 删除，改用每域 64 桶版本。 |
 | `job_cache_versions`（旧表） | 每任务缓存版本。 | 0045 删除实体表后，同名创建兼容视图。 |
@@ -316,7 +316,7 @@ DNS 连接凭据轮换还使用前述 [`dns_credential_batch_items`](#凭据分�
 
 | 现象/问题 | 优先检查 |
 | --- | --- |
-| 用户无法认证或没有订阅节点 | `users` → 授权组成员 → `node_assignments` → 节点部署/mTLS 状态；订阅 URL 另检查 `subscription_credentials`。 |
+| 用户无法认证或没有订阅节点 | `users` → 授权组成员 → `node_assignments` → 节点部署/mTLS 状态；订阅 URL 另检查 `user_credentials`。 |
 | 用户流量疑似重复、缺失或迟到 | `traffic_sample_batches/items` → `traffic_records` 的样本唯一键 → `traffic_baselines.sample_order` → `users.usage_bytes` 和 `data_gaps`；注意捕获模式。 |
 | 整机套餐超额 | `node_packages`、`node_network_samples`、`node_limit_epochs`、`kick_requests`，不要用用户采样代替网卡计量。 |
 | 图表与原始行暂时不一致 | 对应分钟/小时读模型、脏队列及 `dirty_key_versions`；在线图表还要区分覆盖不足与测得零值。 |
@@ -350,3 +350,9 @@ WHERE id;
 ```
 
 新增/移除表或将表改为视图时，应同步更新目录计数和对应用途；用途变更还需检查维护初始化中的 Rust 数据转换。只修改索引的迁移通常不新增表，不能以迁移文件数量推算表数。对部署库的实际结论，须结合上述查询、对应镜像版本及维护初始化是否成功。
+
+## 用户凭据联合轮换（schema 9）
+
+`users` 不再保存连接密码摘要或密文；`user_credentials.kind` 区分 `connection` 和 `subscription`，秘密值各自独立。用户创建时签发两种凭据；唯一轮换入口为 `POST /api/v2/users/{id}/credentials/rotate`，同一事务撤销两种旧值、插入新值、递增一次用户 revision、提交断连需求、审计及加密幂等回执。旧订阅 POST 入口删除。迁移保留现有秘密及订阅撤销历史，已有无订阅用户首次联合轮换时生成订阅。
+
+有效值通过 `(user_id,kind)` 和 `(kind,secret_hash)` 部分唯一索引查询，历史通过 `(user_id,kind,created_at,id)` 索引定位；认证和订阅读取均限定类型与 `revoked_at IS NULL`。凭据目录连接项仍每用户一条，订阅项保留签发历史；不按用户乘以节点展开。历史凭据随用户删除，当前不设置自动清理期限。

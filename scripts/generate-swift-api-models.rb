@@ -60,7 +60,7 @@ response_models = %w[
   NodePackage NodePackageUsage NodeAlert NodeUsageUpdateResponse
   NodeACMEStatus NodeMTLSSettings NodeMTLSTrust NodeMTLSStatus NodeSummary NodesPage NodeSSHDetail NodeConnectionDetail NodeDetail
   AssignmentInfo UserSummary UsersPage JobOutcome JobResult JobSummary JobsPage AuditSummary AuditPage
-  NodeResource ResourceReceipt SubscriptionReceipt
+  NodeResource ResourceReceipt
   RotatedCredentials JobReceipt
   NodeUpdateResponse UserUpdateResponse QuotaResetResponse
   ActiveSubscription SubscriptionStatus NodeUsageSummary DataFreshness PendingRevocation
