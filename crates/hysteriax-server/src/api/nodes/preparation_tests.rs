@@ -1,5 +1,35 @@
 use super::*;
 
+#[tokio::test]
+async fn creation_evaluates_initial_usage_before_scheduling_the_next_package_event() {
+    let (state, _) = transaction_tests::fixture().await;
+    let ssh: String = sqlx::query_scalar("SELECT ssh_credential_id FROM nodes")
+        .fetch_one(&state.pool)
+        .await
+        .unwrap();
+    for cycle in ["fixed", "monthly"] {
+        let input = serde_json::from_value(json!({
+            "name":cycle,"ssh_host":"8.8.8.8","ssh_port":22,"ssh_username":"root",
+            "ssh_credential_id":ssh,"ssh_credential_version":1,"public_host":"8.8.4.4",
+            "public_port":443,"listen_addr":":443","initial_usage_bytes":100,
+            "package":{"quota_bytes":100,"cycle":cycle}
+        }))
+        .unwrap();
+        let (_, Json(receipt)) = create(State(state.clone()), Json(input)).await.unwrap();
+        let id = receipt["node"]["id"].as_str().unwrap();
+        let (usage, restricted, scheduled): (i64, bool, bool) = sqlx::query_as(
+            "SELECT usage_bytes,restricted,next_evaluation_at IS NOT NULL FROM node_packages WHERE node_id=$1")
+            .bind(id).fetch_one(&state.pool).await.unwrap();
+        assert_eq!(usage, 100);
+        assert!(restricted);
+        assert_eq!(scheduled, cycle == "monthly");
+        let admissions: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM background_work WHERE kind='node-limit-dispatch' AND payload->>'node_id'=$1")
+            .bind(id).fetch_one(&state.pool).await.unwrap();
+        assert_eq!(admissions, 1);
+    }
+}
+
 async fn retry_audit(state: &AppState, action: &str, code: &str) {
     sqlx::raw_sql(sqlx::AssertSqlSafe(format!("CREATE SEQUENCE preparation_attempts; CREATE FUNCTION retry_preparation_audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.action='{action}' AND nextval('preparation_attempts')=1 THEN RAISE EXCEPTION 'retry' USING ERRCODE='{code}'; END IF; RETURN NEW; END $$; CREATE TRIGGER retry_preparation_audit BEFORE INSERT ON audit_records FOR EACH ROW EXECUTE FUNCTION retry_preparation_audit()")))
         .execute(&state.pool).await.unwrap();

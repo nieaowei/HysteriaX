@@ -404,14 +404,16 @@ async fn insert_node_on(
         .bind(stats_secret_enc).bind(config_enc).bind(now).bind(now).execute(&mut **tx).await?;
     crate::credentials::node_mtls::save_target(tx, id, 1, mtls).await?;
     crate::node_limits::ensure(tx, id).await?;
-    if let Some(package) = &input.package {
-        crate::node_limits::save(tx, id, package).await?;
-    }
     sqlx::query("UPDATE node_packages SET usage_bytes = $1 WHERE node_id = $2")
         .bind(input.initial_usage_bytes.unwrap_or(0))
         .bind(id)
         .execute(&mut **tx)
         .await?;
+    // Evaluate the actual initial counter before scheduling its next event.
+    // Fixed packages may have no future event to repair a later counter write.
+    if let Some(package) = &input.package {
+        crate::node_limits::save(tx, id, package).await?;
+    }
     sqlx::query("INSERT INTO config_versions (id, node_id, revision, config_enc, content_sha256, created_at) VALUES ($1, $2, 1, $3, $4, $5)")
         .bind(&creation.history_id).bind(id).bind(creation.deployment_snapshot_enc.as_str()).bind(digest).bind(now)
         .execute(&mut **tx).await?;

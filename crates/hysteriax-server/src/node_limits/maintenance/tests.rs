@@ -12,6 +12,8 @@ async fn fixture(users: i32) -> PgPool {
 async fn nodes(pool: &PgPool, n: i32) {
     sqlx::query("WITH fixture_ssh AS (INSERT INTO credentials(id,name,kind,created_at,updated_at) VALUES('fixture-ssh','Fixture SSH','ssh_password',now(),now()) ON CONFLICT DO NOTHING), fixture_ssh_version AS (INSERT INTO credential_versions(credential_id,version,payload_enc,created_at) VALUES('fixture-ssh',1,'unused',now()) ON CONFLICT DO NOTHING) INSERT INTO nodes(id,name,ssh_host,ssh_port,ssh_username,public_host,public_port,listen_addr,node_token_hash,node_token_enc,traffic_stats_secret_enc,desired_config_enc,created_at,updated_at,ssh_credential_id,ssh_credential_version) SELECT 'n-'||lpad(i::text,4,'0'),'Node','127.0.0.1',22,'root','example.test',443,':443','token-'||i,'unused','unused','{}',now(),now(),'fixture-ssh',1 FROM generate_series(1,$1)i ON CONFLICT DO NOTHING")
         .bind(n).execute(pool).await.unwrap();
+    sqlx::query("INSERT INTO node_packages(node_id,period_id) SELECT id,id FROM nodes ON CONFLICT DO NOTHING")
+        .execute(pool).await.unwrap();
 }
 async fn count(pool: &PgPool, query: &str) -> i64 {
     sqlx::query_scalar(sqlx::AssertSqlSafe(query))
@@ -177,36 +179,39 @@ async fn restored_pages_preserve_permanent_reasons_and_old_restore_cannot_clear_
 }
 
 #[tokio::test]
-async fn scan_is_bounded_skips_busy_nodes_and_wraps_to_revisit_them() {
+async fn due_scan_is_bounded_skips_busy_nodes_and_revisits_without_a_cursor() {
     let pool = fixture(0).await;
     nodes(&pool, 301).await;
     let mut held = pool.begin().await.unwrap();
     sqlx::query("SELECT id FROM nodes WHERE id='n-0001' FOR UPDATE")
-        .fetch_one(&mut *held)
+        .execute(&mut *held)
         .await
         .unwrap();
-    for expected in [128, 256, 300] {
+    for expected in [256, 300] {
         let work = scan(&pool).await;
         scan_work(&pool, &work).await.unwrap();
         assert_eq!(
-            count(&pool, "SELECT count(*) FROM node_packages").await,
+            count(
+                &pool,
+                "SELECT count(*) FROM node_packages WHERE next_evaluation_at IS NULL"
+            )
+            .await,
             expected
         );
     }
     held.rollback().await.unwrap();
     let work = scan(&pool).await;
-    assert!(work.payload["after_node"].is_null());
-    scan_work(&pool, &work).await.unwrap();
+    assert_eq!(scan_work(&pool, &work).await.unwrap(), 1);
     assert_eq!(
-        count(&pool, "SELECT count(*) FROM node_packages").await,
+        count(
+            &pool,
+            "SELECT count(*) FROM node_packages WHERE next_evaluation_at IS NULL"
+        )
+        .await,
         301
     );
-    assert!(
-        work_queue::claim(&pool, SCAN_KIND, "other")
-            .await
-            .unwrap()
-            .is_none()
-    );
+    let work = scan(&pool).await;
+    assert_eq!(scan_work(&pool, &work).await.unwrap(), 0);
 }
 
 #[tokio::test]
@@ -369,7 +374,7 @@ async fn new_expiry_supersedes_queued_restore_and_removed_node_work_finishes_wit
 #[tokio::test]
 async fn scan_ack_failure_rolls_back_alerts_source_transitions_outboxes_and_progress() {
     let pool = fixture(0).await;
-    sqlx::query("INSERT INTO node_packages(node_id,period_id,config) SELECT id,id,$1 FROM nodes")
+    sqlx::query("INSERT INTO node_packages(node_id,period_id,config) SELECT id,id,$1 FROM nodes ON CONFLICT(node_id) DO UPDATE SET config=EXCLUDED.config")
         .bind(json!(Package {
             expires_at: Some("2000-01-01T00:00:00Z".parse().unwrap()),
             ..Package::default()
@@ -422,5 +427,217 @@ async fn scan_ack_failure_rolls_back_alerts_source_transitions_outboxes_and_prog
         )
         .await,
         2
+    );
+}
+
+#[tokio::test]
+async fn scheduling_tracks_warning_expiry_and_reset_and_idle_nodes_are_not_written() {
+    let pool = fixture(0).await;
+    let now: DateTime<Utc> = "2026-11-04T12:00:00Z".parse().unwrap();
+    let expiry = now + chrono::Duration::days(10);
+    let config = json!(Package {
+        expires_at: Some(expiry),
+        ..Package::default()
+    });
+    sqlx::query("UPDATE node_packages SET config=$1 WHERE node_id='n-0001'")
+        .bind(config)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query("SELECT id FROM nodes ORDER BY id FOR NO KEY UPDATE")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    evaluation::evaluate_many(&mut tx, &["n-0001".into(), "n-0002".into()], now)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    let scheduled: Option<DateTime<Utc>> =
+        sqlx::query_scalar("SELECT next_evaluation_at FROM node_packages WHERE node_id='n-0001'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(scheduled, Some(expiry - chrono::Duration::days(7)));
+    for (at, expected, kind) in [
+        (expiry - chrono::Duration::days(7), Some(expiry), "expiring"),
+        (expiry, None, "expired"),
+    ] {
+        let mut tx = pool.begin().await.unwrap();
+        sqlx::query("SELECT id FROM nodes WHERE id='n-0001' FOR NO KEY UPDATE")
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        evaluation::evaluate_many(&mut tx, &["n-0001".into()], at)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        let scheduled: Option<DateTime<Utc>> = sqlx::query_scalar(
+            "SELECT next_evaluation_at FROM node_packages WHERE node_id='n-0001'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(scheduled, expected);
+        let active: Vec<String> =
+            sqlx::query_scalar("SELECT kind FROM node_alerts WHERE node_id='n-0001' AND active")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert_eq!(active, vec![kind]);
+    }
+    // Default fixed packages and fully evaluated expired packages need no
+    // polling writes. Any accidental UPDATE fails this assertion transaction.
+    sqlx::raw_sql("CREATE FUNCTION reject_idle_evaluation() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'idle package was written'; END $$; CREATE TRIGGER reject_idle_evaluation BEFORE UPDATE ON node_packages FOR EACH ROW EXECUTE FUNCTION reject_idle_evaluation()")
+        .execute(&pool).await.unwrap();
+    let work = scan(&pool).await;
+    assert_eq!(scan_work(&pool, &work).await.unwrap(), 0);
+}
+
+#[tokio::test]
+async fn multiple_evaluation_lanes_drain_due_rows_once_and_do_not_duplicate_epochs() {
+    let pool = fixture(0).await;
+    nodes(&pool, 301).await;
+    sqlx::query("UPDATE node_packages SET config=$1")
+        .bind(json!(Package {
+            expires_at: Some("2000-01-01T00:00:00Z".parse().unwrap()),
+            ..Package::default()
+        }))
+        .execute(&pool)
+        .await
+        .unwrap();
+    let (a, b) = tokio::join!(pass(&pool, "one"), pass(&pool, "two"));
+    a.unwrap();
+    b.unwrap();
+    for _ in 0..10 {
+        if count(
+            &pool,
+            "SELECT count(*) FROM node_packages WHERE next_evaluation_at IS NOT NULL",
+        )
+        .await
+            == 0
+        {
+            break;
+        }
+        pass(&pool, "one").await.unwrap();
+    }
+    assert_eq!(
+        count(
+            &pool,
+            "SELECT count(*) FROM node_packages WHERE restricted AND next_evaluation_at IS NULL"
+        )
+        .await,
+        301
+    );
+    assert_eq!(
+        count(
+            &pool,
+            "SELECT count(*) FROM node_limit_epochs WHERE generation=1"
+        )
+        .await,
+        301
+    );
+    assert_eq!(
+        count(
+            &pool,
+            "SELECT count(*) FROM audit_records WHERE action='node.restricted'"
+        )
+        .await,
+        301
+    );
+}
+
+#[tokio::test]
+async fn idle_evaluation_uses_due_index_range_without_reading_future_packages() {
+    let pool = fixture(0).await;
+    nodes(&pool, 1000).await;
+    sqlx::query("UPDATE node_packages SET next_evaluation_at=clock_timestamp()+interval '1 day'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::raw_sql("ANALYZE node_packages; ANALYZE nodes")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let query = format!(
+        "EXPLAIN (ANALYZE, FORMAT JSON) {}",
+        include_str!("../due_nodes.sql")
+    );
+    let plan: Value = sqlx::query_scalar(sqlx::AssertSqlSafe(query))
+        .bind(NODE_BATCH)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    fn due_scan(plan: &Value) -> Option<&Value> {
+        if plan["Index Name"] == "node_packages_evaluation_due_idx" {
+            return Some(plan);
+        }
+        plan["Plans"].as_array()?.iter().find_map(due_scan)
+    }
+    let scan = due_scan(&plan[0]["Plan"]).expect("due index range scan");
+    assert!(
+        scan["Index Cond"]
+            .as_str()
+            .unwrap()
+            .contains("statement_timestamp()")
+    );
+    assert_eq!(scan["Actual Rows"].as_f64(), Some(0.0));
+    assert_eq!(scan["Rows Removed by Filter"].as_f64().unwrap_or(0.0), 0.0);
+}
+
+#[tokio::test]
+async fn evaluation_pages_release_node_locks_and_resume_after_final_ack_failure() {
+    let pool = fixture(0).await;
+    nodes(&pool, 129).await;
+    sqlx::query("UPDATE node_packages SET config=$1")
+        .bind(json!(Package {
+            expires_at: Some("2000-01-01T00:00:00Z".parse().unwrap()),
+            ..Package::default()
+        }))
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::raw_sql("CREATE TABLE evaluation_page_writes(xid bigint,node_id text); CREATE FUNCTION track_evaluation_page() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN INSERT INTO evaluation_page_writes VALUES(txid_current(),NEW.node_id); RETURN NEW; END $$; CREATE TRIGGER track_evaluation_page AFTER UPDATE ON node_packages FOR EACH ROW WHEN (OLD.next_evaluation_at IS DISTINCT FROM NEW.next_evaluation_at) EXECUTE FUNCTION track_evaluation_page(); CREATE FUNCTION fail_evaluation_finish() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.kind='node-limit-scan' AND NEW.state='complete' THEN RAISE EXCEPTION 'injected final acknowledgement failure'; END IF; RETURN NEW; END $$; CREATE TRIGGER fail_evaluation_finish BEFORE UPDATE ON background_work FOR EACH ROW EXECUTE FUNCTION fail_evaluation_finish()")
+        .execute(&pool).await.unwrap();
+    let work = scan(&pool).await;
+    assert!(scan_work(&pool, &work).await.is_err());
+    assert_eq!(
+        count(&pool, "SELECT count(*) FROM node_packages WHERE restricted").await,
+        128
+    );
+    let pages: Vec<i64> =
+        sqlx::query_scalar("SELECT count(*) FROM evaluation_page_writes GROUP BY xid ORDER BY xid")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert_eq!(pages, vec![64, 64]);
+    // Earlier pages committed their durable due markers and released their
+    // parents, even though the final work acknowledgement rolled back.
+    let mut peer = pool.begin().await.unwrap();
+    sqlx::query("SELECT id FROM nodes WHERE id='n-0001' FOR NO KEY UPDATE NOWAIT")
+        .execute(&mut *peer)
+        .await
+        .unwrap();
+    peer.rollback().await.unwrap();
+    sqlx::query("DROP TRIGGER fail_evaluation_finish ON background_work")
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_eq!(scan_work(&pool, &work).await.unwrap(), 1);
+    assert_eq!(
+        count(
+            &pool,
+            "SELECT count(*) FROM node_limit_epochs WHERE generation=1"
+        )
+        .await,
+        129
+    );
+    assert_eq!(
+        count(
+            &pool,
+            "SELECT count(*) FROM audit_records WHERE action='node.restricted'"
+        )
+        .await,
+        129
     );
 }

@@ -2,6 +2,60 @@ use super::*;
 use chrono::{DateTime, Duration, Utc};
 use serde_json::json;
 
+#[tokio::test]
+async fn composite_queue_pages_use_primary_key_order_and_index_ranges() {
+    let pool = fixture().await;
+    sqlx::raw_sql("INSERT INTO traffic_dirty_hours(source,node_id,hour) SELECT 'users','n1','2020-01-01'::timestamptz+i*interval '1 hour' FROM generate_series(1,2000)i; INSERT INTO online_dirty_minutes(scope_node_id,minute) SELECT 'n1','2020-01-01'::timestamptz+i*interval '1 minute' FROM generate_series(1,2000)i; ANALYZE traffic_dirty_hours; ANALYZE online_dirty_minutes")
+        .execute(&pool).await.unwrap();
+    let start: DateTime<Utc> = "2020-01-01T00:00:00Z".parse().unwrap();
+    let mut connection = pool.begin().await.unwrap();
+    sqlx::query("SET LOCAL plan_cache_mode=force_generic_plan")
+        .execute(&mut *connection)
+        .await
+        .unwrap();
+    for (queue, index, cursor) in [
+        (
+            Queue::Hours,
+            "traffic_dirty_hours_pkey",
+            json!({"source":"users","node_id":"n1","hour":start+Duration::hours(1000)}),
+        ),
+        (
+            Queue::Minutes,
+            "online_dirty_minutes_pkey",
+            json!({"scope_node_id":"n1","minute":start+Duration::minutes(1000)}),
+        ),
+    ] {
+        for after in [None, Some(cursor)] {
+            let query = format!(
+                "EXPLAIN (ANALYZE, FORMAT JSON) {}",
+                super::refresh::candidates_sql(queue, after.is_some())
+            );
+            let plan: serde_json::Value = sqlx::query_scalar(sqlx::AssertSqlSafe(query))
+                .bind(&after)
+                .bind(64_i64)
+                .fetch_one(&mut *connection)
+                .await
+                .unwrap();
+            fn contains(plan: &serde_json::Value, key: &str, value: &str) -> bool {
+                plan[key] == value
+                    || plan["Plans"].as_array().is_some_and(|children| {
+                        children.iter().any(|child| contains(child, key, value))
+                    })
+            }
+            let root = &plan[0]["Plan"];
+            assert!(contains(root, "Index Name", index));
+            assert!(!contains(root, "Node Type", "Sort"));
+            assert_eq!(root["Actual Rows"].as_f64(), Some(64.0));
+            if after.is_some() {
+                assert!(
+                    plan.to_string().contains("Index Cond"),
+                    "cursor must bound the index scan"
+                );
+            }
+        }
+    }
+}
+
 async fn fixture() -> PgPool {
     let pool = crate::db::test_pool_with_max_connections(4).await;
     sqlx::query("INSERT INTO users(id,name,created_at,updated_at) VALUES('u','User',now(),now())")
@@ -87,37 +141,43 @@ async fn statistics_queues_are_bounded_and_acknowledgements_roll_back_with_resul
         INSERT INTO traffic_dirty_hours(source,node_id,hour) SELECT 'users','n1','2026-01-01'::timestamptz+i*interval '1 hour' FROM generate_series(1,300)i;
         INSERT INTO online_dirty_minutes(scope_node_id,minute) SELECT 'n1','2026-01-01'::timestamptz+i*interval '1 minute' FROM generate_series(1,300)i;
         INSERT INTO job_retry_state_dirty(job_id) SELECT 'missing-'||i FROM generate_series(1,300)i;").execute(&pool).await.unwrap();
-    let mut tx = pool.begin().await.unwrap();
-    assert_eq!(refresh_on(&mut tx, Some(10000)).await.unwrap(), 1024);
-    tx.rollback().await.unwrap();
-    for table in [
-        "analytics_dirty_cycles",
-        "traffic_dirty_hours",
-        "online_dirty_minutes",
-        "job_retry_state_dirty",
+    for (queue, table, limit) in [
+        (Queue::Cycles, "analytics_dirty_cycles", 1),
+        (Queue::Hours, "traffic_dirty_hours", 64),
+        (Queue::Minutes, "online_dirty_minutes", 64),
+        (Queue::Jobs, "job_retry_state_dirty", 32),
     ] {
+        let mut tx = pool.begin().await.unwrap();
+        let claim = claim_on(&mut tx, queue, None).await.unwrap();
+        assert_eq!(claim.rows.len(), limit);
+        assert_eq!(
+            refresh_queue_on(&mut tx, queue, claim).await.unwrap(),
+            limit as u64
+        );
+        tx.rollback().await.unwrap();
         let count: i64 =
             sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT count(*) FROM {table}")))
                 .fetch_one(&pool)
                 .await
                 .unwrap();
         assert_eq!(count, 300, "rollback of {table}");
-    }
-    let mut tx = pool.begin().await.unwrap();
-    assert_eq!(refresh_on(&mut tx, None).await.unwrap(), 1024);
-    tx.commit().await.unwrap();
-    for table in [
-        "analytics_dirty_cycles",
-        "traffic_dirty_hours",
-        "online_dirty_minutes",
-        "job_retry_state_dirty",
-    ] {
+        let mut tx = pool.begin().await.unwrap();
+        let claim = claim_on(&mut tx, queue, None).await.unwrap();
+        assert_eq!(
+            refresh_queue_on(&mut tx, queue, claim).await.unwrap(),
+            limit as u64
+        );
+        tx.commit().await.unwrap();
         let count: i64 =
             sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT count(*) FROM {table}")))
                 .fetch_one(&pool)
                 .await
                 .unwrap();
-        assert_eq!(count, 44, "bounded acknowledgement of {table}");
+        assert_eq!(
+            count,
+            300 - limit as i64,
+            "bounded acknowledgement of {table}"
+        );
     }
     refresh(&pool).await.unwrap();
 }
@@ -130,11 +190,8 @@ async fn another_refresher_skips_claimed_keys_and_history_overlays_the_held_sour
     cycle(&pool, a, start + Duration::seconds(10), 1).await;
     cycle(&pool, b, start + Duration::seconds(20), 3).await;
     let mut owner = pool.begin().await.unwrap();
-    sqlx::query("SELECT cycle_id FROM analytics_dirty_cycles WHERE cycle_id=$1 FOR UPDATE")
-        .bind(a)
-        .execute(&mut *owner)
-        .await
-        .unwrap();
+    let held = claim_on(&mut owner, Queue::Cycles, None).await.unwrap();
+    assert_eq!(held.rows[0]["cycle_id"], json!(a));
     tokio::time::timeout(std::time::Duration::from_secs(2), refresh(&pool))
         .await
         .unwrap()
@@ -161,55 +218,85 @@ async fn another_refresher_skips_claimed_keys_and_history_overlays_the_held_sour
 }
 
 #[tokio::test]
-async fn a_source_change_waiting_on_a_claim_survives_the_old_ack() {
+async fn source_writes_commit_during_a_claim_and_old_generation_is_not_acknowledged() {
     let pool = fixture().await;
     let id = uuid::Uuid::new_v4();
     let start: DateTime<Utc> = "2026-01-01T12:00:00Z".parse().unwrap();
     cycle(&pool, id, start + Duration::seconds(10), 1).await;
     let original = generation(&pool, id).await;
     let mut owner = pool.begin().await.unwrap();
-    sqlx::query("SELECT cycle_id FROM analytics_dirty_cycles WHERE cycle_id=$1 FOR UPDATE")
-        .bind(id)
-        .execute(&mut *owner)
+    let claim = claim_on(&mut owner, Queue::Cycles, None).await.unwrap();
+    let rows = refresh::compute_on(&mut owner, Queue::Cycles, Value::Array(claim.rows))
         .await
         .unwrap();
-    let mut writer = pool.begin().await.unwrap();
-    let pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
-        .fetch_one(&mut *writer)
-        .await
-        .unwrap();
-    let update = tokio::spawn(async move {
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
         sqlx::query("UPDATE online_samples SET connections='{\"u\":9}' WHERE cycle_id=$1")
             .bind(id)
-            .execute(&mut *writer)
+            .execute(&pool)
             .await
             .unwrap();
-        writer.commit().await.unwrap();
-    });
-    tokio::time::timeout(std::time::Duration::from_secs(2),async {
-        loop {
-            let waiting:bool=sqlx::query_scalar("SELECT coalesce((SELECT wait_event_type='Lock' FROM pg_stat_activity WHERE pid=$1),false)").bind(pid).fetch_one(&pool).await.unwrap();
-            if waiting {break;}
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        }
-    }).await.unwrap();
-    refresh_on(&mut owner, Some(1)).await.unwrap();
-    owner.commit().await.unwrap();
-    update.await.unwrap();
+    })
+    .await
+    .expect("a computing refresher must not lock source dirty rows");
     assert!(generation(&pool, id).await > original);
-    let cached:i64=sqlx::query_scalar("SELECT connections::bigint FROM online_cycle_metrics WHERE cycle_id=$1 AND scope_node_id=''").bind(id).fetch_one(&pool).await.unwrap();
-    assert_eq!(cached, 1);
-    let before = history(&pool, start, start + Duration::hours(1)).await;
     assert_eq!(
-        before[0].3,
-        Some(9.0),
-        "read-only fallback must replace a stale cached cycle"
+        refresh::acknowledge_on(&mut owner, Queue::Cycles, &rows)
+            .await
+            .unwrap(),
+        0
     );
+    owner.commit().await.unwrap();
+    assert!(generation(&pool, id).await > original);
+    let stale:i64=sqlx::query_scalar("SELECT connections::bigint FROM online_cycle_metrics WHERE cycle_id=$1 AND scope_node_id=''")
+        .bind(id).fetch_one(&pool).await.unwrap();
+    assert_eq!(
+        stale, 1,
+        "old result can commit only while its dirty key remains visible"
+    );
+    let before = history(&pool, start, start + Duration::hours(1)).await;
+    assert_eq!(before[0].3, Some(9.0));
     refresh(&pool).await.unwrap();
     assert_eq!(
         history(&pool, start, start + Duration::hours(1)).await,
         before
     );
+}
+
+#[tokio::test]
+async fn result_and_generation_ack_rollback_together_and_worker_lock_is_recoverable() {
+    let pool = fixture().await;
+    let id = uuid::Uuid::new_v4();
+    cycle(&pool, id, Utc::now(), 7).await;
+    let original = generation(&pool, id).await;
+    let mut owner = pool.begin().await.unwrap();
+    let claim = claim_on(&mut owner, Queue::Cycles, None).await.unwrap();
+    assert_eq!(
+        refresh_queue_on(&mut owner, Queue::Cycles, claim)
+            .await
+            .unwrap(),
+        1
+    );
+    let visible:i64=sqlx::query_scalar("SELECT connections::bigint FROM online_cycle_metrics WHERE cycle_id=$1 AND scope_node_id=''")
+        .bind(id).fetch_one(&mut *owner).await.unwrap();
+    assert_eq!(visible, 7);
+    owner.rollback().await.unwrap();
+    assert_eq!(generation(&pool, id).await, original);
+    let count: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM online_cycle_metrics WHERE cycle_id=$1")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(count, 0);
+    // Rollback/process loss releases the transaction advisory lock as well.
+    refresh(&pool).await.unwrap();
+    let count: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM analytics_dirty_cycles WHERE cycle_id=$1")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(count, 0);
 }
 
 #[tokio::test]
@@ -290,33 +377,20 @@ async fn different_dirty_jobs_in_one_chain_share_only_the_root_guard() {
     refresh(&pool).await.unwrap();
     sqlx::query("UPDATE jobs SET status='failed',error_message='leaf error',finished_at=now() WHERE id='leaf'").execute(&pool).await.unwrap();
     let mut owner = pool.begin().await.unwrap();
-    sqlx::query("SELECT job_id FROM job_retry_state_dirty WHERE job_id='root' FOR UPDATE")
-        .execute(&mut *owner)
-        .await
-        .unwrap();
-    sqlx::query("SELECT root_id FROM analytics_retry_guards WHERE root_id='root' FOR UPDATE")
-        .execute(&mut *owner)
-        .await
-        .unwrap();
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended(current_database()||':'||current_schema()||':analytics:retry-root:root',0))")
+        .execute(&mut *owner).await.unwrap();
     let mut other = pool.begin().await.unwrap();
-    let pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
-        .fetch_one(&mut *other)
-        .await
-        .unwrap();
-    let worker = tokio::spawn(async move {
-        refresh_on(&mut other, Some(1)).await.unwrap();
-        other.commit().await.unwrap();
-    });
-    tokio::time::timeout(std::time::Duration::from_secs(2),async {
-        loop {
-            let waiting:bool=sqlx::query_scalar("SELECT coalesce((SELECT wait_event_type='Lock' AND query LIKE '%analytics_retry_guards%' FROM pg_stat_activity WHERE pid=$1),false)").bind(pid).fetch_one(&pool).await.unwrap();
-            if waiting {break;}
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        }
-    }).await.unwrap();
-    refresh_on(&mut owner, Some(1)).await.unwrap();
-    owner.commit().await.unwrap();
-    worker.await.unwrap();
+    let claim = claim_on(&mut other, Queue::Jobs, None).await.unwrap();
+    assert!(!claim.rows.is_empty());
+    assert_eq!(
+        refresh_queue_on(&mut other, Queue::Jobs, claim)
+            .await
+            .unwrap(),
+        0
+    );
+    other.commit().await.unwrap();
+    owner.rollback().await.unwrap();
+    refresh(&pool).await.unwrap();
     let rows: Vec<(String, String, String, String)> =
         sqlx::query_as("SELECT root_id,leaf_id,status,last_error FROM job_retry_chain_state")
             .fetch_all(&pool)

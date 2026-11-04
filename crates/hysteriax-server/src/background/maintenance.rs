@@ -43,13 +43,30 @@ pub async fn ensure(pool: &PgPool, key: &str, kind: &str, payload: Value) -> Res
     }).await
 }
 
+/// Admit a fixed set of recurring lanes in one transaction. As with `ensure`,
+/// live owners are read without waiting and completed rows use SKIP LOCKED.
+pub async fn ensure_many(pool: &PgPool, keys: &[String], kind: &str, payload: Value) -> Result<()> {
+    let ids: Vec<String> = keys
+        .iter()
+        .map(|key| format!("maintenance:{key}"))
+        .collect();
+    let kind = kind.to_owned();
+    db::write(pool,move |tx| {
+        let (ids,kind,payload)=(ids.clone(),kind.clone(),payload.clone());
+        Box::pin(async move {
+            sqlx::query("WITH due AS MATERIALIZED (SELECT id FROM background_work WHERE id=ANY($1::text[]) AND kind=$2 AND state IN ('complete','failed') AND available_at<=clock_timestamp() ORDER BY id FOR UPDATE SKIP LOCKED), updated AS (UPDATE background_work w SET state='queued',finished_at=NULL,error_code=NULL FROM due WHERE w.id=due.id) INSERT INTO background_work(id,kind,payload) SELECT candidate.id,$2,$3 FROM unnest($1::text[]) AS candidate(id) WHERE NOT EXISTS(SELECT 1 FROM background_work w WHERE w.id=candidate.id) ON CONFLICT(id) DO NOTHING")
+                .bind(&ids).bind(&kind).bind(&payload).execute(&mut **tx).await?;
+            Ok::<_,anyhow::Error>(())
+        })
+    }).await
+}
+
 pub async fn claim(pool: &PgPool, kind: &str, owner: &str) -> Result<Option<Work>> {
     claim_selected(pool, kind, owner, None).await
 }
 
 /// Claim an exact durable work without consuming another operation's candidate.
 /// Uses the same resource acquisition, exclusion and takeover rules as `claim`.
-#[cfg(test)]
 pub async fn claim_id(pool: &PgPool, kind: &str, owner: &str, id: &str) -> Result<Option<Work>> {
     claim_selected(pool, kind, owner, Some(id.to_owned())).await
 }

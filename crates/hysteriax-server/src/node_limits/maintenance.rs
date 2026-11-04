@@ -3,43 +3,62 @@
 use super::*;
 use crate::background::maintenance::{self as work_queue, Work};
 
-pub const NODE_BATCH: i64 = 128;
+pub const NODE_BATCH: i64 = 64;
+const EVALUATION_LANES: usize = 4;
 pub const USER_BATCH: i64 = 128;
 pub const KIND: &str = "node-limit-dispatch";
 const SCAN_KIND: &str = "node-limit-scan";
 
-pub async fn admit_on(tx: &mut Transaction<'_, Postgres>, node: &str, blocked: bool) -> Result<()> {
-    let generation:i64=sqlx::query_scalar("INSERT INTO node_limit_epochs(node_id,generation) VALUES($1,1) ON CONFLICT(node_id) DO UPDATE SET generation=node_limit_epochs.generation+1 RETURNING generation")
-        .bind(node).fetch_one(&mut **tx).await?;
-    sqlx::query("INSERT INTO background_work(id,kind,payload) VALUES($1,$2,$3)")
-        .bind(format!("node-limit:{node}:{generation}")).bind(KIND)
-        .bind(json!({"node_id":node,"restriction_generation":generation,"restricted":blocked,"after_user":null}))
-        .execute(&mut **tx).await?;
-    Ok(())
-}
-
-pub async fn scan_work(pool: &PgPool, work: &Work) -> Result<()> {
-    let work = work.clone();
-    db::write(pool,move |tx| {
-        let work=work.clone();
-        Box::pin(async move {
-            work.guard_on(tx).await?;
-            let after=work.payload["after_node"].as_str();
-            // Skipped parents are revisited after wrapping. No permanent scan
-            // checkpoint claims a skipped node was evaluated.
-            let nodes:Vec<String>=sqlx::query_scalar("SELECT id FROM nodes WHERE state NOT IN ('deleting','delete_failed') AND ($1::text IS NULL OR id>$1) ORDER BY id LIMIT $2 FOR NO KEY UPDATE SKIP LOCKED")
-                .bind(after).bind(NODE_BATCH).fetch_all(&mut **tx).await?;
-            let now=sqlx::query_scalar("SELECT clock_timestamp()").fetch_one(&mut **tx).await?;
-            for node in &nodes {
-                ensure(tx,node).await?;
-                evaluate(tx,node,now).await?;
-            }
-            let last=if nodes.len()==NODE_BATCH as usize {nodes.last()} else {None};
-            sqlx::query("UPDATE background_work SET payload=jsonb_set(payload,'{after_node}',$2) WHERE id=$1")
-                .bind(&work.id).bind(json!(last)).execute(&mut **tx).await?;
-            work.finish_on(tx,false,1,None).await
+pub async fn scan_work(pool: &PgPool, work: &Work) -> Result<usize> {
+    let began = std::time::Instant::now();
+    let mut total = 0;
+    // Amortize admission/renewal setup across four short result transactions.
+    // The due timestamp is each page's durable checkpoint; no node lock crosses
+    // a page boundary, and takeover simply resumes the remaining due rows.
+    for page in 0..4 {
+        let work = work.clone();
+        let (count, finished) = db::write(pool, move |tx| {
+            let work = work.clone();
+            Box::pin(async move {
+                work.guard_on(tx).await?;
+                let nodes: Vec<String> = sqlx::query_scalar(include_str!("due_nodes.sql"))
+                    .bind(NODE_BATCH)
+                    .fetch_all(&mut **tx)
+                    .await?;
+                let now = sqlx::query_scalar("SELECT clock_timestamp()")
+                    .fetch_one(&mut **tx)
+                    .await?;
+                evaluation::evaluate_many(tx, &nodes, now).await?;
+                let finished = nodes.len() < NODE_BATCH as usize || page == 3;
+                if finished {
+                    work.finish_on(
+                        tx,
+                        false,
+                        if nodes.len() == NODE_BATCH as usize {
+                            0
+                        } else {
+                            1
+                        },
+                        None,
+                    )
+                    .await?;
+                }
+                Ok::<_, anyhow::Error>((nodes.len(), finished))
+            })
         })
-    }).await
+        .await?;
+        total += count;
+        if finished {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    tracing::debug!(
+        nodes = total,
+        elapsed_ms = began.elapsed().as_millis() as u64,
+        "due node packages evaluated"
+    );
+    Ok(total)
 }
 
 pub async fn dispatch_work(pool: &PgPool, work: &Work) -> Result<()> {
@@ -99,33 +118,52 @@ pub async fn dispatch_work(pool: &PgPool, work: &Work) -> Result<()> {
     }).await.map_err(|error|anyhow::anyhow!(error.message))
 }
 
-pub async fn pass(pool: &PgPool, owner: &str) -> Result<()> {
-    work_queue::ensure(
-        pool,
-        "node-limits:evaluate",
-        SCAN_KIND,
-        json!({"after_node":null}),
-    )
-    .await?;
-    for kind in [SCAN_KIND, KIND] {
-        if let Some(work) = work_queue::claim(pool, kind, owner).await? {
+pub async fn pass(pool: &PgPool, owner: &str) -> Result<usize> {
+    let keys: Vec<String> = (0..EVALUATION_LANES)
+        .map(|lane| format!("node-limits:evaluate:{lane}"))
+        .collect();
+    work_queue::ensure_many(pool, &keys, SCAN_KIND, json!({})).await?;
+    let mut tasks = tokio::task::JoinSet::new();
+    for key in keys {
+        let pool = pool.clone();
+        let owner = owner.to_owned();
+        tasks.spawn(async move {
+            let Some(work) =
+                work_queue::claim_id(&pool, SCAN_KIND, &owner, &format!("maintenance:{key}"))
+                    .await?
+            else {
+                return Ok(0);
+            };
             crate::execution::supervise(pool.clone(), work.leases.clone(), async {
-                let result = if kind == SCAN_KIND {
-                    scan_work(pool, &work).await
-                } else {
-                    dispatch_work(pool, &work).await
-                };
-                if let Err(error) = result {
-                    tracing::warn!(%error,kind,"node package work deferred");
-                    work.retry(pool).await?;
+                match scan_work(&pool, &work).await {
+                    Ok(count) => Ok(count),
+                    Err(error) => {
+                        tracing::warn!(%error,"due node package work deferred");
+                        work.retry(&pool).await?;
+                        Ok::<_, anyhow::Error>(0)
+                    }
                 }
-                Ok::<_, anyhow::Error>(())
             })
             .await
-            .transpose()?;
-        }
+            .unwrap_or(Ok(0))
+        });
     }
-    Ok(())
+    let mut processed = 0;
+    while let Some(result) = tasks.join_next().await {
+        processed += result??;
+    }
+    if let Some(work) = work_queue::claim(pool, KIND, owner).await? {
+        crate::execution::supervise(pool.clone(), work.leases.clone(), async {
+            if let Err(error) = dispatch_work(pool, &work).await {
+                tracing::warn!(%error,"node restriction work deferred");
+                work.retry(pool).await?;
+            }
+            Ok::<_, anyhow::Error>(())
+        })
+        .await
+        .transpose()?;
+    }
+    Ok(processed)
 }
 
 #[cfg(test)]

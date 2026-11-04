@@ -298,73 +298,10 @@ pub async fn snapshot(pool: &PgPool, id: &str) -> Result<(Value, Value)> {
     snapshot_from_reading(row.as_ref(), alerts, failed, pending, now)
 }
 
+mod evaluation;
+
 async fn evaluate(tx: &mut Transaction<'_, Postgres>, id: &str, now: DateTime<Utc>) -> Result<()> {
-    rollover(tx, id, now).await?;
-    let row = sqlx::query("SELECT * FROM node_packages WHERE node_id = $1")
-        .bind(id)
-        .fetch_one(&mut **tx)
-        .await?;
-    let package: Package = serde_json::from_value(row.get("config"))?;
-    let usage: i64 = row.get("usage_bytes");
-    let period: String = row.get("period_id");
-    let restrictions = reasons(&package, usage, now);
-    let mut alerts: Vec<(&str, String)> = vec![];
-    if let Some(expiry) = package.expires_at {
-        let kind = if expiry <= now {
-            Some("expired")
-        } else if expiry - now <= chrono::Duration::days(package.expiry_warning_days) {
-            Some("expiring")
-        } else {
-            None
-        };
-        if let Some(kind) = kind {
-            alerts.push((kind, expiry.to_rfc3339()));
-        }
-    }
-    if let Some(quota) = package.quota_bytes {
-        if usage >= quota {
-            alerts.push(("quota_exhausted", period.clone()));
-        } else if i128::from(usage) * 100
-            >= i128::from(quota) * i128::from(package.traffic_warning_percent)
-        {
-            alerts.push(("traffic_warning", period.clone()));
-        }
-    }
-    let desired: Vec<Value> = alerts
-        .iter()
-        .map(|(kind, scope)| json!({"kind":kind,"scope":scope}))
-        .collect();
-    sqlx::query("UPDATE node_alerts SET active = FALSE WHERE node_id = $1 AND active AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements($2) desired WHERE desired->>'kind'=node_alerts.kind AND desired->>'scope'=node_alerts.scope)")
-        .bind(id).bind(json!(desired))
-        .execute(&mut **tx)
-        .await?;
-    for (kind, scope) in alerts {
-        sqlx::query("INSERT INTO node_alerts (id, node_id, kind, scope, created_at) VALUES ($1,$2,$3,$4,$5) ON CONFLICT(node_id,kind,scope) DO UPDATE SET active = TRUE WHERE NOT node_alerts.active")
-            .bind(Uuid::new_v4().to_string()).bind(id).bind(kind).bind(scope).bind(now).execute(&mut **tx).await?;
-    }
-    let blocked = !restrictions.is_empty();
-    if blocked != row.get::<bool, _>("restricted") {
-        sqlx::query("UPDATE node_packages SET restricted = $1 WHERE node_id = $2")
-            .bind(blocked)
-            .bind(id)
-            .execute(&mut **tx)
-            .await?;
-        audit(
-            tx,
-            "system",
-            if blocked {
-                "node.restricted"
-            } else {
-                "node.restored"
-            },
-            "node",
-            id,
-            json!({"reasons": restrictions}),
-        )
-        .await?;
-        maintenance::admit_on(tx, id, blocked).await?;
-    }
-    Ok(())
+    evaluation::evaluate_many(tx, &[id.to_owned()], now).await
 }
 
 #[derive(Clone, Deserialize)]
@@ -434,10 +371,15 @@ pub(crate) async fn update_usage_on(
 
 pub async fn run(state: AppState) {
     loop {
-        if let Err(error) = maintenance::pass(&state.pool, &state.instance_id).await {
-            tracing::error!(%error, "node limit maintenance deferred");
+        match maintenance::pass(&state.pool, &state.instance_id).await {
+            Ok(processed) if processed > 0 => tokio::task::yield_now().await,
+            result => {
+                if let Err(error) = result {
+                    tracing::error!(%error,"node limit maintenance deferred");
+                }
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
         }
-        tokio::time::sleep(Duration::from_secs(1)).await;
     }
 }
 
@@ -1404,3 +1346,9 @@ use axum::Json;
 use axum::extract::Path;
 #[cfg(test)]
 use axum::extract::State;
+
+#[cfg(test)]
+mod migration_tests;
+
+#[cfg(test)]
+mod contention_benchmark;

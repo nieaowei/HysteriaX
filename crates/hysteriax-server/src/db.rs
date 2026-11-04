@@ -501,3 +501,6 @@ mod cutover_tests;
 #[cfg(test)]
 #[path = "db/transaction_cancellation_tests.rs"]
 mod transaction_cancellation_tests;
+
+#[cfg(test)]
+pub mod test_relay;
