@@ -79,6 +79,7 @@ async fn maintenance_pass(state: &AppState) -> anyhow::Result<()> {
             Ok::<_, anyhow::Error>(())
         })
         .await
+        .into_result()?
         .transpose()?;
     }
     Ok(())
@@ -334,7 +335,7 @@ async fn execute_claimed(state: AppState, claimed: ClaimedJob) {
         execute_one(state, claimed.job),
     )
     .await;
-    if completed == Some(true) {
+    if matches!(completed, crate::execution::Supervised::Returned(true)) {
         let release = finish_execution(&pool, &job, &leases).await;
         if let Err(error) = release {
             tracing::warn!(%error,"job resource release deferred to recovery");
@@ -589,7 +590,25 @@ async fn persist_success(
     db::serializable(pool, move |tx| {
         let (app, job, output, audit_id) =
             (app.clone(), job.clone(), output.clone(), audit_id.clone());
-        Box::pin(async move { succeed_on(tx, &app, &job, &output, &audit_id).await })
+        Box::pin(async move {
+            succeed_on(tx, &app, &job, &output, &audit_id).await?;
+            let status: Option<String> = sqlx::query_scalar("SELECT status FROM jobs WHERE id=$1")
+                .bind(&job.id)
+                .fetch_optional(&mut **tx)
+                .await?;
+            if let Some(status) = status.filter(|s| s != "running") {
+                crate::execution::finish_current_on(
+                    tx,
+                    &format!("job:{}", job.id),
+                    if status == "queued" {
+                        crate::execution::Disposition::Yielded
+                    } else {
+                        crate::execution::Disposition::Complete
+                    },
+                )?;
+            }
+            Ok(())
+        })
     })
     .await
 }
@@ -946,6 +965,7 @@ pub(crate) async fn fail_on(
     waiting_recovery: bool,
     retry_after: Option<i64>,
 ) -> Result<(), sqlx::Error> {
+    crate::execution::require_finalization_attempt(tx)?;
     crate::execution::require_job_scope(&job.id, job.node_id.as_deref())
         .map_err(|e| sqlx::Error::Protocol(e.to_string()))?;
     let Some(source) = sqlx::query("SELECT kind,node_id,target_revision,payload_json,attempts,stage,resource_key FROM jobs WHERE id=$1 AND status='running' FOR UPDATE")
@@ -1104,6 +1124,17 @@ pub(crate) async fn fail_on(
     .bind(timestamp)
     .execute(&mut **tx)
     .await?;
+    crate::execution::finish_current_on(
+        tx,
+        &format!("job:{}", job.id),
+        if uncertain {
+            crate::execution::Disposition::Quarantined
+        } else if retry {
+            crate::execution::Disposition::Yielded
+        } else {
+            crate::execution::Disposition::Failed
+        },
+    )?;
     Ok(())
 }
 

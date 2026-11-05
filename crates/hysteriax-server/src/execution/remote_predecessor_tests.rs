@@ -27,6 +27,7 @@ async fn obsolete_scope_cannot_use_a_fresh_predecessor_or_construct_a_payload() 
     let calls = Arc::new(AtomicUsize::new(0));
     let count = calls.clone();
     let scope = Scope {
+        lifecycle: None,
         pool: pool.clone(),
         leases: vec![lease],
         sequence: Default::default(),

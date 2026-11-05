@@ -569,4 +569,4 @@ use axum::extract::State;
 mod migration_tests;
 
 #[cfg(test)]
-mod contention_benchmark;
+pub(crate) mod contention_benchmark;

@@ -399,7 +399,12 @@ async fn a_step_dispatched_before_replacement_keeps_its_intent_and_cannot_publis
         ),
     )
     .await;
-    assert!(outcome.is_none_or(|result| result.is_err()));
+    assert!(
+        outcome
+            .into_result()
+            .expect("finalization outcome must be known")
+            .is_none_or(|result| result.is_err())
+    );
     assert_eq!(sends.load(Ordering::SeqCst), 1);
     assert_eq!(count(&state,"SELECT count(*) FROM execution_operations WHERE state='dispatching' AND evidence IS NULL").await,1);
     assert_eq!(
@@ -592,7 +597,12 @@ async fn dispatch_intent_pins_the_rotation_until_commit_before_replacement_can_p
     assert_eq!(publisher.await.unwrap().unwrap()["version"], 3);
     let _ = published.send(true);
     let result = remote.await.unwrap();
-    assert!(result.is_none_or(|r| r.is_err()));
+    assert!(
+        result
+            .into_result()
+            .expect("finalization outcome must be known")
+            .is_none_or(|r| r.is_err())
+    );
     assert!(sends.load(Ordering::SeqCst) <= 1);
     assert_eq!(count(&state,"SELECT count(*) FROM execution_operations WHERE state='dispatching' AND evidence IS NULL").await,1);
 }

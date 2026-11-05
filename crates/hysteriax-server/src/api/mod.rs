@@ -588,6 +588,10 @@ async fn list_jobs(
 #[path = "tests/jobs_pagination.rs"]
 mod jobs_pagination_tests;
 
+#[cfg(test)]
+#[path = "tests/job_admission.rs"]
+mod job_admission_tests;
+
 pub(crate) async fn get_job(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -802,7 +806,6 @@ pub(crate) async fn enqueue_job_with_payload_in_tx(
         return crate::kick_requests::enqueue(tx, node, &job_payload).await;
     }
     let id = Uuid::new_v4().to_string();
-    let timestamp = now();
     let node_name: Option<String> = if let Some(node_id) = node_id {
         Some(
             sqlx::query_scalar("SELECT name FROM nodes WHERE id = $1")
@@ -815,8 +818,10 @@ pub(crate) async fn enqueue_job_with_payload_in_tx(
         None
     };
     let payload = json!({"id": id, "kind": kind, "node_id": node_id, "node_name": node_name, "target_revision": revision, "status": "queued", "stage": "queued"});
-    sqlx::query("INSERT INTO jobs (id, kind, node_id, node_name, target_revision, payload_json, status, stage, available_at, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, 'queued', 'queued', $7, $8, $9)")
-        .bind(&id).bind(kind).bind(node_id).bind(node_name).bind(revision).bind(&job_payload).bind(timestamp).bind(timestamp).bind(timestamp).execute(&mut **tx).await?;
+    // Eligibility is compared with the database clock by the worker. Use that
+    // same clock even when the API host is ahead of the database host.
+    let timestamp: DateTime<Utc> = sqlx::query_scalar("WITH queued_at AS MATERIALIZED (SELECT clock_timestamp() AS value) INSERT INTO jobs (id, kind, node_id, node_name, target_revision, payload_json, status, stage, available_at, created_at, updated_at) SELECT $1, $2, $3, $4, $5, $6, 'queued', 'queued', value, value, value FROM queued_at RETURNING created_at")
+        .bind(&id).bind(kind).bind(node_id).bind(node_name).bind(revision).bind(&job_payload).fetch_one(&mut **tx).await?;
     sqlx::query("INSERT INTO job_events (job_id, event_type, payload_json, created_at) VALUES ($1, 'job.queued', $2, $3)")
         .bind(&id).bind(payload).bind(timestamp).execute(&mut **tx).await?;
     Ok(id)
@@ -866,8 +871,16 @@ pub(crate) async fn cancel_queued_node_jobs_in_tx(
     Ok(())
 }
 
+#[cfg(test)]
+tokio::task_local! {static TEST_CLOCK_OFFSET_SECONDS: i64;}
+
 pub(crate) fn now() -> DateTime<Utc> {
-    Utc::now()
+    let timestamp = Utc::now();
+    #[cfg(test)]
+    let timestamp = TEST_CLOCK_OFFSET_SECONDS
+        .try_with(|seconds| timestamp + chrono::Duration::seconds(*seconds))
+        .unwrap_or(timestamp);
+    timestamp
 }
 
 pub(crate) fn generate_token() -> String {

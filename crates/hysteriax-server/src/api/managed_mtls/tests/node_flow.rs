@@ -643,6 +643,8 @@ async fn prepare_bound_users(
         node_mtls::prepare_users(&state.pool, &state.secrets, &input, policy, trust, false),
     )
     .await
+    .into_result()
+    .expect("finalization outcome must be known")
     .expect("healthy preparation scope")?;
     let mut tx = state.pool.begin().await?;
     for lease in leases {

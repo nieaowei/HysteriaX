@@ -13,7 +13,7 @@ use sqlx::{PgConnection, PgPool, Row};
 pub const LEASE_SECONDS: i64 = 60;
 pub const RENEW_SECONDS: u64 = 10;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Execution {
     pub resource: String,
     pub owner: String,
@@ -81,9 +81,14 @@ impl Execution {
     }
 
     pub async fn release(&self, connection: &mut PgConnection) -> Result<bool, sqlx::Error> {
+        finalization::validate_release_scope(connection, self)?;
         self.guard(connection).await?;
-        Ok(sqlx::query("UPDATE resource_leases SET owner=NULL,expires_at=NULL,work_id=NULL WHERE resource_key=$1 AND NOT EXISTS(SELECT 1 FROM execution_operations WHERE resource_key=$1 AND state IN ('dispatching','reconciling','needs_attention'))")
-            .bind(&self.resource).execute(connection).await?.rows_affected()==1)
+        let released=sqlx::query("UPDATE resource_leases SET owner=NULL,expires_at=NULL,work_id=NULL WHERE resource_key=$1 AND NOT EXISTS(SELECT 1 FROM execution_operations WHERE resource_key=$1 AND state IN ('dispatching','reconciling','needs_attention'))")
+            .bind(&self.resource).execute(&mut *connection).await?.rows_affected()==1;
+        if released {
+            finalization::released(connection, self)?;
+        }
+        Ok(released)
     }
 
     /// Persist and COMMIT this intent before sending an external request. A
@@ -170,11 +175,13 @@ struct Scope {
     pool: PgPool,
     leases: Vec<Execution>,
     sequence: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    lifecycle: Option<std::sync::Arc<finalization::Lifecycle>>,
 }
 tokio::task_local! { static CURRENT: Scope; }
 
 /// A job writer must own its exact job and, when present, its node.
 pub(crate) fn require_job_scope(job: &str, node: Option<&str>) -> anyhow::Result<()> {
+    finalization::ensure_active()?;
     let scope = CURRENT.try_with(|scope| scope.leases.clone());
     let leases = match scope {
         Ok(leases) => leases,
@@ -282,6 +289,7 @@ pub(crate) async fn job_source_on(
 /// Apply ownership checks inside every transaction opened by a leased worker.
 /// The task-local scope never crosses into API handlers or unrelated workers.
 pub async fn guard_current(connection: &mut PgConnection) -> Result<(), sqlx::Error> {
+    finalization::ensure_active()?;
     let leases = CURRENT
         .try_with(|scope| scope.leases.clone())
         .unwrap_or_default();
@@ -356,62 +364,14 @@ async fn observe_current(scope: &Scope) -> Result<(), sqlx::Error> {
     Ok(())
 }
 
-/// Losing renewal cancels the local future. An external request may still run;
-/// its dispatch intent remains durable and prevents releasing that resource.
-pub async fn supervise<T>(
-    pool: PgPool,
-    leases: Vec<Execution>,
-    work: impl std::future::Future<Output = T>,
-) -> Option<T> {
-    let scope = Scope {
-        pool,
-        leases,
-        sequence: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
-    };
-    supervise_scope(scope, work).await
-}
-
-async fn supervise_scope<T>(scope: Scope, work: impl std::future::Future<Output = T>) -> Option<T> {
-    CURRENT.scope(scope.clone(), async move {
-        // Validate before polling the work future at all; the renewal future's
-        // first database await otherwise lets a stale worker start local work.
-        if let Err(error)=check_current().await {
-            tracing::warn!(%error,"execution ownership was lost before work started");
-            return None;
-        }
-        let renew=async {
-            loop {
-                let mut contended=false;
-                for lease in &scope.leases {
-                    match lease.renew(&scope.pool).await {
-                        Ok(true)=>{},
-                        Err(error) if error.as_database_error().and_then(|e|e.code()).as_deref()==Some("55P03")=>{
-                            // A guarded result transaction holds these same
-                            // rows. A lock timeout is contention, not evidence
-                            // of takeover; observe committed ownership below.
-                            contended=true;
-                        },
-                        result=>{
-                            tracing::warn!(resource=%lease.resource,owner=%lease.owner,generation=lease.generation,?result,"execution renewal lost; stopping local work");
-                            return;
-                        }
-                    }
-                }
-                if let Err(error)=observe_current(&scope).await {
-                    tracing::warn!(%error,"execution was cancelled or ownership expired; stopping local work");
-                    return;
-                }
-                let delay=if contended {std::time::Duration::from_millis(250)}else{std::time::Duration::from_secs(RENEW_SECONDS)};
-                tokio::time::sleep(delay).await;
-            }
-        };
-        tokio::select! {
-            biased;
-            _=renew=>None,
-            output=work=>Some(output),
-        }
-    }).await
-}
+mod finalization;
+mod supervision;
+pub(crate) use finalization::{
+    Attempt as TransactionAttempt, Disposition, finish_on as finish_current_on,
+    require_attempt as require_finalization_attempt,
+};
+use supervision::supervise_scope;
+pub use supervision::{Supervised, supervise};
 
 pub async fn run_heartbeats(state: crate::state::AppState) {
     let mut timer = tokio::time::interval(std::time::Duration::from_secs(RENEW_SECONDS));
@@ -443,3 +403,11 @@ mod boundary_tests;
 
 #[cfg(test)]
 mod epoch_tests;
+
+#[cfg(test)]
+mod finalization_test_relay;
+#[cfg(test)]
+mod finalization_tests;
+
+#[cfg(test)]
+mod finalization_benchmark;

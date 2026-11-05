@@ -124,7 +124,8 @@ pub async fn finish(pool: &PgPool, work: &Work, success: bool) -> Result<()> {
             if work.kind=="traffic" && state!="queued" {
                 sqlx::query("UPDATE online_samples SET pending=false WHERE cycle_id=$1 AND node_id=$2 AND pending").bind(work.cycle).bind(&work.node).execute(&mut **tx).await?;
             }
-            for lease in &work.leases {lease.release(tx).await?;}
+            for lease in &work.leases {anyhow::ensure!(lease.release(tx).await?,"sampling resource has an unverified remote operation");}
+            execution::finish_current_on(tx,&format!("work:{}",work.id),match state {"queued"=>execution::Disposition::Yielded,"failed"=>execution::Disposition::Failed,_=>execution::Disposition::Complete})?;
             Ok(())
         })
     }).await

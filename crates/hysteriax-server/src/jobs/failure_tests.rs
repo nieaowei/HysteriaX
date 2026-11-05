@@ -21,6 +21,8 @@ async fn failed(
         ),
     )
     .await
+    .into_result()
+    .expect("finalization outcome must be known")
 }
 async fn snapshot(pool: &PgPool) -> Value {
     sqlx::query_scalar("SELECT jsonb_build_object('jobs',(SELECT jsonb_agg(to_jsonb(j) ORDER BY id) FROM jobs j),'nodes',(SELECT jsonb_agg(to_jsonb(n) ORDER BY id) FROM nodes n),'events',(SELECT jsonb_agg(to_jsonb(e) ORDER BY id) FROM job_events e))").fetch_one(pool).await.unwrap()

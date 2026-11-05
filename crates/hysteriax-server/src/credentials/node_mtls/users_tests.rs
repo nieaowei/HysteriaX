@@ -52,6 +52,7 @@ async fn save_candidates(f: &Fixture, s: &Source, candidates: Vec<PreparedIdenti
         .context("identity page busy")
     })
     .await
+    .into_result()?
     .context("job scope lost")?
 }
 
@@ -95,7 +96,13 @@ async fn changed_node_deleted_node_job_payload_or_attempt_rejects_old_preparatio
             validate(&f.state.pool, &s),
         )
         .await;
-        assert!(result.is_none_or(|r| r.is_err()), "{query}");
+        assert!(
+            result
+                .into_result()
+                .expect("finalization outcome must be known")
+                .is_none_or(|r| r.is_err()),
+            "{query}"
+        );
         assert_eq!(snapshot(&f).await, before);
     }
 }
@@ -358,6 +365,7 @@ async fn run_prepare(f: &Fixture, ca: &str) -> Result<()> {
         prepare(&f.state.pool, &f.state.secrets, &f.job, ca, 1),
     )
     .await
+    .into_result()?
     .context("job scope lost")?
 }
 async fn leaves(f: &Fixture) -> i64 {
@@ -625,8 +633,11 @@ async fn replaced_identity_lease_rejects_late_database_results_and_is_not_releas
         db::write::<_,anyhow::Error,_>(&f.state.pool,|tx|Box::pin(async move {
             sqlx::query("INSERT INTO late_identity_result VALUES(1)").execute(&mut **tx).await?;Ok(())
         })).await
-    })).await.unwrap();
-    assert!(result.is_err() || result.is_ok_and(|v| v.is_none()));
+    })).await;
+    assert!(matches!(
+        result,
+        execution::Supervised::Lost(_) | execution::Supervised::Returned(Err(_))
+    ));
     assert_eq!(
         sqlx::query_scalar::<_, i64>("SELECT count(*) FROM late_identity_result")
             .fetch_one(&f.state.pool)

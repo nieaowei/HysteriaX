@@ -169,7 +169,12 @@ async fn an_expired_owner_cannot_append_and_the_next_generation_can_report() {
         sqlx::query("UPDATE resource_leases SET expires_at=clock_timestamp()-interval '1 second' WHERE work_id='one'").execute(&other).await.unwrap();
         report_progress(&other,&request,"old","Must not be saved").await
     }).await;
-    assert!(result.is_none_or(|r| r.is_err()));
+    assert!(
+        result
+            .into_result()
+            .expect("finalization outcome must be known")
+            .is_none_or(|r| r.is_err())
+    );
     assert_eq!(logs(&pool, "one").await, json!([]));
     let next = owner(&pool, "one", "next").await;
     assert_eq!(next[0].generation, 2);
@@ -238,7 +243,12 @@ async fn persisted_cancellation_stops_progress_and_terminal_jobs_are_not_restore
         report_progress(&other, &request, "late", "Cancelled progress").await
     })
     .await;
-    assert!(result.is_none_or(|r| r.is_err()));
+    assert!(
+        result
+            .into_result()
+            .expect("finalization outcome must be known")
+            .is_none_or(|r| r.is_err())
+    );
     assert_eq!(logs(&pool, "one").await, json!([]));
     for status in ["cancelled", "succeeded", "failed", "waiting_confirmation"] {
         sqlx::query("UPDATE jobs SET status=$1 WHERE id='one'")

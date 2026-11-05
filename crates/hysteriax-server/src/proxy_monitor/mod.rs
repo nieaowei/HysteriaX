@@ -196,6 +196,7 @@ async fn retention_pass(state: &AppState) -> Result<()> {
             Ok::<_, anyhow::Error>(())
         })
         .await
+        .into_result()?
         .transpose()?;
     }
     Ok(())

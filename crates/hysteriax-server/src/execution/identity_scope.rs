@@ -21,6 +21,7 @@ fn acquisition_scope(parent: &Scope) -> Scope {
     Scope {
         pool: parent.pool.clone(),
         leases: vec![],
+        lifecycle: None,
         sequence: parent.sequence.clone(),
     }
 }
@@ -102,12 +103,13 @@ pub(crate) async fn with_identity_leases<T>(
     let child = Scope {
         pool: parent.pool.clone(),
         leases: leases.clone(),
+        lifecycle: parent.lifecycle.clone(),
         sequence: parent.sequence.clone(),
     };
-    let result = supervise_scope(child.clone(), work).await;
+    let result = supervise_scope(child.clone(), Box::pin(work)).await;
     // Loss of any lease cancels the future. Never release a replacement owner's
     // resources; untouched expired identity leases remain reclaimable normally.
-    let Some(result) = result else {
+    let Some(result) = result.into_result()? else {
         return Ok(None);
     };
     let inherited: BTreeSet<String> = parent.leases.iter().map(|l| l.resource.clone()).collect();
@@ -117,12 +119,27 @@ pub(crate) async fn with_identity_leases<T>(
             crate::db::serializable::<_, anyhow::Error, _>(&parent.pool, move |tx| {
                 let (leases, child, inherited) = (leases.clone(), child.clone(), inherited.clone());
                 Box::pin(async move {
+                    let completed = child.lifecycle.as_ref().and_then(|l| match l.phase() {
+                        finalization::Phase::Committed { released, .. } => Some(released),
+                        _ => None,
+                    });
                     for lease in &leases {
-                        lease.guard(tx).await?;
+                        if !completed
+                            .as_ref()
+                            .is_some_and(|released| released.contains(lease))
+                        {
+                            lease.guard(tx).await?;
+                        }
                     }
-                    CURRENT.scope(child, guard_current(tx)).await?;
+                    if completed.is_none() {
+                        CURRENT.scope(child, guard_current(tx)).await?;
+                    }
                     for lease in &leases {
-                        if !inherited.contains(&lease.resource) {
+                        if !inherited.contains(&lease.resource)
+                            && !completed
+                                .as_ref()
+                                .is_some_and(|released| released.contains(lease))
+                        {
                             ensure!(lease.release(tx).await?, "shared identity became uncertain");
                         }
                     }

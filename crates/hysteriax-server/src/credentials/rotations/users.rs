@@ -34,10 +34,11 @@ pub(super) async fn scheduled_pass(state: &AppState) -> Result<()> {
             Ok::<_, anyhow::Error>(())
         })
         .await
+        .into_result()?
         .transpose()?;
     }
     if let Some(work) = maintenance::claim(&state.pool, ADMIT, &state.instance_id).await? {
-        execute_admission(&state.pool, &work).await;
+        execute_admission(&state.pool, &work).await?;
     }
     if let Some(work) = maintenance::claim(&state.pool, ISSUE, &state.instance_id).await? {
         execute_issue(state, &work).await;
@@ -85,7 +86,7 @@ pub(super) async fn pass(state: &AppState, rotation: &str, ca: &str, version: i6
     else {
         return Ok(false);
     };
-    if !execute_admission(&state.pool, &work).await {
+    if !execute_admission(&state.pool, &work).await? {
         return Ok(false);
     }
     // Direct advancement remains bounded; the asynchronous worker resumes any
@@ -114,17 +115,18 @@ pub(super) async fn pass(state: &AppState, rotation: &str, ca: &str, version: i6
     tx.commit().await?;
     Ok(ready)
 }
-async fn execute_admission(pool: &PgPool, work: &Work) -> bool {
+async fn execute_admission(pool: &PgPool, work: &Work) -> Result<bool> {
     match crate::execution::supervise(pool.clone(), work.leases.clone(), admit_users(pool, work))
         .await
+        .into_result()?
     {
-        Some(Ok(())) => true,
+        Some(Ok(())) => Ok(true),
         Some(Err(error)) => {
             tracing::warn!(%error,work_id=%work.id,"rotation users deferred");
             let _ = work.retry(pool).await;
-            false
+            Ok(false)
         }
-        None => false,
+        None => Ok(false),
     }
 }
 async fn execute_issue(state: &AppState, work: &Work) {

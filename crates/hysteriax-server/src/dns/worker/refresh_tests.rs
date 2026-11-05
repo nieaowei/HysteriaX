@@ -179,6 +179,8 @@ async fn save(w: &Work, s: &Source, records: &[Value]) -> Option<Result<Value>> 
         }
     })
     .await
+    .into_result()
+    .expect("finalization outcome must be known")
 }
 async fn snapshot(w: &Work) -> Value {
     sqlx::query_scalar("SELECT jsonb_build_object('connections',(SELECT jsonb_agg(to_jsonb(c) ORDER BY id) FROM dns_connections c),'zones',(SELECT jsonb_agg(to_jsonb(z) ORDER BY id) FROM dns_zones z),'records',(SELECT jsonb_agg(to_jsonb(r) ORDER BY id) FROM dns_records r),'operations',(SELECT jsonb_agg(to_jsonb(o) ORDER BY id) FROM dns_operations o),'audits',(SELECT jsonb_agg(to_jsonb(a) ORDER BY id) FROM audit_records a))")

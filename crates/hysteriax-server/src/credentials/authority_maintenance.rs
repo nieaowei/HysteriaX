@@ -41,6 +41,7 @@ pub async fn pass(state: &AppState) -> Result<()> {
             Ok::<_, anyhow::Error>(())
         })
         .await
+        .into_result()?
         .transpose()?;
     }
     if let Some(work) = maintenance::claim(&state.pool, KIND, &state.instance_id).await? {
@@ -52,6 +53,7 @@ pub async fn pass(state: &AppState) -> Result<()> {
             Ok::<_, anyhow::Error>(())
         })
         .await
+        .into_result()?
         .transpose()?;
     }
     Ok(())

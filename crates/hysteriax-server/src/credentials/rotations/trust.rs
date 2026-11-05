@@ -35,10 +35,11 @@ pub(super) async fn scheduled_pass(state: &AppState) -> Result<()> {
             Ok::<_, anyhow::Error>(())
         })
         .await
+        .into_result()?
         .transpose()?;
     }
     if let Some(work) = maintenance::claim(&state.pool, KIND, &state.instance_id).await? {
-        execute(&state.pool, &work).await;
+        execute(&state.pool, &work).await?;
     }
     Ok(())
 }
@@ -67,17 +68,18 @@ async fn admit(pool: &PgPool, work: &Work) -> Result<()> {
         })
     }).await
 }
-async fn execute(pool: &PgPool, work: &Work) -> Option<bool> {
-    let result =
-        crate::execution::supervise(pool.clone(), work.leases.clone(), page(pool, work)).await;
+async fn execute(pool: &PgPool, work: &Work) -> Result<Option<bool>> {
+    let result = crate::execution::supervise(pool.clone(), work.leases.clone(), page(pool, work))
+        .await
+        .into_result()?;
     match result {
-        Some(Ok(ready)) => Some(ready),
+        Some(Ok(ready)) => Ok(Some(ready)),
         Some(Err(error)) => {
             tracing::warn!(%error,work_id=%work.id,"trust preparation deferred");
             let _ = work.retry(pool).await;
-            None
+            Ok(None)
         }
-        None => None,
+        None => Ok(None),
     }
 }
 
@@ -95,7 +97,7 @@ pub(super) async fn pass(state: &AppState, rotation: &str, ca: &str, version: i6
     else {
         return Ok(false);
     };
-    Ok(execute(&state.pool, &work).await.unwrap_or(false))
+    Ok(execute(&state.pool, &work).await?.unwrap_or(false))
 }
 
 #[derive(Clone)]

@@ -250,13 +250,13 @@ async fn prepare(
             sqlx::query("SELECT operation_id FROM execution_operations WHERE operation_id=$1 FOR UPDATE").bind(&id).fetch_one(&mut **tx).await?;
             if let Some(old_id)=obsolete {sqlx::query("UPDATE execution_rechecks SET state='obsolete',updated_at=clock_timestamp() WHERE id=$1").bind(old_id).execute(&mut **tx).await?;}
             let (current,state)=load_on(tx,&id).await?;if current!=op {return Err(ApiError::conflict("execution intent changed"));}
-            if state=="verified" {lease.release(tx).await?;return Ok(Preparation::Verified);}
+            if state=="verified" {if !lease.release(tx).await? {return Err(ApiError::conflict("verification resource requires recovery"));}return Ok(Preparation::Verified);}
             let target=sqlx::query("SELECT *,expires_at>clock_timestamp() AS live FROM resource_leases WHERE resource_key=$1").bind(&node_resource).fetch_one(&mut **tx).await?;
             if target.get::<Option<bool>,_>("live")==Some(true) {return Err(ApiError::conflict("wait for the previous execution lease to expire"));}
             if target.get::<Option<String>,_>("owner").as_deref()!=Some(op.owner.as_str()) || target.get::<Option<String>,_>("work_id").as_deref()!=Some(op.work_id.as_str()) {return Err(ApiError::conflict("execution resource ownership changed"));}
             if target.get::<i64,_>("generation")<op.generation {return Err(ApiError::conflict("execution generation moved backwards"));}
             if !matches!(op.intent["kind"].as_str(),Some("ssh-command" | "ssh-upload")) || op.intent["verification"]["protocol"]!="ssh-journal-v2" || op.intent["verification"]["preparation"]=="unverified" || !node_resource.starts_with("node:") {
-                lease.release(tx).await?;return Ok(Preparation::Unsupported);
+                if !lease.release(tx).await? {return Err(ApiError::conflict("verification resource requires recovery"));}return Ok(Preparation::Unsupported);
             }
             let node=node_resource.strip_prefix("node:").unwrap().to_owned();
             let endpoint:Endpoint=serde_json::from_value(op.intent["verification"]["endpoint"].clone()).map_err(|_|ApiError::conflict("SSH operation has no endpoint proof"))?;
@@ -404,7 +404,7 @@ pub(crate) async fn verify(
     };
     let observed =
         execution::supervise(state.pool.clone(), vec![prepared.lease.clone()], remote).await;
-    let (session, receipt) = match observed {
+    let (session, receipt) = match observed.into_result()? {
         Some(Ok(v)) => v,
         _ => {
             return final_result(
@@ -441,7 +441,7 @@ pub(crate) async fn verify(
         ),
     )
     .await;
-    let proof = match result {
+    let proof = match result.into_result()? {
         Some(Ok(p)) => Some(p),
         _ => None,
     };
@@ -501,7 +501,7 @@ async fn final_result(
                     if p.data.fence.is_none() {sqlx::query("UPDATE execution_rechecks SET state='needs_attention',updated_at=clock_timestamp() WHERE id=$1").bind(&p.id).execute(&mut **tx).await?;}
                     status="needs_attention".into();
                 }
-                p.lease.release(tx).await?;
+                if !p.lease.release(tx).await? {return Err(ApiError::conflict("verification resource requires recovery"));}
             } else if status!="verified" {
                 sqlx::query("UPDATE execution_operations SET state='needs_attention',updated_at=clock_timestamp() WHERE operation_id=$1").bind(&id).execute(&mut **tx).await?;status="needs_attention".into();
             }

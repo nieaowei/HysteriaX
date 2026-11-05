@@ -31,6 +31,7 @@ pub(super) async fn scheduled_pass(state: &AppState) -> Result<()> {
             Ok::<_, anyhow::Error>(())
         })
         .await
+        .into_result()?
         .transpose()?;
     }
     if let Some(work) = maintenance::claim(&state.pool, KIND, &state.instance_id).await? {
@@ -74,6 +75,7 @@ async fn execute(pool: &PgPool, work: &Work) -> Result<bool> {
         commit(pool, work, &audit_id),
     )
     .await
+    .into_result()?
     {
         Some(Ok(published)) => Ok(published),
         Some(Err(error)) => {

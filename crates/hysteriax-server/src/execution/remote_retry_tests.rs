@@ -18,6 +18,7 @@ async fn native_intent_and_receipt_retries_never_reinvoke_the_network_factory() 
     let count = Arc::new(AtomicUsize::new(0));
     let calls = count.clone();
     let scope = Scope {
+        lifecycle: None,
         pool: pool.clone(),
         leases: vec![lease],
         sequence: Default::default(),

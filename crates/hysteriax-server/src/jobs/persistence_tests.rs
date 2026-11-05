@@ -66,7 +66,12 @@ async fn rejected_failure_event_still_allows_a_durable_safety_barrier_without_cl
         quarantine_completion(&pool, &one.job),
     )
     .await;
-    assert!(result.is_none_or(|r| !r.unwrap()));
+    assert!(
+        result
+            .into_result()
+            .expect("finalization outcome must be known")
+            .is_none_or(|r| !r.unwrap())
+    );
     assert_eq!(
         count(
             &pool,
@@ -177,6 +182,8 @@ async fn reject(pool: &PgPool, claimed: &ClaimedJob) -> Option<anyhow::Result<bo
         reject_completion(pool, &claimed.job, "completion rejected"),
     )
     .await
+    .into_result()
+    .expect("finalization outcome must be known")
 }
 async fn snapshot(pool: &PgPool) -> Value {
     // A healthy supervisor may extend expires_at; ownership and blocking must
@@ -384,7 +391,12 @@ async fn actual_success_rejection_stops_retrying_and_quarantines_without_deletin
         reject_completion(&pool, &one.job, "invalid completed output").await
     })
     .await;
-    assert!(result.is_none_or(|r| !r.unwrap()));
+    assert!(
+        result
+            .into_result()
+            .expect("finalization outcome must be known")
+            .is_none_or(|r| !r.unwrap())
+    );
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
     assert_eq!(
         count(&pool, "SELECT count(*) FROM nodes WHERE id='node-a'").await,

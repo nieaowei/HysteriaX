@@ -48,6 +48,7 @@ pub async fn prune(state: &AppState) -> Result<u64> {
         }
     })
     .await
+    .into_result()?
     .transpose()
     .map(|count| count.unwrap_or(0))
 }

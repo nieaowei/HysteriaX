@@ -72,6 +72,7 @@ async fn maintenance_pass(state: &AppState) -> Result<()> {
             Ok::<_, anyhow::Error>(())
         })
         .await
+        .into_result()?
         .transpose()?;
     }
     access::dispatch_pass(&state.pool, &state.instance_id).await

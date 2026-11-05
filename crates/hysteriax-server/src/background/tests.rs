@@ -323,7 +323,12 @@ async fn deletion_invalidates_even_a_live_sampling_write_context() {
         .is_err()
     })
     .await;
-    assert!(result.is_none_or(|rejected| rejected));
+    assert!(
+        result
+            .into_result()
+            .expect("finalization outcome must be known")
+            .is_none_or(|rejected| rejected)
+    );
     assert_eq!(
         count(
             &state,

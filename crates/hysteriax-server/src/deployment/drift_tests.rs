@@ -37,6 +37,8 @@ async fn save(f: &Fixture, job: &JobInput) -> Option<Result<()>> {
         record(&f.state.pool, job, 1, Some(1), "saved"),
     )
     .await
+    .into_result()
+    .expect("finalization outcome must be known")
 }
 async fn snapshot(f: &Fixture) -> Value {
     sqlx::query_scalar("SELECT jsonb_build_object('nodes',(SELECT jsonb_agg(to_jsonb(n) ORDER BY id) FROM nodes n),'jobs',(SELECT jsonb_agg(to_jsonb(j) ORDER BY id) FROM jobs j),'events',(SELECT jsonb_agg(to_jsonb(e) ORDER BY id) FROM job_events e))").fetch_one(&f.state.pool).await.unwrap()

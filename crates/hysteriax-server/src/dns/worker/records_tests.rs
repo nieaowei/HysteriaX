@@ -112,6 +112,8 @@ async fn save(f: &Fixture, s: &Source, value: &Value) -> Option<Result<Value>> {
         commit(&f.state.pool, s, value),
     )
     .await
+    .into_result()
+    .expect("finalization outcome must be known")
 }
 async fn snapshot(f: &Fixture) -> Value {
     sqlx::query_scalar("SELECT jsonb_build_object('records',(SELECT jsonb_agg(to_jsonb(r) ORDER BY id) FROM dns_records r),'operations',(SELECT jsonb_agg(to_jsonb(o) ORDER BY id) FROM dns_operations o),'jobs',(SELECT jsonb_agg(to_jsonb(j) ORDER BY id) FROM jobs j),'audits',(SELECT jsonb_agg(to_jsonb(a) ORDER BY id) FROM audit_records a),'events',(SELECT jsonb_agg(to_jsonb(e) ORDER BY id) FROM job_events e))")

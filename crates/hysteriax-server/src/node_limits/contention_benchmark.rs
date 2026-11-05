@@ -64,6 +64,10 @@ fn distribution(mut values: Vec<f64>) -> Value {
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 #[ignore = "manual 100k-user/10k-node lock contention acceptance; use tests/performance/verify-lock-contention.py"]
 async fn benchmark_lock_contention() {
+    run_lock_contention_benchmark().await;
+}
+
+pub(crate) async fn run_lock_contention_benchmark() -> Value {
     let users: i64 = std::env::var("HYSTERIAX_LOCK_BENCH_USERS")
         .unwrap_or("100000".into())
         .parse()
@@ -400,4 +404,5 @@ async fn benchmark_lock_contention() {
             "ten thousand initially due packages must evaluate within sixty seconds"
         );
     }
+    report
 }

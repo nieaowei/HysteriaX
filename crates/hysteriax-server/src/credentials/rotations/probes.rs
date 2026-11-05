@@ -68,7 +68,7 @@ async fn execute(pool: &PgPool, work: &Work, operation: Action) -> Result<()> {
         }
     })
     .await;
-    if let Some(Err(error)) = result {
+    if let Some(Err(error)) = result.into_result()? {
         work.retry(pool).await?;
         return Err(error);
     }

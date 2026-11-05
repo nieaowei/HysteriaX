@@ -41,6 +41,8 @@ async fn page(
         purge_batch(pool, job, "node", &HISTORY[0], None, 2, 0),
     )
     .await
+    .into_result()
+    .expect("finalization outcome must be known")
 }
 async fn snapshot(pool: &PgPool) -> Value {
     sqlx::query_scalar("SELECT jsonb_build_object('records',(SELECT jsonb_agg(to_jsonb(r) ORDER BY id) FROM traffic_records r),'jobs',(SELECT jsonb_agg(to_jsonb(j) ORDER BY id) FROM jobs j))").fetch_one(pool).await.unwrap()

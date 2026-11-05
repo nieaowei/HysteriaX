@@ -145,6 +145,7 @@ pub async fn pass(pool: &PgPool, owner: &str) -> Result<usize> {
                 }
             })
             .await
+            .into_result()?
             .unwrap_or(Ok(0))
         });
     }
@@ -161,6 +162,7 @@ pub async fn pass(pool: &PgPool, owner: &str) -> Result<usize> {
             Ok::<_, anyhow::Error>(())
         })
         .await
+        .into_result()?
         .transpose()?;
     }
     Ok(processed)

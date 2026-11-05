@@ -17,6 +17,7 @@ async fn factory_receives_committed_context_and_is_not_reinvoked_for_an_uncertai
     let count = Arc::new(AtomicUsize::new(0));
     for attempt in 0..2 {
         let scope = Scope {
+            lifecycle: None,
             pool: pool.clone(),
             leases: vec![lease.clone()],
             sequence: Default::default(),

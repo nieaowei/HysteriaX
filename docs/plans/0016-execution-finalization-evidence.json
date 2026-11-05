@@ -1,0 +1,1510 @@
+{
+  "format_version": 1,
+  "status": "accepted",
+  "generated_at": "2026-11-05T14:12:48.364918+00:00",
+  "baseline_commit": "2a1cb72",
+  "uncommitted_workspace_changes": true,
+  "production_deployment": false,
+  "binary_sha256": "d5e4f1016001530c1f2f481bf32e92d918b36ef0ee9cd91373577014612c2e56",
+  "source_manifest_sha256": "7f25ac9377392b7671ed8cab44f9746983e8e6bdabf915296088ddbc7facc17e",
+  "source_manifest": {
+    "Cargo.lock": "1f3b74ddce384c38201309c7f3500042426d2dedb2b477896f336c321eae94e1",
+    "Cargo.toml": "39d89329bbee2d0dfa5ad2739cfeed2fbab3d7be47101a72ee323c9a57938c01",
+    "crates/hysteriax-server/Cargo.toml": "439501f1bc5632397fbefdc042f534ae26bdaa8f9f9a5acdf73abdd5a81142ba",
+    "crates/hysteriax-server/build.rs": "9a929cd0994408a0c221a230650f1b2ca125a70fe34e2161eea4d472c60f437c",
+    "crates/hysteriax-server/migrations/0001_baseline.sql": "2cf8ef9cb73499805c94977880e28e0a8dd5d7d6f27dd711b9731b941252102f",
+    "crates/hysteriax-server/migrations/0002_node_kick_batches.sql": "8d5520d2a74aeee5d7a8826c112ce3ff69e916b447350354b6baed3b7e1fe89a",
+    "crates/hysteriax-server/migrations/0003_remove_authorization_previews.sql": "132e8e5b63b5406727223249a210f8197373b80feaa58f0559a1ca1e3769d396",
+    "crates/hysteriax-server/migrations/0004_separate_job_cache_roots.sql": "78bec13e582942b223f73eca7df3fed49ee16d8f997d375cabba1866eb267d34",
+    "crates/hysteriax-server/migrations/0005_async_authorization.sql": "6aab4dca21826bdd17e868d453923bb781ce460b808de2faa846372212459f28",
+    "crates/hysteriax-server/migrations/0006_user_credential_directory.sql": "3f4096486ac0436979f1e2a396c12319511a6d5d29cf4e60698d77f2825127e3",
+    "crates/hysteriax-server/migrations/0007_retire_legacy_conversions.sql": "4626b04d9cfb6710ef9ee45314a79a64fd682adfba16bf6f5a9372fe64d75aa0",
+    "crates/hysteriax-server/migrations/0008_drop_monitoring_leases.sql": "956eaa1a1da247b1dbac5dba18a32b883715bc74623500e2c3f7cd2f3848ab5e",
+    "crates/hysteriax-server/migrations/0009_unify_user_credentials.sql": "605d682ab792dcd24eee69710768c31282a998c9038aa66a8fbc322636c2d5e5",
+    "crates/hysteriax-server/migrations/0010_lock_contention.sql": "9bdf5a1e093d4013c8f028a06ebbbfe4884513ade302ce9d78d870805449a2c9",
+    "crates/hysteriax-server/src/analytics/dirty_queue_tests.rs": "abea1bc43d510e69b2b74245e9bb6d0aadcf746b5a2cbf43fad1fbb809112979",
+    "crates/hysteriax-server/src/analytics/followup_tests.rs": "07a0d9cf9a22ec1f38f7c13d6e0caae89f6d3c51560678ff3f86aa88fcafcd35",
+    "crates/hysteriax-server/src/analytics/mod.rs": "767d1383b3bdcdc2e41af488bfed519d7455ed00b6b7c7a57aafdbf584f2452b",
+    "crates/hysteriax-server/src/analytics/node_deletion_tests.rs": "92ce9d33edc0bf7805dfc2877e9cb506f40b3ebba6734ee43906d1dc203ba433",
+    "crates/hysteriax-server/src/analytics/online_history.sql": "ed5889e4bffdfb85055b0882a96a61de9ff84cbbb75bfbf5b84144be639de809",
+    "crates/hysteriax-server/src/analytics/probe_history.sql": "37e8fcaff79ff8e5af98639016e8d1ec68a955e520e35728f416d5b9ccfc61fd",
+    "crates/hysteriax-server/src/analytics/refresh.rs": "4263a3a0ed62b538341d4a3c8c522e1bbd5adb356a184c6d2447a1498151ca7c",
+    "crates/hysteriax-server/src/analytics/refresh_cycles.sql": "683c6e37e0b2634e7fd0f0d00c479f0cd2043a3b1d66e5d2043ee3b66fbccabb",
+    "crates/hysteriax-server/src/analytics/refresh_retries.sql": "db19f0d833698c8c4517b6160057a8bbbc05d9d398dded259112cc28f1c502ba",
+    "crates/hysteriax-server/src/analytics/refresh_rollups.sql": "34fe613aa8ae6ba68d3724e6cef14a36c5402e916ac1b7b52ddfa231800df34d",
+    "crates/hysteriax-server/src/analytics/retry_roots.sql": "91aaa48af08471329fc13e12b74b1eb314567676b49cc97f75543cd9cec3aff7",
+    "crates/hysteriax-server/src/analytics/tests.rs": "4e25118d2dce6f7922ae78e2316a21b51b40c9d9afcbb62c54d9978e1597a6a1",
+    "crates/hysteriax-server/src/analytics/traffic_history.sql": "67d5b589e950f07c90ea7361bb8ab0621a1e18ff3ed9f46f06f3a2ab4d38fd4c",
+    "crates/hysteriax-server/src/api/admin_tokens/mod.rs": "445a8d3055b6d0c269f07adba283df7beb3e8ae2e6dd57570f83cf182d3bec1e",
+    "crates/hysteriax-server/src/api/admin_tokens/tests.rs": "2025842a1228a34b9dbfdfe2612f269ba068b4b47671d099c52be47f803844ae",
+    "crates/hysteriax-server/src/api/admin_tokens/token_usage.rs": "978e4c2a88a6b233b789d01b5ed0f98d7cd974d4c556f53c7c85ceb1067818cf",
+    "crates/hysteriax-server/src/api/admin_tokens/token_usage_tests.rs": "4f6a40c04c04b0e386d39fb1a61a670b62f439d03652eb9622f395c7b0414768",
+    "crates/hysteriax-server/src/api/authorization_groups/changes.rs": "080b0be8d50349b56b3e535b0b692356d1d7c03ec287fe46d07a65884a8f00a4",
+    "crates/hysteriax-server/src/api/authorization_groups/changes_tests.rs": "0aabffe78440326e9958e13ea871748d05a4425bb27ce013fcc7167e81a5f13f",
+    "crates/hysteriax-server/src/api/authorization_groups/handlers.rs": "85c2e802d3e0a192ad439d1b08d18ab372812721adb413e5c482653d2c564e14",
+    "crates/hysteriax-server/src/api/authorization_groups/mod.rs": "1e3bc636069a21ea35d3bf3ef875c430c9ca1d11cca46d60e16cc6b8f4ccd4b5",
+    "crates/hysteriax-server/src/api/authorization_groups/reads.rs": "cb6ac9552c7eb4e55fb2e312c7b561687751a743346d11bdc88d9443ee333a2a",
+    "crates/hysteriax-server/src/api/authorization_groups/reads_tests.rs": "26c307303bf820e3da70ccfdb1f370515049fa0ebdd9c4a28d8844db9ea9b24b",
+    "crates/hysteriax-server/src/api/authorization_groups/test_support.rs": "bb73875b7d8f19f0e68083eb0d46ecd0ab7461b8553318db893b9f28b10dffc5",
+    "crates/hysteriax-server/src/api/client_summary.rs": "f0bd5f97f725839f6d2ea9a4b98876ffd39e2e14e7577a9949053d3227d01989",
+    "crates/hysteriax-server/src/api/credentials/handlers.rs": "7175a929ad5f6f1a91e3d60165f04eafd3e7eebe29624d4bf5a6e5ec1ea5bd08",
+    "crates/hysteriax-server/src/api/credentials/handlers_tests.rs": "4a931fc0f72df3bcfc3e562bdc370ddfd856eaeaad132ffdcac69921e6a80f80",
+    "crates/hysteriax-server/src/api/credentials/mod.rs": "72e30229322eee84a304ff974a850e1f21d18529d195e7ed17bd11128ace93af",
+    "crates/hysteriax-server/src/api/credentials/mutations.rs": "abf6867c6a3093840a3b7ba3e23a670d992954ef2a298be621213cc43032bfc3",
+    "crates/hysteriax-server/src/api/credentials/pagination_tests.rs": "a26d93c9289aea670c52fbb17f7202f64c7c177f90e9d1776743afc042ab9f56",
+    "crates/hysteriax-server/src/api/credentials/preparation.rs": "f04fb7cbaf3f9d3f13452c364fd3aaf665b67afe5eeef48d25916d368038689e",
+    "crates/hysteriax-server/src/api/credentials/preparation_tests.rs": "47a951139c3053ebbca27d107370cb9975abde9b548e92c6b693c6cce31c8f8b",
+    "crates/hysteriax-server/src/api/credentials/test_support.rs": "09afe8ff642ca8d9e0d0588aad7c17387dde437907b906a825a69c5aae90c8f0",
+    "crates/hysteriax-server/src/api/credentials/transaction_tests.rs": "388bf81423bf2b5f50f2a74d5a298f7f9dcb7fd59e3d59725003c3f1391e4d6c",
+    "crates/hysteriax-server/src/api/dns/handlers/mod.rs": "0f825ea90889bd406acf0075a59c62894c14058f451c89827c7705978aecda35",
+    "crates/hysteriax-server/src/api/dns/handlers/records.rs": "d238e8d30b2ca310eb98b2159b9bd80035d5452004d7df84aed49eae5242cf87",
+    "crates/hysteriax-server/src/api/dns/handlers/records_tests.rs": "3e8de75294711bd0d32427cfd4506583b144e078e9ebdf4d0d5e7f637a3122b1",
+    "crates/hysteriax-server/src/api/dns/handlers/tests.rs": "a7886b5d64e4e64cb0e3139c314a33a74e85d0a46e83f121b93d05e8e4402441",
+    "crates/hysteriax-server/src/api/dns/mod.rs": "3feae46f6d718a72603ca7fb8d5c2d658077e941933bd1ae631c36010f3e1e00",
+    "crates/hysteriax-server/src/api/dns/mutations.rs": "743ee23a8e892da6ed22b0b9606d1d5ad05a841eee430de02353a1aed8287242",
+    "crates/hysteriax-server/src/api/dns/pagination_tests.rs": "e385328f93194d3c5b8eb98a6a63159f2059dcd538835f6a56e0d3258daae074",
+    "crates/hysteriax-server/src/api/dns/queue_tests.rs": "a2e473feb871b00f8ee1f2424b7442a4623be10dbc67e269765fe3e715da7dd7",
+    "crates/hysteriax-server/src/api/dns/test_support.rs": "66020651ab1fd8b0958c6f40e7e9971b71e1aed5c905179c8d7dfafe7c482db6",
+    "crates/hysteriax-server/src/api/dns/transaction_tests.rs": "983a2f18c0edd006dedd080309f95034ded7b753525c0c042512f3faba39c4b0",
+    "crates/hysteriax-server/src/api/event_stream/mod.rs": "bc4f56e312763c4a82b4d0415e15395f26e11d201c1862e9db1b673aab5f6a5e",
+    "crates/hysteriax-server/src/api/event_stream/tests.rs": "ceed7057e8793fa2005c26e924e974a5f8617ee3300419c420eb5ea7dd19ae10",
+    "crates/hysteriax-server/src/api/execution_rechecks/mod.rs": "3fb38f05906cd34b443c34fc89c55c2e3787467ae06544a27313224f66b12795",
+    "crates/hysteriax-server/src/api/execution_rechecks/tests.rs": "0a535d6813d595ade91cf551d69993abb6edbbe7840390a67364ba1887975d48",
+    "crates/hysteriax-server/src/api/idempotency/mod.rs": "868e15e1ba85014b47c8cbeaa3803bf9d7d8b37cc8940687766302edeec82e57",
+    "crates/hysteriax-server/src/api/idempotency/tests.rs": "3d81cacd4d683ec73183b0ae00e4669fc7cf22157445ffa0d82f094ac31e7a38",
+    "crates/hysteriax-server/src/api/job_retries/handlers.rs": "19fea413555d9c5bb9481030b011f40c203525d8f8968aadec6371adc7a95504",
+    "crates/hysteriax-server/src/api/job_retries/handlers_tests.rs": "d07c2e4bceec2181d1e809fd27a48d9e51e78cee1885c2a55e0e564c09e0112e",
+    "crates/hysteriax-server/src/api/job_retries/mod.rs": "16badc88c9dc140127acf0c16214e35a15d5ff974295ebe8aa3e5df892d20c72",
+    "crates/hysteriax-server/src/api/job_retries/test_support.rs": "c2adc1f5a943a198a014ad3f24b5381d98ae0a14fea63bfe66db1cdb20675119",
+    "crates/hysteriax-server/src/api/job_retries/transaction_tests.rs": "86b19d32f03993713a42f744a3ce0666ade3b18cdadc466a6221d2e359efd602",
+    "crates/hysteriax-server/src/api/managed_mtls/audit.rs": "6d16340d5296d97a4b51845683d7a0b0314c59f96957d8c623859e62e24fffac",
+    "crates/hysteriax-server/src/api/managed_mtls/handlers.rs": "8d5fbb33e7fb6561d0ff22b5a30dba8876bd5a805b526b4e6be6e76d481560bd",
+    "crates/hysteriax-server/src/api/managed_mtls/handlers_tests.rs": "10510762c443f15ef11d8140bb88a304ceadba5d0d378ca9740e173c16d16842",
+    "crates/hysteriax-server/src/api/managed_mtls/mod.rs": "c29d30d54414f4c1f7737eaa0dac00cfbf804816aef71ebeb02999c99d4b6f0f",
+    "crates/hysteriax-server/src/api/managed_mtls/preparation.rs": "bb2dbdef1978c3dade9741c4da485e3d7557e6956cd074ae1bf79bf2431a6f36",
+    "crates/hysteriax-server/src/api/managed_mtls/preparation_tests.rs": "6fac455d27c24ed29f8a359eee2519658445b8bef9cea48365f5391ca9c0f5aa",
+    "crates/hysteriax-server/src/api/managed_mtls/test_support.rs": "a3eb2a113837027a13ff350885031a58d8eca7141a74f852ae814828522d5eee",
+    "crates/hysteriax-server/src/api/managed_mtls/tests/authorization_flow.rs": "9d7e7ec447214dc11379be55ad54acce358603e0bc39d17a6f4db24cc252ea30",
+    "crates/hysteriax-server/src/api/managed_mtls/tests/mod.rs": "5b0dd8177a6bb78a521fe939face4343d181e3c0e142f14496d422b9cced869f",
+    "crates/hysteriax-server/src/api/managed_mtls/tests/node_flow.rs": "ebf6db092be38946a9f7c446c73af18a597f566e09733bc70e2f52b63f891bda",
+    "crates/hysteriax-server/src/api/managed_mtls/tests/publication_admission.rs": "db250e9dbe09faaa9c18964471be6e4b2a120f32cf5ffe8ec368a493c9baa323",
+    "crates/hysteriax-server/src/api/managed_mtls/tests/publication_preparation.rs": "b25e0c46195c9b01fa4ad614f33fc80797400daa7be93ecd8112cc6ee81b53f8",
+    "crates/hysteriax-server/src/api/managed_mtls/tests/rotation_flow.rs": "eb4892c6e1048316fba27c5e56d10534de712f39c000243de8a0c366e1176dae",
+    "crates/hysteriax-server/src/api/managed_mtls/tests/transaction_tests.rs": "3b0beeebf371363cd53071ce616705a97f3d6f130781a0d3555794fe3e396ec9",
+    "crates/hysteriax-server/src/api/mod.rs": "1601c9573596cec7eacdac4b53a1fb9f54b21a9fdaa0b406217b2d3b235f7ebc",
+    "crates/hysteriax-server/src/api/nodes/handlers.rs": "5ff65a1934a65b5b82a2df8fdb3240060e0a30811d274c9d7b7f907211055cee",
+    "crates/hysteriax-server/src/api/nodes/handlers_creation_tests.rs": "bd0c7e42b30ba63ebcacc610430826e97323165d4ff9c06b9f7f6ce534c7b68d",
+    "crates/hysteriax-server/src/api/nodes/handlers_tests.rs": "30d8f8152ddc1b24eb69f3a8542e4cfec25fc8eb0f8badcab7de7505db106e65",
+    "crates/hysteriax-server/src/api/nodes/mod.rs": "1b37c773b0a133c9382055e3c6d8b5a57d8bd39679a16bd193ba2b474a30bffc",
+    "crates/hysteriax-server/src/api/nodes/pagination_tests.rs": "8b90f799987734d653ce65f06a49f10d838cd184de13171430753212b61b6b27",
+    "crates/hysteriax-server/src/api/nodes/preparation_tests.rs": "de4698732a802ad08144d7a451b5bdc3beeb60c87b4c0f75fd0e09184fe63b90",
+    "crates/hysteriax-server/src/api/nodes/removal_tests.rs": "9be46cb85f44ee009952fe8e8db885946a8197db2b5f012fabeab661d3b17b81",
+    "crates/hysteriax-server/src/api/nodes/ssh_fingerprint.rs": "8d3e643e83614bce3deb484277c4535367d5b78c8f272a5a5c57068c88496998",
+    "crates/hysteriax-server/src/api/nodes/ssh_fingerprint_test_support.rs": "e27174ba4b00802e24a7cc9de47e24e409dfc860e2df1aa0fb7613b5cf0c50c0",
+    "crates/hysteriax-server/src/api/nodes/test_support.rs": "ccb150f611a82020264ab7c0486cb68efbfc09996ec697953778e78e1362a209",
+    "crates/hysteriax-server/src/api/nodes/tests.rs": "50a35676400bfe5071dd99676396e9e92d09d2e7c08fbdc264992cf659f185ca",
+    "crates/hysteriax-server/src/api/nodes/transaction_tests.rs": "5cabc355fb5266032f543367acdc24d94bbdfd5e08d67421fd49ceb3f731c229",
+    "crates/hysteriax-server/src/api/resources/mod.rs": "2168ad1cbfdc2b7f506478acc42a6df5c05fc7047bf7b800c5eafc06c7af6ddc",
+    "crates/hysteriax-server/src/api/resources/mutations.rs": "3b78f66c10862c07b64f95f69edc043d648daa5c1fbacfd8181c58c3cfcf9649",
+    "crates/hysteriax-server/src/api/resources/mutations_tests.rs": "7710f4af2c17ac4e53536607c4c2a0b37a6a8f84e8dfec60f0d4d26ac3b5f076",
+    "crates/hysteriax-server/src/api/resources/test_support.rs": "25b803134347c16bde2260149c1347c5acc6eda7699e8a10e6d16f423f755aec",
+    "crates/hysteriax-server/src/api/resources/tests.rs": "d6a950f65f78aed6d09fde120315406be12843662cbd7afcef553e0cd8e66e6a",
+    "crates/hysteriax-server/src/api/resources/transaction_tests.rs": "206d10e4382d58a8797f75ca7a11750de1bf411390bd66943c7c03639ca3c813",
+    "crates/hysteriax-server/src/api/subscriptions/formats.rs": "9f361ae0078a98cc1c8c03e7e2857220c51474742484bc87b70bfbcaa0a46935",
+    "crates/hysteriax-server/src/api/subscriptions/formats_tests.rs": "6f6283305ddad2898ecd3973e26f1e0b1eb06bd5d79e9043264b13202dbc87fb",
+    "crates/hysteriax-server/src/api/subscriptions/mod.rs": "4250dda5fef77254cc8143172dc734c4f2e8da868ade2a8bf094e111aa94aecb",
+    "crates/hysteriax-server/src/api/subscriptions/templates/catalog.rs": "a6decf707d1c6d81ffc096f25a6770048512ce4234aa3dd3a702437d9ba32ea6",
+    "crates/hysteriax-server/src/api/subscriptions/templates/document.rs": "b5ef7b79947a0c399ac2b33a81e9125d7cd8377d2c582a4299f7b04222189681",
+    "crates/hysteriax-server/src/api/subscriptions/templates/mihomo_rules.rs": "7c299107bcbd1416a3e6048a4258e6fa08a28586699c414e5a854568dcec63c7",
+    "crates/hysteriax-server/src/api/subscriptions/templates/mod.rs": "7d966d587b54b16e6ea6e998315e1b461df43249f02b490593fba5887ada69dd",
+    "crates/hysteriax-server/src/api/subscriptions/templates/native_source.rs": "380b9f4d2292bef7b5b0e0e8ccad0f92dc8add72e749358d630a9681533d9970",
+    "crates/hysteriax-server/src/api/subscriptions/templates/render.rs": "bc4ae335be416c4dbb43909eae1132a04db2d89f3b2011bcfab3379c5fc75097",
+    "crates/hysteriax-server/src/api/subscriptions/templates/runtime_checks.rs": "0a18cb756c99a60ffd262b67c3d5872a0f69065f99fd001c9dd646af159b4592",
+    "crates/hysteriax-server/src/api/subscriptions/templates/schema_transform.rs": "a712e92e6b5c5ed15c32096c3c54c67dce1f01f05b56a216b9533a0d9e3a535a",
+    "crates/hysteriax-server/src/api/subscriptions/templates/store/computation.rs": "34ecbf7aa4edfc4512981b061297d4247c170dac2de542852b492e99df952416",
+    "crates/hysteriax-server/src/api/subscriptions/templates/store/handlers.rs": "8ff202b6731321c2aa53b3fb3660d3b1a299d8c4c3c0f836508be79294853147",
+    "crates/hysteriax-server/src/api/subscriptions/templates/store/handlers_tests.rs": "1496df67a7333f20dfacbee9bd7fb652b5669c4e4dba51c9dd1a082d27cdcb6e",
+    "crates/hysteriax-server/src/api/subscriptions/templates/store/mod.rs": "03ed79fc1fb869d29c3fdeeee015baf1262a9a6d6b996aba5d774b588e5d20b5",
+    "crates/hysteriax-server/src/api/subscriptions/templates/store/preparation.rs": "a316f1eff3cd98ab057956d001865941082ddfc61d0ebee0a8beefd577f00b10",
+    "crates/hysteriax-server/src/api/subscriptions/templates/store/preparation_tests.rs": "5ce2d42ed357540aecb8a2377fdc4c285dbf86598a148010a51367824b1b6163",
+    "crates/hysteriax-server/src/api/subscriptions/templates/store/test_support.rs": "d4bb15a4cf876c317f50c04152fc38b2c4c3accca32dcfbff46efe0f4f1a3223",
+    "crates/hysteriax-server/src/api/subscriptions/templates/tests.rs": "d77b5057a950626333a60bb71455d83267722bda977038295814f3fb60c173dc",
+    "crates/hysteriax-server/src/api/subscriptions/templates/transaction_tests.rs": "adea9aa1d74fa1f080ae5e716e82c05deb7c218c0001fa39b6c566019a7c6d61",
+    "crates/hysteriax-server/src/api/subscriptions/tests.rs": "e55ec841ec8362e53300bc24876924b1065857c5140d4c7f6659c4f24ef75a79",
+    "crates/hysteriax-server/src/api/tests/audit_pagination.rs": "723356a6da19fc98929ee4232ac8ca20556139cf9f9f11a577edeb424fc49515",
+    "crates/hysteriax-server/src/api/tests/auth_contention.rs": "bd113afcb863a6817669ec46e2a1487aa960bd800c473e5f82c199fe28d7e0c5",
+    "crates/hysteriax-server/src/api/tests/backend_cache.rs": "5a12613f5fab7486e6512c536860182215bde4f338bb85868f7acb36812a3694",
+    "crates/hysteriax-server/src/api/tests/job_admission.rs": "c6806fc5e0353c3dfeeb278ae56b973ddb046a612e26e67cb4442c8080c3cf87",
+    "crates/hysteriax-server/src/api/tests/jobs_pagination.rs": "cbe1a131313e510ff7e83c6d7384fa02b1f84804e5aac99f652b3521a39fee5d",
+    "crates/hysteriax-server/src/api/tests/management_contract.rs": "b750edc6c82b85ee31499e5c57ebb2cfe3db038b123cbc4852e820407b08e404",
+    "crates/hysteriax-server/src/api/tests/management_transaction.rs": "5d957273bd82427baeecdd5cfa4939e96ab843a8f552c4fe97d042338a80c6e9",
+    "crates/hysteriax-server/src/api/tests/query_optimizer.rs": "5aadf5ac76239945d406bb44261502b51869311c2c14bfbc92569863b1ac1f8c",
+    "crates/hysteriax-server/src/api/tests/routes.rs": "18b7f31c0046ba6981fd4b021e565757bb19055f58c9d0f6c0c06d7c67b01808",
+    "crates/hysteriax-server/src/api/tests/support.rs": "777ea5ad2d4cbae35ce98888d1594969a850f16e5b4949a3d4d528a8926b247c",
+    "crates/hysteriax-server/src/api/users/handlers.rs": "3c8bc10cba85c10d4527ef98a9ad1971d73584797f5202ff46ec03396a7096b9",
+    "crates/hysteriax-server/src/api/users/handlers_rotation_tests.rs": "f02e6096a433f90178fdcced62287380499b2b452d885302f05df92a0712a058",
+    "crates/hysteriax-server/src/api/users/handlers_tests.rs": "b4932a93cfd667e87d3bfdf44570be9f059a2c3b44912f32ced24585b92f8696",
+    "crates/hysteriax-server/src/api/users/mod.rs": "197b8c6f11af16b9993444e9e0c65b5b5620b29c4579022366867e8853ad0f1b",
+    "crates/hysteriax-server/src/api/users/pagination_tests.rs": "ff40f6a98b99b0dd4c2aa10090010ee30bc4027a23fef92f441ac27edd1e5cfb",
+    "crates/hysteriax-server/src/api/users/rotation.rs": "f315f25fa5bffd5f8a76746fef82430a38d2ecc175312ff90adf3f324ccfb9eb",
+    "crates/hysteriax-server/src/api/users/test_support.rs": "6702ef59f0a75637269b365b664f0fd60aca7beb0152efe5578cac782d6e490e",
+    "crates/hysteriax-server/src/api/users/tests.rs": "30fd8da1d78793051cdbfc24bc9b02f43caee284e7837a8ca11eff8a8d86fedf",
+    "crates/hysteriax-server/src/api/users/transaction_tests.rs": "6bb45a7aceda7f1252e04fd0b7be57fc63ddc87f40282fe1f0e00cd20f4841cd",
+    "crates/hysteriax-server/src/artifact_cache/mod.rs": "6902b5cdcece3408c96ecb11a0c183afd5e6033045e944ee1b41b1bccd511535",
+    "crates/hysteriax-server/src/artifact_cache/tests.rs": "1156b82557bc27328b6fe5422ee9a088cfeb8b5210da769a16281496e4fd4dea",
+    "crates/hysteriax-server/src/background/maintenance.rs": "d488bd0723895a3bf01c602cf2952364c72ad6a70b2f30812c201ff3cc350299",
+    "crates/hysteriax-server/src/background/maintenance_admission_tests.rs": "f30a0fb3b1a3366703b0dc4cff5e30ab439eb3b42ed7ac8f18329e77f09c08be",
+    "crates/hysteriax-server/src/background/maintenance_scope_tests.rs": "ed3f1de3cb4c968d92a3271b3f36d0afe48bf3df7167902e82f01024a924d4dd",
+    "crates/hysteriax-server/src/background/maintenance_tests.rs": "211f097f8079f303f1e993736b49b3fe4613451641935fbabddb658e149613b3",
+    "crates/hysteriax-server/src/background/mod.rs": "3585b245989bfa944afb46f49382718d105b3abd024d1cdef07ab3fb28441de4",
+    "crates/hysteriax-server/src/background/tests.rs": "a3eb09ae3af233844719401f082441121bddef6e0c0859b66d92b0cb1caae6b3",
+    "crates/hysteriax-server/src/bootstrap/mod.rs": "041c3a2fc0baba0ac539cc4cb4e40db62271533adceff8819fed0556218d5e5b",
+    "crates/hysteriax-server/src/bootstrap/tests.rs": "3850baebbe2ece142bfb345f8871e5c13ec78462c1e4553b8c7be66f0672d14b",
+    "crates/hysteriax-server/src/cache/mod.rs": "a063e6f3ce6bbd17f6d583fdaf698dac089c72126d032bfb7b9557c206b9bd02",
+    "crates/hysteriax-server/src/cache/tests.rs": "324f0a5bc94ab73a3e4b170fbd815a47363b97b3b52843cd754d36a38851949b",
+    "crates/hysteriax-server/src/cache_domains/bucket_tests.rs": "6198bc5e9f3f8b06632363aae65344e6fbef47031f9407150b5e1816ccd319a1",
+    "crates/hysteriax-server/src/cache_domains/cache_batch_version.sql": "7e60e2d5090b1c29c8f8d107de8c3be400fff054644da7c98cc64a8e446d8d20",
+    "crates/hysteriax-server/src/cache_domains/mod.rs": "3e9481f2e53edef625d847d9851db54789aef97c64472450998758bd5a96b997",
+    "crates/hysteriax-server/src/config/mod.rs": "7309e030628e2f8b151a6f69a452f7c4488bed1738d9402d11680a76b10daf27",
+    "crates/hysteriax-server/src/config/tests.rs": "b18d610c6f75828b47820071ef908ba21bbf6bbe3a5bd7b63a5f496b629ed1ee",
+    "crates/hysteriax-server/src/credentials/activation.rs": "71a8d50fde728bab8d860bb3cfcaa7d4dcf04d6764218e4a0ee4aa024b3e5d7c",
+    "crates/hysteriax-server/src/credentials/activation_ownership_tests.rs": "5a397a0d14927f5b755483f09061d8ad8d8d2609227cc0ea2d68502b776e4b2f",
+    "crates/hysteriax-server/src/credentials/authority_maintenance.rs": "098843709d49d5f1510949b0d86cb9ac8be95924fb5eee81f1863148bd5bc456",
+    "crates/hysteriax-server/src/credentials/authority_maintenance_tests.rs": "ccc067bab013524b28795ebd1b8f00e91ef59ed526e50bc4d4d2fa3a410ccf37",
+    "crates/hysteriax-server/src/credentials/authorization.rs": "63c60e739a247353be6d2d82c17ed5d4bab92ff8e5b41c6053e336314c916a18",
+    "crates/hysteriax-server/src/credentials/ca.rs": "7d804fb77e92df9f5699426e23b5bddca5df4957998f0247a2e02a99e9488f36",
+    "crates/hysteriax-server/src/credentials/ca_tests.rs": "400e2e71b094ed21628ba988d14cf3b3e4216af5c3b20720d3f0bf9705d4add8",
+    "crates/hysteriax-server/src/credentials/identities.rs": "2a2f734e037378f1262d1aaa104c52d4574f196f8b7ffb1cf2b4b832f01ad3dc",
+    "crates/hysteriax-server/src/credentials/identity_maintenance.rs": "1df4b48aebfd6bfd19c4122f0b403ad09752df6508d32a55db39dc62b3611043",
+    "crates/hysteriax-server/src/credentials/identity_maintenance_tests.rs": "eef0adb749322b0b92237b6309e54e20f5d9db9c6d0b897a2d0fb05a12159748",
+    "crates/hysteriax-server/src/credentials/maintenance.rs": "16c9ad1888dc7255cae26de831845784be5e661eb31ff403631b1833b55bc98e",
+    "crates/hysteriax-server/src/credentials/mod.rs": "57a1d546f7b2efaa5981a21969b3c244d00eb88c8fe9a355b641f522ac21fb8c",
+    "crates/hysteriax-server/src/credentials/node_mtls/mod.rs": "4c6da5475a5672cee54fe083d95b6c58c38b30a96bf915fddf1ead035bc73535",
+    "crates/hysteriax-server/src/credentials/node_mtls/users.rs": "38dea8ee69c1bd8f6174256c10c9579b6b7724d82ca93022d17487aebbcf558e",
+    "crates/hysteriax-server/src/credentials/node_mtls/users_tests.rs": "c1f3f0d3e365e273d1a946a1949aeabaee67913e49c4ccb5fce4783e8dcdd010",
+    "crates/hysteriax-server/src/credentials/probe.rs": "df87bce3f10d3f237a811d28ec4e88d889a38a92a40d857f9e9bb3aecdb8692d",
+    "crates/hysteriax-server/src/credentials/probe_maintenance.rs": "fcef1903c5d0588079194301fef5d542c3bd75f58652a105078dc73c00245b99",
+    "crates/hysteriax-server/src/credentials/probe_maintenance_tests.rs": "46d7e9f3624ceb7f9a3e11fc4a8fb54f653a2ba7b2adfe887242cf66ac946aa5",
+    "crates/hysteriax-server/src/credentials/probe_tests.rs": "09e0f2fc4819f698ca94f0e215421bcd549f2f6b832bb9b41a6f7866b50f249d",
+    "crates/hysteriax-server/src/credentials/reference_index.rs": "5b6ff78134947a28759fcc901f83e2c356f203afebde293abcb40e668c71597f",
+    "crates/hysteriax-server/src/credentials/reference_index_tests.rs": "e9314d7d021ac22f9286700f056fe7070a24cfe9bc82bce1e96fa8d4768fd21a",
+    "crates/hysteriax-server/src/credentials/reference_transaction_tests.rs": "f5d97fe6596cde4510ff8874b296a4bd6e5dd1ed7163a7a01b6d83d930a43f2d",
+    "crates/hysteriax-server/src/credentials/retention.rs": "ed29b8b1bf00e9dbba485f20a8d53876e1df27fd1641adb50ffc4f8b7957b31e",
+    "crates/hysteriax-server/src/credentials/retention_tests.rs": "bdcae5b431eeb13343790aa108ad761bec9a086c6d4454877d728ceaa44f073b",
+    "crates/hysteriax-server/src/credentials/rotations/cancelled.rs": "3231ba08ed60ef220df6a369d754ee080326d073b69ff2b9aef7535bb73eddb1",
+    "crates/hysteriax-server/src/credentials/rotations/cancelled_tests.rs": "edc05961d482c7a631c035eb3fd6e86703cf8c0b9c51669b9dc3dfb2dc19cb28",
+    "crates/hysteriax-server/src/credentials/rotations/cleanup.rs": "f27161f7efcb545c6c91a3c790a8ba57068e57ff3e5a4977bac681e655b3b0e0",
+    "crates/hysteriax-server/src/credentials/rotations/cleanup_tests.rs": "e0d5e9c60f556c354712f34b7705e309c58e07ff221062d8d9b3a88a53eba541",
+    "crates/hysteriax-server/src/credentials/rotations/configuration_tests.rs": "c15929ee3a5b562d92d083d4832ae9c6b656968d6fdaa53cf3ae381e34c80df6",
+    "crates/hysteriax-server/src/credentials/rotations/coordinator_tests.rs": "d811203de2268a6516fd5a501a9d4f73306365797781cc608a03cc3b4e98f066",
+    "crates/hysteriax-server/src/credentials/rotations/metadata.rs": "001e1e9d361e4da177e80ca016f83dd3369bb532354d4c08b4ca209101743f65",
+    "crates/hysteriax-server/src/credentials/rotations/metadata_tests.rs": "0bb491fdd8cd0b839f90d0f66c6fdf9069c7f792886b57cf3b86159101420520",
+    "crates/hysteriax-server/src/credentials/rotations/mod.rs": "bde10a98c99c30ca724a65870188080aa7ffe9ee2f435256315d34b702b06c0b",
+    "crates/hysteriax-server/src/credentials/rotations/probes.rs": "bc3c1f3ef43a0f53cbd834447a5ba5293886f7213d51a3d06ea4c878859ad9d7",
+    "crates/hysteriax-server/src/credentials/rotations/probes_tests.rs": "114c030aebe08a703dfba97b5f7f3399cebaf50804571753747a76550a9eaf92",
+    "crates/hysteriax-server/src/credentials/rotations/publication.rs": "06a601bcad399e3327b7bb3de324b4310f68255e209dfa4021d914f40b9204d7",
+    "crates/hysteriax-server/src/credentials/rotations/publication_tests.rs": "8594a0fbfd08301eb153dfaa7d61175322a7c37ae6a267cda26bb93d301e1c11",
+    "crates/hysteriax-server/src/credentials/rotations/release.rs": "75a9b1f934b95b1407c2ccd50a33924df69f09db5701470d9a651f84c9bf8cbd",
+    "crates/hysteriax-server/src/credentials/rotations/release_tests.rs": "18f1f4e1b10c3eb1e5f08ed17b1dfe382888f0b9fb8fae702328422f340ef8d4",
+    "crates/hysteriax-server/src/credentials/rotations/superseded.rs": "47524f9190c8a40f6694d14e3626ab014c507c008ab120ea50f3acbd9ee93037",
+    "crates/hysteriax-server/src/credentials/rotations/superseded_tests.rs": "58081f756f2719c74d60e9447a82dfd246047b6837df2ea3e60552ccd26728ca",
+    "crates/hysteriax-server/src/credentials/rotations/trust.rs": "3e35863543b4a374c4240f6ab30fa32b849820c1a4e6d0ea4b217ba44bbe1cfa",
+    "crates/hysteriax-server/src/credentials/rotations/trust_tests.rs": "90e58d701c594a4cda148b8a31d40a598db7a7ac981a71a643e682a799094042",
+    "crates/hysteriax-server/src/credentials/rotations/users.rs": "930204f4cc32d645b20cd47099c07af42dab270d93ff6d8ad1ddc945a3d81216",
+    "crates/hysteriax-server/src/credentials/rotations/users_tests.rs": "d42a880719635d8617c815f3817c185984ad50197f537657d412451bec268ebd",
+    "crates/hysteriax-server/src/credentials/tests.rs": "41c36a9a4aaddde5034a4449a5674b42251b86b543eb6a47b46e545d3c632366",
+    "crates/hysteriax-server/src/credentials/worker/mod.rs": "fb6032e81c57c0bba4bd95f199a8c0090b3d3cb020d2108a462b639143f1e8ab",
+    "crates/hysteriax-server/src/credentials/worker/persistence.rs": "d2e2a7149cfb58ee6633dc2f1d31704a37fd82fdebd6028e398772a6794577e1",
+    "crates/hysteriax-server/src/credentials/worker/persistence_tests.rs": "3ce5d40a13c60f8461cdcfa9c03f9a6f11203a2768acae0709580392959a9fe7",
+    "crates/hysteriax-server/src/db/cutover_tests.rs": "d16a5f033c32caecac50c72b5e6b882f8383983472486d2ca5a3c1f287c4510b",
+    "crates/hysteriax-server/src/db/legacy_lock_fixture.rs": "9a2467e019ea775d497e4bc52cfbfed84af9035e853a878c1d1dd0e33e667f22",
+    "crates/hysteriax-server/src/db/mod.rs": "9fff9b45bf8a4885b8260faaf11e6a8f54a616a73ec1b075b9788a1cc391582c",
+    "crates/hysteriax-server/src/db/runtime_timeout_tests.rs": "4759252bbfc35af03005718252c171177d224b0685808030ce0c7e01073dc814",
+    "crates/hysteriax-server/src/db/test_relay.rs": "178c901ad5eab8c82e447a8ea783a66ac361778d2b54b232400482e02f883938",
+    "crates/hysteriax-server/src/db/tests.rs": "cb34767d77bcb3d1caafd395dd4e91ec57b8ec8665b7206dd223763d87079a7c",
+    "crates/hysteriax-server/src/db/transaction_cancellation_tests.rs": "90595180cb00c4eda4e538ddadfe8c785badb96821e9aee3ef35182f78919b1e",
+    "crates/hysteriax-server/src/deployment/drift.rs": "e27bf87083e5997374d2ac29bf24ff9d685ecfd11861949baf302a5156b20ec0",
+    "crates/hysteriax-server/src/deployment/drift_tests.rs": "36b6a7f5f37cbf43f63743fc8d730b5090de9bfd3b4322b0bb4e5130ded86442",
+    "crates/hysteriax-server/src/deployment/kick.rs": "34fbbbd795af0f8d8aa3dec9fef4c24c7e87fa4e7b45fd317181ff89430ba08d",
+    "crates/hysteriax-server/src/deployment/kick_tests.rs": "b531e42569b1d01bbe186382d520503299f2ad075a2039e5a39257a44918b718",
+    "crates/hysteriax-server/src/deployment/mod.rs": "d334e0fa510d050006dbbe1c7984fc4a1c8d4ba785fd987226c1f41f867ca864",
+    "crates/hysteriax-server/src/deployment/probe_tokens.rs": "f11f84aa50e23c74a19cd8935f577bf2c800f4280b0d7e7a1cadbf782e647871",
+    "crates/hysteriax-server/src/deployment/probe_tokens_tests.rs": "ef1945dd2f8aa1a2e309b9d8cfe8cb31614fbe131988a79d3d6b0209494c6852",
+    "crates/hysteriax-server/src/deployment/progress_tests.rs": "b8c39d9dc1187546a6fb894868d6d237536e56125d43773c18c9328252acb153",
+    "crates/hysteriax-server/src/deployment/tests.rs": "52755a19f1c54afe8c0c2c1f69588dc272dc5f407022537c260360eb429bffe3",
+    "crates/hysteriax-server/src/dns/binding.rs": "82c87356005e4c2c696a0f7bb4836d9d59b248214df92012ad506235daa0eae5",
+    "crates/hysteriax-server/src/dns/binding_tests.rs": "d775875ff7106550489a85cd9e4f7bc4d417de447c5f6cdaae3364a3006d2ab5",
+    "crates/hysteriax-server/src/dns/execution.rs": "129741e64dd15542359c32c72509a1df5024e2a8ef346f6c3b231e076cfe9a15",
+    "crates/hysteriax-server/src/dns/mod.rs": "30b26efdfc78d4c6767c24e33ada8e4a14a662c0bcb3ec43b102c9c6a0cbc08e",
+    "crates/hysteriax-server/src/dns/probe/mod.rs": "045b2d86fef5e1691c390c149167f319598b93a85b513e7be7517d4c85166ed7",
+    "crates/hysteriax-server/src/dns/probe/persistence.rs": "30ab7592a3c724248b109183d30701887199b5c077b34ebf5c84557c164d3cac",
+    "crates/hysteriax-server/src/dns/probe/persistence_tests.rs": "c76b865c61fe0f64f32e734ce3860b2acec2f9ffc8f2ee1e3504312fb093699f",
+    "crates/hysteriax-server/src/dns/provider.rs": "4930f42aadde4d4691d55c4585fcdd44ffbc27080fb4ca3efc1696a318dbd96f",
+    "crates/hysteriax-server/src/dns/provider_tests.rs": "fe9be55c5c85295329c91dc2a9e2fdc7a2ba467463e57d2175b73aab5c3a2cf8",
+    "crates/hysteriax-server/src/dns/rotation.rs": "487a0bd9b5814cfc520bee634060f5cdbc7c0daff26089b697525a6419e93dde",
+    "crates/hysteriax-server/src/dns/rotation_loader_tests.rs": "c638b5c509c2704cac4de524251ad71b6c8b3b563f22d9ee9332e05143d435aa",
+    "crates/hysteriax-server/src/dns/rotation_tests.rs": "85294cc06c738ccbf0ad18f6b2f25ba7aae9226616bcba29832eb31def61bf76",
+    "crates/hysteriax-server/src/dns/ssh_target_tests.rs": "8c7b98e892ffba476fcf18b8b0d4023cc5fb8afb72d6e75f90883a5f3e1d505d",
+    "crates/hysteriax-server/src/dns/test_support.rs": "3af12995fb4fba12de49f26178a5929ed711316ac144184c342bb56d6574c859",
+    "crates/hysteriax-server/src/dns/tests.rs": "8c86e0b6d75abced09e51074ce7c261427e59fcba6e4785fe1e55aafd908cefd",
+    "crates/hysteriax-server/src/dns/validation_tests.rs": "c9790894c8d9c6cf62ab69616695a69ad3805ee1ee90e894fc21b19c2b37536a",
+    "crates/hysteriax-server/src/dns/worker/mod.rs": "a09458ceda86cc6fe0d23faceb6605ebbc3b5d336966a4fe30c787d7752b8e7f",
+    "crates/hysteriax-server/src/dns/worker/records.rs": "62a0a4b89f5e2d98be432882f51b715d04027e9de2b34703022fec8d22986d7e",
+    "crates/hysteriax-server/src/dns/worker/records_tests.rs": "365b001524e2ecd6cf4eae0ee936c3c9e8bd65cd9c36ed0c7568095f0365213b",
+    "crates/hysteriax-server/src/dns/worker/refresh.rs": "364e63b18f58a0f151b7d8c6b10cd1e4b9d3e31bcdfb68f6c36f1e8bfa884953",
+    "crates/hysteriax-server/src/dns/worker/refresh_tests.rs": "6044325148902805c6d37506a09d181286b2268ba4c6cefcf070696cb3dbbd21",
+    "crates/hysteriax-server/src/dns/worker/tests.rs": "f0d1f0d06e141835dfd354327d02f322bf33d4c3a37938f526ec49a6e62288b7",
+    "crates/hysteriax-server/src/error/mod.rs": "f9cbf44ea306779895bab1c032fc8d7dd2a9b9e2a6eccabc532d076edf85ade7",
+    "crates/hysteriax-server/src/error/tests.rs": "05bc1e22d97295843595e04f638c05d4cd0c4441090305122f5043f8a5404832",
+    "crates/hysteriax-server/src/events/mod.rs": "ba2d383815a6c9dd0a0126f42c3577a862eceee10917253bb034d633f78d3d8c",
+    "crates/hysteriax-server/src/events/tests.rs": "327fd079fe85832919e3a2beec8beb1abf2b3f298ad54168fb5ba23122a501ec",
+    "crates/hysteriax-server/src/execution/boundary_tests.rs": "15e261bb7fda9b099caee5bf75d1b426833e7d147869c5a563bd386436436eec",
+    "crates/hysteriax-server/src/execution/epoch_tests.rs": "2f4e889edbc7826ebf7a1c273dcda75e1c9ea29aa32cd4fdf933492e18624aaf",
+    "crates/hysteriax-server/src/execution/finalization.rs": "040449cf4151d1d5194d7c672ee33c0368663e67d7db2b2637dabcc9484db6eb",
+    "crates/hysteriax-server/src/execution/finalization_benchmark.rs": "53e10068caefce93e8e23ded97b7bd72be19501ae7c8cf0f6a038e47cc2348cc",
+    "crates/hysteriax-server/src/execution/finalization_test_relay.rs": "83889c0628e3ec9d267e96d3dd5c22a64f6659045dada8f91bba69380547d827",
+    "crates/hysteriax-server/src/execution/finalization_tests.rs": "07741ab876f646574e9d47acb96234c9e464f9dcab0733f9797605171eaf3730",
+    "crates/hysteriax-server/src/execution/identity_scope.rs": "f59c18da1216a862b78bd8c5cf7d37014f451ab2e0e3178bb54e56dfe3a840db",
+    "crates/hysteriax-server/src/execution/mod.rs": "03197570abfc63709bdc3cb883faa36943ca5fe466ac6d5113c3e08c268a084d",
+    "crates/hysteriax-server/src/execution/remote.rs": "294633e808e7a0fb960c8822335f8c2c12267fa38458d2c6927a245f8dc552c8",
+    "crates/hysteriax-server/src/execution/remote_predecessor_tests.rs": "2caa5cd927a4dd58138caa84fcba79dbf7a3f51dbc84c3f119f821327c22b537",
+    "crates/hysteriax-server/src/execution/remote_retry_tests.rs": "339a80e2dd96f1afee13fcfcbcf4016a942d2f998957e1e62e8f09b103767caa",
+    "crates/hysteriax-server/src/execution/remote_tests.rs": "28177ecaf1cbb01d96d1e2680b91bb7e47086f351be6deb0a56cea666113ffac",
+    "crates/hysteriax-server/src/execution/sampling_admission.rs": "b664acab0ddb2f9d624b1ee09aa5cb8958d7fcfe9753f358136da4cfd4b44f72",
+    "crates/hysteriax-server/src/execution/supervision.rs": "886e033df38233030092dbe734d7d6ab054e3cd969507d2f6e3567ad4454a012",
+    "crates/hysteriax-server/src/execution/tests.rs": "6e339a1ae69a817fb6363d51ef951fd90bb57fb1f98878cc25c0bf732c9c11fb",
+    "crates/hysteriax-server/src/jobs/completion_tests.rs": "96a31e1bb79a546b798bcb2cdd1bb00f8493b54dbe9c2309cc9291ebe453f30f",
+    "crates/hysteriax-server/src/jobs/dns_job_tests.rs": "821ae003342c68a6b7c29e14a57d82001908acd32fc732f7717c56ba31a3f803",
+    "crates/hysteriax-server/src/jobs/failure_tests.rs": "3e17b21cc69bf638ed0aecb3ae882f0c6116954eb46e18f2259adc6369b6fc3c",
+    "crates/hysteriax-server/src/jobs/maintenance_tests.rs": "d00a7fbb8a72a21c410f42576b290e2795fa19f6e02f5a11b1efd6412aa9ac8e",
+    "crates/hysteriax-server/src/jobs/mod.rs": "dcbe1661e352442986b2dc35491ff680e1b8483278bf7e0e345b1a7699f32e45",
+    "crates/hysteriax-server/src/jobs/node_cleanup_tests.rs": "fbf5cc0bba8897d1b3557d6fd9c44b46d7a2eb118f946ef84ce6ffe1ce14f1fd",
+    "crates/hysteriax-server/src/jobs/ownership_tests.rs": "9ec3c7c33361f79f3955603244d89a98d1c0da760a6441c4a3eac22eac81c2c1",
+    "crates/hysteriax-server/src/jobs/persistence.rs": "5e985eea5fe8d61d78594702f071dd508de6fc68bea1ae92cf9b44762147eaac",
+    "crates/hysteriax-server/src/jobs/persistence_tests.rs": "b0ca178f1bf1f4553c792f8f9fccbbcfe33d802dca341c5f31ba8e02d4a59d45",
+    "crates/hysteriax-server/src/jobs/ssh_confirmation_tests.rs": "757cccbde976246c4de34c731c8d1954480dbf2c0c1da382bc2395d22a4f0b3a",
+    "crates/hysteriax-server/src/jobs/tests.rs": "2a26e27fa231f96e9ad12a25f665ad65086581de43c28055ee0b83b9a291b62c",
+    "crates/hysteriax-server/src/kick_requests/authorization.rs": "8d46c5162fdd6af861f4f260b2914375f6720cc19c35893a7ba781687127d2ed",
+    "crates/hysteriax-server/src/kick_requests/batch_tests.rs": "383947b9c07aad35fddd917eab546159dee923cb36feb1ea852b72c984d24341",
+    "crates/hysteriax-server/src/kick_requests/mod.rs": "b1a2f307a5494bdf9cd30757316d41dbc11224134d92d8c0c3f908d7464c2a20",
+    "crates/hysteriax-server/src/kick_requests/tests.rs": "e48a27e3e8c1a77e7ed293450b7f4e028966bdd209ae03b034da96297f2ef890",
+    "crates/hysteriax-server/src/main.rs": "449f6cb220b4e4c3be94dced1acf77c62429b07d8f60d22626f3e63397bafa37",
+    "crates/hysteriax-server/src/monitoring/mod.rs": "654bab8b4e4234748ac110ffb4ddf9ac06cd181e6384ff5fca4c087828d1719c",
+    "crates/hysteriax-server/src/monitoring/tests.rs": "2d59f6aad5d52e0a51220f99e794f8ccbcbc37da06595bb08ed10983a595b4cf",
+    "crates/hysteriax-server/src/node_acme/mod.rs": "128d72e7ed7e9bf4c559a39d07bb0af546228acc275df29e47e0877d56548e9a",
+    "crates/hysteriax-server/src/node_acme/tests.rs": "fb9482ac47fd8aa1abe316433dfd96a56e7249b00a9d4960a47f59cf9b91fdc3",
+    "crates/hysteriax-server/src/node_cleanup/mod.rs": "615c607c1edd8893274f67c1fd53c9bff3a31f0dd5a589e895ea87416a3b504c",
+    "crates/hysteriax-server/src/node_cleanup/ownership_tests.rs": "05a766b32d0fc2e12154f73808c5e7b68e2fcb28b69e61c8457b6463a925c8f4",
+    "crates/hysteriax-server/src/node_limits/contention_benchmark.rs": "b9cab5786735a78f12031b6db7242f575bb73df844a880b9e74623b660d6d214",
+    "crates/hysteriax-server/src/node_limits/due_nodes.sql": "0bffc491907b7ebc59e45e1001b488a4ba2bdacfc42a1818f647a758dda9ebc2",
+    "crates/hysteriax-server/src/node_limits/evaluation.rs": "d89c0fedb94414c12b3fcaf69ba599b44504989dc2a0cce67d19d9f4147b1d2c",
+    "crates/hysteriax-server/src/node_limits/evaluation.sql": "eb7bfe77d5f221ec17ad83d3f82837253e716e438341e6b081e45f823a2aae53",
+    "crates/hysteriax-server/src/node_limits/maintenance.rs": "cb8774ce8142c2e7e7f580895080be0a022247138f04c3eb5e99c7e5de0bd118",
+    "crates/hysteriax-server/src/node_limits/maintenance_tests.rs": "8d67a602fef64797eac4775cf5b0a96599eaccfbf2a74e0120ba22f1922844d9",
+    "crates/hysteriax-server/src/node_limits/migration_tests.rs": "27e9af7fe9e24c2a52920390ff71acf7e34034579ffb03d2591c637a6a4e868a",
+    "crates/hysteriax-server/src/node_limits/mod.rs": "ba340349dc5d65b5f8f8c3017b6f344ee81bcc4d245471e14d91b8a1fe8d7aeb",
+    "crates/hysteriax-server/src/node_limits/test_support.rs": "dee639fadd36d868a0e4f1f41d4bed7ee159f22b90510bf6c3f4f4d35ad739b7",
+    "crates/hysteriax-server/src/node_limits/tests.rs": "9788561046ac4924b24565c1b789303f1f47dfaaa14311f36d5c2940f2964bfe",
+    "crates/hysteriax-server/src/overview/integration_tests.rs": "598fe614e3ba86ea9f0f4febae13656a6c3634db97536fab10354123c8701651",
+    "crates/hysteriax-server/src/overview/mod.rs": "6e5d4f514c748bff3083e4377788e5df98c0ada09eda2b749ddb60404fe9b77a",
+    "crates/hysteriax-server/src/overview/summary.rs": "d747bce944f6b7d9c9307433012029e7a0d46e3569a53f5d358fdbad32571afc",
+    "crates/hysteriax-server/src/overview/summary_failures.sql": "bae7ac371237320bddfbc9ab78d96f9ec03c2d79e1033c33197ec957a2340d2a",
+    "crates/hysteriax-server/src/overview/summary_nodes.sql": "8e654006b8fabf79e5ed8dea62dcf67782f8e24258fcdc228577c97fa8b04fda",
+    "crates/hysteriax-server/src/overview/summary_quota.sql": "83a5d2e0ef7077b950552f7f9599d92101ea368ef2ab62715e4a712aae3b1283",
+    "crates/hysteriax-server/src/overview/summary_tasks.sql": "39e88c550d64cdd8b69e483b8b6f350a405fd02e55fda282aa8c640b248d3d7c",
+    "crates/hysteriax-server/src/overview/tests.rs": "11b27acf91e3da30228c9a5fe29b03c2566a4fe1aee718832b23121295ba83ba",
+    "crates/hysteriax-server/src/proxy_monitor/mod.rs": "38f016e301a0e5804d46aea0ee1ca6f78ffc0590c1a51be7164b79578ff3a346",
+    "crates/hysteriax-server/src/proxy_monitor/temporary_material_tests.rs": "99da04d9ce35daa72c4682780bd4bb86595f5575ab4907907b7736cae6b1d9c9",
+    "crates/hysteriax-server/src/proxy_monitor/tests.rs": "c4ec949628dbe6aa90a5c92cf70a3d8cec64d3db035da2d62949c9035f1b9185",
+    "crates/hysteriax-server/src/proxy_monitor/token_tests.rs": "fbcc549eaed9a2bc2eb9e5661dd77f89d983c6c46f2e89264e0afb133e741a58",
+    "crates/hysteriax-server/src/quota_rank/mod.rs": "2c22f8882ee4dbb9cc68e05747e6159300d168a885c02e73f398abf7e69e4104",
+    "crates/hysteriax-server/src/quota_rank/quota_rank.lua": "fecab18f0729389391743ab2452207b481332fd1d99f087dac4bad358ec83fba",
+    "crates/hysteriax-server/src/quota_rank/tests.rs": "f22c0751d4f8ca28c4c815e7474769f59ef33498a5c0ab97151194ee7e60b063",
+    "crates/hysteriax-server/src/read_snapshot/mod.rs": "754f82d476b90c669130162280d5ce88748f2f20f0d58531bc6bfe67316cd032",
+    "crates/hysteriax-server/src/read_snapshot/tests.rs": "e9d56d7ce988067d05716aae0e53df465cf4a74958d50639eedb150fbf7d49c9",
+    "crates/hysteriax-server/src/redis_cache/mod.rs": "06c20ea41a2d9cb41e33d767665b8c1a9526f4a37e8026482d10d94de7a43aab",
+    "crates/hysteriax-server/src/redis_cache/tests.rs": "df3ae0724e48fab4f0e45221f8adacfc0fd9eebf3f62b49445151dd67ed65814",
+    "crates/hysteriax-server/src/runtime_config/mod.rs": "6e2ab03f5b733687b7be2779c1c0ac38c6fddffdd9c6b313c3bc73686a723722",
+    "crates/hysteriax-server/src/runtime_config/tests.rs": "ff5640667a754a9a4762b9a64cbf567a813eda24cb255875848b67cf97085367",
+    "crates/hysteriax-server/src/security/mod.rs": "697a444b4ea66676506c2147dc16a5d89c04f0155c3bbb024830cb5468106c5c",
+    "crates/hysteriax-server/src/security/redaction.rs": "25d6cd656acf1a9f0de98f83a56198631b77c3142175e3641a40487743cc22e0",
+    "crates/hysteriax-server/src/security/redaction_tests.rs": "4a11a58aace54be8b886ad8819d10c8edd4a8afa335d6458d7ccd54a0fe2b77e",
+    "crates/hysteriax-server/src/security/secrets.rs": "bd313fc7dc1ce06b65ee941aa4f3422bc6292c612334c2a8112c9ee9789de6fa",
+    "crates/hysteriax-server/src/security/secrets_tests.rs": "637368238dfd7949144d31c1a0439acfbd15ba82786c19cfc1a8162504494d3f",
+    "crates/hysteriax-server/src/security/tokens.rs": "3ae5814713ff998377f22b44197ea2a44059ebc3b3ac0c09d79a0e1845d58ce9",
+    "crates/hysteriax-server/src/shutdown_tests.rs": "d75443d9e195c7e10e5226a5f9ebf6d41bdd12eed1c5c354906e0d2d24814647",
+    "crates/hysteriax-server/src/ssh/clear_tests.rs": "d7f455e801f3f383e936d3a428183a1582dae343e8da66346838ff3be2dff989",
+    "crates/hysteriax-server/src/ssh/execution_tests.rs": "ce8a8b4a073179fd649bb9c0b148dc7ffce630749de3a55f51e9ac4ea5dce793",
+    "crates/hysteriax-server/src/ssh/journal/mod.rs": "a73de5ce5c2fd29fc2d330793e8dd9aea4a22c59750ef2f16d0d86a64426550b",
+    "crates/hysteriax-server/src/ssh/journal/recheck.rs": "82fea6f076efd2f2018596244bbf123c30676fefe62595a187281f697e394fa6",
+    "crates/hysteriax-server/src/ssh/journal/tests.rs": "2ae4129a993e27647c9bf054072d9cb282c8a33286b8b673e844590634bd8e3d",
+    "crates/hysteriax-server/src/ssh/lifecycle_tests.rs": "079d15ca0dff7bca006f4a0a7dae82919d9933911dec0efda874de6a4b4acf7b",
+    "crates/hysteriax-server/src/ssh/mod.rs": "7400275c3a1dfddae9593bc99e5b8140d01ee10288cb9f9ee8696d56e2815a62",
+    "crates/hysteriax-server/src/ssh/tests.rs": "2b23984366f3a4bf3ae97b9f84da58e248084c83a49b27e01cce2915c9c9ac80",
+    "crates/hysteriax-server/src/ssh/upload.rs": "7afcf7266d4a4c72e2867f620ca11fb7d84db8bbbaab56fb327730f5d80b1248",
+    "crates/hysteriax-server/src/ssh/upload_openssh_tests.rs": "da75549edda2f37299a9b6183528d72b2f0f572bb9694777ca9d07a161be220d",
+    "crates/hysteriax-server/src/ssh/upload_tests.rs": "720816a14bcba7ff8f37842031bf893b624b895b7940a897e414b24d26ec5f3e",
+    "crates/hysteriax-server/src/state.rs": "6ca9b8a3d0fc40fc570ced8c4979185e8a1c719aa6cceb62ec438f38f826e72c",
+    "crates/hysteriax-server/src/traffic/access.rs": "4ce71047955bc5cbd5d0b26b103fc5a7d328accd7097affaff2d30b2550ad108",
+    "crates/hysteriax-server/src/traffic/access_tests.rs": "acf86abccc6cf9d184898e794b6c17e408fb5f190378aa2708d36f562ea4eb5c",
+    "crates/hysteriax-server/src/traffic/batch_bulk_tests.rs": "fb3eea76d994b2e78c568589b32dc3f6b1506e86bec6babdc28ab4cdada67440",
+    "crates/hysteriax-server/src/traffic/batch_tests.rs": "dea8925b7f8a2971aa97297781437ce7da4146c8cc391c0832be7e05e6b6d1af",
+    "crates/hysteriax-server/src/traffic/batches.rs": "e3f4bf8fd5bb63ef1c5f91c4dafb07f023c0dca5056dd0dd3380ce82add470da",
+    "crates/hysteriax-server/src/traffic/billing_checkpoint.sql": "ac31b34b4c5063799d157914569940d74ef7d9a06d4c0c60e54f425e65c5f39d",
+    "crates/hysteriax-server/src/traffic/billing_page.sql": "db84f503b00f75390adb31877882df1ada622eec285d1aa8bd3b39c51e7d9aa0",
+    "crates/hysteriax-server/src/traffic/clear.rs": "5d27289ea74f741b2bdc62d7915978319fe481ec8a893b119483087f80f63c20",
+    "crates/hysteriax-server/src/traffic/clear_response_tests.rs": "efce9c36139b24c3012962f84d9202d7069085d6769e7840c10e3b9f83af4901",
+    "crates/hysteriax-server/src/traffic/clear_tests.rs": "2c3771e6c6c2c496b74990bfa47cbad97b4e6397d1f9b7bb8b16ff4001b4a154",
+    "crates/hysteriax-server/src/traffic/mod.rs": "1d3e4b01578dbd2c51eeee794e0d888e0c64c9a2492bfbeec570546a39a6deba",
+    "crates/hysteriax-server/src/traffic/tests.rs": "dfb36fcf0e31051b6af36bb3a815f9c5005ed534478b42b7a05fd4aabd78d0a5",
+    "crates/hysteriax-server/src/traffic/work.rs": "ed0cc2ca64ccec92f0a35d18bdc47f8f7e36b4375a11dac27b123651ac1b848d",
+    "crates/hysteriax-server/src/traffic/work_tests.rs": "2c50197cada31beca85fe2addb6125e7ba5dfb6e8e4413a1c46b72d73e573da6",
+    "crates/hysteriax-server/src/user_credentials/mod.rs": "477b1472692836d7e377c1c07695b6141c217ff4e747b948c3a6cd150d3ba07c",
+    "crates/hysteriax-server/src/user_credentials/tests.rs": "39514fd058dc682de15663247084ce18451237e79649ac6f22bf94488f689bde",
+    "crates/hysteriax-template-validator/Cargo.toml": "cdadb169beb951f692f8aa45306fb5f3efff8af828ffe4af689a087d9899b04d",
+    "crates/hysteriax-template-validator/build.rs": "1027cc1462f4ed3c1be1b771d2f52c4fef906658375e9a6910fb3ae1450dd675",
+    "crates/hysteriax-template-validator/src/lib.rs": "aa6341507b099b0ecc5d568cbab942a2fc23468c41b4a9ac5efb6eaa447578c4",
+    "deploy/caddy/Caddyfile": "2959a037158c1f05ba210e2c9a143486b6fa0ed2d8396ba4e7c4a6cd89ba2fd5",
+    "deploy/hysteria-v2.12.3.sha256": "1825ec2a32e49dca913160fb94c1b5e6a9660e241d1fe868a4e6154ae3e57fea",
+    "deploy/hysteriax-acme.service": "768866202343e23125cffca8de313ac39cd70f5377e48dd7556a0cba27624491",
+    "deploy/licenses/README.md": "c5c2a170b760a7b4bc1cb5c08233a4c50458dca9fc01142313cad988a4bc47ee",
+    "deploy/licenses/jsonschema.LICENSE": "117829c3ca21efb132d81a44b55363d395ab8eea18526873bc828da4c0e5f038",
+    "deploy/mihomo-v1.19.31.sha256": "227ebc5b7626209f405c73341306346aba4fa886816ec3b06a6bbf47273404ed",
+    "deploy/node-acme-prepare.sh": "e3f6365079cacda9901e45e4adff655a2987defca2c732ce8334a069653dc4ff",
+    "deploy/node-acme-resume.sh": "ee5b1da10320332da8a5c1c3f4405ccc950801a05b94570c02477f64fd502e12",
+    "deploy/node-install.sh": "ed9b0bdb67e2650f8f240ee083f142a16df1393969c409e786ed8cccc3920989",
+    "deploy/node-rollback.sh": "6f08662b438cd86497e1c490cfc699e0e191f6c28c9535ac6a84b5303cfc2685",
+    "openapi/openapi.yaml": "d971ab51f4340f199777b022206fe9b58c8dc96433e0eff39f16a0c81f653a59",
+    "tests/fixtures/acme-dns-providers.json": "02105eb6f8a73578cadd6a794e469aafa2decf4c7a92c9256861dec1c6e3fef2",
+    "tests/fixtures/credentials-test.crt": "539f243e7b646389b2f5a3715a4f5e9448085a20adb0799ed80432a822b59971",
+    "tests/fixtures/credentials-test.key": "2d01b7d3c1d35639ce2dc25700d53e3956bf8586065fdd3681075716621eec8b",
+    "tests/fixtures/mihomo-hysteria2.yaml": "ce2734314b7080c5a9539f3869706156d02f313e60d9f4dbfa1c81391eb3ac75",
+    "tests/fixtures/runtime/egress-guard.Dockerfile": "467c0100cbbaf8694e2802d4d1eef50128b801c64a6b1b5463f91681c98d3eda",
+    "tests/fixtures/runtime/egress-guard.sh": "3b5c8cd0faa2636ae0b4ca634d7805f992932546eb392f354e93da086e100508",
+    "tests/fixtures/runtime/node-acme-ca.py": "1295321a43b1bbb8aeecd225cd6e584180a6156b6d60748056fffaed4e246f82",
+    "tests/fixtures/runtime/systemd-node.Dockerfile": "6a405780ff3886b0e79336de76da97604199f89019f06fe8a8aa32d632f39c3e",
+    "tests/fixtures/template-validator/README.md": "2ebc9a58d4e343076683c8cffcce5424c878c31ff072aabbf2bf16bb44d7c7bc",
+    "tests/fixtures/template-validator/advanced-verdicts.json": "96bf573d2e1dcdf3426a84d7435a516a3dcf6eaee60d3a65b4c262d064a294de",
+    "tests/fixtures/template-validator/generate_corpus.py": "9e62e2bce4367d4dcb6eb4d67be64574ee35d56a2d0968d90f9cd0ec8b1bd825",
+    "tests/fixtures/template-validator/generate_edges.py": "c3b2bff7cd89bf47f932abaf082db0e1d8ee08b7f218edf37b2cedfe4f2b9e78",
+    "tests/fixtures/template-validator/inputs/mihomo-hysteria2.yaml": "ce2734314b7080c5a9539f3869706156d02f313e60d9f4dbfa1c81391eb3ac75",
+    "tests/fixtures/template-validator/inputs/mihomo-template.yaml": "710cfed6cd0584cf34779b681c1b8ef9e3f701696ded2e781a5810b4ca201518",
+    "tests/fixtures/template-validator/inputs/singbox-template.json": "168d63547a5cc64d82a0e187052304aeb49b605ed2d27c2bf5645fef165d8c20",
+    "tests/fixtures/template-validator/verdicts.json": "81268defe5283d6f0e84bd955547b5683b0a1b88d2a1bdd598f4143ef2fa4604",
+    "tests/integration/verify-execution-finalization.py": "13df3bb01c46d21ebad2e6f2a2d59f260ecc0a3e2f974074f0888ddbdd0022eb",
+    "tests/performance/verify-execution-finalization.py": "df5717b7800b652752e196e173039622b6a086fd4aa78069e4d07d346fdba367",
+    "tests/requirements.txt": "bc057a97eb28dcd0f52fa148683e88dacafa5578ceafbbf126f18d0e3cb43487",
+    "tests/support/rust_test_binary.py": "ce22e48db09d3e281b9c30a0e2f41da8bd9d97864c6c08e19f320d512079e0f3"
+  },
+  "implementation_patch_sha256": "e4a447e437594dc149e61b22020bc664958ad3db007ba7474242b5c0542c4ab7",
+  "functional_regression": {
+    "acceptance_passed": true,
+    "executable_sha256": "d5e4f1016001530c1f2f481bf32e92d918b36ef0ee9cd91373577014612c2e56",
+    "requested_rounds": 30,
+    "filters": {
+      "execution::": 31,
+      "background::": 19,
+      "jobs::": 94,
+      "api::execution_rechecks::": 11,
+      "api::job_admission_tests::": 1,
+      "api::managed_mtls::tests::rotation_flow::": 17,
+      "api::managed_mtls::tests::publication_preparation::": 6,
+      "credentials::rotations::": 143,
+      "credentials::node_mtls::": 17,
+      "dns::probe::persistence::tests::": 10,
+      "dns::rotation::tests::": 9,
+      "dns::worker::records::tests::": 9,
+      "dns::worker::refresh::tests::": 10,
+      "node_cleanup::ownership_tests::": 5,
+      "node_limits::maintenance::": 12,
+      "proxy_monitor::token_tests::": 6,
+      "deployment::progress_tests::": 8
+    },
+    "selected_tests": 408,
+    "cases": [
+      {
+        "label": "round-01",
+        "seconds": 227.95271904199998,
+        "segments": [
+          {
+            "segment": "parallel",
+            "exit_code": 0,
+            "summary": "test result: ok. 404 passed; 0 failed; 3 ignored;",
+            "passed": 404,
+            "failed": 0,
+            "ignored": 3,
+            "verified": true
+          },
+          {
+            "segment": "isolated",
+            "exit_code": 0,
+            "summary": "test result: ok. 1 passed; 0 failed; 0 ignored;",
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0,
+            "verified": true
+          }
+        ],
+        "passed": 405,
+        "failed": 0,
+        "ignored": 3,
+        "verified": true,
+        "summary": "405 passed; 0 failed; 3 ignored"
+      },
+      {
+        "label": "round-02",
+        "seconds": 233.72267254200003,
+        "segments": [
+          {
+            "segment": "parallel",
+            "exit_code": 0,
+            "summary": "test result: ok. 404 passed; 0 failed; 3 ignored;",
+            "passed": 404,
+            "failed": 0,
+            "ignored": 3,
+            "verified": true
+          },
+          {
+            "segment": "isolated",
+            "exit_code": 0,
+            "summary": "test result: ok. 1 passed; 0 failed; 0 ignored;",
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0,
+            "verified": true
+          }
+        ],
+        "passed": 405,
+        "failed": 0,
+        "ignored": 3,
+        "verified": true,
+        "summary": "405 passed; 0 failed; 3 ignored"
+      },
+      {
+        "label": "round-03",
+        "seconds": 227.93243608299997,
+        "segments": [
+          {
+            "segment": "parallel",
+            "exit_code": 0,
+            "summary": "test result: ok. 404 passed; 0 failed; 3 ignored;",
+            "passed": 404,
+            "failed": 0,
+            "ignored": 3,
+            "verified": true
+          },
+          {
+            "segment": "isolated",
+            "exit_code": 0,
+            "summary": "test result: ok. 1 passed; 0 failed; 0 ignored;",
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0,
+            "verified": true
+          }
+        ],
+        "passed": 405,
+        "failed": 0,
+        "ignored": 3,
+        "verified": true,
+        "summary": "405 passed; 0 failed; 3 ignored"
+      },
+      {
+        "label": "round-04",
+        "seconds": 228.855284333,
+        "segments": [
+          {
+            "segment": "parallel",
+            "exit_code": 0,
+            "summary": "test result: ok. 404 passed; 0 failed; 3 ignored;",
+            "passed": 404,
+            "failed": 0,
+            "ignored": 3,
+            "verified": true
+          },
+          {
+            "segment": "isolated",
+            "exit_code": 0,
+            "summary": "test result: ok. 1 passed; 0 failed; 0 ignored;",
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0,
+            "verified": true
+          }
+        ],
+        "passed": 405,
+        "failed": 0,
+        "ignored": 3,
+        "verified": true,
+        "summary": "405 passed; 0 failed; 3 ignored"
+      },
+      {
+        "label": "round-05",
+        "seconds": 231.21917695800005,
+        "segments": [
+          {
+            "segment": "parallel",
+            "exit_code": 0,
+            "summary": "test result: ok. 404 passed; 0 failed; 3 ignored;",
+            "passed": 404,
+            "failed": 0,
+            "ignored": 3,
+            "verified": true
+          },
+          {
+            "segment": "isolated",
+            "exit_code": 0,
+            "summary": "test result: ok. 1 passed; 0 failed; 0 ignored;",
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0,
+            "verified": true
+          }
+        ],
+        "passed": 405,
+        "failed": 0,
+        "ignored": 3,
+        "verified": true,
+        "summary": "405 passed; 0 failed; 3 ignored"
+      },
+      {
+        "label": "round-06",
+        "seconds": 232.1679845829999,
+        "segments": [
+          {
+            "segment": "parallel",
+            "exit_code": 0,
+            "summary": "test result: ok. 404 passed; 0 failed; 3 ignored;",
+            "passed": 404,
+            "failed": 0,
+            "ignored": 3,
+            "verified": true
+          },
+          {
+            "segment": "isolated",
+            "exit_code": 0,
+            "summary": "test result: ok. 1 passed; 0 failed; 0 ignored;",
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0,
+            "verified": true
+          }
+        ],
+        "passed": 405,
+        "failed": 0,
+        "ignored": 3,
+        "verified": true,
+        "summary": "405 passed; 0 failed; 3 ignored"
+      },
+      {
+        "label": "round-07",
+        "seconds": 227.5564837080001,
+        "segments": [
+          {
+            "segment": "parallel",
+            "exit_code": 0,
+            "summary": "test result: ok. 404 passed; 0 failed; 3 ignored;",
+            "passed": 404,
+            "failed": 0,
+            "ignored": 3,
+            "verified": true
+          },
+          {
+            "segment": "isolated",
+            "exit_code": 0,
+            "summary": "test result: ok. 1 passed; 0 failed; 0 ignored;",
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0,
+            "verified": true
+          }
+        ],
+        "passed": 405,
+        "failed": 0,
+        "ignored": 3,
+        "verified": true,
+        "summary": "405 passed; 0 failed; 3 ignored"
+      },
+      {
+        "label": "round-08",
+        "seconds": 224.7433504999999,
+        "segments": [
+          {
+            "segment": "parallel",
+            "exit_code": 0,
+            "summary": "test result: ok. 404 passed; 0 failed; 3 ignored;",
+            "passed": 404,
+            "failed": 0,
+            "ignored": 3,
+            "verified": true
+          },
+          {
+            "segment": "isolated",
+            "exit_code": 0,
+            "summary": "test result: ok. 1 passed; 0 failed; 0 ignored;",
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0,
+            "verified": true
+          }
+        ],
+        "passed": 405,
+        "failed": 0,
+        "ignored": 3,
+        "verified": true,
+        "summary": "405 passed; 0 failed; 3 ignored"
+      },
+      {
+        "label": "round-09",
+        "seconds": 226.47902250000016,
+        "segments": [
+          {
+            "segment": "parallel",
+            "exit_code": 0,
+            "summary": "test result: ok. 404 passed; 0 failed; 3 ignored;",
+            "passed": 404,
+            "failed": 0,
+            "ignored": 3,
+            "verified": true
+          },
+          {
+            "segment": "isolated",
+            "exit_code": 0,
+            "summary": "test result: ok. 1 passed; 0 failed; 0 ignored;",
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0,
+            "verified": true
+          }
+        ],
+        "passed": 405,
+        "failed": 0,
+        "ignored": 3,
+        "verified": true,
+        "summary": "405 passed; 0 failed; 3 ignored"
+      },
+      {
+        "label": "round-10",
+        "seconds": 226.54699250000021,
+        "segments": [
+          {
+            "segment": "parallel",
+            "exit_code": 0,
+            "summary": "test result: ok. 404 passed; 0 failed; 3 ignored;",
+            "passed": 404,
+            "failed": 0,
+            "ignored": 3,
+            "verified": true
+          },
+          {
+            "segment": "isolated",
+            "exit_code": 0,
+            "summary": "test result: ok. 1 passed; 0 failed; 0 ignored;",
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0,
+            "verified": true
+          }
+        ],
+        "passed": 405,
+        "failed": 0,
+        "ignored": 3,
+        "verified": true,
+        "summary": "405 passed; 0 failed; 3 ignored"
+      },
+      {
+        "label": "round-11",
+        "seconds": 226.60683599999993,
+        "segments": [
+          {
+            "segment": "parallel",
+            "exit_code": 0,
+            "summary": "test result: ok. 404 passed; 0 failed; 3 ignored;",
+            "passed": 404,
+            "failed": 0,
+            "ignored": 3,
+            "verified": true
+          },
+          {
+            "segment": "isolated",
+            "exit_code": 0,
+            "summary": "test result: ok. 1 passed; 0 failed; 0 ignored;",
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0,
+            "verified": true
+          }
+        ],
+        "passed": 405,
+        "failed": 0,
+        "ignored": 3,
+        "verified": true,
+        "summary": "405 passed; 0 failed; 3 ignored"
+      },
+      {
+        "label": "round-12",
+        "seconds": 228.24517962499976,
+        "segments": [
+          {
+            "segment": "parallel",
+            "exit_code": 0,
+            "summary": "test result: ok. 404 passed; 0 failed; 3 ignored;",
+            "passed": 404,
+            "failed": 0,
+            "ignored": 3,
+            "verified": true
+          },
+          {
+            "segment": "isolated",
+            "exit_code": 0,
+            "summary": "test result: ok. 1 passed; 0 failed; 0 ignored;",
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0,
+            "verified": true
+          }
+        ],
+        "passed": 405,
+        "failed": 0,
+        "ignored": 3,
+        "verified": true,
+        "summary": "405 passed; 0 failed; 3 ignored"
+      },
+      {
+        "label": "round-13",
+        "seconds": 231.25189712500014,
+        "segments": [
+          {
+            "segment": "parallel",
+            "exit_code": 0,
+            "summary": "test result: ok. 404 passed; 0 failed; 3 ignored;",
+            "passed": 404,
+            "failed": 0,
+            "ignored": 3,
+            "verified": true
+          },
+          {
+            "segment": "isolated",
+            "exit_code": 0,
+            "summary": "test result: ok. 1 passed; 0 failed; 0 ignored;",
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0,
+            "verified": true
+          }
+        ],
+        "passed": 405,
+        "failed": 0,
+        "ignored": 3,
+        "verified": true,
+        "summary": "405 passed; 0 failed; 3 ignored"
+      },
+      {
+        "label": "round-14",
+        "seconds": 229.74738741600004,
+        "segments": [
+          {
+            "segment": "parallel",
+            "exit_code": 0,
+            "summary": "test result: ok. 404 passed; 0 failed; 3 ignored;",
+            "passed": 404,
+            "failed": 0,
+            "ignored": 3,
+            "verified": true
+          },
+          {
+            "segment": "isolated",
+            "exit_code": 0,
+            "summary": "test result: ok. 1 passed; 0 failed; 0 ignored;",
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0,
+            "verified": true
+          }
+        ],
+        "passed": 405,
+        "failed": 0,
+        "ignored": 3,
+        "verified": true,
+        "summary": "405 passed; 0 failed; 3 ignored"
+      },
+      {
+        "label": "round-15",
+        "seconds": 225.52028862499992,
+        "segments": [
+          {
+            "segment": "parallel",
+            "exit_code": 0,
+            "summary": "test result: ok. 404 passed; 0 failed; 3 ignored;",
+            "passed": 404,
+            "failed": 0,
+            "ignored": 3,
+            "verified": true
+          },
+          {
+            "segment": "isolated",
+            "exit_code": 0,
+            "summary": "test result: ok. 1 passed; 0 failed; 0 ignored;",
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0,
+            "verified": true
+          }
+        ],
+        "passed": 405,
+        "failed": 0,
+        "ignored": 3,
+        "verified": true,
+        "summary": "405 passed; 0 failed; 3 ignored"
+      },
+      {
+        "label": "round-16",
+        "seconds": 229.54941712500022,
+        "segments": [
+          {
+            "segment": "parallel",
+            "exit_code": 0,
+            "summary": "test result: ok. 404 passed; 0 failed; 3 ignored;",
+            "passed": 404,
+            "failed": 0,
+            "ignored": 3,
+            "verified": true
+          },
+          {
+            "segment": "isolated",
+            "exit_code": 0,
+            "summary": "test result: ok. 1 passed; 0 failed; 0 ignored;",
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0,
+            "verified": true
+          }
+        ],
+        "passed": 405,
+        "failed": 0,
+        "ignored": 3,
+        "verified": true,
+        "summary": "405 passed; 0 failed; 3 ignored"
+      },
+      {
+        "label": "round-17",
+        "seconds": 224.5608950830001,
+        "segments": [
+          {
+            "segment": "parallel",
+            "exit_code": 0,
+            "summary": "test result: ok. 404 passed; 0 failed; 3 ignored;",
+            "passed": 404,
+            "failed": 0,
+            "ignored": 3,
+            "verified": true
+          },
+          {
+            "segment": "isolated",
+            "exit_code": 0,
+            "summary": "test result: ok. 1 passed; 0 failed; 0 ignored;",
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0,
+            "verified": true
+          }
+        ],
+        "passed": 405,
+        "failed": 0,
+        "ignored": 3,
+        "verified": true,
+        "summary": "405 passed; 0 failed; 3 ignored"
+      },
+      {
+        "label": "round-18",
+        "seconds": 221.72384824999972,
+        "segments": [
+          {
+            "segment": "parallel",
+            "exit_code": 0,
+            "summary": "test result: ok. 404 passed; 0 failed; 3 ignored;",
+            "passed": 404,
+            "failed": 0,
+            "ignored": 3,
+            "verified": true
+          },
+          {
+            "segment": "isolated",
+            "exit_code": 0,
+            "summary": "test result: ok. 1 passed; 0 failed; 0 ignored;",
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0,
+            "verified": true
+          }
+        ],
+        "passed": 405,
+        "failed": 0,
+        "ignored": 3,
+        "verified": true,
+        "summary": "405 passed; 0 failed; 3 ignored"
+      },
+      {
+        "label": "round-19",
+        "seconds": 225.23513033400013,
+        "segments": [
+          {
+            "segment": "parallel",
+            "exit_code": 0,
+            "summary": "test result: ok. 404 passed; 0 failed; 3 ignored;",
+            "passed": 404,
+            "failed": 0,
+            "ignored": 3,
+            "verified": true
+          },
+          {
+            "segment": "isolated",
+            "exit_code": 0,
+            "summary": "test result: ok. 1 passed; 0 failed; 0 ignored;",
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0,
+            "verified": true
+          }
+        ],
+        "passed": 405,
+        "failed": 0,
+        "ignored": 3,
+        "verified": true,
+        "summary": "405 passed; 0 failed; 3 ignored"
+      },
+      {
+        "label": "round-20",
+        "seconds": 220.23716279100063,
+        "segments": [
+          {
+            "segment": "parallel",
+            "exit_code": 0,
+            "summary": "test result: ok. 404 passed; 0 failed; 3 ignored;",
+            "passed": 404,
+            "failed": 0,
+            "ignored": 3,
+            "verified": true
+          },
+          {
+            "segment": "isolated",
+            "exit_code": 0,
+            "summary": "test result: ok. 1 passed; 0 failed; 0 ignored;",
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0,
+            "verified": true
+          }
+        ],
+        "passed": 405,
+        "failed": 0,
+        "ignored": 3,
+        "verified": true,
+        "summary": "405 passed; 0 failed; 3 ignored"
+      },
+      {
+        "label": "round-21",
+        "seconds": 220.2428157080003,
+        "segments": [
+          {
+            "segment": "parallel",
+            "exit_code": 0,
+            "summary": "test result: ok. 404 passed; 0 failed; 3 ignored;",
+            "passed": 404,
+            "failed": 0,
+            "ignored": 3,
+            "verified": true
+          },
+          {
+            "segment": "isolated",
+            "exit_code": 0,
+            "summary": "test result: ok. 1 passed; 0 failed; 0 ignored;",
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0,
+            "verified": true
+          }
+        ],
+        "passed": 405,
+        "failed": 0,
+        "ignored": 3,
+        "verified": true,
+        "summary": "405 passed; 0 failed; 3 ignored"
+      },
+      {
+        "label": "round-22",
+        "seconds": 228.21945833300015,
+        "segments": [
+          {
+            "segment": "parallel",
+            "exit_code": 0,
+            "summary": "test result: ok. 404 passed; 0 failed; 3 ignored;",
+            "passed": 404,
+            "failed": 0,
+            "ignored": 3,
+            "verified": true
+          },
+          {
+            "segment": "isolated",
+            "exit_code": 0,
+            "summary": "test result: ok. 1 passed; 0 failed; 0 ignored;",
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0,
+            "verified": true
+          }
+        ],
+        "passed": 405,
+        "failed": 0,
+        "ignored": 3,
+        "verified": true,
+        "summary": "405 passed; 0 failed; 3 ignored"
+      },
+      {
+        "label": "round-23",
+        "seconds": 230.24346849999984,
+        "segments": [
+          {
+            "segment": "parallel",
+            "exit_code": 0,
+            "summary": "test result: ok. 404 passed; 0 failed; 3 ignored;",
+            "passed": 404,
+            "failed": 0,
+            "ignored": 3,
+            "verified": true
+          },
+          {
+            "segment": "isolated",
+            "exit_code": 0,
+            "summary": "test result: ok. 1 passed; 0 failed; 0 ignored;",
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0,
+            "verified": true
+          }
+        ],
+        "passed": 405,
+        "failed": 0,
+        "ignored": 3,
+        "verified": true,
+        "summary": "405 passed; 0 failed; 3 ignored"
+      },
+      {
+        "label": "round-24",
+        "seconds": 230.5784950419993,
+        "segments": [
+          {
+            "segment": "parallel",
+            "exit_code": 0,
+            "summary": "test result: ok. 404 passed; 0 failed; 3 ignored;",
+            "passed": 404,
+            "failed": 0,
+            "ignored": 3,
+            "verified": true
+          },
+          {
+            "segment": "isolated",
+            "exit_code": 0,
+            "summary": "test result: ok. 1 passed; 0 failed; 0 ignored;",
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0,
+            "verified": true
+          }
+        ],
+        "passed": 405,
+        "failed": 0,
+        "ignored": 3,
+        "verified": true,
+        "summary": "405 passed; 0 failed; 3 ignored"
+      },
+      {
+        "label": "round-25",
+        "seconds": 228.47796920899964,
+        "segments": [
+          {
+            "segment": "parallel",
+            "exit_code": 0,
+            "summary": "test result: ok. 404 passed; 0 failed; 3 ignored;",
+            "passed": 404,
+            "failed": 0,
+            "ignored": 3,
+            "verified": true
+          },
+          {
+            "segment": "isolated",
+            "exit_code": 0,
+            "summary": "test result: ok. 1 passed; 0 failed; 0 ignored;",
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0,
+            "verified": true
+          }
+        ],
+        "passed": 405,
+        "failed": 0,
+        "ignored": 3,
+        "verified": true,
+        "summary": "405 passed; 0 failed; 3 ignored"
+      },
+      {
+        "label": "round-26",
+        "seconds": 228.11646666599972,
+        "segments": [
+          {
+            "segment": "parallel",
+            "exit_code": 0,
+            "summary": "test result: ok. 404 passed; 0 failed; 3 ignored;",
+            "passed": 404,
+            "failed": 0,
+            "ignored": 3,
+            "verified": true
+          },
+          {
+            "segment": "isolated",
+            "exit_code": 0,
+            "summary": "test result: ok. 1 passed; 0 failed; 0 ignored;",
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0,
+            "verified": true
+          }
+        ],
+        "passed": 405,
+        "failed": 0,
+        "ignored": 3,
+        "verified": true,
+        "summary": "405 passed; 0 failed; 3 ignored"
+      },
+      {
+        "label": "round-27",
+        "seconds": 227.48719654199977,
+        "segments": [
+          {
+            "segment": "parallel",
+            "exit_code": 0,
+            "summary": "test result: ok. 404 passed; 0 failed; 3 ignored;",
+            "passed": 404,
+            "failed": 0,
+            "ignored": 3,
+            "verified": true
+          },
+          {
+            "segment": "isolated",
+            "exit_code": 0,
+            "summary": "test result: ok. 1 passed; 0 failed; 0 ignored;",
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0,
+            "verified": true
+          }
+        ],
+        "passed": 405,
+        "failed": 0,
+        "ignored": 3,
+        "verified": true,
+        "summary": "405 passed; 0 failed; 3 ignored"
+      },
+      {
+        "label": "round-28",
+        "seconds": 226.78770183300003,
+        "segments": [
+          {
+            "segment": "parallel",
+            "exit_code": 0,
+            "summary": "test result: ok. 404 passed; 0 failed; 3 ignored;",
+            "passed": 404,
+            "failed": 0,
+            "ignored": 3,
+            "verified": true
+          },
+          {
+            "segment": "isolated",
+            "exit_code": 0,
+            "summary": "test result: ok. 1 passed; 0 failed; 0 ignored;",
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0,
+            "verified": true
+          }
+        ],
+        "passed": 405,
+        "failed": 0,
+        "ignored": 3,
+        "verified": true,
+        "summary": "405 passed; 0 failed; 3 ignored"
+      },
+      {
+        "label": "round-29",
+        "seconds": 228.56315537499995,
+        "segments": [
+          {
+            "segment": "parallel",
+            "exit_code": 0,
+            "summary": "test result: ok. 404 passed; 0 failed; 3 ignored;",
+            "passed": 404,
+            "failed": 0,
+            "ignored": 3,
+            "verified": true
+          },
+          {
+            "segment": "isolated",
+            "exit_code": 0,
+            "summary": "test result: ok. 1 passed; 0 failed; 0 ignored;",
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0,
+            "verified": true
+          }
+        ],
+        "passed": 405,
+        "failed": 0,
+        "ignored": 3,
+        "verified": true,
+        "summary": "405 passed; 0 failed; 3 ignored"
+      },
+      {
+        "label": "round-30",
+        "seconds": 227.59291058300005,
+        "segments": [
+          {
+            "segment": "parallel",
+            "exit_code": 0,
+            "summary": "test result: ok. 404 passed; 0 failed; 3 ignored;",
+            "passed": 404,
+            "failed": 0,
+            "ignored": 3,
+            "verified": true
+          },
+          {
+            "segment": "isolated",
+            "exit_code": 0,
+            "summary": "test result: ok. 1 passed; 0 failed; 0 ignored;",
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0,
+            "verified": true
+          }
+        ],
+        "passed": 405,
+        "failed": 0,
+        "ignored": 3,
+        "verified": true,
+        "summary": "405 passed; 0 failed; 3 ignored"
+      },
+      {
+        "label": "full",
+        "seconds": 490.2488048330006,
+        "segments": [
+          {
+            "segment": "parallel",
+            "exit_code": 0,
+            "summary": "test result: ok. 1061 passed; 0 failed; 16 ignored;",
+            "passed": 1061,
+            "failed": 0,
+            "ignored": 16,
+            "verified": true
+          },
+          {
+            "segment": "isolated",
+            "exit_code": 0,
+            "summary": "test result: ok. 1 passed; 0 failed; 0 ignored;",
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0,
+            "verified": true
+          }
+        ],
+        "passed": 1062,
+        "failed": 0,
+        "ignored": 16,
+        "verified": true,
+        "summary": "1062 passed; 0 failed; 16 ignored"
+      }
+    ],
+    "rust_min_stack": "16777216",
+    "threads": 8,
+    "isolated_tests": [
+      "jobs::node_cleanup_tests::large_record_removal_is_queued_idempotent_and_completes_without_ssh"
+    ],
+    "source_unchanged": true
+  },
+  "capacity": {
+    "acceptance_passed": true,
+    "smoke": false,
+    "cases": [
+      {
+        "actual_seconds": 910.463746292,
+        "assignments": 1000000,
+        "cached_online": [
+          10000,
+          10000
+        ],
+        "database_commands": 428212,
+        "database_response_delay_ms": 25,
+        "drain_seconds": 9.994910375,
+        "errors": 0,
+        "execution_outcomes": {
+          "committed_returned": 2360,
+          "lost": 0,
+          "recovery_required": 0,
+          "returned": 2360
+        },
+        "first_due_burst_seconds": 36.316336417,
+        "instances": 1,
+        "ledger_rows": 863,
+        "measured_seconds": 900,
+        "measured_triggers_enabled": true,
+        "nodes": 10000,
+        "observed_node_lock_waits": {
+          "count": 8,
+          "max_ms": 201.025,
+          "p50_ms": 157.905,
+          "p95_ms": 201.025
+        },
+        "pending_after_drain": 0,
+        "profile": "real package/analytics/leased billing; separate instance pools/owners; 16 writers; one ready batch/s; no SSH/HTTP",
+        "raw_online": [
+          10000,
+          10000
+        ],
+        "ready_batches_injected": 863,
+        "scheduled_evaluation": true,
+        "schema": 10,
+        "seed_triggers_disabled_only_during_import": true,
+        "select1_latency": {
+          "count": 11,
+          "max_ms": 35.380333,
+          "p50_ms": 29.9945,
+          "p95_ms": 35.380333
+        },
+        "source_transaction_latency": {
+          "count": 26944,
+          "max_ms": 4745.862875000001,
+          "p50_ms": 407.10470799999996,
+          "p95_ms": 1329.1979170000002
+        },
+        "source_writes": 26944,
+        "traffic_hour_tx": 863,
+        "unbilled_items": 0,
+        "usage_bytes": 863,
+        "users": 100000,
+        "exit_code": 0,
+        "executable_sha256": "d5e4f1016001530c1f2f481bf32e92d918b36ef0ee9cd91373577014612c2e56"
+      },
+      {
+        "actual_seconds": 905.910601875,
+        "assignments": 1000000,
+        "cached_online": [
+          10000,
+          10000
+        ],
+        "database_commands": 824262,
+        "database_response_delay_ms": 25,
+        "drain_seconds": 5.42380275,
+        "errors": 0,
+        "execution_outcomes": {
+          "committed_returned": 2454,
+          "lost": 0,
+          "recovery_required": 0,
+          "returned": 2454
+        },
+        "first_due_burst_seconds": 35.026002875,
+        "instances": 3,
+        "ledger_rows": 863,
+        "measured_seconds": 900,
+        "measured_triggers_enabled": true,
+        "nodes": 10000,
+        "observed_node_lock_waits": {
+          "count": 6,
+          "max_ms": 158.218,
+          "p50_ms": 124.45299999999999,
+          "p95_ms": 158.218
+        },
+        "pending_after_drain": 0,
+        "profile": "real package/analytics/leased billing; separate instance pools/owners; 16 writers; one ready batch/s; no SSH/HTTP",
+        "raw_online": [
+          10000,
+          10000
+        ],
+        "ready_batches_injected": 863,
+        "scheduled_evaluation": true,
+        "schema": 10,
+        "seed_triggers_disabled_only_during_import": true,
+        "select1_latency": {
+          "count": 33,
+          "max_ms": 37.29175,
+          "p50_ms": 31.065833,
+          "p95_ms": 35.982209000000005
+        },
+        "source_transaction_latency": {
+          "count": 28301,
+          "max_ms": 5052.458166,
+          "p50_ms": 375.693125,
+          "p95_ms": 1311.050125
+        },
+        "source_writes": 28301,
+        "traffic_hour_tx": 863,
+        "unbilled_items": 0,
+        "usage_bytes": 863,
+        "users": 100000,
+        "exit_code": 0,
+        "executable_sha256": "d5e4f1016001530c1f2f481bf32e92d918b36ef0ee9cd91373577014612c2e56"
+      }
+    ],
+    "source_unchanged": true
+  },
+  "environment": {
+    "settings": {
+      "RUST_MIN_STACK": "16777216",
+      "HYSTERIAX_EXECUTION_LEASE_SECONDS": "180",
+      "HYSTERIAX_DB_STATEMENT_TIMEOUT_SECONDS": "60",
+      "HYSTERIAX_DB_IDLE_TRANSACTION_TIMEOUT_SECONDS": "60",
+      "HYSTERIAX_DB_POOL_MAX_CONNECTIONS": "32"
+    },
+    "postgres": "18-alpine",
+    "database": "isolated local disk database on port 55439",
+    "regression": "12 GiB tmpfs, fsync=on, synchronous_commit=on, port 55441, 8 test threads; large cleanup separately",
+    "host_sleep_prevention": "temporary caffeinate -i over the validation driver lifetime",
+    "regression_binary_sha256": "d5e4f1016001530c1f2f481bf32e92d918b36ef0ee9cd91373577014612c2e56"
+  },
+  "postgresql": "18.6 aarch64-unknown-linux-musl; fsync=on; synchronous_commit=on",
+  "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
+  "checks": {
+    "cargo_fmt": true,
+    "git_diff_check": true,
+    "python_syntax": true,
+    "clippy": true,
+    "clippy_baseline_exclusions": [
+      "large_enum_variant",
+      "too_many_arguments",
+      "await_holding_lock"
+    ]
+  },
+  "ignored_server_tests": [
+    "test analytics::followup_tests::aligned_online_history_skips_cycles_until_an_edge_or_dirty_minute_needs_them ... ignored, query-plan performance regression; run tests/performance/verify-query-plans.sh",
+    "test analytics::followup_tests::rollup_refresh_reads_only_dirty_ranges_and_skips_empty_queues ... ignored, query-plan performance regression; run tests/performance/verify-query-plans.sh",
+    "test api::execution_rechecks::tests::actual_http_recheck_recovers_lost_fence_response_with_same_nonce_and_one_payload ... ignored, requires an owned Linux Docker fixture via TEST_SSH_JOURNAL_CONTAINER",
+    "test api::query_optimizer_tests::selective_history_search_and_status_paging_use_indexes ... ignored, query-plan performance regression; run tests/performance/verify-query-plans.sh",
+    "test execution::finalization_benchmark::benchmark_execution_finalization ... ignored, manual finalization acceptance; use tests/performance/verify-execution-finalization.py",
+    "test jobs::node_cleanup_tests::restored_snapshot_removal_completes_while_reads_and_writes_continue ... ignored, requires an explicitly restored local production snapshot",
+    "test node_limits::contention_benchmark::benchmark_lock_contention ... ignored, manual 100k-user/10k-node lock contention acceptance; use tests/performance/verify-lock-contention.py",
+    "test ssh::journal::tests::actual_ssh_response_loss_keeps_intent_and_exact_remote_receipt_without_replaying ... ignored, requires an owned Linux Docker fixture via TEST_SSH_JOURNAL_CONTAINER",
+    "test ssh::journal::tests::installed_release_is_reused_only_after_both_digest_checks_and_atomically_staged ... ignored, requires an owned Linux Docker fixture via TEST_SSH_JOURNAL_CONTAINER",
+    "test ssh::journal::tests::linux_journal_preserves_outputs_fences_replays_and_keeps_unknown_barriers ... ignored, requires an owned Linux Docker fixture via TEST_SSH_JOURNAL_CONTAINER",
+    "test ssh::journal::tests::linux_journal_preserves_payload_umask_while_receipt_files_remain_private ... ignored, requires an owned Linux Docker fixture via TEST_SSH_JOURNAL_CONTAINER",
+    "test ssh::journal::tests::linux_recheck_resumes_partial_fences_and_never_replays_payload_or_stale_authority ... ignored, requires an owned Linux Docker fixture via TEST_SSH_JOURNAL_CONTAINER",
+    "test ssh::journal::tests::linux_stalled_upload_holds_fence_until_remote_deadline_and_records_failure ... ignored, requires an owned Linux Docker fixture via TEST_SSH_JOURNAL_CONTAINER",
+    "test ssh::journal::tests::linux_upload_is_atomic_and_lost_ack_can_be_fenced_without_replaying_bytes ... ignored, requires an owned Linux Docker fixture via TEST_SSH_JOURNAL_CONTAINER",
+    "test ssh::upload::openssh_tests::real_openssh_upload_streams_a_release_sized_file_with_independent_deadline ... ignored, requires an owned OpenSSH fixture and optional bandwidth-limited TCP forwarder",
+    "test traffic::batch_tests::bulk_tests::benchmark_billing_pages ... ignored, manual billing benchmark; keeps all production triggers enabled"
+  ],
+  "cleanup": {
+    "local_postgresql_containers_and_anonymous_volumes_removed": [
+      "hx-finalization-pg",
+      "hx-finalization-regression-pg",
+      "hx-finalization-regression-memory-pg"
+    ],
+    "preexisting_buildkit_preserved": true
+  }
+}

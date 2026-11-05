@@ -57,6 +57,7 @@ async fn execute(pool: &PgPool, work: &Work, admission: bool) -> Result<()> {
         }
     })
     .await
+    .into_result()?
     {
         Some(Err(error)) => {
             work.retry(pool).await?;

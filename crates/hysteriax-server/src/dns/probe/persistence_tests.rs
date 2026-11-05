@@ -60,6 +60,8 @@ async fn prepared(f: &Fixture) -> Option<Result<Prepared>> {
         prepare_job(&f.state.pool, &f.job, &f.operation, &f.expected),
     )
     .await
+    .into_result()
+    .expect("finalization outcome must be known")
 }
 async fn work(f: &Fixture) -> Work {
     match prepared(f).await.unwrap().unwrap() {
@@ -78,6 +80,8 @@ async fn save(f: &Fixture, w: &Work, status: &str) -> Option<Result<Value>> {
         save_job(&f.state.pool, w, &observation(&w.record, status)),
     )
     .await
+    .into_result()
+    .expect("finalization outcome must be known")
 }
 async fn count(f: &Fixture, q: &str) -> i64 {
     sqlx::query_scalar(sqlx::AssertSqlSafe(q))

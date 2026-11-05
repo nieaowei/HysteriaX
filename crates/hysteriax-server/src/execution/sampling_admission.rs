@@ -94,6 +94,7 @@ pub(crate) async fn admit_sampling_read(
     let closed_scope = Scope {
         pool: pool.clone(),
         leases: vec![],
+        lifecycle: None,
         sequence: parent.map(|s| s.sequence).unwrap_or_default(),
     };
     CURRENT

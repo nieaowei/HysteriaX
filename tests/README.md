@@ -7,10 +7,10 @@
 | 目录 | 内容 | 常用入口 |
 | --- | --- | --- |
 | [unit/](unit/) | 运维脚本、测试辅助代码和文档提取工具的 Python 单元测试 | `unittest discover` |
-| [integration/](integration/) | HTTP、数据库、SSH、DNS、部署、升级和多实例功能验证 | `verify-deployment-matrix.py`、`verify-multi-instance-billing.py` |
+| [integration/](integration/) | HTTP、数据库、SSH、DNS、部署、升级和多实例功能验证 | `verify-deployment-matrix.py`、`verify-multi-instance-billing.py`、`verify-execution-finalization.py` |
 | [integration/traffic-clear/](integration/traffic-clear/) | 独立 Go 模块，验证固定 Hysteria 的流量清零、在线状态和继续计费行为 | `go test` |
 | [contracts/](contracts/) | OpenAPI、配置内核、固定 schema 和模板文档契约验证 | `verify-management-contract.rb`、`verify-subscription-validator-compatibility.py` |
-| [performance/](performance/) | 容量、并发、锁争用、查询计划及大规模清理检查 | `benchmark-multi-instance.py`、`verify-lock-contention.py`、`verify-query-plans.sh` |
+| [performance/](performance/) | 容量、并发、锁争用、查询计划及大规模清理检查 | `benchmark-multi-instance.py`、`verify-lock-contention.py`、`verify-execution-finalization.py`、`verify-query-plans.sh` |
 | [support/](support/) | 共享测试客户端、隔离数据库、故障注入和确定性夹具生成 | 由验证程序导入；`overview-fixtures.py` 也可直接运行 |
 | [fixtures/](fixtures/) | 跨组件共享证书、配置、schema 评估语料与固定结果 | 保留固定输入和结果 |
 | [fixtures/runtime/](fixtures/runtime/) | 测试节点镜像、网络隔离脚本和测试 CA 服务 | `systemd-node.Dockerfile`、`egress-guard.Dockerfile` |

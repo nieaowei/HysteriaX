@@ -139,14 +139,27 @@ impl Work {
         next_seconds: i64,
         error_code: Option<&str>,
     ) -> Result<()> {
+        execution::require_finalization_attempt(tx)?;
         self.guard_on(tx).await?;
         let lease = self.primary()?;
         let changed=sqlx::query("UPDATE background_work SET state=$4,owner=NULL,finished_at=CASE WHEN $4='complete' THEN clock_timestamp() ELSE NULL END,available_at=clock_timestamp()+make_interval(secs=>$5::double precision),error_code=$6 WHERE id=$1 AND owner=$2 AND generation=$3 AND state='running'")
             .bind(&self.id).bind(&lease.owner).bind(lease.generation).bind(if more{"queued"}else{"complete"}).bind(next_seconds as f64).bind(error_code).execute(&mut **tx).await?.rows_affected();
         anyhow::ensure!(changed == 1, "maintenance ownership was lost");
         for lease in &self.leases {
-            lease.release(tx).await?;
+            anyhow::ensure!(
+                lease.release(tx).await?,
+                "maintenance resource has an unverified remote operation"
+            );
         }
+        execution::finish_current_on(
+            tx,
+            &format!("work:{}", self.id),
+            if more {
+                execution::Disposition::Yielded
+            } else {
+                execution::Disposition::Complete
+            },
+        )?;
         Ok(())
     }
     pub async fn retry(&self, pool: &PgPool) -> Result<()> {

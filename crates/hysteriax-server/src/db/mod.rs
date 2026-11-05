@@ -130,11 +130,12 @@ where
             crate::execution::guard_current(&mut tx)
                 .await
                 .map_err(E::from)?;
-            match operation(&mut tx).await {
-                Ok(value) => tx.commit().await.map(|()| value).map_err(E::from),
+            let attempt = crate::execution::TransactionAttempt::new(&mut tx);
+            match attempt.operation(operation(&mut tx)).await {
+                Ok(value) => attempt.commit(tx).await.map(|()| value).map_err(E::from),
                 Err(error) => {
                     // Finish rollback before retrying or returning a connection.
-                    tx.rollback().await.map_err(E::from)?;
+                    attempt.rollback(tx).await.map_err(E::from)?;
                     Err(error)
                 }
             }
@@ -177,11 +178,12 @@ where
             crate::execution::guard_current(&mut tx)
                 .await
                 .map_err(E::from)?;
-            match operation(&mut tx).await {
-                Ok(value) => tx.commit().await.map(|()| value).map_err(E::from),
+            let attempt = crate::execution::TransactionAttempt::new(&mut tx);
+            match attempt.operation(operation(&mut tx)).await {
+                Ok(value) => attempt.commit(tx).await.map(|()| value).map_err(E::from),
                 Err(error) => {
                     // Finish rollback before retrying or returning a connection.
-                    tx.rollback().await.map_err(E::from)?;
+                    attempt.rollback(tx).await.map_err(E::from)?;
                     Err(error)
                 }
             }

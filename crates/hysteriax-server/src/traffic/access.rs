@@ -166,6 +166,7 @@ pub async fn dispatch_pass(pool: &PgPool, owner: &str) -> Result<()> {
             Ok::<_, anyhow::Error>(())
         })
         .await
+        .into_result()?
         .transpose()?;
     }
     Ok(())

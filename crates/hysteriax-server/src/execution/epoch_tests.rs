@@ -65,6 +65,7 @@ async fn maintenance_fences_identical_restored_owner_generation_and_work() {
     tx.rollback().await.unwrap();
     assert!(!old.renew(&pool).await.unwrap());
     let scope = Scope {
+        lifecycle: None,
         pool: pool.clone(),
         leases: vec![old],
         sequence: Default::default(),
@@ -72,6 +73,7 @@ async fn maintenance_fences_identical_restored_owner_generation_and_work() {
     assert!(observe_current(&scope).await.is_err());
     assert!(
         observe_current(&Scope {
+            lifecycle: None,
             leases: vec![current],
             ..scope
         })
