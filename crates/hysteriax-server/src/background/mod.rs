@@ -23,6 +23,7 @@ pub struct Work {
     pub leases: Vec<Execution>,
 }
 
+#[tracing::instrument(name="sampling_cycle", skip(pool,kind), fields(sampling_kind=kind))]
 pub async fn ensure_cycle(pool: &PgPool, kind: &str) -> Result<Uuid> {
     let kind = kind.to_owned();
     let id = Uuid::new_v4();
