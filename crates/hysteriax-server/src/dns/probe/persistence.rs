@@ -185,4 +185,5 @@ pub(super) async fn save_job(pool: &PgPool, work: &Work, detail: &Value) -> Resu
 }
 
 #[cfg(test)]
+#[path = "persistence_tests.rs"]
 mod tests;

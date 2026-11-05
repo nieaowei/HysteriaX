@@ -215,4 +215,5 @@ pub(super) async fn missing_proof_on(
 }
 
 #[cfg(test)]
+#[path = "trust_tests.rs"]
 pub(super) mod tests;

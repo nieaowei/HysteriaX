@@ -432,4 +432,5 @@ async fn commit(state: &AppState, work: &Work, prepared: Preparation) -> Result<
 }
 
 #[cfg(test)]
+#[path = "metadata_tests.rs"]
 mod tests;

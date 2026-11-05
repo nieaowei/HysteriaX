@@ -47,11 +47,15 @@ Subscription templates have encrypted drafts, immutable publications and explici
 | Area | Responsibility |
 | --- | --- |
 | `api/`, `openapi/openapi.yaml` | HTTP routes, contracts, templates and idempotent writes. |
-| `db.rs`, `bootstrap.rs`, `migrations/` | Transactions, maintenance, runtime compatibility and schema history. |
-| `execution.rs`, `background.rs`, `jobs.rs` | Leases, fencing, recovery and job execution. |
-| `deployment.rs`, `ssh.rs`, `credentials/` | Verified external operations and credential lifecycle. |
-| `traffic/`, `analytics/`, `node_limits.rs` | Captured billing, refresh queues and machine quotas. |
-| `cache.rs`, `cache_domains.rs`, `quota_rank.rs`, `events.rs` | Versioned caches, rankings and event publication. |
+| `db/`, `bootstrap/`, `migrations/` | Transactions, maintenance, runtime compatibility and schema history. |
+| `execution/`, `background/`, `jobs/` | Leases, fencing, recovery and job execution. |
+| `deployment/`, `ssh/`, `credentials/` | Verified external operations and credential lifecycle. |
+| `traffic/`, `analytics/`, `node_limits/` | Captured billing, refresh queues and machine quotas. |
+| `cache/`, `cache_domains/`, `quota_rank/`, `events/` | Versioned caches, rankings and event publication. |
 | `apps/macos/Sources/HysteriaX/` | Client models, transport, stores and views. |
 
 See the [verification guide](deployment-testing.md) for reproducible checks and their isolation requirements. Host capacity and replica counts are deployment decisions, separate from functional acceptance.
+
+File ownership, module depth and resource placement follow [directory and test ownership](code-layout.md). Top-level domains and genuine multi-file groups use directories; internal leaf implementations and their tests use named files in the owning directory. Explicit Rust module paths preserve namespaces and private access where physical files have been regrouped.
+
+Repository-level verification lives in `tests/`, component-specific macOS verification lives in `apps/macos/Tests/`, and operation tools live in `scripts/`. Use the [test index](../tests/README.md), [client test index](../apps/macos/Tests/README.md) and [operation index](../scripts/README.md) for current entry points. External protocol versions remain part of the wire contract independently of internal file names.

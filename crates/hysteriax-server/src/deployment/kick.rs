@@ -172,4 +172,5 @@ async fn disconnect_batch(
     Ok(())
 }
 #[cfg(test)]
+#[path = "kick_tests.rs"]
 mod tests;

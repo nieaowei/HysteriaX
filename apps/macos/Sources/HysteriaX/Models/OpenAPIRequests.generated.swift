@@ -1,4 +1,4 @@
-// Generated from openapi/openapi.yaml by scripts/generate-swift-api-models.rb. Do not edit.
+// Generated from openapi/openapi.yaml by scripts/generate/generate-swift-api-models.rb. Do not edit.
 import Foundation
 
 struct DNSConnectionCreateRequest: Encodable, Sendable {

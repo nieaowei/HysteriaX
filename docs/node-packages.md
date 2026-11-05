@@ -29,5 +29,5 @@
 ## 验证
 
 - `cargo test --workspace`：计费方向、基线、并发校正、重置、到期、提醒去重、节点认证限制和迁移。
-- `scripts/verify-node-package-client.sh`：客户端缓存兼容、输入及 API 编码、通知授权拒绝、发送重试和持久化去重。
-- `scripts/verify-node-packages-live.py`：在独立 PostgreSQL schema 和一次性 Debian systemd 节点上验证真实网卡采集、真实 Hysteria 在线连接断开、订阅过滤和自动恢复。需要 `TEST_DATABASE_URL`、测试 Python 依赖和 Docker。先构建 `docker build --build-arg BASE_IMAGE=debian:trixie -f scripts/fixtures/systemd-node.Dockerfile -t hysteriax-package-test:local .`，脚本自动清理测试节点和 schema。
+- `apps/macos/Tests/runners/verify-node-package-client.sh`：客户端缓存兼容、输入及 API 编码、通知授权拒绝、发送重试和持久化去重。
+- `tests/integration/verify-node-packages-live.py`：在独立 PostgreSQL schema 和一次性 Debian systemd 节点上验证真实网卡采集、真实 Hysteria 在线连接断开、订阅过滤和自动恢复。需要 `TEST_DATABASE_URL`、测试 Python 依赖和 Docker。先构建 `docker build --build-arg BASE_IMAGE=debian:trixie -f tests/fixtures/runtime/systemd-node.Dockerfile -t hysteriax-package-test:local .`，脚本自动清理测试节点和 schema。

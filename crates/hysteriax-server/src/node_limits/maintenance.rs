@@ -183,4 +183,5 @@ pub async fn drain_for_test(pool: &PgPool) {
 }
 
 #[cfg(test)]
+#[path = "maintenance_tests.rs"]
 mod tests;

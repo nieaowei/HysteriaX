@@ -49,7 +49,7 @@ pub(crate) fn render(r: &Request) -> Result<String> {
         quote(&r.target_epoch),
         r.target_generation,
         quote(&hash(&serde_json::to_vec(&("recheck", &r.id))?)),
-        include_str!("recheck/recheck.sh")
+        include_str!("recheck.sh")
     ))
 }
 pub(crate) fn parse(bytes: &[u8], r: &Request) -> Result<Proof> {

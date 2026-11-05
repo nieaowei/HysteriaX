@@ -8,12 +8,12 @@ services:
     environment:
       POSTGRES_DB: hysteriax
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: ${HYSTERIAX_DB_ADMIN_PASSWORD:?run scripts/init-secrets.sh first}
+      POSTGRES_PASSWORD: ${HYSTERIAX_DB_ADMIN_PASSWORD:?run scripts/ops/init-secrets.sh first}
       HYSTERIAX_DB_USER: ${HYSTERIAX_DB_USER:-hysteriax}
-      HYSTERIAX_DB_PASSWORD: ${HYSTERIAX_DB_PASSWORD:?run scripts/init-secrets.sh first}
+      HYSTERIAX_DB_PASSWORD: ${HYSTERIAX_DB_PASSWORD:?run scripts/ops/init-secrets.sh first}
     volumes:
       - postgres_data:/var/lib/postgresql
-      - ./scripts/provision-postgres.sh:/docker-entrypoint-initdb.d/10-provision-hysteriax.sh:ro
+      - ./scripts/ops/provision-postgres.sh:/docker-entrypoint-initdb.d/10-provision-hysteriax.sh:ro
     healthcheck:
       test: ["CMD-SHELL", "exec pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
       interval: 5s
@@ -24,7 +24,7 @@ services:
     image: redis:8-alpine
     restart: unless-stopped
     environment:
-      HYSTERIAX_REDIS_PASSWORD: ${HYSTERIAX_REDIS_PASSWORD:?run scripts/init-secrets.sh first}
+      HYSTERIAX_REDIS_PASSWORD: ${HYSTERIAX_REDIS_PASSWORD:?run scripts/ops/init-secrets.sh first}
     command: [sh, -ec, 'exec redis-server --requirepass "$$HYSTERIAX_REDIS_PASSWORD" --maxmemory 64mb --maxmemory-policy allkeys-lru --appendonly yes']
     volumes:
       - redis_data:/data

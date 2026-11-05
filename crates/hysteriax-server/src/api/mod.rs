@@ -3,13 +3,14 @@ pub(crate) mod authorization_groups;
 mod client_summary;
 pub(crate) mod credentials;
 pub(crate) mod dns;
-mod event_stream_v2;
+mod event_stream;
 mod execution_rechecks;
 mod idempotency;
 pub(crate) mod job_retries;
 pub(crate) mod managed_mtls;
 pub(crate) mod nodes;
 pub(crate) mod resources;
+#[path = "nodes/ssh_fingerprint.rs"]
 pub(crate) mod ssh_fingerprint;
 pub(crate) mod subscriptions;
 pub(crate) mod users;
@@ -57,9 +58,9 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v2/server/monitoring", get(crate::monitoring::get))
         .route("/api/v2/audit", get(list_audit_records))
         .route("/api/v2/cache", get(cache_stats))
-        .route("/api/v2/events/head", get(event_stream_v2::head))
-        .route("/api/v2/events", get(event_stream_v2::events))
-        .route("/api/v2/jobs/{id}/events", get(event_stream_v2::job_events))
+        .route("/api/v2/events/head", get(event_stream::head))
+        .route("/api/v2/events", get(event_stream::events))
+        .route("/api/v2/jobs/{id}/events", get(event_stream::job_events))
         .route(
             "/api/v2/execution-operations",
             get(execution_rechecks::list),
@@ -70,51 +71,54 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/api/v2/jobs", get(list_jobs))
         .route("/api/v2/jobs/{id}", get(get_job))
-        .route("/api/v2/jobs/{id}/retry", post(job_retries::v2::retry))
+        .route(
+            "/api/v2/jobs/{id}/retry",
+            post(job_retries::handlers::retry),
+        )
         .route(
             "/api/v2/jobs/{id}/confirm-fingerprint",
-            post(job_retries::v2::confirm_fingerprint),
+            post(job_retries::handlers::confirm_fingerprint),
         )
         .route(
             "/api/v2/subscription-templates",
-            get(st::list).post(st::v2::create),
+            get(st::list).post(st::handlers::create),
         )
         .route("/api/v2/subscription-templates/fields", get(st::fields))
         .route(
             "/api/v2/subscription-templates/source",
-            post(st::v2::compute_source),
+            post(st::handlers::compute_source),
         )
         .route(
             "/api/v2/subscription-templates/import",
-            post(st::v2::compute_source),
+            post(st::handlers::compute_source),
         )
         .route(
             "/api/v2/subscription-templates/{id}",
-            get(st::get).patch(st::v2::patch),
+            get(st::get).patch(st::handlers::patch),
         )
         .route(
             "/api/v2/subscription-templates/{id}/draft",
-            get(st::draft).put(st::v2::save),
+            get(st::draft).put(st::handlers::save),
         )
         .route(
             "/api/v2/subscription-templates/{id}/validate",
-            post(st::v2::compute_template),
+            post(st::handlers::compute_template),
         )
         .route(
             "/api/v2/subscription-templates/{id}/refactor",
-            post(st::v2::compute_template),
+            post(st::handlers::compute_template),
         )
         .route(
             "/api/v2/subscription-templates/{id}/preview",
-            post(st::v2::compute_template),
+            post(st::handlers::compute_template),
         )
         .route(
             "/api/v2/subscription-templates/{id}/publish",
-            post(st::v2::publication),
+            post(st::handlers::publication),
         )
         .route(
             "/api/v2/subscription-templates/{id}/rollback",
-            post(st::v2::publication),
+            post(st::handlers::publication),
         )
         .route(
             "/api/v2/subscription-templates/{id}/versions",
@@ -130,13 +134,13 @@ pub fn router(state: AppState) -> Router {
         )
         .route(
             "/api/v2/authorization-groups",
-            get(authorization_groups::list).post(authorization_groups::v2::create),
+            get(authorization_groups::list).post(authorization_groups::handlers::create),
         )
         .route(
             "/api/v2/authorization-groups/{id}",
             get(authorization_groups::get)
-                .patch(authorization_groups::v2::change)
-                .delete(authorization_groups::v2::change),
+                .patch(authorization_groups::handlers::change)
+                .delete(authorization_groups::handlers::change),
         )
         .route(
             "/api/v2/authorization-groups/{id}/users",
@@ -148,100 +152,106 @@ pub fn router(state: AppState) -> Router {
         )
         .route(
             "/api/v2/users/{id}/authorization-groups",
-            axum::routing::put(authorization_groups::v2::update_memberships),
+            axum::routing::put(authorization_groups::handlers::update_memberships),
         )
         .route(
             "/api/v2/credentials/ca-identities",
-            post(managed_mtls::v2::create),
+            post(managed_mtls::handlers::create),
         )
         .route(
             "/api/v2/credentials/{id}/ca-versions",
-            post(managed_mtls::v2::publish),
+            post(managed_mtls::handlers::publish),
         )
         .route(
             "/api/v2/credentials/{id}/ca-policy",
-            axum::routing::patch(managed_mtls::v2::update_policy),
+            axum::routing::patch(managed_mtls::handlers::update_policy),
         )
         .route(
             "/api/v2/users/{id}/managed-certificates/reissue",
-            post(managed_mtls::v2::reissue_user),
+            post(managed_mtls::handlers::reissue_user),
         )
         .route(
             "/api/v2/dns/records",
-            get(dns::list_records).post(dns::v2::create_record),
+            get(dns::list_records).post(dns::handlers::create_record),
         )
         .route(
             "/api/v2/dns/records/{id}",
             get(dns::get_record)
-                .patch(dns::v2::record_action)
-                .delete(dns::v2::record_action),
+                .patch(dns::handlers::record_action)
+                .delete(dns::handlers::record_action),
         )
         .route(
             "/api/v2/dns/records/{id}/check",
-            post(dns::v2::record_action),
+            post(dns::handlers::record_action),
         )
         .route(
             "/api/v2/nodes/{id}/dns-binding",
             get(dns::get_binding)
-                .put(dns::v2::set_binding)
-                .delete(dns::v2::unbind),
+                .put(dns::handlers::set_binding)
+                .delete(dns::handlers::unbind),
         )
         .route(
             "/api/v2/dns/connections",
-            get(dns::list_connections).post(dns::v2::create_connection),
+            get(dns::list_connections).post(dns::handlers::create_connection),
         )
         .route(
             "/api/v2/dns/connections/{id}",
             get(dns::get_connection)
-                .patch(dns::v2::patch_connection)
-                .delete(dns::v2::delete_connection),
+                .patch(dns::handlers::patch_connection)
+                .delete(dns::handlers::delete_connection),
         )
         .route(
             "/api/v2/dns/connections/{id}/verify",
-            post(dns::v2::connection_action),
+            post(dns::handlers::connection_action),
         )
         .route(
             "/api/v2/dns/connections/{id}/refresh",
-            post(dns::v2::connection_action),
+            post(dns::handlers::connection_action),
         )
         .route("/api/v2/dns/zones", get(dns::list_zones))
         .route(
             "/api/v2/dns/zones/{id}",
-            axum::routing::patch(dns::v2::patch_zone),
+            axum::routing::patch(dns::handlers::patch_zone),
         )
         .route(
             "/api/v2/dns/zones/{id}/refresh",
-            post(dns::v2::refresh_zone),
+            post(dns::handlers::refresh_zone),
         )
-        .route("/api/v2/nodes", get(nodes::list).post(nodes::create_v2))
+        .route(
+            "/api/v2/nodes",
+            get(nodes::list).post(nodes::create_handler),
+        )
         .route(
             "/api/v2/nodes/{id}",
             get(nodes::get)
-                .patch(nodes::patch_v2)
-                .delete(nodes::delete_v2),
+                .patch(nodes::patch_handler)
+                .delete(nodes::delete_handler),
         )
-        .route("/api/v2/nodes/{id}/record", delete(nodes::remove_record_v2))
-        .route("/api/v2/nodes/{id}/deploy", post(nodes::action_v2))
-        .route("/api/v2/nodes/{id}/sync", post(nodes::action_v2))
-        .route("/api/v2/nodes/{id}/rollback", post(nodes::action_v2))
-        .route("/api/v2/nodes/{id}/ssh-test", post(nodes::action_v2))
+        .route(
+            "/api/v2/nodes/{id}/record",
+            delete(nodes::remove_record_handler),
+        )
+        .route("/api/v2/nodes/{id}/deploy", post(nodes::action_handler))
+        .route("/api/v2/nodes/{id}/sync", post(nodes::action_handler))
+        .route("/api/v2/nodes/{id}/rollback", post(nodes::action_handler))
+        .route("/api/v2/nodes/{id}/ssh-test", post(nodes::action_handler))
         .route(
             "/api/v2/nodes/{id}/usage",
-            axum::routing::put(nodes::update_usage_v2),
+            axum::routing::put(nodes::update_usage_handler),
         )
         .route(
             "/api/v2/credentials",
-            get(credentials::list).post(credentials::create_v2),
+            get(credentials::list).post(credentials::create_handler),
         )
         .route(
             "/api/v2/credentials/{id}",
             get(credentials::get)
-                .patch(credentials::patch_v2)
-                .delete(credentials::delete_v2),
+                .patch(credentials::patch_handler)
+                .delete(credentials::delete_handler),
         )
         .route(
             "/api/v2/credentials/{id}/versions",
-            post(credentials::publish_v2),
+            post(credentials::publish_handler),
         )
         .route(
             "/api/v2/credentials/{id}/references",
@@ -250,27 +260,30 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v2/credential-batches/{id}", get(credentials::batch))
         .route(
             "/api/v2/credential-batches/{id}/retry",
-            post(credentials::retry_v2),
+            post(credentials::retry_handler),
         )
         .route(
             "/api/v2/admin/tokens",
             get(list_admin_tokens).post(admin_tokens::create),
         )
         .route("/api/v2/admin/tokens/{id}", delete(admin_tokens::revoke))
-        .route("/api/v2/users", get(users::list).post(users::create_v2))
+        .route(
+            "/api/v2/users",
+            get(users::list).post(users::create_handler),
+        )
         .route(
             "/api/v2/nodes/{id}/resources",
-            get(resources::list).post(resources::create_v2),
+            get(resources::list).post(resources::create_handler),
         )
         .route(
             "/api/v2/nodes/{id}/resources/{resource_id}",
-            delete(resources::delete_v2),
+            delete(resources::delete_handler),
         )
         .route(
             "/api/v2/users/{id}",
             get(users::get)
-                .patch(users::patch_v2)
-                .delete(users::delete_v2),
+                .patch(users::patch_handler)
+                .delete(users::delete_handler),
         )
         .route("/api/v2/users/{id}/usage", get(users::usage))
         .route(
@@ -279,11 +292,11 @@ pub fn router(state: AppState) -> Router {
         )
         .route(
             "/api/v2/users/{id}/credentials/rotate",
-            post(users::rotate_credentials_v2),
+            post(users::rotate_credentials_handler),
         )
         .route(
             "/api/v2/users/{id}/quota/reset",
-            post(users::reset_quota_v2),
+            post(users::reset_quota_handler),
         )
         .layer(DefaultBodyLimit::max(30 * 1024 * 1024))
         .route_layer(middleware::from_fn_with_state(
@@ -370,6 +383,7 @@ async fn require_admin(
     AUDIT_ACTOR_ID.scope(id, next.run(request)).await
 }
 
+#[path = "admin_tokens/token_usage.rs"]
 mod token_usage;
 
 async fn cache_stats(State(state): State<AppState>) -> Json<Value> {
@@ -571,6 +585,7 @@ async fn list_jobs(
 }
 
 #[cfg(test)]
+#[path = "tests/jobs_pagination.rs"]
 mod jobs_pagination_tests;
 
 pub(crate) async fn get_job(
@@ -730,6 +745,7 @@ async fn list_audit_records(
 }
 
 #[cfg(test)]
+#[path = "tests/audit_pagination.rs"]
 mod audit_pagination_tests;
 
 #[derive(Deserialize)]
@@ -864,209 +880,32 @@ pub(crate) fn generate_token() -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use sqlx::Row;
-
-    use super::{enqueue_job_in_tx, job_summary, validate_admin_token_label};
-
-    #[tokio::test]
-    async fn job_node_snapshot_survives_node_rename_and_deletion() {
-        let pool = crate::db::test_pool().await;
-        sqlx::query("WITH fixture_ssh AS (INSERT INTO credentials(id,name,kind,created_at,updated_at) VALUES('fixture-ssh','Fixture SSH','ssh_password',now(),now()) ON CONFLICT DO NOTHING), fixture_ssh_version AS (INSERT INTO credential_versions(credential_id,version,payload_enc,created_at) VALUES('fixture-ssh',1,'unused',now()) ON CONFLICT DO NOTHING) INSERT INTO nodes(id,name,ssh_host,ssh_port,ssh_username,public_host,public_port,listen_addr,node_token_hash,node_token_enc,traffic_stats_secret_enc,desired_config_enc,created_at,updated_at,ssh_credential_id,ssh_credential_version) VALUES ('snapshot-node','Original node','127.0.0.1',22,'root','node.example.test',443,':443','node-hash','node-token','stats-secret','{}',now(),now(),'fixture-ssh',1)")
-            .execute(&pool).await.unwrap();
-
-        let mut tx = pool.begin().await.unwrap();
-        let id = enqueue_job_in_tx(&mut tx, "sync", Some("snapshot-node"), Some(1))
-            .await
-            .unwrap();
-        let global_id = enqueue_job_in_tx(&mut tx, "global", None, None)
-            .await
-            .unwrap();
-        assert!(
-            enqueue_job_in_tx(&mut tx, "sync", Some("missing-node"), Some(1))
-                .await
-                .is_err()
-        );
-        tx.commit().await.unwrap();
-
-        sqlx::query("UPDATE nodes SET name = 'Renamed node' WHERE id = 'snapshot-node'")
-            .execute(&pool)
-            .await
-            .unwrap();
-        sqlx::query("DELETE FROM nodes WHERE id = 'snapshot-node'")
-            .execute(&pool)
-            .await
-            .unwrap();
-
-        let row = sqlx::query("SELECT * FROM jobs WHERE id = $1")
-            .bind(&id)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-        let summary = serde_json::to_value(job_summary(&row)).unwrap();
-        assert_eq!(summary["node_id"], "snapshot-node");
-        assert_eq!(summary["node_name"], "Original node");
-        let payload: serde_json::Value =
-            sqlx::query_scalar("SELECT payload_json FROM job_events WHERE job_id = $1")
-                .bind(&id)
-                .fetch_one(&pool)
-                .await
-                .unwrap();
-        assert_eq!(payload["node_name"], "Original node");
-
-        let global = sqlx::query("SELECT node_id, node_name FROM jobs WHERE id = $1")
-            .bind(&global_id)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-        assert!(global.get::<Option<String>, _>("node_id").is_none());
-        assert!(global.get::<Option<String>, _>("node_name").is_none());
-    }
-
-    #[tokio::test]
-    async fn collection_routes_always_paginate_without_page_suffix() {
-        use super::{AppState, Duration, StatusCode, Value, json, router, token_digest};
-
-        let pool = crate::db::test_pool().await;
-        let state = AppState::new(
-            pool,
-            crate::security::SecretBox::from_base64("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
-                .unwrap(),
-        );
-        let token = "collection-route-test";
-        sqlx::query("INSERT INTO admin_tokens(id,token_hash,label,created_at) VALUES('admin',$1,'Test',now())")
-            .bind(token_digest(token)).execute(&state.pool).await.unwrap();
-        sqlx::query("INSERT INTO users(id,name,enabled,created_at,updated_at) SELECT 'user-'||i,'User '||i,true,now(),now() FROM generate_series(1,65) i")
-            .execute(&state.pool).await.unwrap();
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let base = format!("http://{}", listener.local_addr().unwrap());
-        let app = router(state);
-        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(10))
-            .build()
-            .unwrap();
-        for path in ["nodes", "users", "dns/records", "credentials"] {
-            let url = format!("{base}/api/v2/{path}");
-            let all = client.get(&url).bearer_auth(token).send().await.unwrap();
-            assert_eq!(all.status(), StatusCode::OK);
-            let all: Value = all.json().await.unwrap();
-            assert!(
-                all.is_object(),
-                "collection responses always use the page envelope"
-            );
-            assert_eq!(all["page"], 1);
-            assert_eq!(all["page_size"], 50);
-            let total = all["total"].as_u64().unwrap() as usize;
-            assert!(all["items"].as_array().unwrap().len() <= 50);
-            if path == "users" {
-                assert_eq!(total, 65);
-                assert_eq!(all["items"].as_array().unwrap().len(), 50);
-            }
-            for query in ["page=1", "page_size=25", "page=2&page_size=25"] {
-                let response = client
-                    .get(format!("{url}?{query}"))
-                    .bearer_auth(token)
-                    .send()
-                    .await
-                    .unwrap();
-                assert_eq!(response.status(), StatusCode::OK);
-                let page: Value = response.json().await.unwrap();
-                assert_eq!(page["total"], total);
-                let size = if query == "page=1" { 50 } else { 25 };
-                assert_eq!(page["page_size"], size);
-                assert!(page["items"].as_array().unwrap().len() <= size);
-                if path == "users" && query == "page=2&page_size=25" {
-                    assert_eq!(page["page"], 2);
-                    assert_eq!(page["items"].as_array().unwrap().len(), 25);
-                }
-            }
-            for query in ["page=0", "page_size=201", "sort=invalid"] {
-                assert_eq!(
-                    client
-                        .get(format!("{url}?{query}"))
-                        .bearer_auth(token)
-                        .send()
-                        .await
-                        .unwrap()
-                        .status(),
-                    StatusCode::BAD_REQUEST
-                );
-            }
-            assert_eq!(
-                client
-                    .get(format!("{url}/page?page=1"))
-                    .bearer_auth(token)
-                    .send()
-                    .await
-                    .unwrap()
-                    .status(),
-                StatusCode::NOT_FOUND
-            );
-            assert_eq!(
-                client
-                    .get(format!("{url}?page=1"))
-                    .send()
-                    .await
-                    .unwrap()
-                    .status(),
-                StatusCode::UNAUTHORIZED
-            );
-        }
-        let filtered = client
-            .get(format!("{base}/api/v2/dns/records?zone_id=missing"))
-            .bearer_auth(token)
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(filtered.status(), StatusCode::OK);
-        let filtered: Value = filtered.json().await.unwrap();
-        assert_eq!(filtered["items"], json!([]));
-        assert_eq!(filtered["total"], 0);
-        let searched: Value = client
-            .get(format!("{base}/api/v2/users?q=User%2065"))
-            .bearer_auth(token)
-            .send()
-            .await
-            .unwrap()
-            .json()
-            .await
-            .unwrap();
-        assert_eq!(searched["total"], 1);
-        assert_eq!(searched["items"][0]["id"], "user-65");
-        server.abort();
-    }
-
-    #[test]
-    fn admin_token_labels_count_unicode_characters_not_utf8_bytes() {
-        let hundred_characters = "令牌".repeat(50);
-        assert_eq!(
-            validate_admin_token_label(&hundred_characters).unwrap(),
-            hundred_characters
-        );
-        assert!(validate_admin_token_label(&format!("{hundred_characters}令牌")).is_err());
-        assert!(validate_admin_token_label("   ").is_err());
-    }
-}
+#[path = "tests/routes.rs"]
+mod tests;
 
 #[cfg(test)]
+#[path = "tests/backend_cache.rs"]
 mod backend_cache_tests;
 
 #[cfg(test)]
-mod backend_cache_v2_tests;
+#[path = "tests/management_contract.rs"]
+mod management_contract_tests;
 
 #[cfg(test)]
+#[path = "tests/query_optimizer.rs"]
 mod query_optimizer_tests;
 
 #[cfg(test)]
+#[path = "tests/auth_contention.rs"]
 mod auth_contention_tests;
 
 #[cfg(test)]
+#[path = "tests/management_transaction.rs"]
 mod management_transaction_tests;
 
 // Direct domain fixtures are test-only; production writes use protocol-2 handlers.
 #[cfg(test)]
-#[path = "test_support.rs"]
+#[path = "tests/support.rs"]
 mod test_support;
 #[cfg(test)]
 use test_support::*;

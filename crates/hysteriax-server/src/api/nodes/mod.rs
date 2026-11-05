@@ -1,0 +1,1555 @@
+use axum::{
+    Json,
+    extract::{Path, Query, State},
+    http::StatusCode,
+};
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
+use sqlx::Row;
+use url::Url;
+use uuid::Uuid;
+
+use crate::{
+    api::{
+        cancel_queued_node_jobs_in_tx, enqueue_job_in_tx, enqueue_job_with_payload_in_tx,
+        generate_token, now, supersede_queued_syncs_in_tx,
+    },
+    config::{
+        DEFAULT_TRAFFIC_STATS_PORT, render_server_yaml_preview_with_traffic_stats_port,
+        validate_server_options,
+    },
+    error::ApiError,
+    security::token_digest,
+    state::AppState,
+};
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CreateNode {
+    package: Option<crate::node_limits::Package>,
+    initial_usage_bytes: Option<i64>,
+    name: String,
+    ssh_host: String,
+    ssh_port: u16,
+    ssh_username: String,
+    ssh_credential_id: String,
+    ssh_credential_version: i64,
+    ssh_host_fingerprint: Option<String>,
+    #[serde(default)]
+    public_host: String,
+    dns_allocation: Option<crate::dns::binding::Allocation>,
+    public_port: u16,
+    listen_addr: String,
+    #[serde(default = "default_traffic_stats_port")]
+    traffic_stats_port: u16,
+    proxy_probe_url: Option<String>,
+    tls_sni: Option<String>,
+    #[serde(default)]
+    tls_skip_verify: bool,
+    #[serde(default = "empty_config")]
+    config: Value,
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PatchNode {
+    package: Option<crate::node_limits::Package>,
+    expected_revision: i64,
+    name: Option<String>,
+    ssh_host: Option<String>,
+    ssh_port: Option<u16>,
+    ssh_username: Option<String>,
+    ssh_credential_id: Option<String>,
+    ssh_credential_version: Option<i64>,
+    ssh_host_fingerprint: Option<String>,
+    public_host: Option<String>,
+    public_port: Option<u16>,
+    listen_addr: Option<String>,
+    traffic_stats_port: Option<u16>,
+    proxy_probe_url: Option<String>,
+    tls_sni: Option<String>,
+    tls_skip_verify: Option<bool>,
+    config: Option<Value>,
+}
+
+#[derive(Deserialize)]
+pub struct RevisionQuery {
+    pub expected_revision: Option<i64>,
+}
+
+#[derive(Deserialize)]
+pub struct NodeAction {
+    expected_revision: i64,
+}
+
+#[derive(Default, Deserialize)]
+pub(crate) struct NodesListQuery {
+    page: Option<i64>,
+    page_size: Option<i64>,
+    q: Option<String>,
+    state_matches: Option<String>,
+    sort: Option<String>,
+    order: Option<String>,
+}
+
+impl NodesListQuery {
+    fn validate(&self) -> Result<(i64, i64, &str, &str), ApiError> {
+        let page = self.page.unwrap_or(1);
+        let size = self.page_size.unwrap_or(50);
+        if page < 1 || !(1..=200).contains(&size) {
+            return Err(ApiError::bad_request(
+                "page must be positive and page_size must be between 1 and 200",
+            ));
+        }
+        let sort = self.sort.as_deref().unwrap_or("name");
+        if !["name", "ssh_host", "state", "created_at"].contains(&sort) {
+            return Err(ApiError::bad_request("invalid node sort field"));
+        }
+        let order = match self.order.as_deref().unwrap_or("asc") {
+            "asc" => "ASC",
+            "desc" => "DESC",
+            _ => return Err(ApiError::bad_request("invalid node sort order")),
+        };
+        Ok((page, size, sort, order))
+    }
+}
+
+pub(crate) async fn list(
+    State(state): State<AppState>,
+    Query(query): Query<NodesListQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let (requested_page, page_size, sort, order) = query.validate()?;
+    let search = query.q.as_deref().unwrap_or("").trim();
+    let states: Vec<&str> = query
+        .state_matches
+        .as_deref()
+        .unwrap_or("")
+        .split(',')
+        .map(str::trim)
+        .filter(|state| !state.is_empty())
+        .collect();
+    let filter = "($1 = '' OR strpos(lower(n.name), lower($1)) > 0 OR strpos(lower(n.ssh_host), lower($1)) > 0 OR strpos(lower(n.id), lower($1)) > 0 OR strpos(lower(n.state), lower($1)) > 0 OR n.state = ANY($2))";
+    let mut tx = crate::read_snapshot::begin(&state.pool).await?;
+    let total: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "SELECT count(*) FROM nodes n WHERE {filter}"
+    )))
+    .bind(search)
+    .bind(&states)
+    .fetch_one(&mut *tx)
+    .await?;
+    let page = requested_page.min(((total + page_size - 1) / page_size).max(1));
+    let order_by = match sort {
+        "name" => format!(
+            "lower(n.name) COLLATE \"C\" {order}, n.name COLLATE \"C\" {order}, n.id {order}"
+        ),
+        "ssh_host" => format!(
+            "lower(n.ssh_host) COLLATE \"C\" {order}, n.ssh_host COLLATE \"C\" {order}, n.name COLLATE \"C\" {order}, n.id {order}"
+        ),
+        "state" => format!("n.state {order}, n.name COLLATE \"C\" {order}, n.id {order}"),
+        _ => format!("n.created_at {order}, n.id {order}"),
+    };
+    let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "SELECT n.*,c.kind AS credential_kind FROM nodes n LEFT JOIN credentials c ON c.id=n.ssh_credential_id WHERE {filter} ORDER BY {order_by} LIMIT $3 OFFSET $4"
+    )))
+    .bind(search)
+    .bind(&states)
+    .bind(page_size)
+    .bind((page - 1) * page_size)
+    .fetch_all(&mut *tx)
+    .await?;
+    let ids: Vec<String> = rows.iter().map(|row| row.get("id")).collect();
+    let readings = crate::overview::summary::read_nodes_on(&mut tx, Some(&ids)).await?;
+    let now = chrono::Utc::now();
+    let mut summaries: std::collections::BTreeMap<String, Value> = readings
+        .iter()
+        .map(|row| {
+            let value = row.summary(now)?;
+            Ok((
+                value["id"]
+                    .as_str()
+                    .ok_or_else(ApiError::internal)?
+                    .to_owned(),
+                value,
+            ))
+        })
+        .collect::<Result<_, ApiError>>()?;
+    let mut bindings = super::dns::bindings_on(&mut tx, &ids).await?;
+    tx.commit().await?;
+    let mut items = Vec::with_capacity(rows.len());
+    for row in rows {
+        let id: String = row.get("id");
+        let mut node = summaries.remove(&id).ok_or_else(ApiError::internal)?;
+        let cipher: String = row.get("desired_config_enc");
+        let key = format!("mtls:{}:{}", id, crate::security::token_digest(&cipher));
+        let mtls = state
+            .caches
+            .previews
+            .get(key, std::time::Duration::from_secs(1800), false, || async {
+                let config: Value = serde_json::from_str(&state.secrets.decrypt(&cipher)?)
+                    .map_err(|_| ApiError::internal())?;
+                Ok::<_, ApiError>(json!(
+                    crate::credentials::node_mtls::Settings::from_config(&config)?
+                        .authority()
+                        .is_some()
+                ))
+            })
+            .await?;
+        node["mtls_required"] = (*mtls).clone();
+        node["mtls_state"] = json!(row.get::<String, _>("mtls_state"));
+        node["mtls_recovery_configured"] = json!(row.get::<bool, _>("mtls_recovery_configured"));
+        node["mtls_error"] = json!(row.get::<Option<String>, _>("mtls_error"));
+        node["mtls_generation"] = json!(row.get::<i64, _>("mtls_generation"));
+        let kind: Option<String> = row.get("credential_kind");
+        node["ssh"] = json!({"host":row.get::<String,_>("ssh_host"),"port":row.get::<i32,_>("ssh_port"),"username":row.get::<String,_>("ssh_username"),
+            "auth_type":if kind.as_deref()==Some("ssh_password"){ "password" }else{ "private_key" },"credential_id":row.get::<Option<String>,_>("ssh_credential_id"),
+            "credential_version":row.get::<Option<i64>,_>("ssh_credential_version"),"secret_configured":true,"host_fingerprint":row.get::<Option<String>,_>("ssh_host_fingerprint")});
+        node["published_connection"] = json!(row.get::<Option<Value>, _>("published_connection"));
+        node["public"] = json!({"host":row.get::<String,_>("public_host"),"port":row.get::<i32,_>("public_port"),"listen_addr":row.get::<String,_>("listen_addr"),"tls_sni":row.get::<Option<String>,_>("tls_sni"),"skip_cert_verify":row.get::<bool,_>("tls_skip_verify")});
+        node["dns_binding"] = bindings.remove(&id).unwrap_or(Value::Null);
+        node["traffic_stats_port"] = json!(row.get::<i32, _>("traffic_stats_port"));
+        node["proxy_probe_url"] = json!(row.get::<Option<String>, _>("proxy_probe_url"));
+        node["created_at"] = json!(row.get::<chrono::DateTime<chrono::Utc>, _>("created_at"));
+        items.push(node);
+    }
+    Ok(Json(
+        json!({"items":items,"total":total,"page":page,"page_size":page_size}),
+    ))
+}
+
+#[cfg(test)]
+mod pagination_tests;
+
+pub async fn get(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    crate::read_snapshot::scope(&state.pool, get_snapshot(State(state.clone()), Path(id))).await
+}
+async fn get_snapshot(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    let row = sqlx::query("SELECT * FROM nodes WHERE id = $1")
+        .bind(&id)
+        .fetch_optional(&mut *crate::read_snapshot::begin(&state.pool).await?)
+        .await?
+        .ok_or_else(|| ApiError::not_found("node"))?;
+    Ok(Json(node_json(&state, &row).await?))
+}
+
+async fn prepare_creation(
+    state: &AppState,
+    mut input: CreateNode,
+) -> Result<std::sync::Arc<PreparedNodeCreation>, ApiError> {
+    let allocation_request = serde_json::to_value(&input).map_err(|_| ApiError::internal())?;
+    let id = Uuid::new_v4().to_string();
+    let prepared = if let Some(allocation) = &input.dns_allocation {
+        let prepared = crate::dns::binding::prepare(state, &id, allocation).await?;
+        input.public_host = prepared.hostname.clone();
+        Some(prepared)
+    } else {
+        None
+    };
+    if input.initial_usage_bytes.is_some_and(|x| x < 0) {
+        return Err(ApiError::bad_request("initial usage must be nonnegative"));
+    }
+    if let Some(package) = &input.package {
+        package.validate()?;
+    }
+    validate_text(&input.name, "name", 100)?;
+    validate_text(&input.ssh_host, "ssh_host", 253)?;
+    validate_text(&input.ssh_username, "ssh_username", 100)?;
+    validate_text(&input.public_host, "public_host", 253)?;
+    validate_text(&input.listen_addr, "listen_addr", 100)?;
+    validate_traffic_stats_port(input.traffic_stats_port)?;
+    let proxy_probe_url = normalize_proxy_probe_url(input.proxy_probe_url.as_deref())?;
+    let (first_listen_port, hopping) = validate_listen_addr(&input.listen_addr)?;
+    validate_hop_public_port(input.public_port, first_listen_port, hopping)?;
+    validate_ssh_credential(
+        state,
+        &input.ssh_credential_id,
+        input.ssh_credential_version,
+        false,
+    )
+    .await?;
+    let mtls = crate::credentials::node_mtls::validate_input(&mut input.config)
+        .map_err(|e| ApiError::bad_request(e.to_string()))?;
+    crate::credentials::node_mtls::validate_binding(&state.pool, &state.secrets, &mtls, true)
+        .await
+        .map_err(|e| ApiError::bad_request(e.to_string()))?;
+    crate::credentials::require_managed_config(&input.config)
+        .map_err(|e| ApiError::bad_request(e.to_string()))?;
+    let (resolved, _) =
+        super::resources::resolve_config_resources(&state.pool, &state.secrets, &id, &input.config)
+            .await
+            .map_err(|_| ApiError::bad_request("invalid configuration credential"))?;
+    validate_server_options(&resolved)
+        .map_err(|_| ApiError::bad_request("invalid node configuration"))?;
+    validate_listener_features(&input.config, &input.listen_addr)?;
+
+    let token = generate_token();
+    let stats_secret = generate_token();
+    let now = now();
+    let config_json = input.config.to_string();
+    let deployment_snapshot = json!({
+        "acme_component_version": crate::node_acme::VERSION,
+        "server_config": input.config.clone(),
+        "listen_addr": input.listen_addr.clone(),
+        "traffic_stats_port": input.traffic_stats_port,
+        "proxy_probe_url": proxy_probe_url,
+        "public_host": input.public_host.clone(), "public_port": input.public_port,
+        "tls_sni": input.tls_sni.clone(), "tls_skip_verify": input.tls_skip_verify
+    });
+    let deployment_snapshot_json = deployment_snapshot.to_string();
+    let config_enc = state.secrets.encrypt(&config_json)?;
+    let node_token_enc = state.secrets.encrypt(&token)?;
+    let stats_secret_enc = state.secrets.encrypt(&stats_secret)?;
+    let digest = hex::encode(Sha256::digest(deployment_snapshot_json.as_bytes()));
+
+    let creation = std::sync::Arc::new(PreparedNodeCreation {
+        id,
+        input,
+        prepared,
+        allocation_request: allocation_request.clone(),
+        history_id: Uuid::new_v4().to_string(),
+        token,
+        timestamp: now,
+        proxy_probe_url,
+        mtls,
+        config_enc,
+        node_token_enc,
+        stats_secret_enc,
+        deployment_snapshot_enc: state.secrets.encrypt(&deployment_snapshot_json)?,
+        digest,
+        actor: super::audit_actor(),
+    });
+    Ok(creation)
+}
+
+struct PreparedNodeCreation {
+    id: String,
+    history_id: String,
+    input: CreateNode,
+    prepared: Option<crate::dns::binding::Prepared>,
+    allocation_request: Value,
+    token: String,
+    timestamp: chrono::DateTime<chrono::Utc>,
+    proxy_probe_url: Option<String>,
+    mtls: crate::credentials::node_mtls::Settings,
+    config_enc: String,
+    node_token_enc: String,
+    stats_secret_enc: String,
+    deployment_snapshot_enc: String,
+    digest: String,
+    actor: String,
+}
+enum NodeCreation {
+    Created(Value),
+    Existing(Value),
+}
+
+fn credential_binding_error(error: anyhow::Error) -> ApiError {
+    if crate::db::RetryableTransactionError::retryable_transaction(&error) {
+        ApiError::from(error)
+    } else {
+        ApiError::conflict(error.to_string())
+    }
+}
+
+async fn insert_node_on(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    state: &AppState,
+    creation: &PreparedNodeCreation,
+) -> Result<NodeCreation, ApiError> {
+    let input = &creation.input;
+    let id = &creation.id;
+    let mtls = &creation.mtls;
+    let token = &creation.token;
+    let now = creation.timestamp;
+    let proxy_probe_url = &creation.proxy_probe_url;
+    let config_enc = &creation.config_enc;
+    let node_token_enc = &creation.node_token_enc;
+    let stats_secret_enc = &creation.stats_secret_enc;
+    let digest = &creation.digest;
+    let allocation_request = &creation.allocation_request;
+    if let Some(allocation) = &input.dns_allocation
+        && let Some(previous) =
+            crate::dns::existing_operation(tx, &allocation.idempotency_key, allocation_request)
+                .await?
+    {
+        return Ok(NodeCreation::Existing(previous));
+    }
+    crate::credentials::check_bindings(
+        tx,
+        &input.config,
+        None,
+        Some((
+            &input.ssh_credential_id,
+            input.ssh_credential_version,
+            false,
+        )),
+    )
+    .await
+    .map_err(credential_binding_error)?;
+    crate::credentials::node_mtls::check_binding(tx, mtls, true)
+        .await
+        .map_err(credential_binding_error)?;
+    sqlx::query("INSERT INTO nodes (id, name, ssh_host, ssh_port, ssh_username, ssh_credential_id, ssh_credential_version, ssh_host_fingerprint, public_host, public_port, listen_addr, traffic_stats_port, proxy_probe_url, tls_sni, tls_skip_verify, node_token_hash, node_token_enc, traffic_stats_secret_enc, desired_config_enc, desired_revision, state, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, 1, 'new', $20, $21)")
+        .bind(id).bind(input.name.trim()).bind(input.ssh_host.trim()).bind(i32::from(input.ssh_port))
+        .bind(input.ssh_username.trim()).bind(&input.ssh_credential_id).bind(input.ssh_credential_version)
+        .bind(&input.ssh_host_fingerprint).bind(input.public_host.trim()).bind(i32::from(input.public_port))
+        .bind(input.listen_addr.trim()).bind(i32::from(input.traffic_stats_port)).bind(proxy_probe_url).bind(&input.tls_sni).bind(input.tls_skip_verify).bind(token_digest(token)).bind(node_token_enc)
+        .bind(stats_secret_enc).bind(config_enc).bind(now).bind(now).execute(&mut **tx).await?;
+    crate::credentials::node_mtls::save_target(tx, id, 1, mtls).await?;
+    crate::node_limits::ensure(tx, id).await?;
+    sqlx::query("UPDATE node_packages SET usage_bytes = $1 WHERE node_id = $2")
+        .bind(input.initial_usage_bytes.unwrap_or(0))
+        .bind(id)
+        .execute(&mut **tx)
+        .await?;
+    // Evaluate the actual initial counter before scheduling its next event.
+    // Fixed packages may have no future event to repair a later counter write.
+    if let Some(package) = &input.package {
+        crate::node_limits::save(tx, id, package).await?;
+    }
+    sqlx::query("INSERT INTO config_versions (id, node_id, revision, config_enc, content_sha256, created_at) VALUES ($1, $2, 1, $3, $4, $5)")
+        .bind(&creation.history_id).bind(id).bind(creation.deployment_snapshot_enc.as_str()).bind(digest).bind(now)
+        .execute(&mut **tx).await?;
+    let dns_result =
+        if let (Some(allocation), Some(prepared)) = (&input.dns_allocation, &creation.prepared) {
+            Some(
+                crate::dns::binding::bind_in_tx(tx, id, allocation, prepared, allocation_request)
+                    .await?,
+            )
+        } else {
+            None
+        };
+    super::audit_on(tx,&creation.actor,"node.created","node",id,json!({"name":input.name.trim(),"package":input.package,"initial_usage_bytes":input.initial_usage_bytes.unwrap_or(0)})).await?;
+    crate::credentials::reference_index::flush_node_on(tx, &state.secrets, id).await?;
+    Ok(NodeCreation::Created(json!({
+        "node": {"id": id, "name": input.name.trim(), "revision": 1, "state": "new", "traffic_stats_port": input.traffic_stats_port, "proxy_probe_url": proxy_probe_url, "mtls_required": mtls.authority().is_some()},
+        "node_auth_token": token,
+        "dns_allocation": dns_result,
+        "note": "The node token is shown once here and is stored encrypted for server configuration generation."
+    })))
+}
+
+// Operational observations may change independently. Freeze the fields this
+// patch merges or overwrites, including configuration material with its own
+// background publication lifecycle.
+fn patch_source(row: &sqlx::postgres::PgRow) -> Value {
+    let mut source = serde_json::Map::new();
+    for field in [
+        "name",
+        "ssh_host",
+        "ssh_username",
+        "public_host",
+        "listen_addr",
+        "desired_config_enc",
+    ] {
+        source.insert(field.into(), json!(row.get::<String, _>(field)));
+    }
+    for field in [
+        "ssh_credential_id",
+        "ssh_host_fingerprint",
+        "proxy_probe_url",
+        "tls_sni",
+    ] {
+        source.insert(field.into(), json!(row.get::<Option<String>, _>(field)));
+    }
+    for field in ["ssh_port", "public_port", "traffic_stats_port"] {
+        source.insert(field.into(), json!(row.get::<i32, _>(field)));
+    }
+    source.insert(
+        "ssh_credential_version".into(),
+        json!(row.get::<Option<i64>, _>("ssh_credential_version")),
+    );
+    source.insert(
+        "tls_skip_verify".into(),
+        json!(row.get::<bool, _>("tls_skip_verify")),
+    );
+    Value::Object(source)
+}
+
+async fn prepare_patch(
+    state: &AppState,
+    id: String,
+    input: PatchNode,
+) -> Result<std::sync::Arc<PreparedNodePatch>, ApiError> {
+    if input.expected_revision < 1 {
+        return Err(ApiError::bad_request("expected_revision must be positive"));
+    }
+    let explicit_mtls = input
+        .config
+        .as_ref()
+        .is_some_and(|config| config.get("mtls").is_some());
+    let current = sqlx::query("SELECT * FROM nodes WHERE id = $1")
+        .bind(&id)
+        .fetch_optional(&state.pool)
+        .await?
+        .ok_or_else(|| ApiError::not_found("node"))?;
+    let revision: i64 = current.get("desired_revision");
+    if current.get::<String, _>("state") == "deleting" {
+        return Err(ApiError::conflict("node deletion is in progress"));
+    }
+    if revision != input.expected_revision {
+        return Err(ApiError::conflict(format!(
+            "node revision is {revision}; reload before editing"
+        )));
+    }
+
+    let ssh_host_supplied = input.ssh_host.is_some();
+    let name: String = input.name.unwrap_or_else(|| current.get("name"));
+    let ssh_host: String = input.ssh_host.unwrap_or_else(|| current.get("ssh_host"));
+    let ssh_port: u16 = input
+        .ssh_port
+        .unwrap_or_else(|| current.get::<i32, _>("ssh_port") as u16);
+    let ssh_username: String = input
+        .ssh_username
+        .unwrap_or_else(|| current.get("ssh_username"));
+    if input.ssh_credential_id.is_some() != input.ssh_credential_version.is_some() {
+        return Err(ApiError::bad_request(
+            "SSH credential ID and version must be supplied together",
+        ));
+    }
+    let ssh_credential_id: String = input
+        .ssh_credential_id
+        .unwrap_or_else(|| current.get("ssh_credential_id"));
+    let ssh_credential_version: i64 = input
+        .ssh_credential_version
+        .unwrap_or_else(|| current.get("ssh_credential_version"));
+    let ssh_changed = ssh_credential_id != current.get::<String, _>("ssh_credential_id")
+        || ssh_credential_version != current.get::<i64, _>("ssh_credential_version");
+    validate_ssh_credential(
+        state,
+        &ssh_credential_id,
+        ssh_credential_version,
+        !ssh_changed,
+    )
+    .await?;
+    let public_host: String = input
+        .public_host
+        .unwrap_or_else(|| current.get("public_host"));
+    let connection_changed = public_host != current.get::<String, _>("public_host")
+        || input
+            .public_port
+            .is_some_and(|p| i32::from(p) != current.get::<i32, _>("public_port"))
+        || input
+            .tls_sni
+            .as_ref()
+            .is_some_and(|s| Some(s) != current.get::<Option<String>, _>("tls_sni").as_ref())
+        || input
+            .tls_skip_verify
+            .is_some_and(|v| v != current.get::<bool, _>("tls_skip_verify"));
+    let public_port: u16 = input
+        .public_port
+        .unwrap_or_else(|| current.get::<i32, _>("public_port") as u16);
+    let previous_traffic_stats_port = current.get::<i32, _>("traffic_stats_port") as u16;
+    let traffic_stats_port = input
+        .traffic_stats_port
+        .unwrap_or(previous_traffic_stats_port);
+    let traffic_stats_port_changed = traffic_stats_port != previous_traffic_stats_port;
+    let listener_changed = input.listen_addr.is_some();
+    let listen_addr: String = input
+        .listen_addr
+        .unwrap_or_else(|| current.get("listen_addr"));
+    let previous_proxy_probe_url: Option<String> = current.get("proxy_probe_url");
+    let proxy_probe_url = match input.proxy_probe_url.as_deref() {
+        Some(value) => normalize_proxy_probe_url(Some(value))?,
+        None => previous_proxy_probe_url.clone(),
+    };
+    let proxy_probe_url_changed = proxy_probe_url != previous_proxy_probe_url;
+    let tls_sni = input.tls_sni.or_else(|| current.get("tls_sni"));
+    let tls_skip_verify = input
+        .tls_skip_verify
+        .unwrap_or_else(|| current.get::<bool, _>("tls_skip_verify"));
+    let fingerprint_supplied = input.ssh_host_fingerprint.is_some();
+    let host_fingerprint = input
+        .ssh_host_fingerprint
+        .or_else(|| current.get("ssh_host_fingerprint"));
+    if ssh_changed {
+        let (kind, _, _, payload, _) = crate::credentials::load(
+            &state.pool,
+            &state.secrets,
+            &ssh_credential_id,
+            ssh_credential_version,
+        )
+        .await?;
+        let candidate = crate::ssh::SshNode {
+            host: ssh_host.clone(),
+            port: ssh_port,
+            username: ssh_username.clone(),
+            auth_type: if kind == "ssh_password" {
+                "password"
+            } else {
+                "private_key"
+            }
+            .into(),
+            secret: payload["secret"]
+                .as_str()
+                .ok_or_else(ApiError::internal)?
+                .into(),
+            passphrase: payload["passphrase"].as_str().map(str::to_owned),
+            host_fingerprint: host_fingerprint.clone(),
+        };
+        match crate::ssh::connect(&candidate).await.map_err(|_| {
+            ApiError::bad_request("SSH credential verification failed; previous binding remains")
+        })? {
+            crate::ssh::FingerprintResult::Trusted(session) => {
+                crate::ssh::inspect_connected(&session).await.map_err(|_| {
+                    ApiError::bad_request(
+                        "SSH privilege verification failed; previous binding remains",
+                    )
+                })?;
+            }
+            _ => {
+                return Err(ApiError::conflict(
+                    "SSH host fingerprint must be confirmed before changing credentials",
+                ));
+            }
+        }
+    }
+    let old_config_enc: String = current.get("desired_config_enc");
+    let config_changed = input.config.is_some();
+    let mut config: Value = if let Some(config) = input.config {
+        config
+    } else {
+        serde_json::from_str(&state.secrets.decrypt(&old_config_enc)?)
+            .map_err(|_| ApiError::internal())?
+    };
+    validate_text(&name, "name", 100)?;
+    validate_text(&ssh_host, "ssh_host", 253)?;
+    validate_text(&ssh_username, "ssh_username", 100)?;
+    validate_text(&public_host, "public_host", 253)?;
+    validate_text(&listen_addr, "listen_addr", 100)?;
+    validate_traffic_stats_port(traffic_stats_port)?;
+    let (first_listen_port, hopping) = validate_listen_addr(&listen_addr)?;
+    validate_hop_public_port(public_port, first_listen_port, hopping)?;
+    let previous_config: Value = serde_json::from_str(&state.secrets.decrypt(&old_config_enc)?)
+        .map_err(|_| ApiError::internal())?;
+    let previous_mtls = crate::credentials::node_mtls::Settings::from_config(&previous_config)?;
+    if config_changed
+        && current.get::<String, _>("mtls_state") == "needs_configuration"
+        && config.get("mtls").is_none()
+    {
+        return Err(ApiError::bad_request(
+            "select mtls.mode explicitly before recovering a reset node",
+        ));
+    }
+    let mtls = if config_changed {
+        crate::credentials::node_mtls::validate_input(&mut config)
+            .map_err(|e| ApiError::bad_request(e.to_string()))?
+    } else {
+        crate::credentials::node_mtls::Settings::from_config(&config)?
+    };
+    let new_ca = mtls.authority().map(|(id, _)| id) != previous_mtls.authority().map(|(id, _)| id);
+    if config_changed {
+        crate::credentials::node_mtls::validate_binding(&state.pool, &state.secrets, &mtls, new_ca)
+            .await
+            .map_err(|e| ApiError::bad_request(e.to_string()))?;
+    }
+    crate::credentials::require_managed_config(&config)
+        .map_err(|e| ApiError::bad_request(e.to_string()))?;
+    let (resolved, _) =
+        crate::credentials::resolve_config(&state.pool, &state.secrets, &config, false)
+            .await
+            .map_err(|_| ApiError::bad_request("invalid configuration credential"))?;
+    validate_server_options(&resolved)
+        .map_err(|_| ApiError::bad_request("invalid node configuration"))?;
+    validate_listener_features(&config, &listen_addr)?;
+    super::resources::resolve_config_resources(&state.pool, &state.secrets, &id, &config).await?;
+
+    let config_json = config.to_string();
+    let deployment_snapshot = json!({
+        "acme_component_version": crate::node_acme::VERSION,
+        "server_config": config.clone(),
+        "listen_addr": listen_addr.clone(),
+        "traffic_stats_port": traffic_stats_port,
+        "proxy_probe_url": proxy_probe_url.clone(),
+        "public_host": public_host.clone(), "public_port": public_port,
+        "tls_sni": tls_sni.clone(), "tls_skip_verify": tls_skip_verify
+    });
+    let deployment_snapshot_json = deployment_snapshot.to_string();
+    let config_enc = state.secrets.encrypt(&config_json)?;
+    let updated_at = now();
+    let next_revision = revision + 1;
+    let old_config: Value = serde_json::from_str(&state.secrets.decrypt(&old_config_enc)?)
+        .map_err(|_| ApiError::internal())?;
+    let actor = super::audit_actor();
+    let package = input.package;
+    let source = patch_source(&current);
+    let prepared = std::sync::Arc::new(PreparedNodePatch {
+        id,
+        revision,
+        next_revision,
+        name,
+        ssh_host,
+        ssh_port,
+        ssh_username,
+        ssh_credential_id,
+        ssh_credential_version,
+        ssh_changed,
+        host_fingerprint,
+        public_host,
+        public_port,
+        listen_addr,
+        traffic_stats_port,
+        proxy_probe_url,
+        tls_sni,
+        tls_skip_verify,
+        config,
+        old_config,
+        config_enc,
+        source,
+        history_id: Uuid::new_v4().to_string(),
+        deployment_snapshot_enc: state.secrets.encrypt(&deployment_snapshot_json)?,
+        deployment_digest: hex::encode(Sha256::digest(deployment_snapshot_json.as_bytes())),
+        updated_at,
+        mtls,
+        new_ca,
+        explicit_mtls,
+        config_changed,
+        fingerprint_supplied,
+        ssh_host_supplied,
+        connection_changed,
+        listener_changed,
+        proxy_probe_url_changed,
+        traffic_stats_port_changed,
+        actor,
+        package,
+    });
+    Ok(prepared)
+}
+
+#[derive(Clone)]
+struct PreparedNodePatch {
+    id: String,
+    revision: i64,
+    next_revision: i64,
+    name: String,
+    ssh_host: String,
+    ssh_port: u16,
+    ssh_username: String,
+    ssh_credential_id: String,
+    ssh_credential_version: i64,
+    ssh_changed: bool,
+    host_fingerprint: Option<String>,
+    public_host: String,
+    public_port: u16,
+    listen_addr: String,
+    traffic_stats_port: u16,
+    proxy_probe_url: Option<String>,
+    tls_sni: Option<String>,
+    tls_skip_verify: bool,
+    config: Value,
+    old_config: Value,
+    config_enc: String,
+    source: Value,
+    history_id: String,
+    deployment_snapshot_enc: String,
+    deployment_digest: String,
+    updated_at: chrono::DateTime<chrono::Utc>,
+    mtls: crate::credentials::node_mtls::Settings,
+    new_ca: bool,
+    explicit_mtls: bool,
+    config_changed: bool,
+    fingerprint_supplied: bool,
+    ssh_host_supplied: bool,
+    connection_changed: bool,
+    listener_changed: bool,
+    proxy_probe_url_changed: bool,
+    traffic_stats_port_changed: bool,
+    actor: String,
+    package: Option<crate::node_limits::Package>,
+}
+
+async fn patch_on(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    state: &AppState,
+    prepared: PreparedNodePatch,
+) -> Result<Json<Value>, ApiError> {
+    let PreparedNodePatch {
+        id,
+        revision,
+        next_revision,
+        name,
+        ssh_host,
+        ssh_port,
+        ssh_username,
+        ssh_credential_id,
+        ssh_credential_version,
+        ssh_changed,
+        host_fingerprint,
+        public_host,
+        public_port,
+        listen_addr,
+        traffic_stats_port,
+        proxy_probe_url,
+        tls_sni,
+        tls_skip_verify,
+        config,
+        old_config,
+        config_enc,
+        source,
+        history_id,
+        deployment_snapshot_enc,
+        deployment_digest,
+        updated_at,
+        mtls,
+        new_ca,
+        explicit_mtls,
+        config_changed,
+        fingerprint_supplied,
+        ssh_host_supplied,
+        connection_changed,
+        listener_changed,
+        proxy_probe_url_changed,
+        traffic_stats_port_changed,
+        actor,
+        package,
+    } = prepared;
+    let current = sqlx::query("SELECT * FROM nodes WHERE id=$1 FOR NO KEY UPDATE")
+        .bind(&id)
+        .fetch_optional(&mut **tx)
+        .await?
+        .ok_or_else(|| ApiError::not_found("node"))?;
+    if current.get::<i64, _>("desired_revision") != revision {
+        return Err(ApiError::conflict(
+            "node changed while saving; reload before editing",
+        ));
+    }
+    if patch_source(&current) != source {
+        return Err(ApiError::conflict(
+            "node configuration changed during preparation; reload before editing",
+        ));
+    }
+    if current.get::<String, _>("state") == "deleting" {
+        return Err(ApiError::conflict("node deletion is in progress"));
+    }
+    if config_changed
+        && current.get::<String, _>("mtls_state") == "needs_configuration"
+        && !explicit_mtls
+    {
+        return Err(ApiError::bad_request(
+            "select mtls.mode explicitly before recovering a reset node",
+        ));
+    }
+    let users:Vec<String> = sqlx::query_scalar("SELECT u.id FROM users u JOIN node_assignments a ON a.user_id=u.id WHERE a.node_id=$1 ORDER BY u.id FOR NO KEY UPDATE OF u").bind(&id).fetch_all(&mut **tx).await?;
+    sqlx::query("SELECT id FROM credentials WHERE owner_user_id=ANY($1) ORDER BY id FOR UPDATE")
+        .bind(&users)
+        .fetch_all(&mut **tx)
+        .await?;
+    sqlx::query("SELECT id FROM mtls_user_identities WHERE user_id=ANY($1) ORDER BY id FOR UPDATE")
+        .bind(&users)
+        .fetch_all(&mut **tx)
+        .await?;
+    crate::credentials::check_bindings(
+        tx,
+        &config,
+        Some(&old_config),
+        Some((&ssh_credential_id, ssh_credential_version, !ssh_changed)),
+    )
+    .await
+    .map_err(credential_binding_error)?;
+    let bound: Option<String> =
+        sqlx::query_scalar("SELECT hostname FROM dns_bindings WHERE node_id=$1")
+            .bind(&id)
+            .fetch_optional(&mut **tx)
+            .await?;
+    if bound.as_ref().is_some_and(|host| host != &public_host) {
+        return Err(ApiError::conflict(
+            "use the DNS binding operation to reassign or unbind the node domain",
+        ));
+    }
+    if config_changed {
+        crate::credentials::node_mtls::check_binding(tx, &mtls, new_ca)
+            .await
+            .map_err(credential_binding_error)?;
+    }
+    let updated = sqlx::query("UPDATE nodes SET name = $1, ssh_host = $2, ssh_port = $3, ssh_username = $4, ssh_credential_id = $5, ssh_credential_version = $6, ssh_host_fingerprint = $7, public_host = $8, public_port = $9, listen_addr = $10, traffic_stats_port = $11, proxy_probe_url = $12, tls_sni = $13, tls_skip_verify = $14, desired_config_enc = $15, desired_revision = $16, state = CASE WHEN $17 = TRUE AND state IN ('needs_fingerprint', 'fingerprint_changed') THEN 'ready' ELSE state END, updated_at = $18 WHERE id = $19 AND desired_revision = $20")
+        .bind(name.trim()).bind(ssh_host.trim()).bind(i32::from(ssh_port)).bind(ssh_username.trim()).bind(&ssh_credential_id)
+        .bind(ssh_credential_version).bind(host_fingerprint).bind(public_host.trim()).bind(i32::from(public_port)).bind(listen_addr.trim())
+        .bind(i32::from(traffic_stats_port)).bind(&proxy_probe_url).bind(tls_sni).bind(tls_skip_verify).bind(&config_enc).bind(next_revision).bind(fingerprint_supplied).bind(updated_at).bind(&id).bind(revision)
+        .execute(&mut **tx).await?;
+    if updated.rows_affected() == 0 {
+        return Err(ApiError::conflict(
+            "node changed while saving; reload before editing",
+        ));
+    }
+    if config_changed {
+        sqlx::query("UPDATE nodes SET mtls_recovery_configured=TRUE WHERE id=$1")
+            .bind(&id)
+            .execute(&mut **tx)
+            .await?;
+    }
+    crate::credentials::node_mtls::save_target(tx, &id, next_revision, &mtls).await?;
+    super::ssh_fingerprint::cancel_waiting(tx, &id).await?;
+    sqlx::query("INSERT INTO config_versions (id, node_id, revision, config_enc, content_sha256, created_at) VALUES ($1, $2, $3, $4, $5, $6)")
+        .bind(history_id).bind(&id).bind(next_revision).bind(deployment_snapshot_enc)
+        .bind(deployment_digest).bind(updated_at).execute(&mut **tx).await?;
+    if let Some(package) = &package {
+        crate::node_limits::save(tx, &id, package).await?;
+    }
+    let dns_job_ids = if ssh_host_supplied {
+        crate::dns::binding::sync_ssh_target_in_tx(tx, &id, next_revision, &ssh_host).await?
+    } else {
+        Vec::new()
+    };
+    let sync_required = config_changed
+        || connection_changed
+        || listener_changed
+        || proxy_probe_url_changed
+        || traffic_stats_port_changed;
+    if sync_required {
+        supersede_queued_syncs_in_tx(tx, &id).await?;
+        let recovery =
+            config_changed && current.get::<String, _>("mtls_state") == "needs_configuration";
+        enqueue_job_with_payload_in_tx(
+            tx,
+            "sync",
+            Some(&id),
+            Some(next_revision),
+            json!({"force": recovery}),
+        )
+        .await?;
+    }
+    super::audit_on(tx,&actor,"node.updated","node",&id,json!({"revision": next_revision, "config_changed": config_changed, "proxy_probe_url_changed": proxy_probe_url_changed, "traffic_stats_port_changed": traffic_stats_port_changed, "package_changed": package.is_some(), "package": package, "dns_job_ids": dns_job_ids})).await?;
+    crate::credentials::reference_index::flush_node_on(tx, &state.secrets, &id).await?;
+    Ok(Json(
+        json!({"id": id, "name": name.trim(), "revision": next_revision, "state": current.get::<String, _>("state"), "traffic_stats_port": traffic_stats_port, "proxy_probe_url": proxy_probe_url, "sync_job_queued": sync_required, "dns_job_ids": dns_job_ids}),
+    ))
+}
+
+/// Forget a node without connecting to it or claiming remote uninstall success.
+async fn remove_record_on(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    id: String,
+    expected: i64,
+) -> Result<StatusCode, ApiError> {
+    lock_node_removal_graph_on(tx, &id).await?;
+    let node = sqlx::query("SELECT name, desired_revision FROM nodes WHERE id=$1 FOR UPDATE")
+        .bind(&id)
+        .fetch_optional(&mut **tx)
+        .await?
+        .ok_or_else(|| ApiError::not_found("node"))?;
+    if node.get::<i64, _>("desired_revision") != expected {
+        return Err(ApiError::conflict(
+            "node revision changed; reload before removing its record",
+        ));
+    }
+    let removing: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM jobs WHERE node_id=$1 AND kind='record-remove' AND status IN ('queued','running'))")
+        .bind(&id).fetch_one(&mut **tx).await?;
+    if removing {
+        return Ok(StatusCode::ACCEPTED);
+    }
+    // Cancelling the local future cannot retract an already-issued remote script.
+    // Wait for these operations before promising a record-only removal.
+    let mutating: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM jobs WHERE node_id=$1 AND status='running' AND (kind IN ('deploy','sync','rollback','uninstall','credential-apply') OR kind LIKE 'dns-%'))")
+        .bind(&id).fetch_one(&mut **tx).await?;
+    if mutating {
+        return Err(ApiError::conflict(
+            "a remote deployment, uninstall or credential update is still running; wait for it to finish before removing the node record",
+        ));
+    }
+    if managed_remote_trust(tx, &id).await? {
+        return Err(ApiError::conflict(
+            "managed mTLS remote trust is still deployed or unconfirmed; recover SSH and uninstall or complete the switch before removing the node record",
+        ));
+    }
+    let unresolved_dns: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM jobs j JOIN dns_operations o ON o.job_id=j.id WHERE j.node_id=$1 AND o.applied_at IS NULL AND o.action IN ('record-create','record-update','record-delete') AND j.status IN ('running','failed','queued'))")
+        .bind(&id).fetch_one(&mut **tx).await?;
+    if unresolved_dns {
+        return Err(ApiError::conflict(
+            "finish or reconcile pending DNS writes before removing the node record",
+        ));
+    }
+    let cancelled = sqlx::query("UPDATE jobs SET status='cancelled',stage='node_removed',updated_at=now(),finished_at=now() WHERE node_id=$1 AND status IN ('queued','running','waiting_confirmation') RETURNING id,kind")
+        .bind(&id).fetch_all(&mut **tx).await?;
+    for job in &cancelled {
+        let job_id: String = job.get("id");
+        crate::kick_requests::event(tx,&job_id,"job.cancelled",json!({"id":job_id,"kind":job.get::<String,_>("kind"),"node_id":id,"status":"cancelled","stage":"node_removed"})).await?;
+    }
+    let pending: i64 = sqlx::query_scalar("SELECT count(*) FROM kick_requests WHERE node_id=$1 AND state NOT IN ('completed','cancelled')")
+        .bind(&id).fetch_one(&mut **tx).await?;
+    let assignments: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM node_assignments WHERE node_id=$1")
+            .bind(&id)
+            .fetch_one(&mut **tx)
+            .await?;
+    if crate::node_cleanup::needs_background_cleanup(tx, &id).await? {
+        queue_record_removal(tx, &id, expected, json!({
+            "node_name":node.get::<String,_>("name"),"expected_revision":expected,
+            "remote_uninstall":false,"remote_service_may_be_running":true,
+            "cancelled_jobs":cancelled.len(),"removed_assignments":assignments,"removed_pending_kicks":pending
+        })).await?;
+        return Ok(StatusCode::ACCEPTED);
+    }
+    crate::api::authorization_groups::before_node_delete(tx, &id, now()).await?;
+    crate::dns::binding::before_node_delete(tx, &id).await?;
+    // Child configuration, assignments, monitoring data and kick obligations
+    // cascade; jobs retain their historical node ID, name snapshot and events.
+    sqlx::query("DELETE FROM nodes WHERE id=$1")
+        .bind(&id)
+        .execute(&mut **tx)
+        .await?;
+    sqlx::query("INSERT INTO audit_records(id,actor,action,entity_type,entity_id,detail_json,created_at) VALUES($1,$4,'node.record_removed','node',$2,$3,now())")
+        .bind(Uuid::new_v4().to_string()).bind(&id).bind(json!({"node_name":node.get::<String,_>("name"),"expected_revision":expected,"remote_uninstall":false,"remote_service_may_be_running":true,"cancelled_jobs":cancelled.len(),"removed_assignments":assignments,"removed_pending_kicks":pending})).bind(super::audit_actor()).execute(&mut **tx).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn queue_record_removal(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    id: &str,
+    revision: i64,
+    detail: Value,
+) -> Result<String, ApiError> {
+    let retry_of = sqlx::query("SELECT j.id,CASE WHEN n.state='delete_failed' AND j.target_revision=$2 THEN j.result_json END AS checkpoint FROM jobs j JOIN nodes n ON n.id=j.node_id WHERE j.node_id=$1 AND j.kind='record-remove' AND j.status='failed' AND NOT EXISTS(SELECT 1 FROM jobs child WHERE child.retry_of_job_id=j.id) ORDER BY j.created_at DESC LIMIT 1")
+        .bind(id).bind(revision).fetch_optional(&mut **tx).await?;
+    sqlx::query("UPDATE nodes SET state='deleting',updated_at=now() WHERE id=$1")
+        .bind(id)
+        .execute(&mut **tx)
+        .await?;
+    let job = super::enqueue_job_with_payload_in_tx(
+        tx,
+        "record-remove",
+        Some(id),
+        Some(revision),
+        json!({
+            "actor_id":super::audit_actor(),"removal_detail":detail
+        }),
+    )
+    .await?;
+    if let Some(parent) = retry_of {
+        sqlx::query("UPDATE jobs SET retry_of_job_id=$1,result_json=$3 WHERE id=$2")
+            .bind(parent.get::<String, _>("id"))
+            .bind(&job)
+            .bind(parent.get::<Option<Value>, _>("checkpoint"))
+            .execute(&mut **tx)
+            .await?;
+    }
+    sqlx::query("INSERT INTO audit_records(id,actor,action,entity_type,entity_id,detail_json,created_at) VALUES($1,$2,'node.record_removal_requested','node',$3,$4,now())")
+        .bind(Uuid::new_v4().to_string()).bind(super::audit_actor()).bind(id)
+        .bind(json!({"job_id":job,"remote_uninstall":false})).execute(&mut **tx).await?;
+    Ok(job)
+}
+
+async fn managed_remote_trust(
+    connection: &mut sqlx::PgConnection,
+    node: &str,
+) -> Result<bool, sqlx::Error> {
+    sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM mtls_node_trust WHERE node_id=$1 AND deployed UNION ALL SELECT 1 FROM mtls_live_activation_trust WHERE node_id=$1)").bind(node).fetch_one(connection).await
+}
+
+/// Parent groups precede nodes; users, credentials and identities follow in ID order.
+/// SERIALIZABLE retries also cover memberships committed after this graph snapshot.
+async fn lock_node_removal_graph_on(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    node: &str,
+) -> Result<(), ApiError> {
+    sqlx::query("SELECT g.id FROM authorization_groups g JOIN authorization_group_nodes m ON m.group_id=g.id WHERE m.node_id=$1 ORDER BY g.id FOR UPDATE OF g").bind(node).fetch_all(&mut **tx).await?;
+    sqlx::query("SELECT id FROM nodes WHERE id=$1 FOR UPDATE")
+        .bind(node)
+        .fetch_optional(&mut **tx)
+        .await?
+        .ok_or_else(|| ApiError::not_found("node"))?;
+    let users: Vec<String> = sqlx::query_scalar("SELECT u.id FROM users u WHERE u.id IN (SELECT user_id FROM node_assignments WHERE node_id=$1 UNION SELECT gu.user_id FROM authorization_group_users gu JOIN authorization_group_nodes gn ON gn.group_id=gu.group_id WHERE gn.node_id=$1) ORDER BY u.id FOR NO KEY UPDATE OF u").bind(node).fetch_all(&mut **tx).await?;
+    sqlx::query("SELECT id FROM credentials WHERE owner_user_id=ANY($1) ORDER BY id FOR UPDATE")
+        .bind(&users)
+        .fetch_all(&mut **tx)
+        .await?;
+    sqlx::query("SELECT id FROM mtls_user_identities WHERE user_id=ANY($1) ORDER BY id FOR UPDATE")
+        .bind(&users)
+        .fetch_all(&mut **tx)
+        .await?;
+    Ok(())
+}
+
+async fn delete_on(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    id: String,
+    expected: i64,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    lock_node_removal_graph_on(tx, &id).await?;
+    let node = sqlx::query(
+        "SELECT desired_revision, deployed_revision, state FROM nodes WHERE id = $1 FOR UPDATE",
+    )
+    .bind(&id)
+    .fetch_optional(&mut **tx)
+    .await?
+    .ok_or_else(|| ApiError::not_found("node"))?;
+    let revision: i64 = node.get("desired_revision");
+    if revision != expected {
+        return Err(ApiError::conflict(
+            "node revision changed; reload before deleting",
+        ));
+    }
+    let deployed_revision: Option<i64> = node.get("deployed_revision");
+    let unresolved_dns: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM jobs j JOIN dns_operations o ON o.job_id=j.id WHERE j.node_id=$1 AND o.applied_at IS NULL AND o.action IN ('record-create','record-update','record-delete') AND j.status IN ('running','failed','queued'))")
+        .bind(&id).fetch_one(&mut **tx).await?;
+    if unresolved_dns {
+        return Err(ApiError::conflict(
+            "finish or reconcile pending DNS writes before deleting the node",
+        ));
+    }
+    let node_state: String = sqlx::query_scalar("SELECT state FROM nodes WHERE id = $1")
+        .bind(&id)
+        .fetch_one(&mut **tx)
+        .await?;
+    if node_state == "deleting" {
+        let existing: Option<String> = sqlx::query_scalar("SELECT id FROM jobs WHERE node_id = $1 AND kind IN ('uninstall','record-remove') AND status IN ('queued', 'running') ORDER BY created_at DESC LIMIT 1")
+            .bind(&id).fetch_optional(&mut **tx).await?;
+        if let Some(job_id) = existing {
+            return Ok((
+                StatusCode::ACCEPTED,
+                Json(json!({"job_id": job_id, "status": "queued"})),
+            ));
+        }
+    }
+    let active_deployment: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM jobs WHERE node_id = $1 AND status = 'running' AND kind IN ('deploy', 'sync', 'rollback', 'uninstall', 'credential-apply')")
+        .bind(&id).fetch_one(&mut **tx).await?;
+    let never_installed = deployed_revision.is_none()
+        && !managed_remote_trust(tx, &id).await?
+        && active_deployment == 0
+        && matches!(
+            node_state.as_str(),
+            "new" | "ready" | "needs_fingerprint" | "fingerprint_changed"
+        );
+    if never_installed {
+        cancel_queued_node_jobs_in_tx(tx, &id).await?;
+        cancel_running_node_jobs_in_tx(tx, &id).await?;
+        if crate::node_cleanup::needs_background_cleanup(tx, &id).await? {
+            let job = queue_record_removal(tx, &id, expected, json!({"expected_revision":expected,"remote_uninstall":false,"remote_install":false})).await?;
+            return Ok((
+                StatusCode::ACCEPTED,
+                Json(json!({"job_id":job,"status":"queued"})),
+            ));
+        }
+        crate::api::authorization_groups::before_node_delete(tx, &id, now()).await?;
+        crate::dns::binding::before_node_delete(tx, &id).await?;
+        sqlx::query("DELETE FROM nodes WHERE id = $1 AND desired_revision = $2")
+            .bind(&id)
+            .bind(expected)
+            .execute(&mut **tx)
+            .await?;
+        sqlx::query("INSERT INTO audit_records (id, actor, action, entity_type, entity_id, detail_json, created_at) VALUES ($1, $5, 'node.deleted', 'node', $2, $3, $4)")
+            .bind(Uuid::new_v4().to_string()).bind(&id).bind(json!({"expected_revision": expected, "remote_install": false})).bind(now()).bind(super::audit_actor()).execute(&mut **tx).await?;
+        return Ok((StatusCode::NO_CONTENT, Json(Value::Null)));
+    }
+    if node_state != "deleting" {
+        let updated = sqlx::query("UPDATE nodes SET state = 'deleting', updated_at = $1 WHERE id = $2 AND desired_revision = $3 AND state = $4")
+            .bind(now()).bind(&id).bind(expected).bind(&node_state).execute(&mut **tx).await?;
+        if updated.rows_affected() == 0 {
+            let existing: Option<String> = sqlx::query_scalar("SELECT id FROM jobs WHERE node_id = $1 AND kind = 'uninstall' AND status IN ('queued', 'running') ORDER BY created_at DESC LIMIT 1")
+                .bind(&id).fetch_optional(&mut **tx).await?;
+            if let Some(job_id) = existing {
+                return Ok((
+                    StatusCode::ACCEPTED,
+                    Json(json!({"job_id": job_id, "status": "queued"})),
+                ));
+            }
+            return Err(ApiError::conflict(
+                "node changed while deletion was starting",
+            ));
+        }
+    }
+    cancel_queued_node_jobs_in_tx(tx, &id).await?;
+    let job_id = enqueue_job_in_tx(tx, "uninstall", Some(&id), Some(revision)).await?;
+    sqlx::query("INSERT INTO audit_records (id, actor, action, entity_type, entity_id, detail_json, created_at) VALUES ($1, $5, 'node.uninstall_requested', 'node', $2, $3, $4)")
+        .bind(Uuid::new_v4().to_string()).bind(&id).bind(json!({"job_id": job_id, "expected_revision": expected})).bind(now()).bind(super::audit_actor()).execute(&mut **tx).await?;
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(json!({"job_id": job_id, "status": "queued"})),
+    ))
+}
+
+async fn cancel_running_node_jobs_in_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    node_id: &str,
+) -> Result<(), ApiError> {
+    let rows = sqlx::query("UPDATE jobs SET status = 'cancelled', stage = 'node_removed', updated_at = $1, finished_at = $1 WHERE node_id = $2 AND status = 'running' RETURNING id, kind")
+        .bind(now())
+        .bind(node_id)
+        .fetch_all(&mut **tx)
+        .await?;
+    for row in rows {
+        let id: String = row.get("id");
+        let kind: String = row.get("kind");
+        let payload = json!({"id": id, "kind": kind, "node_id": node_id, "status": "cancelled", "stage": "node_removed"});
+        sqlx::query("INSERT INTO job_events (job_id, event_type, payload_json, created_at) VALUES ($1, 'job.cancelled', $2, $3)")
+            .bind(&id)
+            .bind(payload)
+            .bind(now())
+            .execute(&mut **tx)
+            .await?;
+    }
+    Ok(())
+}
+
+mod handlers;
+pub(super) use handlers::{
+    action as action_handler, create as create_handler, delete as delete_handler,
+    patch as patch_handler, remove_record as remove_record_handler,
+    update_usage as update_usage_handler,
+};
+
+pub(crate) fn action_allowed(state: &str, kind: &str) -> bool {
+    state != "deleting" && (state != "delete_failed" || kind == "ssh-test")
+}
+
+async fn action_on(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    state: &AppState,
+    id: &str,
+    expected: i64,
+    kind: &str,
+    actor: &str,
+) -> Result<Value, ApiError> {
+    let row = sqlx::query(
+        "SELECT desired_revision,deployed_revision,state,mtls_state,mtls_recovery_configured FROM nodes WHERE id=$1 FOR NO KEY UPDATE",
+    ).bind(id).fetch_optional(&mut **tx).await?.ok_or_else(|| ApiError::not_found("node"))?;
+    let desired_revision: i64 = row.get("desired_revision");
+    let state_value: String = row.get("state");
+    if !action_allowed(&state_value, kind) {
+        return Err(ApiError::conflict(
+            "node is being deleted; retry deletion after checking the SSH state",
+        ));
+    }
+    if expected != desired_revision {
+        return Err(ApiError::conflict(format!(
+            "node revision is {desired_revision}; reload before starting {kind}"
+        )));
+    }
+    let mtls_state: String = row.get("mtls_state");
+    if mtls_state == "needs_configuration"
+        && !row.get::<bool, _>("mtls_recovery_configured")
+        && kind != "ssh-test"
+    {
+        return Err(ApiError::conflict(
+            "node requires an explicit off or managed configuration before recovery deployment",
+        ));
+    }
+    let target_revision = if kind == "rollback" {
+        if mtls_state != "ready" {
+            return Err(ApiError::conflict(
+                "node activation must be recovered before historical rollback",
+            ));
+        }
+        let deployed = row
+            .get::<Option<i64>, _>("deployed_revision")
+            .ok_or_else(|| ApiError::conflict("node has no successful deployment to roll back"))?;
+        sqlx::query_scalar::<_, i64>("SELECT revision FROM config_versions WHERE node_id=$1 AND deployed_success=TRUE AND revision<$2 ORDER BY revision DESC LIMIT 1 FOR KEY SHARE")
+            .bind(id).bind(deployed).fetch_optional(&mut **tx).await?
+            .ok_or_else(|| ApiError::conflict("node has no earlier successful configuration to restore"))?
+    } else {
+        desired_revision
+    };
+    let mut payload = if kind == "sync" {
+        json!({"force":true})
+    } else {
+        json!({})
+    };
+    if kind == "ssh-test" && state_value == "delete_failed" {
+        payload["delete_recovery"] = json!(true);
+    }
+    let recovery = if kind == "sync" {
+        crate::credentials::rotations::enqueue_explicit_recovery(tx, &state.secrets, id)
+            .await
+            .map_err(credential_binding_error)?
+    } else {
+        None
+    };
+    let job_id = if let Some(job) = recovery {
+        job
+    } else {
+        enqueue_job_with_payload_in_tx(tx, kind, Some(id), Some(target_revision), payload).await?
+    };
+    super::audit_on(
+        tx,
+        actor,
+        &format!("node.{kind}"),
+        "node",
+        id,
+        json!({"job_id":job_id,"target_revision":target_revision}),
+    )
+    .await?;
+    Ok(json!({"job_id":job_id,"status":"queued"}))
+}
+
+async fn node_json(state: &AppState, row: &sqlx::postgres::PgRow) -> Result<Value, ApiError> {
+    let config_enc: String = row.get("desired_config_enc");
+    let config: Value = serde_json::from_str(&state.secrets.decrypt(&config_enc)?)
+        .map_err(|_| ApiError::internal())?;
+    let mtls_required = crate::credentials::node_mtls::Settings::from_config(&config)?
+        .authority()
+        .is_some();
+    let node_id: String = row.get("id");
+    let last_sample_at: Option<chrono::DateTime<chrono::Utc>> = row.get("last_sample_at");
+    let data_freshness = match last_sample_at.as_ref() {
+        None => "not_collected",
+        Some(sample) if (chrono::Utc::now() - *sample).num_seconds() <= 30 => "fresh",
+        Some(_) => "stale",
+    };
+    let telemetry = sqlx::query(
+        "SELECT
+            (SELECT COUNT(*) FROM data_gaps WHERE node_id = $1 AND resolved_at IS NULL) AS open_gaps,
+            (SELECT coalesce((SELECT pending FROM job_node_kick_totals WHERE node_id=$2),0)) AS pending_revocations",
+    )
+    .bind(&node_id)
+    .bind(&node_id)
+    .fetch_one(&mut *crate::read_snapshot::begin(&state.pool).await?)
+    .await?;
+    let traffic_stats_port = row.get::<i32, _>("traffic_stats_port") as u16;
+    let version =
+        crate::cache_domains::version(&state.pool, &["node_config", "credentials", "resources"])
+            .await?;
+    let key = format!(
+        "preview:{}:{}:{}",
+        node_id,
+        version,
+        crate::security::token_digest(&config_enc)
+    );
+    let preview = state
+        .caches
+        .previews
+        .get(key, std::time::Duration::from_secs(1800), false, || async {
+            let (resolved, _) = super::resources::resolve_config_resources(
+                &state.pool,
+                &state.secrets,
+                &node_id,
+                &config,
+            )
+            .await?;
+            let resolved =
+                crate::credentials::node_mtls::preview(&state.pool, &node_id, &resolved).await?;
+            let value = render_server_yaml_preview_with_traffic_stats_port(
+                &resolved,
+                row.get::<String, _>("listen_addr").as_str(),
+                &node_id,
+                "<managed-node-token>",
+                "<managed-stats-secret>",
+                &std::env::var("HYSTERIAX_PUBLIC_URL")
+                    .unwrap_or_else(|_| "https://management.example.invalid".into()),
+                traffic_stats_port,
+            )
+            .map_err(|_| ApiError::internal())?;
+            Ok::<_, ApiError>(json!(value))
+        })
+        .await?;
+    let yaml_preview = preview.as_str().ok_or_else(ApiError::internal)?;
+    let (package, package_usage) = crate::node_limits::snapshot(&state.pool, &node_id)
+        .await
+        .map_err(|_| ApiError::internal())?;
+    let credential_kind: String = sqlx::query_scalar("SELECT kind FROM credentials WHERE id=$1")
+        .bind(row.get::<String, _>("ssh_credential_id"))
+        .fetch_one(&mut *crate::read_snapshot::begin(&state.pool).await?)
+        .await?;
+    let deployed_mtls = row
+        .get::<Option<String>, _>("deployed_config_enc")
+        .map(|cipher| {
+            state
+                .secrets
+                .decrypt(&cipher)
+                .and_then(|value| Ok(serde_json::from_str::<Value>(&value)?))
+        })
+        .transpose()?
+        .map(|value| crate::credentials::node_mtls::Settings::from_config(&value))
+        .transpose()?;
+    let trust=sqlx::query("SELECT ca_id,ca_version,desired,deployed FROM mtls_node_trust WHERE node_id=$1 ORDER BY ca_id,ca_version").bind(&node_id).fetch_all(&mut *crate::read_snapshot::begin(&state.pool).await?).await?;
+    let mtls_status = json!({"target":crate::credentials::node_mtls::Settings::from_config(&config)?,"deployed":deployed_mtls,"trust":trust.into_iter().map(|row|json!({"ca_credential_id":row.get::<String,_>("ca_id"),"ca_credential_version":row.get::<i64,_>("ca_version"),"desired":row.get::<bool,_>("desired"),"deployed":row.get::<bool,_>("deployed")})).collect::<Vec<_>>()});
+    Ok(json!({
+        "mtls":mtls_status,
+        "acme_status": crate::node_acme::observed(&state.pool, &node_id).await?,
+        "package": package, "package_usage": package_usage,
+        "id": node_id, "name": row.get::<String, _>("name"),
+        "ssh": {"host": row.get::<String, _>("ssh_host"), "port": row.get::<i32, _>("ssh_port"), "username": row.get::<String, _>("ssh_username"), "auth_type": if credential_kind == "ssh_password" { "password" } else { "private_key" }, "credential_id": row.get::<String,_>("ssh_credential_id"), "credential_version": row.get::<i64,_>("ssh_credential_version"), "secret_configured": true, "host_fingerprint": row.get::<Option<String>, _>("ssh_host_fingerprint")},
+        "published_connection": row.get::<Option<Value>,_>("published_connection"),
+        "dns_binding": crate::api::dns::binding_summary(&state.pool, &node_id).await?,
+        "public": {"host": row.get::<String, _>("public_host"), "port": row.get::<i32, _>("public_port"), "listen_addr": row.get::<String, _>("listen_addr"), "tls_sni": row.get::<Option<String>, _>("tls_sni"), "skip_cert_verify": row.get::<bool, _>("tls_skip_verify")},
+        "traffic_stats_port": traffic_stats_port,
+        "config": config, "yaml_preview": yaml_preview, "mtls_required": mtls_required,
+        "mtls_state":row.get::<String,_>("mtls_state"),"mtls_recovery_configured":row.get::<bool,_>("mtls_recovery_configured"),"mtls_error":row.get::<Option<String>,_>("mtls_error"),"mtls_generation":row.get::<i64,_>("mtls_generation"),
+        "revision": row.get::<i64, _>("desired_revision"), "deployed_revision": row.get::<Option<i64>, _>("deployed_revision"),
+        "state": row.get::<String, _>("state"), "last_seen_at": row.get::<Option<chrono::DateTime<chrono::Utc>>, _>("last_seen_at"),
+        "proxy_probe_url": row.get::<Option<String>, _>("proxy_probe_url"),
+        "last_sample_at": last_sample_at, "data_freshness": data_freshness,
+        "open_gaps": telemetry.get::<i64, _>("open_gaps"),
+        "pending_revocations": telemetry.get::<i64, _>("pending_revocations"),
+        "created_at": row.get::<chrono::DateTime<chrono::Utc>, _>("created_at"), "updated_at": row.get::<chrono::DateTime<chrono::Utc>, _>("updated_at")
+    }))
+}
+
+async fn validate_ssh_credential(
+    state: &AppState,
+    id: &str,
+    version: i64,
+    allow_archived: bool,
+) -> Result<(), ApiError> {
+    let (kind, owner, archived, _, _) =
+        crate::credentials::load(&state.pool, &state.secrets, id, version)
+            .await
+            .map_err(|_| ApiError::bad_request("SSH credential not found"))?;
+    if owner.is_some()
+        || (archived && !allow_archived)
+        || !matches!(kind.as_str(), "ssh_private_key" | "ssh_password")
+    {
+        return Err(ApiError::bad_request("invalid or archived SSH credential"));
+    }
+    Ok(())
+}
+
+fn normalize_proxy_probe_url(value: Option<&str>) -> Result<Option<String>, ApiError> {
+    let Some(value) = value.map(str::trim) else {
+        return Ok(None);
+    };
+    if value.is_empty() {
+        return Ok(None);
+    }
+    if value.chars().count() > 2048 {
+        return Err(ApiError::bad_request(
+            "proxy_probe_url must be at most 2048 characters",
+        ));
+    }
+    let url = Url::parse(value)
+        .map_err(|_| ApiError::bad_request("proxy_probe_url must be a valid HTTP URL"))?;
+    if url.scheme() != "http"
+        || url.host().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return Err(ApiError::bad_request(
+            "proxy_probe_url must be an HTTP URL without credentials, query, or fragment",
+        ));
+    }
+    Ok(Some(url.to_string()))
+}
+
+fn validate_listen_addr(value: &str) -> Result<(u16, bool), ApiError> {
+    let Some((_, port)) = value.rsplit_once(':') else {
+        return Err(ApiError::bad_request(
+            "listen_addr must contain a host and port",
+        ));
+    };
+    let mut seen = std::collections::BTreeSet::new();
+    let mut first = None;
+    for item in port.split(',') {
+        if let Some((start, end)) = item.split_once('-') {
+            if end.contains('-') {
+                return Err(invalid_listen_ports());
+            }
+            let start = parse_listen_port(start).ok_or_else(invalid_listen_ports)?;
+            let end = parse_listen_port(end).ok_or_else(invalid_listen_ports)?;
+            if start >= end {
+                return Err(invalid_listen_ports());
+            }
+            first.get_or_insert(start);
+            for value in start..=end {
+                if !seen.insert(value) {
+                    return Err(invalid_listen_ports());
+                }
+            }
+        } else {
+            let value = parse_listen_port(item).ok_or_else(invalid_listen_ports)?;
+            first.get_or_insert(value);
+            if !seen.insert(value) {
+                return Err(invalid_listen_ports());
+            }
+        }
+    }
+    Ok((
+        first.ok_or_else(invalid_listen_ports)?,
+        port.contains(',') || port.contains('-'),
+    ))
+}
+
+fn parse_listen_port(value: &str) -> Option<u16> {
+    if value.is_empty() || value.trim() != value {
+        return None;
+    }
+    value
+        .parse::<u16>()
+        .ok()
+        .filter(|port| (1..=65535).contains(port))
+}
+
+fn invalid_listen_ports() -> ApiError {
+    ApiError::bad_request(
+        "listen_addr ports must be single ports or non-overlapping ranges between 1 and 65535",
+    )
+}
+
+fn validate_hop_public_port(
+    public_port: u16,
+    first_listen_port: u16,
+    hopping: bool,
+) -> Result<(), ApiError> {
+    if hopping && public_port != first_listen_port {
+        return Err(ApiError::bad_request(
+            "public_port must match the first listen port when port hopping is enabled",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_listener_features(config: &Value, listen_addr: &str) -> Result<(), ApiError> {
+    if crate::config::realm_connection(config)
+        .map_err(|error| ApiError::bad_request(error.to_string()))?
+        .is_some()
+        && crate::config::listener_hop_ports(listen_addr).is_some()
+    {
+        return Err(ApiError::bad_request(
+            "port hopping cannot be combined with Hysteria Realms mode",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_text(value: &str, field: &str, max: usize) -> Result<(), ApiError> {
+    let value = value.trim();
+    if value.is_empty() || value.len() > max || value.chars().any(char::is_control) {
+        return Err(ApiError::bad_request(format!(
+            "{field} must contain 1 to {max} printable characters"
+        )));
+    }
+    Ok(())
+}
+
+fn empty_config() -> Value {
+    json!({})
+}
+
+fn default_traffic_stats_port() -> u16 {
+    DEFAULT_TRAFFIC_STATS_PORT
+}
+
+fn validate_traffic_stats_port(port: u16) -> Result<(), ApiError> {
+    if port == 0 {
+        return Err(ApiError::bad_request(
+            "traffic_stats_port must be between 1 and 65535",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod transaction_tests;
+
+#[cfg(test)]
+mod preparation_tests;
+
+#[cfg(test)]
+mod tests;
+
+#[cfg(test)]
+mod removal_tests;
+
+// Direct domain fixtures are test-only; production writes use protocol-2 handlers.
+#[cfg(test)]
+mod test_support;
+#[cfg(test)]
+pub(crate) use test_support::*;
+
+#[cfg(test)]
+use crate::db;

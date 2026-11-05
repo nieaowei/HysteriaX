@@ -261,4 +261,5 @@ async fn switch(pool: &PgPool, work: &Work) -> Result<()> {
 }
 
 #[cfg(test)]
+#[path = "probes_tests.rs"]
 mod tests;

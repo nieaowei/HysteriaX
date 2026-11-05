@@ -1,0 +1,280 @@
+//! Cache dependencies are committed database versions, never Redis-side authority.
+use crate::{error::ApiError, state::AppState};
+use sqlx::{PgPool, Row};
+use std::time::Duration;
+/// Version-independent policy path; cache keys retain the complete wire URI.
+pub fn management_path(path: &str) -> &str {
+    path.strip_prefix("/api/v2")
+        .filter(|suffix| suffix.is_empty() || suffix.starts_with('/'))
+        .unwrap_or(path)
+}
+
+pub async fn version(pool: &PgPool, domains: &[&str]) -> Result<String, ApiError> {
+    let mut connection = crate::read_snapshot::begin(pool).await?;
+    version_on(&mut connection, domains).await
+}
+
+pub async fn version_on(
+    connection: &mut sqlx::PgConnection,
+    domains: &[&str],
+) -> Result<String, ApiError> {
+    let (epoch,vector):(String,String)=sqlx::query_as("SELECT e.epoch,coalesce((SELECT string_agg(v.domain||':'||v.bucket::text||'='||v.generation::text,',' ORDER BY v.domain,v.bucket) FROM cache_bucket_versions v WHERE v.domain=ANY($1::text[])),'') FROM cache_version_epoch e WHERE e.id")
+        .bind(domains).fetch_one(connection).await?;
+    Ok(format!(
+        "b3:{epoch}:{}",
+        crate::security::token_digest(&vector)
+    ))
+}
+
+pub fn dependencies(path: &str, query: &[(String, String)]) -> Vec<&'static str> {
+    let path = management_path(path);
+    if path == "/overview/history" {
+        let get = |key: &str| {
+            query
+                .iter()
+                .find(|(k, _)| k == key)
+                .map(|(_, v)| v.as_str())
+        };
+        let source = get("source").unwrap_or("users");
+        let metrics = get("metrics").unwrap_or("all");
+        let mut deps = vec!["node_config"];
+        if metrics != "quality" {
+            deps.push(if source == "network" {
+                "network"
+            } else {
+                "traffic"
+            });
+            if source != "network" {
+                deps.extend(["online", "gaps"]);
+            }
+        }
+        if metrics != "traffic" {
+            deps.extend(["online", "probe"]);
+        }
+        return deps;
+    }
+    if path == "/overview/nodes" {
+        return vec![
+            "node_config",
+            "nodes",
+            "online",
+            "probe",
+            "network",
+            "gaps",
+            "jobs",
+        ];
+    }
+    if path == "/overview" {
+        return vec![
+            "node_config",
+            "nodes",
+            "user_config",
+            "users",
+            "online",
+            "probe",
+            "network",
+            "gaps",
+            "jobs",
+        ];
+    }
+    if path.starts_with("/dns/") {
+        return vec!["dns", "node_config", "credentials"];
+    }
+    if path.starts_with("/authorization-groups/") && path.ends_with("/nodes") {
+        return vec!["groups", "node_config", "nodes"];
+    }
+    if path.starts_with("/authorization-groups") {
+        return vec!["groups", "user_config", "node_config"];
+    }
+    if path.starts_with("/credential-batches") {
+        return vec![
+            "credentials",
+            "jobs",
+            "node_config",
+            "dns",
+            "users",
+            "user_config",
+            "groups",
+        ];
+    }
+    if path.starts_with("/credentials") {
+        let mut d = vec!["credentials", "user_config", "node_config", "dns", "jobs"];
+        if path == "/credentials" {
+            d.push("users");
+        }
+        return d;
+    }
+    if path.starts_with("/users") {
+        return vec![
+            "user_config",
+            "users",
+            "node_config",
+            "credentials",
+            "groups",
+            "jobs",
+            "traffic",
+            "gaps",
+        ];
+    }
+    if path.starts_with("/nodes") {
+        if path.contains("/resources") {
+            return vec!["resources", "node_config"];
+        }
+        return vec![
+            "node_config",
+            "nodes",
+            "credentials",
+            "resources",
+            "dns",
+            "jobs",
+            "online",
+            "probe",
+            "network",
+            "gaps",
+        ];
+    }
+    if path.starts_with("/jobs") {
+        return vec!["jobs"];
+    }
+    if path == "/audit" {
+        return vec!["audit"];
+    }
+    vec![
+        "node_config",
+        "nodes",
+        "user_config",
+        "users",
+        "credentials",
+        "resources",
+        "dns",
+        "jobs",
+        "audit",
+        "traffic",
+        "network",
+        "online",
+        "probe",
+        "groups",
+        "gaps",
+    ]
+}
+pub async fn policy(
+    state: &AppState,
+    path: &str,
+    query: &[(String, String)],
+    ttl: Duration,
+) -> Result<(String, Duration), ApiError> {
+    let path = management_path(path);
+    if let Some(id) = path.strip_prefix("/jobs/")
+        && !id.contains('/')
+    {
+        let row=sqlx::query("SELECT j.status,(SELECT generation FROM job_cache_versions WHERE job_id=j.id) revision,md5(((to_jsonb(j)-ARRAY['lease_owner','lease_expires_at'])||jsonb_build_object('retry_job_id',(SELECT child.id FROM jobs child WHERE child.retry_of_job_id=j.id)))::text) digest FROM jobs j WHERE j.id=$1").bind(id).fetch_optional(&mut *crate::read_snapshot::begin(&state.pool).await?).await?;
+        if let Some(row) = row
+            && matches!(
+                row.get::<String, _>("status").as_str(),
+                "succeeded" | "failed" | "rolled_back" | "cancelled"
+            )
+        {
+            return Ok((
+                format!(
+                    "{}:job:{}:{}",
+                    version(&state.pool, &[]).await?,
+                    row.get::<i64, _>("revision"),
+                    row.get::<String, _>("digest")
+                ),
+                Duration::from_secs(300),
+            ));
+        }
+    }
+    if let Some(id) = path.strip_prefix("/credential-batches/")
+        && !id.contains('/')
+    {
+        let row = sqlx::query(include_str!("cache_batch_version.sql"))
+            .bind(id)
+            .fetch_optional(&mut *crate::read_snapshot::begin(&state.pool).await?)
+            .await?;
+        if let Some(row) = row
+            && row.get::<bool, _>("terminal")
+        {
+            return Ok((
+                format!(
+                    "{}:batch:{}:{}",
+                    version(&state.pool, &[]).await?,
+                    row.get::<i64, _>("revision"),
+                    row.get::<String, _>("digest")
+                ),
+                Duration::from_secs(300),
+            ));
+        }
+    }
+    let ttl = if path.starts_with("/authorization-groups")
+        || path.starts_with("/dns/")
+        || path.contains("/resources")
+    {
+        Duration::from_secs(60)
+    } else {
+        ttl
+    };
+    let mut revision = version(&state.pool, &dependencies(path, query)).await?;
+    let parts: Vec<_> = path.trim_matches('/').split('/').collect();
+    let primary = match parts.as_slice() {
+        ["nodes", id] => Some(("nodes", *id)),
+        ["users", id] => Some(("users", *id)),
+        ["credentials", id] => Some(("credentials", *id)),
+        ["authorization-groups", id] => Some(("authorization_groups", *id)),
+        ["jobs", id] => Some(("jobs", *id)),
+        ["credential-batches", id] => Some(("credential_batches", *id)),
+        ["dns", "connections", id] => Some(("dns_connections", *id)),
+        ["dns", "records", id] => Some(("dns_records", *id)),
+        _ => None,
+    };
+    if let Some((kind, id)) = primary {
+        let entity: Option<(i64, bool)> = sqlx::query_as(
+            "SELECT generation,deleted FROM cache_entity_versions WHERE kind=$1 AND entity_id=$2",
+        )
+        .bind(kind)
+        .bind(id)
+        .fetch_optional(&mut *crate::read_snapshot::begin(&state.pool).await?)
+        .await?;
+        revision.push_str(&format!(";entity={kind}:{id}:{entity:?}"));
+    }
+    if path == "/overview" || path == "/overview/nodes" {
+        revision.push_str(";overview_schema=3");
+    }
+    if path == "/overview" {
+        revision.push_str(&format!(";quota_second={}", chrono::Utc::now().timestamp()));
+    }
+    if path == "/overview/history" {
+        revision.push_str(&format!(
+            ";minute={}",
+            chrono::Utc::now().timestamp().div_euclid(60)
+        ));
+    }
+    Ok((revision, ttl))
+}
+
+pub fn route(path: &str) -> String {
+    let mut parts: Vec<_> = path.trim_matches('/').split('/').collect();
+    if parts.len() > 3
+        && matches!(
+            parts[2],
+            "nodes"
+                | "users"
+                | "credentials"
+                | "jobs"
+                | "credential-batches"
+                | "authorization-groups"
+        )
+    {
+        parts[3] = ":id";
+    }
+    if parts.len() > 4 && parts[2] == "dns" {
+        parts[4] = ":id";
+    }
+    if parts.len() > 5 && parts[2] == "nodes" && parts[4] == "resources" {
+        parts[5] = ":resource_id";
+    }
+    format!("/{}", parts.join("/"))
+}
+
+#[cfg(test)]
+mod bucket_tests;

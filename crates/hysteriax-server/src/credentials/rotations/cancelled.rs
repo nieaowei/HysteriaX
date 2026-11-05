@@ -107,4 +107,5 @@ async fn page(pool: &PgPool, work: &Work) -> Result<()> {
 }
 
 #[cfg(test)]
+#[path = "cancelled_tests.rs"]
 pub(in crate::credentials::rotations) mod tests;

@@ -77,4 +77,5 @@ async fn page(pool: &PgPool, work: &Work) -> Result<()> {
 }
 
 #[cfg(test)]
+#[path = "superseded_tests.rs"]
 mod tests;

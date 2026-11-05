@@ -142,4 +142,5 @@ pub(super) async fn commit(pool: &PgPool, source: &Source, result: &Value) -> Re
 }
 
 #[cfg(test)]
+#[path = "records_tests.rs"]
 mod tests;

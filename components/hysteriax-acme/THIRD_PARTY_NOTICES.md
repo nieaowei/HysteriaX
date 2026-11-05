@@ -2,7 +2,7 @@
 
 HysteriaX is MIT licensed; see `LICENSE`. The component uses CertMagic v0.25.4 and the eight libdns provider versions used by unmodified Hysteria v2.12.3. The module graph and checksums are locked in `go.mod` / `go.sum`. Provider mapping follows the upstream MIT-licensed Hysteria application.
 
-Dependency license and notice texts are reproduced below by module. Regenerate with `python3 scripts/update-node-acme-notices.py` after a dependency change. Pebble is an optional test tool and is not linked into the distributed component.
+Dependency license and notice texts are reproduced below by module. Regenerate with `python3 scripts/generate/update-node-acme-notices.py` after a dependency change. Pebble is an optional test tool and is not linked into the distributed component.
 
 | Module | Version | License / notices |
 | --- | --- | --- |

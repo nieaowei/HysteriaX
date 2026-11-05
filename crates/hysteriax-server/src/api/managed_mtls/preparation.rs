@@ -354,4 +354,5 @@ pub(super) async fn reissue_user_on(
 }
 
 #[cfg(test)]
+#[path = "preparation_tests.rs"]
 mod tests;

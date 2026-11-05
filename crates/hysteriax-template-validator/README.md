@@ -22,7 +22,7 @@ additional cache by validator source and Schema inputs; Cargo still verifies
 artifact freshness after restore. See the action's
 [workspace-cache option](https://github.com/Swatinem/rust-cache#example-usage).
 
-`scripts/verify-subscription-schema-build-gate.py` checks application-only cache
+`tests/contracts/verify-subscription-schema-build-gate.py` checks application-only cache
 reuse by observing Cargo's fresh artifact and unchanged rlib hash/mtime. It also
 checks that valid schema changes rebuild and change verdicts, and invalid raw or
 prepared schemas fail the build. The compatibility script compares the actual

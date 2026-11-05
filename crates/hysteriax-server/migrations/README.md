@@ -49,7 +49,7 @@ cargo run -p hysteriax-server -- --migrate-only
 ```sh
 # TEST_DATABASE_URL 必须指向可丢弃的 PostgreSQL 数据库。
 cargo test --workspace
-python3 scripts/verify-migrations.py
+python3 tests/integration/verify-migrations.py
 ```
 
 本次合并在独立 PostgreSQL 18 空库中回放原 SQL 链，再将原结构与基线结构按 PostgreSQL 规范化定义比较；105 张应用表的初始数据也逐表一致，随机 epoch 按生成语义核对。当前测试覆盖原生字段、初始化数据、重复迁移、历史篡改/缺失/失败/未来版本拒绝及旧迁移链拒绝。后续业务测试直接使用当前 schema，不再构建已移除的历史版本。
@@ -76,7 +76,7 @@ current migration chain.
 
 生产已应用 0007，旧测试数据库已退役，独立旧库升级工具及依赖旧版本的验证脚本已删除。新环境直接初始化空库；已升级到 schema 7 的库可重复执行当前 `--migrate-only`。不再支持未完成历史转换的旧库升级。
 
-0007 已发布，其 SQL 原文和校验和保持不变。文件中的旧脚本路径仅是当时的错误提示，已不再是有效操作指引，不能据此运行旧工具或伪造转换标记。当前初始化、重复维护、密钥及迁移历史拒绝、恢复隔离由现有 Rust 测试和 `scripts/verify-migrations.py` 覆盖。
+0007 已发布，其 SQL 原文和校验和保持不变。文件中的旧脚本路径仅是当时的错误提示，已不再是有效操作指引，不能据此运行旧工具或伪造转换标记。当前初始化、重复维护、密钥及迁移历史拒绝、恢复隔离由现有 Rust 测试和 `tests/integration/verify-migrations.py` 覆盖。
 
 当前仍保留凭据引用索引维护、用户访问检查重建、默认模板播种、恢复时的 epoch 隔离与只读运行校验。旧 mTLS 配置回放拒绝和不确定远程操作屏障也继续保留，避免重新执行已失效或结果未知的任务。模板仅支持 schema 2。
 
@@ -102,7 +102,7 @@ current migration chain.
 
 ```sh
 # TEST_DATABASE_URL 仅指向已停止所有 API 的测试库。
-python3 scripts/migrate-lock-contention-test-db.py \
+python3 scripts/migrations/migrate-lock-contention-test-db.py \
   --expected-database hysteriax_test \
   --confirm-test-environment --confirm-api-stopped \
   --report /tmp/hysteriax-lock-migration.json

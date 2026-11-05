@@ -1,6 +1,6 @@
 # 节点 ACME 维护
 
-`hysteriax-acme` 固定使用 CertMagic v0.25.4，DNS 服务商及版本与 Hy2 v2.12.3 一致。组件源码、锁文件和依赖许可在 `components/hysteriax-acme/`。本地运行 `scripts/build-node-acme.sh` 生成 Linux amd64 / arm64 二进制、许可包和 SHA256SUMS；管理服务镜像在本地构建时也会包含两种架构的产物，通过现有 SFTP 下发，节点无需安装 Go。部署管理服务时仍须本地构建镜像后推送服务器。
+`hysteriax-acme` 固定使用 CertMagic v0.25.4，DNS 服务商及版本与 Hy2 v2.12.3 一致。组件源码、锁文件和依赖许可在 `components/hysteriax-acme/`。本地运行 `scripts/build/build-node-acme.sh` 生成 Linux amd64 / arm64 二进制、许可包和 SHA256SUMS；管理服务镜像在本地构建时也会包含两种架构的产物，通过现有 SFTP 下发，节点无需安装 Go。部署管理服务时仍须本地构建镜像后推送服务器。
 
 ## 文件与权限
 
@@ -43,11 +43,11 @@ PEBBLE_BIN=/tmp/hysteriax-acme-tools/pebble go test -race -run TestPebbleChallen
 回到仓库根目录，构建组件并运行 systemd 验收：
 
 ```sh
-scripts/build-node-acme.sh
-docker build -f scripts/fixtures/systemd-node.Dockerfile -t hysteriax-acme-test-node:0003 .
-scripts/verify-node-acme-systemd.py
+scripts/build/build-node-acme.sh
+docker build -f tests/fixtures/runtime/systemd-node.Dockerfile -t hysteriax-acme-test-node:0003 .
+tests/integration/verify-node-acme-systemd.py
 # 使用与测试容器同架构的 Linux Pebble 二进制，增加首次签发及真实超时恢复：
-PEBBLE_NODE_BIN=/path/to/linux/pebble scripts/verify-node-acme-systemd.py
+PEBBLE_NODE_BIN=/path/to/linux/pebble tests/integration/verify-node-acme-systemd.py
 ```
 
 Pebble 测试运行本地 DNS stub 和测试 provider，实际验证 HTTP-01、TLS-ALPN-01、DNS-01、备用端口及多域名签发；八家真实服务商仅使用现有 fixtures 验证字段映射，不访问真实账号。systemd 验收使用一次性容器和本地测试 CA，测试安装、兼容 SAN 复用、账号权限、组件重启、原版 Hy2 的 SAN+mTLS+ECH 转发、失败恢复及手动 TLS 切换。

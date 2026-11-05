@@ -15,7 +15,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Package the unsigned universal app
-        run: scripts/release-macos.sh
+        run: scripts/build/release-macos.sh
         env:
           HYSTERIAX_RELEASE_VERSION: ${{ github.ref_name }}
 

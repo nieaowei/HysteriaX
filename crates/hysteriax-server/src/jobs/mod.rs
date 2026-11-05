@@ -1,0 +1,1231 @@
+use crate::db;
+use std::time::Duration;
+
+use crate::{
+    deployment::{self, JobInput, JobOutput},
+    security::{SecretBox, redact_config_secrets, redact_secret_values},
+    ssh::SshError,
+    state::AppState,
+};
+use serde_json::{Value, json};
+use sqlx::{PgPool, Row};
+use tokio::task::JoinSet;
+
+const DEFAULT_MAX_PARALLEL_NODES: usize = 4;
+const MAX_ATTEMPTS: i64 = 3;
+
+#[cfg(test)]
+mod node_cleanup_tests;
+
+pub async fn run(state: AppState) {
+    let max_parallel = crate::runtime_config::background_worker_parallelism();
+    tracing::info!(max_parallel, "background job worker started");
+    let mut tasks = JoinSet::new();
+    let mut reconciliation = tokio::time::interval(Duration::from_secs(1));
+    reconciliation.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        while tasks.len() < max_parallel.min(DEFAULT_MAX_PARALLEL_NODES) {
+            match claim_next_for(&state.pool, Some(&state.instance_id)).await {
+                Ok(Some(job)) => {
+                    let worker_state = state.clone();
+                    tasks.spawn(async move { execute_claimed(worker_state, job).await });
+                }
+                Ok(None) => break,
+                Err(error) => {
+                    tracing::error!(%error, "failed to claim background job");
+                    break;
+                }
+            }
+        }
+
+        tokio::select! {
+            joined = tasks.join_next(), if !tasks.is_empty() => {
+                if let Some(Err(error)) = joined {
+                    tracing::error!(%error, "background job task panicked");
+                }
+            }
+            _ = reconciliation.tick() => {
+                if let Err(error) = maintenance_pass(&state).await {
+                    tracing::error!(%error, "job maintenance deferred");
+                }
+            }
+            _ = tokio::time::sleep(Duration::from_secs(1)) => {}
+        }
+    }
+}
+
+async fn maintenance_pass(state: &AppState) -> anyhow::Result<()> {
+    use crate::background::maintenance;
+    for operation in ["recovery", "kick_schedule"] {
+        maintenance::ensure(
+            &state.pool,
+            &format!("jobs:{operation}"),
+            "jobs-maintenance",
+            json!({"operation":operation}),
+        )
+        .await?;
+    }
+    for _ in 0..2 {
+        let Some(work) =
+            maintenance::claim(&state.pool, "jobs-maintenance", &state.instance_id).await?
+        else {
+            break;
+        };
+        crate::execution::supervise(state.pool.clone(), work.leases.clone(), async {
+            if let Err(error) = maintenance_work(state, &work).await {
+                tracing::warn!(%error,"job maintenance batch deferred");
+                work.retry(&state.pool).await?;
+            }
+            Ok::<_, anyhow::Error>(())
+        })
+        .await
+        .transpose()?;
+    }
+    Ok(())
+}
+async fn maintenance_work(
+    state: &AppState,
+    work: &crate::background::maintenance::Work,
+) -> anyhow::Result<()> {
+    let work = work.clone();
+    db::serializable::<_, crate::error::ApiError, _>(&state.pool, move |tx| {
+        let work = work.clone();
+        Box::pin(async move {
+            work.guard_on(tx)
+                .await
+                .map_err(crate::error::ApiError::from)?;
+            let delay=match work.payload["operation"].as_str() {
+                Some("recovery")=>if recover_interrupted_on(tx).await?==256 {1}else{10},
+                Some("kick_schedule")=>{
+                    let page=crate::kick_requests::schedule_page(tx,None,false,work.payload["node_after"].as_str()).await?;
+                    sqlx::query("UPDATE background_work SET payload=jsonb_set(payload,'{node_after}',$2) WHERE id=$1")
+                        .bind(&work.id).bind(json!(page.next_node)).execute(&mut **tx).await?;
+                    if page.more {1}else{10}
+                },
+                _=>return Err(crate::error::ApiError::internal()),
+            };
+            work.finish_on(tx,false,delay,None).await.map_err(crate::error::ApiError::from)?;
+            Ok(())
+        })
+    })
+    .await
+    .map_err(|error| anyhow::anyhow!(error.message))
+}
+
+#[cfg(test)]
+async fn recover_interrupted(pool: &PgPool) -> Result<(), sqlx::Error> {
+    db::write(pool, |tx| {
+        Box::pin(async move { recover_interrupted_on(tx).await.map(|_| ()) })
+    })
+    .await
+}
+async fn recover_interrupted_on(
+    tx: &mut sqlx::Transaction<'static, sqlx::Postgres>,
+) -> Result<usize, sqlx::Error> {
+    let cutoff: chrono::DateTime<chrono::Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
+        .fetch_one(&mut **tx)
+        .await?;
+    let rows = sqlx::query(
+        "WITH candidates AS (SELECT id FROM jobs WHERE status='running' UNION SELECT j.id FROM execution_operations o JOIN jobs j ON j.id=o.work_id WHERE o.state='dispatching' OR (j.stage NOT IN ('reconciling','needs_attention') AND o.state IN ('reconciling','needs_attention'))) SELECT j.id,j.kind,j.node_id,j.resource_key,j.attempts,j.payload_json,EXISTS(SELECT 1 FROM resource_leases l WHERE l.work_id=j.id) AS managed FROM jobs j JOIN candidates c ON c.id=j.id WHERE NOT EXISTS(SELECT 1 FROM resource_leases l WHERE l.work_id=j.id AND l.owner IS NOT NULL AND l.expires_at>$1) ORDER BY j.updated_at,j.id LIMIT 256 FOR UPDATE OF j SKIP LOCKED",
+    )
+    .bind(cutoff)
+    .fetch_all(&mut **tx)
+    .await?;
+    let count = rows.len();
+    for row in rows {
+        let id: String = row.get("id");
+        let kind: String = row.get("kind");
+        let node_id: Option<String> = row.get("node_id");
+        let timestamp = now();
+        let uncertain: bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM execution_operations WHERE work_id=$1 AND state IN ('dispatching','reconciling','needs_attention'))")
+            .bind(&id).fetch_one(&mut **tx).await?;
+        let legacy_remote = !row.get::<bool, _>("managed") && kind != "record-remove";
+        if uncertain || legacy_remote {
+            let stage = if legacy_remote {
+                "needs_attention"
+            } else {
+                "reconciling"
+            };
+            let mut resources = vec![format!("job:{id}")];
+            if let Some(node) = &node_id {
+                resources.push(format!("node:{node}"));
+            }
+            if let Some(resource) = row.get::<Option<String>, _>("resource_key") {
+                resources.push(resource);
+            }
+            resources.sort();
+            resources.dedup();
+            for resource in resources {
+                sqlx::query("INSERT INTO resource_leases(resource_key,work_id,blocked) VALUES($1,$2,true) ON CONFLICT(resource_key) DO UPDATE SET blocked=true")
+                    .bind(&resource).bind(&id).execute(&mut **tx).await?;
+            }
+            sqlx::query("UPDATE execution_operations SET state=$2,updated_at=clock_timestamp() WHERE work_id=$1 AND state='dispatching'")
+                .bind(&id).bind(stage).execute(&mut **tx).await?;
+            sqlx::query("UPDATE jobs SET status='failed',stage=$2,error_message='Execution interrupted; remote outcome requires verification before recovery',updated_at=clock_timestamp(),finished_at=clock_timestamp() WHERE id=$1")
+                .bind(&id).bind(stage).execute(&mut **tx).await?;
+            let interrupted = JobInput {
+                id: id.clone(),
+                kind: kind.clone(),
+                node_id: node_id.clone(),
+                target_revision: None,
+                payload: row.get("payload_json"),
+                attempts: row.get("attempts"),
+            };
+            crate::kick_requests::finish(tx, &interrupted, "needs_attention").await?;
+            crate::kick_requests::event(
+                tx,
+                &id,
+                "job.reconciliation_required",
+                json!({"id":id,"kind":kind,"node_id":node_id,"status":"failed","stage":stage}),
+            )
+            .await?;
+            continue;
+        }
+        if kind == "kick" && row.get::<i64, _>("attempts") >= 5 {
+            let job = JobInput {
+                id: id.clone(),
+                kind: kind.clone(),
+                node_id: node_id.clone(),
+                target_revision: None,
+                payload: row.get("payload_json"),
+                attempts: row.get("attempts"),
+            };
+            sqlx::query("UPDATE jobs SET status='failed',stage='needs_attention',error_message='Kick interrupted after exhausting its execution budget',finished_at=now(),updated_at=now() WHERE id=$1")
+                .bind(&id).execute(&mut **tx).await?;
+            crate::kick_requests::finish(tx, &job, "needs_attention").await?;
+            crate::kick_requests::event(tx,&id,"job.failed",json!({"id":id,"kind":kind,"node_id":node_id,"status":"failed","stage":"needs_attention"})).await?;
+            continue;
+        }
+        sqlx::query("UPDATE jobs SET status = 'queued', stage = 'recovered', available_at = $1, updated_at = $2, finished_at = NULL WHERE id = $3 AND status = 'running'")
+            .bind(timestamp).bind(timestamp).bind(&id).execute(&mut **tx).await?;
+        sqlx::query("INSERT INTO job_events (job_id, event_type, payload_json, created_at) VALUES ($1, 'job.recovered', $2, $3)")
+            .bind(&id)
+            .bind(json!({"id": id, "kind": kind, "node_id": node_id, "status": "queued", "stage": "recovered"}))
+            .bind(timestamp)
+            .execute(&mut **tx)
+            .await?;
+    }
+    Ok(count)
+}
+
+struct ClaimedJob {
+    job: JobInput,
+    leases: Vec<crate::execution::Execution>,
+}
+
+// Legacy unit fixtures exercise queue/completion semantics without running a
+// live executor. Ownership-specific tests use claim_next_for with an owner.
+#[cfg(test)]
+pub(crate) async fn claim_next(pool: &PgPool) -> Result<Option<JobInput>, sqlx::Error> {
+    Ok(claim_next_for(pool, None).await?.map(|claimed| claimed.job))
+}
+
+async fn claim_next_for(
+    pool: &PgPool,
+    owner: Option<&str>,
+) -> Result<Option<ClaimedJob>, sqlx::Error> {
+    if owner.is_some_and(str::is_empty) || owner.is_none() && !cfg!(test) {
+        return Err(sqlx::Error::Protocol(
+            "job claim requires an instance owner".into(),
+        ));
+    }
+    let owner = owner.map(str::to_owned);
+    db::write(pool, move |tx| {
+        let owner = owner.clone();
+        Box::pin(async move {
+    let timestamp: chrono::DateTime<chrono::Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
+        .fetch_one(&mut **tx).await?;
+    sqlx::query("SAVEPOINT job_claim").execute(&mut **tx).await?;
+    let mut leases = Vec::new();
+    let row = sqlx::query("UPDATE jobs SET status = 'running', stage = 'starting', attempts = attempts + CASE WHEN stage IN ('fingerprint_confirmed','batch_continue') THEN 0 ELSE 1 END, started_at = COALESCE(started_at, $1), updated_at = $2 WHERE id = (SELECT candidate.id FROM jobs AS candidate WHERE candidate.status = 'queued' AND candidate.available_at <= $3 AND NOT EXISTS(SELECT 1 FROM mtls_superseded_node_jobs s WHERE s.job_id=candidate.id) AND (candidate.node_id IS NULL OR NOT EXISTS (SELECT 1 FROM jobs AS active WHERE active.node_id = candidate.node_id AND active.status = 'running')) AND (candidate.kind NOT IN ('deploy','sync','rollback') OR NOT EXISTS (SELECT 1 FROM jobs AS dependency WHERE dependency.node_id=candidate.node_id AND dependency.kind LIKE 'dns-%' AND dependency.status IN ('queued','running'))) AND (candidate.resource_key IS NULL OR NOT EXISTS (SELECT 1 FROM jobs AS resource_active WHERE resource_active.resource_key=candidate.resource_key AND resource_active.status='running')) AND NOT EXISTS(SELECT 1 FROM resource_leases l WHERE l.resource_key=ANY(ARRAY['job:'||candidate.id,'node:'||candidate.node_id,candidate.resource_key]) AND (l.blocked OR (l.owner IS NOT NULL AND l.expires_at>clock_timestamp()) OR EXISTS(SELECT 1 FROM execution_operations o WHERE o.resource_key=l.resource_key AND o.state IN ('dispatching','reconciling','needs_attention')))) ORDER BY candidate.available_at, candidate.created_at, candidate.id LIMIT 1 FOR UPDATE OF candidate SKIP LOCKED) RETURNING id, kind, node_id, target_revision, payload_json, attempts, resource_key")
+        .bind(timestamp).bind(timestamp).bind(timestamp).fetch_optional(&mut **tx).await?;
+    let job = if let Some(row) = row {
+        let job = JobInput {
+            id: row.get("id"),
+            kind: row.get("kind"),
+            node_id: row.get("node_id"),
+            target_revision: row.get("target_revision"),
+            payload: row.get::<Value, _>("payload_json"),
+            attempts: row.get("attempts"),
+        };
+        if let Some(owner) = owner.as_deref() {
+            let mut resources = vec![format!("job:{}", job.id)];
+            if let Some(node) = &job.node_id {
+                resources.push(format!("node:{node}"));
+            }
+            if let Some(resource) = row.get::<Option<String>, _>("resource_key") {
+                resources.push(resource);
+            }
+            resources.sort();
+            resources.dedup();
+            for resource in resources {
+                let Some(lease) =
+                    crate::execution::acquire(tx, &resource, owner, &job.id).await?
+                else {
+                    sqlx::query("ROLLBACK TO SAVEPOINT job_claim").execute(&mut **tx).await?;
+                    sqlx::query("RELEASE SAVEPOINT job_claim").execute(&mut **tx).await?;
+                    return Ok(None);
+                };
+                leases.push(lease);
+            }
+        }
+        let payload = json!({"id": job.id, "kind": job.kind, "node_id": job.node_id, "status": "running", "stage": "starting", "attempts": job.attempts});
+        sqlx::query("INSERT INTO job_events (job_id, event_type, payload_json, created_at) VALUES ($1, 'job.started', $2, $3)")
+            .bind(&job.id).bind(payload).bind(timestamp).execute(&mut **tx).await?;
+        Some(ClaimedJob { job, leases })
+    } else {
+        None
+    };
+    sqlx::query("RELEASE SAVEPOINT job_claim").execute(&mut **tx).await?;
+    Ok(job)
+        })
+    }).await
+}
+
+async fn job_is_running(pool: &PgPool, id: &str) -> bool {
+    loop {
+        match sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS(SELECT 1 FROM jobs WHERE id=$1 AND status='running')",
+        )
+        .bind(id)
+        .fetch_one(pool)
+        .await
+        {
+            Ok(running) => return running,
+            Err(error) => {
+                tracing::error!(job_id=id,%error,"failed to check job cancellation");
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+        }
+    }
+}
+
+async fn wait_for_node_removal(
+    state: &AppState,
+    job: &JobInput,
+    mut receiver: tokio::sync::broadcast::Receiver<String>,
+) {
+    let mut timer = tokio::time::interval(Duration::from_secs(1));
+    loop {
+        tokio::select! {
+            message=receiver.recv()=>match message {
+                Ok(node) if job.node_id.as_deref()==Some(node.as_str())=>return,
+                Err(tokio::sync::broadcast::error::RecvError::Closed)=>return,
+                _=>{},
+            },
+            _=timer.tick()=>{
+                // Persisted status is authoritative across instances. Stop on
+                // database loss even if no local broadcast was received.
+                let active=sqlx::query_scalar::<_,bool>("SELECT EXISTS(SELECT 1 FROM jobs WHERE id=$1 AND status='running')")
+                    .bind(&job.id).fetch_one(&state.pool).await;
+                if !matches!(active,Ok(true)) {return;}
+            }
+        }
+    }
+}
+
+async fn execute_claimed(state: AppState, claimed: ClaimedJob) {
+    let pool = state.pool.clone();
+    let job = claimed.job.clone();
+    let leases = claimed.leases;
+    let completed = crate::execution::supervise(
+        pool.clone(),
+        leases.clone(),
+        execute_one(state, claimed.job),
+    )
+    .await;
+    if completed == Some(true) {
+        let release = finish_execution(&pool, &job, &leases).await;
+        if let Err(error) = release {
+            tracing::warn!(%error,"job resource release deferred to recovery");
+        }
+    }
+}
+
+/// Runs after the supervised future ends, so it validates the explicit claimed
+/// leases rather than borrowing a task-local scope that has already exited.
+async fn finish_execution(
+    pool: &PgPool,
+    job: &JobInput,
+    leases: &[crate::execution::Execution],
+) -> Result<(), sqlx::Error> {
+    let (job, mut leases) = (job.clone(), leases.to_vec());
+    leases.sort_by(|a, b| a.resource.cmp(&b.resource));
+    let owner = leases
+        .iter()
+        .find(|l| l.resource == format!("job:{}", job.id) && l.work == job.id)
+        .map(|l| l.owner.clone())
+        .ok_or_else(|| sqlx::Error::Protocol("job release is missing its job lease".into()))?;
+    if leases
+        .windows(2)
+        .any(|pair| pair[0].resource == pair[1].resource)
+        || leases.iter().any(|l| l.work != job.id || l.owner != owner)
+    {
+        return Err(sqlx::Error::Protocol(
+            "job release has a different work or owner scope".into(),
+        ));
+    }
+    if let Some(node) = &job.node_id
+        && !leases.iter().any(|l| l.resource == format!("node:{node}"))
+    {
+        return Err(sqlx::Error::Protocol(
+            "job release is missing its node lease".into(),
+        ));
+    }
+    db::write(pool, move |tx| {let (job,leases)=(job.clone(),leases.clone());Box::pin(async move {
+        for lease in &leases {lease.guard(tx).await?;}
+        let row=sqlx::query("SELECT node_id,resource_key,kind,attempts,stage FROM jobs WHERE id=$1 FOR UPDATE")
+            .bind(&job.id).fetch_optional(&mut **tx).await?.ok_or_else(||sqlx::Error::Protocol("job release source is missing".into()))?;
+        if row.get::<String,_>("kind")!=job.kind || row.get::<i64,_>("attempts")!=job.attempts || row.get::<Option<String>,_>("node_id")!=job.node_id {
+            return Err(sqlx::Error::Protocol("job release source changed".into()));
+        }
+        let mut expected=vec![format!("job:{}",job.id)];
+        if let Some(node)=&job.node_id {expected.push(format!("node:{node}"));}
+        if let Some(resource)=row.get::<Option<String>,_>("resource_key") {expected.push(resource);}
+        expected.sort();expected.dedup();
+        let keys:Vec<String>=leases.iter().map(|l|l.resource.clone()).collect();
+        if keys!=expected {return Err(sqlx::Error::Protocol("job release resource scope changed".into()));}
+        let (uncertain,attention):(bool,bool)=sqlx::query_as("SELECT count(*)>0,coalesce(bool_or(state='needs_attention'),false) FROM execution_operations WHERE (work_id=$1 OR resource_key=ANY($2::text[])) AND state IN ('dispatching','reconciling','needs_attention')")
+            .bind(&job.id).bind(&keys).fetch_one(&mut **tx).await?;
+        if uncertain {
+            for lease in &leases {
+                sqlx::query("UPDATE resource_leases SET blocked=true WHERE resource_key=$1 AND owner=$2 AND generation=$3 AND work_id=$4")
+                    .bind(&lease.resource).bind(&lease.owner).bind(lease.generation).bind(&job.id).execute(&mut **tx).await?;
+                sqlx::query("UPDATE execution_operations SET state='reconciling',updated_at=clock_timestamp() WHERE resource_key=$1 AND owner=$2 AND generation=$3 AND work_id=$4 AND state='dispatching'")
+                    .bind(&lease.resource).bind(&lease.owner).bind(lease.generation).bind(&job.id).execute(&mut **tx).await?;
+            }
+            crate::kick_requests::finish(tx,&job,"needs_attention").await?;
+            let stage=if attention || row.get::<String,_>("stage")=="needs_attention" {"needs_attention"} else {"reconciling"};
+            let changed=sqlx::query("UPDATE jobs SET status='failed',stage=$2,error_message=coalesce(error_message,'Remote outcome requires verification before recovery'),updated_at=clock_timestamp(),finished_at=clock_timestamp() WHERE id=$1 AND (status<>'failed' OR stage<>$2)")
+                .bind(&job.id).bind(stage).execute(&mut **tx).await?;
+            if changed.rows_affected()==1 {
+                crate::kick_requests::event(tx,&job.id,"job.reconciliation_required",json!({"id":job.id,"status":"failed","stage":stage})).await?;
+            }
+        } else {
+            for lease in &leases {
+                if !lease.release(tx).await? {return Err(sqlx::Error::Protocol("job resource became uncertain before release".into()));}
+            }
+        }
+        Ok(())
+    })}).await
+}
+
+#[cfg(test)]
+mod completion_tests;
+#[cfg(test)]
+mod failure_tests;
+#[cfg(test)]
+mod ownership_tests;
+
+#[cfg(test)]
+pub(crate) async fn claim_for_test(
+    pool: &PgPool,
+    owner: &str,
+) -> Option<(JobInput, Vec<crate::execution::Execution>)> {
+    claim_next_for(pool, Some(owner))
+        .await
+        .unwrap()
+        .map(|claimed| (claimed.job, claimed.leases))
+}
+
+#[cfg(test)]
+pub(crate) async fn execute_for_test(
+    state: AppState,
+    job: JobInput,
+    leases: Vec<crate::execution::Execution>,
+) {
+    execute_claimed(state, ClaimedJob { job, leases }).await;
+}
+
+async fn execute_one(state: AppState, job: JobInput) -> bool {
+    // Subscribe before the database check: a removal before subscription is
+    // caught by persisted status, and a later removal is caught by the signal.
+    let receiver = state.removed_nodes.subscribe();
+    if !job_is_running(&state.pool, &job.id).await {
+        return true;
+    }
+    let result = tokio::select! {
+        biased;
+        _ = wait_for_node_removal(&state,&job,receiver) => return false,
+        result = deployment::run_job(&state.pool, &state.secrets, &job) => result,
+    };
+    match result {
+        Ok(output) => {
+            // A domain worker may have atomically requeued or ended its work
+            // and released the captured leases. Do not republish that output.
+            if !job_is_running(&state.pool, &job.id).await {
+                return false;
+            }
+            let removed = output.delete_node;
+            if let Err(error) =
+                retry_persistence(|| persist_success(&state, &job, output.clone())).await
+            {
+                let message = safe_error(&state.pool, &state.secrets, &job, &error).await;
+                return match retry_persistence(|| {
+                    persistence::reject_completion(&state.pool, &job, &message)
+                })
+                .await
+                {
+                    Ok(release) => release,
+                    Err(error) => {
+                        tracing::warn!(job_id=job.id,%error,"completion rejection could not be persisted; retaining execution for recovery");
+                        if let Err(error) = retry_persistence(|| {
+                            persistence::quarantine_completion(&state.pool, &job)
+                        })
+                        .await
+                        {
+                            tracing::error!(job_id=job.id,%error,"could not retain remote completion barrier");
+                        }
+                        false
+                    }
+                };
+            }
+            if removed && let Some(node) = &job.node_id {
+                let absent = sqlx::query_scalar::<_, bool>(
+                    "SELECT NOT EXISTS(SELECT 1 FROM nodes WHERE id=$1)",
+                )
+                .bind(node)
+                .fetch_one(&state.pool)
+                .await
+                .unwrap_or(false);
+                if absent {
+                    let _ = state.removed_nodes.send(node.clone());
+                }
+            }
+        }
+        Err(error) => {
+            let message = safe_error(&state.pool, &state.secrets, &job, &error).await;
+            let retry_after = crate::dns::provider::retry_delay(&error);
+            let retry = (deployment::retryable(&error)
+                || (job.kind == "record-remove" && crate::node_cleanup::retryable(&error))
+                || (job.kind == "authorization-change"
+                    && (crate::node_cleanup::retryable(&error)
+                        || crate::db::RetryableTransactionError::retryable_transaction(&error))))
+                && if job.kind == "kick" {
+                    crate::kick_requests::retry_delay(job.attempts).is_some()
+                } else {
+                    job.attempts < MAX_ATTEMPTS
+                };
+            let waiting_recovery =
+                job.kind == "kick" && crate::kick_requests::transport_error(&error);
+            let rolled_back = was_rolled_back(&error);
+            let rollback_failed = was_rollback_failed(&error);
+            if let Err(error) = retry_persistence(|| async {
+                fail_after(
+                    &state.pool,
+                    &job,
+                    &message,
+                    retry,
+                    rolled_back,
+                    rollback_failed,
+                    waiting_recovery,
+                    retry_after,
+                )
+                .await
+                .map_err(anyhow::Error::from)
+            })
+            .await
+            {
+                tracing::warn!(job_id=job.id,%error,"failure could not be persisted; retaining execution for recovery");
+                if let Err(error) =
+                    retry_persistence(|| persistence::quarantine_completion(&state.pool, &job))
+                        .await
+                {
+                    tracing::error!(job_id=job.id,%error,"could not retain remote failure barrier");
+                }
+                return false;
+            }
+        }
+    }
+    true
+}
+
+mod persistence;
+use persistence::retry_persistence;
+
+#[cfg(test)]
+pub(crate) async fn succeed(
+    app: &AppState,
+    job: &JobInput,
+    output: JobOutput,
+) -> Result<(), sqlx::Error> {
+    persist_success(app, job, output)
+        .await
+        .map_err(completion_database_error)
+}
+
+async fn persist_success(
+    app: &AppState,
+    job: &JobInput,
+    mut output: JobOutput,
+) -> anyhow::Result<()> {
+    crate::execution::require_job_scope(&job.id, job.node_id.as_deref())?;
+    if output.delete_node && !matches!(job.kind.as_str(), "uninstall" | "record-remove") {
+        return Err(sqlx::Error::Protocol("this job cannot remove a node".into()).into());
+    }
+    let pool = &app.pool;
+    if output.delete_node {
+        let (job, output) = (job.clone(), output.clone());
+        let proceed = db::serializable(pool, move |tx| {
+            let (job, output) = (job.clone(), output.clone());
+            Box::pin(async move { completion_gate_on(tx, &job, &output).await })
+        })
+        .await?;
+        if !proceed {
+            return Ok(());
+        }
+    }
+    if output.delete_node && output.result["history_cleaned"] != true {
+        let removed = crate::node_cleanup::purge_history(pool, job).await?;
+        output.result["removed_history_rows"] = json!(removed);
+    }
+    if output.delete_node
+        && let Some(node) = &job.node_id
+    {
+        crate::node_cleanup::prepare_final_delete(pool, node).await?;
+    }
+    let (app, job) = (app.clone(), job.clone());
+    let audit_id = uuid::Uuid::new_v4().to_string();
+    db::serializable(pool, move |tx| {
+        let (app, job, output, audit_id) =
+            (app.clone(), job.clone(), output.clone(), audit_id.clone());
+        Box::pin(async move { succeed_on(tx, &app, &job, &output, &audit_id).await })
+    })
+    .await
+}
+
+#[cfg(test)]
+fn completion_database_error(error: anyhow::Error) -> sqlx::Error {
+    match error.downcast::<sqlx::Error>() {
+        Ok(error) => error,
+        Err(error) => sqlx::Error::Protocol(error.to_string()),
+    }
+}
+
+async fn completion_gate_on(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    job: &JobInput,
+    output: &JobOutput,
+) -> anyhow::Result<bool> {
+    let Some(source) = sqlx::query("SELECT kind,node_id,target_revision,payload_json,attempts,resource_key FROM jobs WHERE id=$1 AND status='running' FOR UPDATE")
+        .bind(&job.id).fetch_optional(&mut **tx).await? else { return Ok(false); };
+    if source.get::<String, _>("kind") != job.kind
+        || source.get::<Option<String>, _>("node_id") != job.node_id
+        || source.get::<Option<i64>, _>("target_revision") != job.target_revision
+        || source.get::<Value, _>("payload_json") != job.payload
+        || source.get::<i64, _>("attempts") != job.attempts
+    {
+        return Err(sqlx::Error::Protocol("job completion source changed".into()).into());
+    }
+    let mut resources = vec![format!("job:{}", job.id)];
+    if let Some(node) = &job.node_id {
+        resources.push(format!("node:{node}"));
+        let node_source =
+            sqlx::query("SELECT state,desired_revision FROM nodes WHERE id=$1 FOR NO KEY UPDATE")
+                .bind(node)
+                .fetch_optional(&mut **tx)
+                .await?
+                .ok_or_else(|| sqlx::Error::Protocol("job completion node is missing".into()))?;
+        if output.delete_node
+            && (node_source.get::<String, _>("state") != "deleting"
+                || Some(node_source.get::<i64, _>("desired_revision")) != job.target_revision)
+        {
+            return Err(sqlx::Error::Protocol("node removal source changed".into()).into());
+        }
+    }
+    if let Some(resource) = source.get::<Option<String>, _>("resource_key") {
+        crate::execution::require_job_resource_scope(&job.id, &resource)
+            .map_err(|e| sqlx::Error::Protocol(e.to_string()))?;
+        resources.push(resource);
+    }
+    let uncertain: bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM execution_operations WHERE (work_id=$1 OR resource_key=ANY($2::text[])) AND state IN ('dispatching','reconciling','needs_attention'))")
+        .bind(&job.id).bind(&resources).fetch_one(&mut **tx).await?;
+    if uncertain {
+        fail_on(
+            tx,
+            job,
+            "Remote outcome requires verification before completion",
+            false,
+            false,
+            false,
+            false,
+            None,
+        )
+        .await?;
+        return Ok(false);
+    }
+    if (output.deployed_revision.is_some()
+        || output.deployed_config.is_some()
+        || output.deployed_sha256.is_some()
+        || output.published_connection.is_some())
+        && (output.deployed_revision.is_none()
+            || output.deployed_revision != job.target_revision
+            || output.deployed_config.is_none()
+            || output.deployed_sha256.is_none()
+            || job.node_id.is_none()
+            || output.node_state.is_none()
+            || output.delete_node)
+    {
+        return Err(sqlx::Error::Protocol(
+            "deployment output does not match the claimed target".into(),
+        )
+        .into());
+    }
+    crate::credentials::rotations::pin_job_source_on(tx, job).await?;
+    Ok(true)
+}
+
+async fn succeed_on(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    app: &AppState,
+    job: &JobInput,
+    output: &JobOutput,
+    audit_id: &str,
+) -> anyhow::Result<()> {
+    if !completion_gate_on(tx, job, output).await? {
+        return Ok(());
+    }
+    let timestamp: chrono::DateTime<chrono::Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
+        .fetch_one(&mut **tx)
+        .await?;
+    let result = json!({"stage": output.stage, "result": output.result});
+    if crate::api::ssh_fingerprint::supports_confirmation(&job.kind)
+        && output.stage == "fingerprint_confirmation_required"
+    {
+        let revision = output.result["node_revision"].as_i64().unwrap_or(-1);
+        let current: Option<i64> = sqlx::query_scalar("SELECT desired_revision FROM nodes WHERE id=$1 AND state!='deleting' AND (state!='delete_failed' OR $2)")
+            .bind(&job.node_id).bind(job.kind == "ssh-test" && output.result["delete_recovery"] == true).fetch_optional(&mut **tx).await?;
+        let valid = current == Some(revision);
+        let status = if valid {
+            "waiting_confirmation"
+        } else {
+            "cancelled"
+        };
+        let stage = if valid {
+            output.stage.as_str()
+        } else {
+            "superseded"
+        };
+        let changed = sqlx::query("UPDATE jobs SET status=$1,stage=$2,result_json=$3,error_message=NULL,updated_at=$4,finished_at=CASE WHEN $1='cancelled' THEN $4 ELSE NULL END WHERE id=$5 AND status='running'")
+            .bind(status).bind(stage).bind(&result).bind(timestamp).bind(&job.id).execute(&mut **tx).await?;
+        if changed.rows_affected() == 1 {
+            let log = json!({"created_at":timestamp,"stage":stage,"attempt":job.attempts,
+                "message":if valid { "SSH host fingerprint observed; waiting for explicit trust." } else { "SSH test superseded by a node change." }});
+            sqlx::query(
+                "UPDATE jobs SET logs_json=logs_json || jsonb_build_array($1::jsonb) WHERE id=$2",
+            )
+            .bind(log)
+            .bind(&job.id)
+            .execute(&mut **tx)
+            .await?;
+            if valid {
+                sqlx::query("UPDATE nodes SET state=$1,updated_at=$2 WHERE id=$3")
+                    .bind(&output.node_state)
+                    .bind(timestamp)
+                    .bind(&job.node_id)
+                    .execute(&mut **tx)
+                    .await?;
+            }
+            crate::kick_requests::event(tx, &job.id,
+                if valid { "job.waiting_confirmation" } else { "job.cancelled" },
+                json!({"id":job.id,"kind":job.kind,"node_id":job.node_id,"status":status,"stage":stage,"result":output.result})).await?;
+        }
+        return Ok(());
+    }
+    if job.kind == "ssh-test" && output.stage == "environment_checked" {
+        let current: Option<i64> = sqlx::query_scalar("SELECT desired_revision FROM nodes WHERE id=$1 AND state!='deleting' AND (state!='delete_failed' OR $2)")
+            .bind(&job.node_id).bind(job.kind == "ssh-test" && output.result["delete_recovery"] == true).fetch_optional(&mut **tx).await?;
+        if current != output.result["node_revision"].as_i64() || current.is_none() {
+            let changed = sqlx::query("UPDATE jobs SET status='cancelled',stage='superseded',updated_at=$1,finished_at=$1 WHERE id=$2 AND status='running'")
+                .bind(timestamp).bind(&job.id).execute(&mut **tx).await?;
+            if changed.rows_affected() == 1 {
+                crate::kick_requests::event(tx,&job.id,"job.cancelled",json!({"id":job.id,"kind":job.kind,"node_id":job.node_id,"status":"cancelled","stage":"superseded"})).await?;
+            }
+            return Ok(());
+        }
+    }
+    if job.kind == "kick" {
+        let pending:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM kick_requests WHERE node_id=$1 AND latest_job_id=$2 AND state='active')")
+            .bind(&job.node_id).bind(&job.id).fetch_one(&mut **tx).await?;
+        if pending {
+            sqlx::query("UPDATE jobs SET status='queued',stage='batch_continue',result_json=$2,available_at=clock_timestamp(),updated_at=clock_timestamp(),finished_at=NULL,error_message=NULL WHERE id=$1 AND status='running'")
+                .bind(&job.id).bind(&result).execute(&mut **tx).await?;
+            crate::kick_requests::event(tx,&job.id,"job.batch_continue",json!({"id":job.id,"kind":"kick","node_id":job.node_id,"status":"queued","stage":"batch_continue","result":output.result})).await?;
+            return Ok(());
+        }
+    }
+    let changed = sqlx::query("UPDATE jobs SET status = 'succeeded', stage = $1, result_json = $2, error_message = NULL, updated_at = $3, finished_at = $4 WHERE id = $5 AND status = 'running'")
+        .bind(&output.stage).bind(result).bind(timestamp).bind(timestamp).bind(&job.id).execute(&mut **tx).await?;
+    if changed.rows_affected() == 0 {
+        return Ok(());
+    }
+    if job.kind == "ssh-test" && output.stage == "environment_checked" {
+        sqlx::query("UPDATE nodes SET ssh_host_fingerprint=$1 WHERE id=$2")
+            .bind(output.result["fingerprint"].as_str())
+            .bind(&job.node_id)
+            .execute(&mut **tx)
+            .await?;
+    }
+    crate::kick_requests::finish(
+        tx,
+        job,
+        if output.stage == "restriction_cleared" {
+            "cancelled"
+        } else {
+            "completed"
+        },
+    )
+    .await?;
+    if !output.delete_node
+        && let (Some(node_id), Some(state)) = (&job.node_id, &output.node_state)
+    {
+        if let (Some(revision), Some(config)) =
+            (output.deployed_revision, output.deployed_config.as_deref())
+        {
+            if output.result["activation_id"].is_string() {
+                crate::credentials::activation::commit(
+                    tx,
+                    &job.id,
+                    output.deployed_sha256.as_deref().unwrap_or(""),
+                )
+                .await?;
+            }
+            sqlx::query("UPDATE nodes SET state = CASE WHEN state IN ('deleting', 'delete_failed') THEN state ELSE $1 END, deployed_revision = $2, deployed_config_enc = $3, deployed_content_sha256 = $4, last_seen_at = $5, updated_at = $6 WHERE id = $7")
+                .bind(state).bind(revision).bind(config).bind(output.deployed_sha256.as_deref()).bind(timestamp).bind(timestamp).bind(node_id).execute(&mut **tx).await?;
+            if let Some(connection) = &output.published_connection {
+                sqlx::query("UPDATE nodes SET published_connection=$1 WHERE id=$2")
+                    .bind(connection)
+                    .bind(node_id)
+                    .execute(&mut **tx)
+                    .await?;
+            }
+            sqlx::query("UPDATE config_versions SET deployed_success = TRUE WHERE node_id = $1 AND revision = $2")
+                .bind(node_id).bind(revision).execute(&mut **tx).await?;
+            crate::credentials::reference_index::flush_node_on(tx, &app.secrets, node_id).await?;
+            crate::credentials::rotations::operation_completed(tx, job).await?;
+        } else {
+            sqlx::query("UPDATE nodes SET state = CASE WHEN state IN ('deleting', 'delete_failed') THEN state ELSE $1 END, updated_at = $2 WHERE id = $3")
+                .bind(state)
+                .bind(timestamp)
+                .bind(node_id)
+                .execute(&mut **tx)
+                .await?;
+        }
+    }
+    let payload = json!({"id": job.id, "kind": job.kind, "node_id": job.node_id, "status": "succeeded", "stage": output.stage, "result": output.result});
+    sqlx::query("INSERT INTO job_events (job_id, event_type, payload_json, created_at) VALUES ($1, 'job.succeeded', $2, $3)")
+        .bind(&job.id).bind(payload).bind(timestamp).execute(&mut **tx).await?;
+    if output.delete_node
+        && let Some(node_id) = &job.node_id
+    {
+        let pending = sqlx::query("UPDATE jobs SET status = 'cancelled', stage = 'node_removed', updated_at = $1, finished_at = $1 WHERE node_id = $2 AND id <> $3 AND status IN ('queued', 'running', 'waiting_confirmation') RETURNING id, kind")
+            .bind(timestamp)
+            .bind(node_id)
+            .bind(&job.id)
+            .fetch_all(&mut **tx)
+            .await?;
+        for row in pending {
+            let id: String = row.get("id");
+            let kind: String = row.get("kind");
+            let payload = json!({"id": id, "kind": kind, "node_id": node_id, "status": "cancelled", "stage": "node_removed"});
+            sqlx::query("INSERT INTO job_events (job_id, event_type, payload_json, created_at) VALUES ($1, 'job.cancelled', $2, $3)")
+                .bind(&id)
+                .bind(payload)
+                .bind(timestamp)
+                .execute(&mut **tx)
+                .await?;
+        }
+        let record_only = job.kind == "record-remove";
+        let mut detail = if record_only {
+            job.payload["removal_detail"].clone()
+        } else {
+            json!({})
+        };
+        detail["job_id"] = json!(job.id);
+        detail["remote_uninstall"] = json!(!record_only);
+        detail["removed_history_rows"] = output.result["removed_history_rows"].clone();
+        sqlx::query("INSERT INTO audit_records (id, actor, action, entity_type, entity_id, detail_json, created_at) VALUES ($1, $5, $6, 'node', $2, $3, $4)")
+                .bind(audit_id).bind(node_id).bind(detail).bind(timestamp)
+                .bind(job.payload["actor_id"].as_str().unwrap_or("admin"))
+                .bind(if record_only { "node.record_removed" } else { "node.deleted" }).execute(&mut **tx).await?;
+        crate::api::authorization_groups::before_node_delete(tx, node_id, timestamp).await?;
+        crate::dns::binding::before_node_delete(tx, node_id).await?;
+        // History is empty now. Cached FK plans must not sequentially rescan
+        // large child tables using statistics from before the purge.
+        sqlx::query("SET LOCAL enable_seqscan=off")
+            .execute(&mut **tx)
+            .await?;
+        sqlx::query("SET LOCAL enable_bitmapscan=off")
+            .execute(&mut **tx)
+            .await?;
+        sqlx::query("SET LOCAL jit=off").execute(&mut **tx).await?;
+        sqlx::query("SET LOCAL plan_cache_mode=force_custom_plan")
+            .execute(&mut **tx)
+            .await?;
+        sqlx::query("SET LOCAL statement_timeout='2s'")
+            .execute(&mut **tx)
+            .await?;
+        sqlx::query("DELETE FROM nodes WHERE id = $1 AND state = 'deleting'")
+            .bind(node_id)
+            .execute(&mut **tx)
+            .await?;
+    }
+    if job.kind != "kick"
+        && !output.delete_node
+        && output.stage != "fingerprint_confirmation_required"
+        && output.result["delete_recovery"] != true
+        && let Some(node) = &job.node_id
+    {
+        crate::kick_requests::schedule(tx, Some(node), true).await?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+async fn fail(
+    pool: &PgPool,
+    job: &JobInput,
+    message: &str,
+    retry: bool,
+    rolled_back: bool,
+    rollback_failed: bool,
+    waiting_recovery: bool,
+) -> Result<(), sqlx::Error> {
+    fail_after(
+        pool,
+        job,
+        message,
+        retry,
+        rolled_back,
+        rollback_failed,
+        waiting_recovery,
+        None,
+    )
+    .await
+}
+
+async fn fail_after(
+    pool: &PgPool,
+    job: &JobInput,
+    message: &str,
+    retry: bool,
+    rolled_back: bool,
+    rollback_failed: bool,
+    waiting_recovery: bool,
+    retry_after: Option<i64>,
+) -> Result<(), sqlx::Error> {
+    crate::execution::require_job_scope(&job.id, job.node_id.as_deref())
+        .map_err(|error| sqlx::Error::Protocol(error.to_string()))?;
+    let (job, message) = (job.clone(), message.to_owned());
+    db::write(pool, move |tx| {
+        let (job, message) = (job.clone(), message.clone());
+        Box::pin(async move {
+            fail_on(
+                tx,
+                &job,
+                &message,
+                retry,
+                rolled_back,
+                rollback_failed,
+                waiting_recovery,
+                retry_after,
+            )
+            .await
+        })
+    })
+    .await
+}
+
+pub(crate) async fn fail_on(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    job: &JobInput,
+    message: &str,
+    retry: bool,
+    rolled_back: bool,
+    rollback_failed: bool,
+    waiting_recovery: bool,
+    retry_after: Option<i64>,
+) -> Result<(), sqlx::Error> {
+    crate::execution::require_job_scope(&job.id, job.node_id.as_deref())
+        .map_err(|e| sqlx::Error::Protocol(e.to_string()))?;
+    let Some(source) = sqlx::query("SELECT kind,node_id,target_revision,payload_json,attempts,stage,resource_key FROM jobs WHERE id=$1 AND status='running' FOR UPDATE")
+        .bind(&job.id).fetch_optional(&mut **tx).await? else { return Ok(()); };
+    if source.get::<String, _>("kind") != job.kind
+        || source.get::<Option<String>, _>("node_id") != job.node_id
+        || source.get::<Option<i64>, _>("target_revision") != job.target_revision
+        || source.get::<Value, _>("payload_json") != job.payload
+        || source.get::<i64, _>("attempts") != job.attempts
+    {
+        return Err(sqlx::Error::Protocol("job failure source changed".into()));
+    }
+    let mut resources = vec![format!("job:{}", job.id)];
+    if let Some(node) = &job.node_id {
+        resources.push(format!("node:{node}"));
+    }
+    if let Some(resource) = source.get::<Option<String>, _>("resource_key") {
+        crate::execution::require_job_resource_scope(&job.id, &resource)
+            .map_err(|error| sqlx::Error::Protocol(error.to_string()))?;
+        resources.push(resource);
+    }
+    let (uncertain, attention):(bool,bool)=sqlx::query_as("SELECT count(*)>0,coalesce(bool_or(state='needs_attention'),false) FROM execution_operations WHERE (work_id=$1 OR resource_key=ANY($2::text[])) AND state IN ('dispatching','reconciling','needs_attention')")
+        .bind(&job.id).bind(&resources).fetch_one(&mut **tx).await?;
+    let retry = retry && !uncertain;
+    let timestamp: chrono::DateTime<chrono::Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
+        .fetch_one(&mut **tx)
+        .await?;
+    let (status, stage, available_at, finished_at, event_name) = if uncertain {
+        (
+            "failed",
+            if attention || source.get::<String, _>("stage") == "needs_attention" {
+                "needs_attention"
+            } else {
+                "reconciling"
+            },
+            timestamp,
+            Some(timestamp),
+            "job.reconciliation_required",
+        )
+    } else if retry {
+        let delay = if job.kind == "kick" {
+            crate::kick_requests::retry_delay(job.attempts).unwrap_or(300)
+        } else if job.kind.starts_with("dns-") {
+            retry_after.unwrap_or(30 * job.attempts).max(30)
+        } else {
+            30
+        };
+        let later = timestamp + chrono::Duration::seconds(delay);
+        ("queued", "retry_wait", later, None, "job.retrying")
+    } else if job.kind == "kick" {
+        (
+            "failed",
+            if waiting_recovery {
+                "waiting_recovery"
+            } else {
+                "needs_attention"
+            },
+            timestamp,
+            Some(timestamp),
+            "job.failed",
+        )
+    } else if rolled_back {
+        (
+            "rolled_back",
+            "rolled_back",
+            timestamp,
+            Some(timestamp),
+            "job.rolled_back",
+        )
+    } else if rollback_failed {
+        (
+            "failed",
+            "rollback_failed",
+            timestamp,
+            Some(timestamp),
+            "job.failed",
+        )
+    } else {
+        ("failed", "failed", timestamp, Some(timestamp), "job.failed")
+    };
+    let changed = sqlx::query("UPDATE jobs SET status = $1, stage = $2, error_message = $3, available_at = $4, updated_at = $5, finished_at = $6 WHERE id = $7 AND status = 'running'")
+        .bind(status).bind(stage).bind(message).bind(available_at).bind(timestamp).bind(finished_at).bind(&job.id).execute(&mut **tx).await?;
+    if changed.rows_affected() == 0 {
+        return Ok(());
+    }
+    if !uncertain
+        && job.kind == "ssh-test"
+        && !retry
+        && let Some(revision) = job.payload["confirmed_revision"].as_i64()
+    {
+        // Trust was saved, but authentication/environment checks failed. Do not
+        // leave the node claiming that the already-confirmed key still needs trust.
+        let previous = job.payload["ssh_restore_state"].as_str().unwrap_or("");
+        let state = if matches!(
+            previous,
+            "deployed" | "rolled_back" | "sync_failed" | "rollback_failed" | "drift" | "syncing"
+        ) {
+            previous
+        } else {
+            "unreachable"
+        };
+        sqlx::query("UPDATE nodes SET state=$4,updated_at=$1 WHERE id=$2 AND desired_revision=$3 AND ssh_host_fingerprint IS NOT NULL AND state IN ('needs_fingerprint','fingerprint_changed')")
+            .bind(timestamp).bind(&job.node_id).bind(revision).bind(state).execute(&mut **tx).await?;
+    }
+    if !uncertain && let Some(node_id) = &job.node_id {
+        let state = if rolled_back {
+            Some("rolled_back")
+        } else if rollback_failed {
+            Some("rollback_failed")
+        } else if job.kind == "record-remove" {
+            if retry { None } else { Some("delete_failed") }
+        } else if job.kind == "uninstall" {
+            Some("delete_failed")
+        } else if message.contains("confirm this SSH host fingerprint") {
+            Some("needs_fingerprint")
+        } else if message.contains("SSH host key changed") {
+            Some("fingerprint_changed")
+        } else if message.contains("changed outside HysteriaX") {
+            Some("drift")
+        } else if !retry
+            && job.kind != "ssh-test"
+            && job.kind != "kick"
+            && !job.kind.starts_with("dns-")
+        {
+            Some("sync_failed")
+        } else {
+            None
+        };
+        if let Some(state) = state {
+            sqlx::query("UPDATE nodes SET state = CASE WHEN state IN ('deleting','delete_failed') AND $1 != 'delete_failed' THEN state ELSE $2 END, updated_at = $3 WHERE id = $4")
+                .bind(state)
+                .bind(state)
+                .bind(timestamp)
+                .bind(node_id)
+                .execute(&mut **tx)
+                .await?;
+        }
+    }
+    if !uncertain && job.kind.starts_with("dns-record-") && job.kind != "dns-record-check" {
+        // An applied operation or an older desired document cannot fail a later edit.
+        // Explicit retries move operation.job_id to their new attempt atomically.
+        sqlx::query("UPDATE dns_records r SET state=$1,updated_at=$4 FROM dns_operations o WHERE o.id=$2 AND o.job_id=$3 AND o.resource_type='dns_record' AND o.applied_at IS NULL AND r.id=o.resource_id AND r.desired IS NOT NULL AND o.payload->'source_revision'=to_jsonb(r.revision) AND r.desired=CASE WHEN o.action='record-delete' THEN '{\"delete\":true}'::jsonb ELSE o.payload->'desired' END")
+            .bind(if retry { "pending" } else { "failed" }).bind(job.payload["dns_operation_id"].as_str()).bind(&job.id).bind(timestamp).execute(&mut **tx).await?;
+    }
+    if !retry {
+        crate::kick_requests::finish(tx, job, if uncertain { "needs_attention" } else { stage })
+            .await?;
+    }
+    let payload = json!({"id": job.id, "kind": job.kind, "node_id": job.node_id, "status": status, "stage": stage, "error": message, "attempts": job.attempts});
+    sqlx::query(
+        "INSERT INTO job_events (job_id, event_type, payload_json, created_at) VALUES ($1, $2, $3, $4)",
+    )
+    .bind(&job.id)
+    .bind(event_name)
+    .bind(payload)
+    .bind(timestamp)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+async fn safe_error(
+    pool: &PgPool,
+    secrets: &SecretBox,
+    job: &JobInput,
+    error: &anyhow::Error,
+) -> String {
+    let mut message = error
+        .chain()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(": ");
+    let mut secret_values = Vec::new();
+    if let Some(node_id) = &job.node_id
+        && let Ok(Some(row)) = sqlx::query("SELECT node_token_enc, traffic_stats_secret_enc, desired_config_enc FROM nodes WHERE id = $1")
+            .bind(node_id).fetch_optional(pool).await {
+                for field in ["node_token_enc", "traffic_stats_secret_enc"] {
+                    if let Ok(Some(encrypted)) = row.try_get::<Option<String>, _>(field)
+                        && let Ok(secret) = secrets.decrypt(&encrypted)
+                    {
+                        secret_values.push(secret);
+                    }
+                }
+                if let Ok(config_json) = secrets.decrypt(&row.get::<String, _>("desired_config_enc"))
+                    && let Ok(config) = serde_json::from_str::<Value>(&config_json)
+                {
+                    redact_config_secrets(&mut message, &config);
+                }
+                if let Some(revision) = job.target_revision
+                    && let Ok(Some(config_enc)) = sqlx::query_scalar::<_, String>(
+                        "SELECT config_enc FROM config_versions WHERE node_id = $1 AND revision = $2",
+                    )
+                    .bind(node_id)
+                    .bind(revision)
+                    .fetch_optional(pool)
+                    .await
+                    && let Ok(snapshot) = secrets.decrypt(&config_enc)
+                    && let Ok(snapshot) = serde_json::from_str::<Value>(&snapshot)
+                {
+                    redact_config_secrets(&mut message, &snapshot);
+                }
+
+                if let Ok(assignments) = sqlx::query(
+                    "SELECT c.secret_enc AS credential_enc FROM user_credentials c JOIN node_assignments a ON a.user_id=c.user_id WHERE c.kind='connection' AND c.revoked_at IS NULL AND a.node_id = $1",
+                ).bind(node_id).fetch_all(pool).await {
+                    for assignment in assignments {
+                        if let Ok(Some(encrypted))=assignment.try_get::<Option<String>,_>("credential_enc")
+                            && let Ok(secret)=secrets.decrypt(&encrypted) {secret_values.push(secret);}
+                    }
+                }
+
+    }
+    if let Ok(versions) =
+        sqlx::query_scalar::<_, String>("SELECT payload_enc FROM credential_versions")
+            .fetch_all(pool)
+            .await
+    {
+        for cipher in versions {
+            if let Ok(plain) = secrets.decrypt(&cipher)
+                && let Ok(payload) = serde_json::from_str::<Value>(&plain)
+            {
+                collect_credential_secrets(&payload, &mut secret_values);
+            }
+        }
+    } else {
+        return "Job failed; credential redaction could not be completed".into();
+    }
+    redact_secret_values(&mut message, secret_values);
+    message
+        .chars()
+        .filter(|character| !character.is_control() || *character == '\n' || *character == '\t')
+        .take(2_000)
+        .collect()
+}
+
+fn collect_credential_secrets(value: &Value, out: &mut Vec<String>) {
+    match value {
+        Value::String(s) if !s.is_empty() => out.push(s.clone()),
+        Value::Object(map) => {
+            for v in map.values() {
+                collect_credential_secrets(v, out);
+            }
+        }
+        Value::Array(items) => {
+            for v in items {
+                collect_credential_secrets(v, out);
+            }
+        }
+        _ => (),
+    }
+}
+
+fn was_rolled_back(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause
+            .downcast_ref::<SshError>()
+            .is_some_and(|error| matches!(error, SshError::Command { code: 53, .. }))
+    })
+}
+
+fn was_rollback_failed(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause
+            .downcast_ref::<SshError>()
+            .is_some_and(|error| matches!(error, SshError::Command { code: 54, .. }))
+    })
+}
+
+fn now() -> chrono::DateTime<chrono::Utc> {
+    chrono::Utc::now()
+}
+
+#[cfg(test)]
+mod tests;
+
+#[cfg(test)]
+mod dns_job_tests;
+
+#[cfg(test)]
+mod ssh_confirmation_tests;
+
+#[cfg(test)]
+mod maintenance_tests;

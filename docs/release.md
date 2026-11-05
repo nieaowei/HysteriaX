@@ -4,9 +4,9 @@ HysteriaX is distributed directly as an unsigned downloadable DMG; it is not sub
 
 The Universal app contains `arm64` and `x86_64` slices and targets macOS 26.0. The Xcode release project sets the minimum macOS version to 26.0 for both slices; this is separate from the SwiftPM development manifest. See [compatibility](compatibility.md).
 
-Both CI and the release script run `scripts/verify-macos-app.sh` to check the two executable slices, bundle minimum, and Mach-O minimum versions before accepting the app.
+Both CI and the release script run `apps/macos/Tests/runners/verify-macos-app.sh` to check the two executable slices, bundle minimum, and Mach-O minimum versions before accepting the app.
 
-Run `scripts/release-macos.sh` locally with `HYSTERIAX_RELEASE_VERSION` set to a version such as `1.2.3`. The DMG is written under `dist/` by default; set `HYSTERIAX_RELEASE_OUTPUT_DIR` to choose another output directory. The script does not access Keychain or sign the app or disk image.
+Run `scripts/build/release-macos.sh` locally with `HYSTERIAX_RELEASE_VERSION` set to a version such as `1.2.3`. The DMG is written under `dist/` by default; set `HYSTERIAX_RELEASE_OUTPUT_DIR` to choose another output directory. The script does not access Keychain or sign the app or disk image.
 
 The DMG has no signature or notarization ticket. The app is built without a Developer ID identity; modern linkers may still give the Mach-O binary an ad hoc signature, which does not identify a developer or satisfy Gatekeeper. macOS Gatekeeper may warn or block the downloaded app, and users may need to explicitly allow it to open in macOS security settings. This is an expected tradeoff of direct unsigned distribution.
 

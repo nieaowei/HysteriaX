@@ -50,14 +50,14 @@ scp hysteriax-server.tar.gz user@server:/tmp/hysteriax-server.tar.gz
 ```sh
 git clone https://github.com/nieaowei/HysteriaX.git
 cd HysteriaX
-scripts/init-secrets.sh manage.example.com
+scripts/ops/init-secrets.sh manage.example.com
 gzip -dc /tmp/hysteriax-server.tar.gz | docker load
 docker compose up -d postgres redis
 docker compose --profile maintenance run --pull never --rm --no-deps migrate
 docker compose up -d --no-build api caddy
 ```
 
-数据库初始化和升级必须先运行 `migrate`。普通 API 启动只检查 schema、协议和主密钥，不执行初始化改写。当前 `0001_baseline.sql` 仅支持新建空库，不兼容原 0001～0074 数据库；旧安装需保留匹配的旧镜像和数据库。
+首次部署请使用空数据库，并先运行 `migrate` 完成初始化，再启动管理服务。旧安装升级前请查阅 [安装指南](docs/installation.md) 中的兼容性要求，并保留匹配的旧镜像和数据库备份。
 
 Compose 会启动管理 API、PostgreSQL、Redis 和 Caddy。Caddy 自动申请和续期管理域名的 HTTPS 证书；数据库和 Redis 不向宿主机公开端口。
 
@@ -83,12 +83,6 @@ curl --fail https://manage.example.com/readyz
 ### 3. 安装并连接 Mac 客户端
 
 从 [GitHub Releases](https://github.com/nieaowei/HysteriaX/releases) 下载已发布版本的 DMG，打开后将 `HysteriaX.app` 拖入 `Applications`。发布包未进行 Developer ID 签名和公证；如 macOS 阻止打开，按系统安全设置中的提示允许运行，详见 [发布说明](docs/release.md)。
-
-也可以在安装 Xcode 的 Mac 上，从项目根目录构建并运行：
-
-```sh
-./script/build_and_run.sh
-```
 
 打开 HysteriaX 的「设置」：
 
@@ -138,38 +132,17 @@ curl --fail https://manage.example.com/readyz
 - **查看运行状态**：在概览查看流量和连接趋势，在节点与用户详情确认采样时间；任务失败时先查看「任务」中的具体错误，操作历史可在「审计」中查询。
 - **查看服务日志**：在服务目录运行 `docker compose logs --tail=100 api`；证书或 HTTPS 连接异常时同时检查 `caddy` 日志。
 - **备份与恢复**：按 [备份指南](docs/backup-restore.md) 备份数据库、匹配的主密钥和必要的 Caddy 状态。备份脚本会短暂停止 API 以生成一致快照。
-- **升级**：本次基线重建不支持原迁移链升级；新基线后续兼容升级需先备份并停止全部旧实例，完成迁移后更新管理服务与配套 Mac 客户端。管理接口使用 `/api/v2`；升级前查阅 [安装指南](docs/installation.md) 和对应版本说明。
+- **升级**：升级前查阅 [安装指南](docs/installation.md) 和对应版本说明，确认兼容性要求；先备份并停止全部旧实例，完成迁移后更新管理服务与配套 Mac 客户端。
 
 节点套餐统计所选网卡的整机流量，用户额度统计用户的 Hysteria 用量，两者口径不同。采集和撤权存在延迟，SSH 不可达时可能无法立即断开已有连接，具体边界见 [节点套餐](docs/node-packages.md)。
 
-## 开发与 API
+## 使用指南
 
-服务端为 Rust + Axum，使用 PostgreSQL 18 保存数据、Redis 提供缓存；Mac 客户端使用 SwiftUI。Rust 最低版本声明为 1.89，客户端构建使用 Xcode；SwiftPM 构建要求见 [Package.swift](apps/macos/Package.swift)。
-
-管理 API 位于 `/api/v2`，请求使用 `Authorization: Bearer <管理员令牌>`，写请求还需携带稳定的 `Idempotency-Key`。服务提供 `/openapi.yaml`，契约源文件为 [openapi/openapi.yaml](openapi/openapi.yaml)。列表接口使用分页响应，批量读取需遍历各页。
-
-本地数据库配置与测试环境准备见 [安装指南](docs/installation.md#local-development-and-tests)。配置好测试数据库后，可运行以下常用检查：
-
-```sh
-cargo fmt --all -- --check
-cargo test --workspace
-cargo clippy --workspace --all-targets -- -D warnings
-ruby scripts/generate-swift-api-models.rb --check
-```
-
-Mac 客户端的 API 模型由 OpenAPI 生成。构建并检查应用能否启动：
-
-```sh
-./script/build_and_run.sh --verify
-```
-
-## 详细文档
-
-完整使用与运维指南见 [文档索引](docs/README.md)。已提交的历史计划、审计及阶段记录可从 Git 历史查阅。
+更多安装、使用与日常维护说明见 [文档索引](docs/README.md)。
 
 | 文档 | 内容 |
 | --- | --- |
-| [安装指南](docs/installation.md) | 服务部署、本地环境和版本迁移。 |
+| [安装指南](docs/installation.md) | 服务部署、安装要求和版本升级。 |
 | [凭据中心](docs/credentials.md) | SSH、证书、令牌及凭据版本管理。 |
 | [授权组](docs/authorization-groups.md) | 用户与节点授权、批量成员管理。 |
 | [订阅格式](docs/subscriptions.md) | 格式识别、客户端要求和节点过滤规则。 |
@@ -178,5 +151,4 @@ Mac 客户端的 API 模型由 OpenAPI 生成。构建并检查应用能否启�
 | [DNS 管理](docs/dns.md) | Cloudflare 连接、记录管理和节点域名绑定。 |
 | [配置字段覆盖](docs/field-coverage.md) · [兼容性](docs/compatibility.md) | 支持的 Hysteria 配置及功能限制。 |
 | [备份与恢复](docs/backup-restore.md) · [故障排查](docs/troubleshooting.md) | 数据保护与常见问题处理。 |
-| [架构](docs/architecture.md) | 组件职责、数据存储与代码结构。 |
-| [部署测试](docs/deployment-testing.md) · [发布说明](docs/release.md) | 部署验证方法与安装包发布。 |
+| [Mac 安装包说明](docs/release.md) | 客户端平台要求、安装包与系统运行限制。 |

@@ -71,4 +71,5 @@ pub(super) async fn remove(pool: &PgPool, job: &JobInput, hash: &str) -> Result<
 }
 
 #[cfg(test)]
+#[path = "probe_tokens_tests.rs"]
 mod tests;

@@ -87,14 +87,14 @@ Verification commands:
 ```sh
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
-ruby scripts/generate-swift-api-models.rb --check
-scripts/verify-node-package-client.sh
-scripts/verify-subscription-client.sh
-python3 scripts/verify-credentials-live.py
+ruby scripts/generate/generate-swift-api-models.rb --check
+apps/macos/Tests/runners/verify-node-package-client.sh
+apps/macos/Tests/runners/verify-subscription-client.sh
+python3 tests/integration/verify-credentials-live.py
 ```
 
 Live checks use disposable PostgreSQL schemas and two disposable systemd nodes;
-set `TEST_DATABASE_URL` and install `scripts/requirements-test.txt`. The live
+set `TEST_DATABASE_URL` and install `tests/requirements.txt`. The live
 credential test covers shared TLS updates, pinned rollback, partial failure and
 retry, consecutive publication, unauthorized SSH keys, encrypted SSH-key
 passphrases, and manually prepared shared-password changes.

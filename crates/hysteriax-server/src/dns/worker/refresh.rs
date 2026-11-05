@@ -281,4 +281,5 @@ pub(super) async fn commit_zone(
 }
 
 #[cfg(test)]
+#[path = "refresh_tests.rs"]
 pub(super) mod tests;

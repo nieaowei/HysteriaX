@@ -208,4 +208,5 @@ pub(super) async fn commit(
 }
 
 #[cfg(test)]
+#[path = "persistence_tests.rs"]
 mod tests;

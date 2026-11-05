@@ -195,4 +195,5 @@ pub(crate) async fn commit_on(
 }
 
 #[cfg(test)]
+#[path = "probe_tests.rs"]
 mod tests;

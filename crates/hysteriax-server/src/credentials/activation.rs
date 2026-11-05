@@ -393,4 +393,5 @@ pub async fn historical_snapshot(
 }
 
 #[cfg(test)]
+#[path = "activation_ownership_tests.rs"]
 mod ownership_tests;

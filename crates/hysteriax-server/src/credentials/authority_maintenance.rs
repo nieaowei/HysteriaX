@@ -217,4 +217,5 @@ async fn record_error(pool: &PgPool, work: &Work) -> Result<()> {
 }
 
 #[cfg(test)]
+#[path = "authority_maintenance_tests.rs"]
 mod tests;

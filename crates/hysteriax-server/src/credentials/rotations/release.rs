@@ -172,4 +172,5 @@ async fn commit_on(
 }
 
 #[cfg(test)]
+#[path = "release_tests.rs"]
 mod tests;

@@ -259,6 +259,8 @@ async fn verify(pool: &PgPool, provider: &Cloudflare, source: Source) -> Result<
 }
 
 #[cfg(test)]
+#[path = "rotation_loader_tests.rs"]
 mod loader_tests;
 #[cfg(test)]
+#[path = "rotation_tests.rs"]
 mod tests;

@@ -7,7 +7,7 @@ PostgreSQL stores encrypted service state; `HYSTERIAX_MASTER_KEY` is held separa
 From the repository directory, create a verified archive:
 
 ```sh
-scripts/backup-restore.py backup
+scripts/ops/backup-restore.py backup
 ```
 
 The command requires a ready API, stops all API replicas to make a consistent snapshot, creates a PostgreSQL custom-format dump, and then restarts the replicas. The mode-600 archive under `backups/` contains the dump, schema version, SHA-256 checksums, and a fingerprint of the master key. It never contains the key. An alternate destination can be passed as an argument.
@@ -21,7 +21,7 @@ Only backups from the new `0001_baseline.sql` history and its compatible success
 Restore with the matching encryption key already set in `.env`:
 
 ```sh
-scripts/backup-restore.py restore backups/hysteriax-postgresql-YYYYMMDDTHHMMSSZ.tar.gz
+scripts/ops/backup-restore.py restore backups/hysteriax-postgresql-YYYYMMDDTHHMMSSZ.tar.gz
 ```
 
 The command verifies archive paths, checksums, format, and key fingerprint, then restores into a temporary PostgreSQL database and checks its schema version. It stops every API replica only after this validation. Before renaming either database, it compares the external execution, verification, DNS, disconnect and remote-task journals against the current database using sorted row hashes. Every journal must exist on both sides with the same column set. Missing tables and partial-column comparisons are rejected even when the existing journal is empty.
@@ -35,8 +35,8 @@ SQLite archive format version 1 is not accepted. This release does not include a
 Run the archive unit tests and isolated Compose integration with:
 
 ```sh
-python3 -m unittest discover -s tests -p 'test_backup_restore.py'
-scripts/verify-backup-restore-compose.py
+python3 -m unittest discover -s tests/unit -p 'test_backup_restore.py'
+tests/integration/verify-backup-restore-compose.py
 ```
 
 The integration uses three full API containers, restores a real PostgreSQL dump, checks retained business rows and ciphertext, and exercises maintenance before startup and rollback. It also changes an isolated HTTP service after backup and verifies that both confirmed and unconfirmed intents prevent restore without repeating the request or losing the current database. This tests refusal, not provider-specific remote rollback. `.dockerignore` excludes `.env*`, backups, and production data from image build context.

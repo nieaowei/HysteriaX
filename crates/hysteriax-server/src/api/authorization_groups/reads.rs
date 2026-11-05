@@ -211,4 +211,5 @@ async fn members(
 }
 
 #[cfg(test)]
+#[path = "reads_tests.rs"]
 mod tests;

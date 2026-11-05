@@ -364,4 +364,5 @@ fn validate_certificate(cert: &X509Certificate<'_>, now: DateTime<Utc>) -> Resul
 }
 
 #[cfg(test)]
+#[path = "ca_tests.rs"]
 mod tests;

@@ -87,4 +87,5 @@ async fn prune_work(pool: &PgPool, work: &maintenance::Work) -> Result<u64> {
 }
 
 #[cfg(test)]
+#[path = "retention_tests.rs"]
 mod tests;

@@ -190,4 +190,5 @@ async fn commit_work(state: &AppState, work: &Work, prepared: Preparation) -> Re
 }
 
 #[cfg(test)]
+#[path = "identity_maintenance_tests.rs"]
 mod tests;

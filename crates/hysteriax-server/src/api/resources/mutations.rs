@@ -128,7 +128,7 @@ pub(super) async fn delete_on(
     .await
 }
 
-pub(crate) async fn create_v2(
+pub(crate) async fn create_handler(
     State(state): State<AppState>,
     Extension(actor): Extension<AdminActor>,
     Path(node): Path<String>,
@@ -162,7 +162,7 @@ pub(crate) async fn create_v2(
     .into_http()
 }
 
-pub(crate) async fn delete_v2(
+pub(crate) async fn delete_handler(
     State(state): State<AppState>,
     Extension(actor): Extension<AdminActor>,
     Path((node, resource)): Path<(String, String)>,
@@ -189,4 +189,5 @@ pub(crate) async fn delete_v2(
 }
 
 #[cfg(test)]
+#[path = "mutations_tests.rs"]
 mod tests;

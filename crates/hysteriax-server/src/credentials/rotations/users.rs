@@ -360,4 +360,5 @@ async fn commit_work(state: &AppState, work: &Work, prepared: Preparation) -> Re
 }
 
 #[cfg(test)]
+#[path = "users_tests.rs"]
 mod tests;

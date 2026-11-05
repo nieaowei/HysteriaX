@@ -232,4 +232,5 @@ async fn record_error(pool: &PgPool, work: &Work, revision: i64, message: &str) 
 }
 
 #[cfg(test)]
+#[path = "probe_maintenance_tests.rs"]
 mod tests;

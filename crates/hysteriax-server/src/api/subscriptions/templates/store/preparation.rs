@@ -1,6 +1,7 @@
 use super::*;
 
 #[cfg(test)]
+#[path = "preparation_tests.rs"]
 mod tests;
 
 #[derive(Clone)]

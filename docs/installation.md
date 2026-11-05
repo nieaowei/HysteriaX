@@ -4,7 +4,7 @@
 
 1. Point a DNS A/AAAA record for the management hostname at the server.
 2. Install Docker Engine and the Docker Compose plugin.
-3. From the project directory, run `scripts/init-secrets.sh manage.example.com`. This creates a private `.env` with the administrator token, encryption key, and separate PostgreSQL administrator and application passwords.
+3. From the project directory, run `scripts/ops/init-secrets.sh manage.example.com`. This creates a private `.env` with the administrator token, encryption key, and separate PostgreSQL administrator and application passwords.
 4. Save the administrator token and make a separate protected backup of `HYSTERIAX_MASTER_KEY`.
 5. Build the image on your development machine for the server's architecture and transfer it to the server using the commands below. Start dependencies with `docker compose up -d postgres redis`, then initialize the database with `docker compose --profile maintenance run --pull never --rm --no-deps migrate`. Start the service with `docker compose up -d --no-build api caddy`.
 6. Confirm `https://manage.example.com/readyz` returns `{"status":"ready","database":"ok","management_protocol":2}`.
@@ -23,11 +23,11 @@ Compose starts PostgreSQL 18 with a persistent volume and a non-superuser applic
 
 Tagged images published by the release workflow can also be selected with `HYSTERIAX_IMAGE=ghcr.io/<owner>/hysteriax-server` and `HYSTERIAX_VERSION=vX.Y.Z` in `.env`. Load or pull the selected image before maintenance; existing installations must follow the [database baseline requirements](#database-baseline). Caddy state and PostgreSQL data use separate named volumes. Keep `.env`, database backups, `HYSTERIAX_MASTER_KEY`, and Caddy state in protected backups. Never commit `.env` or production data.
 
-After checking the host's memory and PostgreSQL connection budget, multiple API replicas can share that database, Redis and master key. For example, `docker compose up -d --no-build --scale api=2 api caddy` starts two replicas without building on the deployment host. The Caddy configuration discovers the `api` Docker DNS addresses every five seconds and selects them with round-robin load balancing. Passive failure tracking and a one-second dial timeout leave room to try a healthy replica within the three-second retry window; Caddy's default retry rules still apply. No sticky session is required. See the [Caddy reverse proxy reference](https://caddyserver.com/docs/caddyfile/directives/reverse_proxy) and run `python3 scripts/verify-caddy-replicas.py --report /tmp/caddy-replicas.json` for the isolated proxy check. That check uses lightweight HTTP backends and does not replace the full HysteriaX business acceptance or host capacity measurements.
+After checking the host's memory and PostgreSQL connection budget, multiple API replicas can share that database, Redis and master key. For example, `docker compose up -d --no-build --scale api=2 api caddy` starts two replicas without building on the deployment host. The Caddy configuration discovers the `api` Docker DNS addresses every five seconds and selects them with round-robin load balancing. Passive failure tracking and a one-second dial timeout leave room to try a healthy replica within the three-second retry window; Caddy's default retry rules still apply. No sticky session is required. See the [Caddy reverse proxy reference](https://caddyserver.com/docs/caddyfile/directives/reverse_proxy) and run `python3 tests/integration/verify-caddy-replicas.py --report /tmp/caddy-replicas.json` for the isolated proxy check. That check uses lightweight HTTP backends and does not replace the full HysteriaX business acceptance or host capacity measurements.
 
 Budget each production host for the services actually scheduled there. The bundled Compose stack is a convenient single-host topology, not a requirement that PostgreSQL, Redis and API replicas share one machine. The server accepts separate `DATABASE_URL` and `HYSTERIAX_REDIS_URL` endpoints; supply the external addresses in the production service configuration. Account for API process memory on API hosts, PostgreSQL connections and query memory on database hosts, and Redis memory on its host. Do not compare the sum of separate hosts' service limits with an API host's RAM.
 
-For local Docker acceptance with a PostgreSQL dump from this baseline, use `python3 scripts/verify-snapshot-capacity.py --help` and `--replicas 3`. Build its test-only network helper from `scripts/fixtures/egress-guard.Dockerfile` first. The verifier restores into separate owned containers, installs an outbound allowlist before releasing each API startup gate, and exercises real API replicas through Caddy with Redis available, stopped, and restarted empty. It records cgroup memory, OOM events, response failures and cross-replica idempotency. The default two-replica fixture limits total 752 MiB, excluding the host OS and Docker daemon. These limits describe that local fixture; they are not a production gate for a separated deployment. Local Docker is sufficient for this functional acceptance; an additional native x86_64 test host is not required.
+For local Docker acceptance with a PostgreSQL dump from this baseline, use `python3 tests/performance/verify-snapshot-capacity.py --help` and `--replicas 3`. Build its test-only network helper from `tests/fixtures/runtime/egress-guard.Dockerfile` first. The verifier restores into separate owned containers, installs an outbound allowlist before releasing each API startup gate, and exercises real API replicas through Caddy with Redis available, stopped, and restarted empty. It records cgroup memory, OOM events, response failures and cross-replica idempotency. The default two-replica fixture limits total 752 MiB, excluding the host OS and Docker daemon. These limits describe that local fixture; they are not a production gate for a separated deployment. Local Docker is sufficient for this functional acceptance; an additional native x86_64 test host is not required.
 
 ## Database baseline
 
@@ -37,11 +37,22 @@ Existing installations must retain a matching image, metadata backup, configurat
 
 For a new empty database, run `--migrate-only` before the first API startup. It applies the baseline and completes administrator, credential, template, reference-index and work-queue initialization without starting workers or contacting nodes. Ordinary startup checks the exact migration history, protocol and master key. Management API requests use `/api/v2`, and administrative writes require a stable `Idempotency-Key` for retries.
 
-On 2026-10-29, production applied migration 0002 through `--migrate-only`; it cleared old kick requirements and task history without running the baseline SQL. Production now uses schema version 2. Future migrations start at `0003`. For subsequent compatible upgrades, stop every API replica, retain a recoverable backup and matching old image, run maintenance once, then start the corresponding server and macOS client. See [migration maintenance](../crates/hysteriax-server/migrations/README.md).
+For compatible upgrades, stop every API replica, retain a recoverable backup and matching old image, run maintenance once, then start the corresponding server and macOS client. Follow the complete current migration chain and its checksum requirements in [migration maintenance](../crates/hysteriax-server/migrations/README.md); historical deployment records do not describe the current schema requirement.
 
 ## Local development and tests
 
-Set `DATABASE_URL` to a PostgreSQL URL, `HYSTERIAX_ADMIN_TOKEN` to at least 256 bits of random token material, `HYSTERIAX_MASTER_KEY` to a base64-encoded 32-byte key, and `HYSTERIAX_PUBLIC_URL` to the public HTTPS origin. With those variables exported, run `cargo run -p hysteriax-server -- --migrate-only` once, then start the API with `scripts/run.sh`. Set `HYSTERIAX_REDIS_URL` for Redis-backed caches; unavailable Redis permits database fallback.
+The Rust workspace declares a minimum version of 1.94; [Cargo.toml](../Cargo.toml) is authoritative. Mac source builds use Xcode; the separate SwiftPM requirements are declared in [Package.swift](../apps/macos/Package.swift) and explained in [compatibility](compatibility.md). Build and run the client with `scripts/build/build-macos.sh`, or use its `--verify` mode to check startup. See the [operation index](../scripts/README.md) for build tools and [architecture](architecture.md#api-and-event-contract) for the management API contract.
+
+Set `DATABASE_URL` to a PostgreSQL URL, `HYSTERIAX_ADMIN_TOKEN` to at least 256 bits of random token material, `HYSTERIAX_MASTER_KEY` to a base64-encoded 32-byte key, and `HYSTERIAX_PUBLIC_URL` to the public HTTPS origin. With those variables exported, run `cargo run -p hysteriax-server -- --migrate-only` once, then start the API with `scripts/ops/run.sh`. Set `HYSTERIAX_REDIS_URL` for Redis-backed caches; unavailable Redis permits database fallback.
+
+Build, generation, operations and actual migration tools live in `scripts/`. Repository-level verification lives in `tests/`; macOS-specific regression sources and runners live in `apps/macos/Tests/`. See [directory and test ownership](code-layout.md) for the layout and [the test index](../tests/README.md) for entry points.
+
+From the repository root, prepare Python verification dependencies and run the script unit tests:
+
+```sh
+python3 -m pip install -r tests/requirements.txt
+python3 -m unittest discover -s tests/unit -p 'test_*.py'
+```
 
 For local database tests, use a separate checkout and a disposable Compose project, then start the same PostgreSQL image with the loopback-only port override. Do not use a production `.env` or project for these commands:
 
@@ -51,7 +62,6 @@ set -a
 set +a
 export TEST_DATABASE_URL="postgresql://postgres:${HYSTERIAX_DB_ADMIN_PASSWORD}@127.0.0.1:${HYSTERIAX_DB_HOST_PORT:-55432}/hysteriax"
 docker compose --env-file .env -f compose.yaml -f compose.test.yaml up -d postgres
-python3 -m pip install -r scripts/requirements-test.txt
 cargo test --workspace
 ```
 

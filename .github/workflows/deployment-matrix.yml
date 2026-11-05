@@ -31,10 +31,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: python -m pip install -r scripts/requirements-test.txt
+      - run: python -m pip install -r tests/requirements.txt
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: scripts/verify-deployment-matrix.py --only debian12-amd64 --only debian13-amd64 --only ubuntu2204-amd64 --only ubuntu2404-amd64
+      - run: tests/integration/verify-deployment-matrix.py --only debian12-amd64 --only debian13-amd64 --only ubuntu2204-amd64 --only ubuntu2404-amd64
 
   arm64:
     if: github.repository_visibility == 'public'
@@ -61,7 +61,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: python -m pip install -r scripts/requirements-test.txt
+      - run: python -m pip install -r tests/requirements.txt
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: scripts/verify-deployment-matrix.py --only debian12-arm64 --only debian13-arm64 --only ubuntu2204-arm64 --only ubuntu2404-arm64
+      - run: tests/integration/verify-deployment-matrix.py --only debian12-arm64 --only debian13-arm64 --only ubuntu2204-arm64 --only ubuntu2404-arm64

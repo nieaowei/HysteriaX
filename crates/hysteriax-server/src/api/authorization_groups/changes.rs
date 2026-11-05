@@ -586,4 +586,5 @@ pub(crate) async fn finish_for_test(state: &AppState, id: &str) {
 }
 
 #[cfg(test)]
+#[path = "changes_tests.rs"]
 mod tests;

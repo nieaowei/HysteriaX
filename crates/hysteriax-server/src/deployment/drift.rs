@@ -33,4 +33,5 @@ pub(super) async fn record(
 }
 
 #[cfg(test)]
+#[path = "drift_tests.rs"]
 mod tests;

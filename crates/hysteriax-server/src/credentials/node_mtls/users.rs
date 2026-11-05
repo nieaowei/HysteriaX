@@ -255,4 +255,5 @@ pub(super) async fn validate_rollback(
 }
 
 #[cfg(test)]
+#[path = "users_tests.rs"]
 mod tests;

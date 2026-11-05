@@ -9,9 +9,9 @@ The current server and client use management protocol 2 and API 2.0.0 at `/api/v
 ## Pinned node and subscription runtimes
 
 - Managed nodes use Hysteria `app/v2.12.3`, with Linux amd64/arm64 digests in [the pinned checksum file](../deploy/hysteria-v2.12.3.sha256).
-- Mihomo verification uses v1.19.31. `scripts/verify-mihomo-config.sh` checks its digest before invoking its native validator. The sing-box native export requirements and template/platform selection are described in [subscriptions](subscriptions.md).
+- Mihomo verification uses v1.19.31. `tests/contracts/verify-mihomo-config.sh` checks its digest before invoking its native validator. The sing-box native export requirements and template/platform selection are described in [subscriptions](subscriptions.md).
 - ECH, Gecko, mTLS and port hopping are emitted only for compatible targets. Port hopping requires nftables/iptables and grants `CAP_NET_ADMIN` only to the relevant node service. Enabled Mimic has no supported Mihomo mapping.
-- Realm cannot be combined with port hopping. Mihomo Realm subscriptions use `handshake-timeout: 30`; `scripts/verify-realm-live.py` covers the pinned-client workaround with delayed STUN responses. This documents the pinned version's behavior, not the status of later upstream fixes.
+- Realm cannot be combined with port hopping. Mihomo Realm subscriptions use `handshake-timeout: 30`; `tests/integration/verify-realm-live.py` covers the pinned-client workaround with delayed STUN responses. This documents the pinned version's behavior, not the status of later upstream fixes.
 - Managed mTLS requires the matching user identities and a node probe identity. A custom `proxy_probe_url` can select an allowed HTTP 200 target when the default loopback route is blocked. Session-only verification is labeled separately from successful TCP forwarding.
 
 ## Evidence and limits

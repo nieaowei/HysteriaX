@@ -20,6 +20,6 @@ jobs:
         working-directory: components/hysteriax-acme
       - run: go vet ./...
         working-directory: components/hysteriax-acme
-      - run: scripts/build-node-acme.sh
-      - run: docker build -f scripts/fixtures/systemd-node.Dockerfile -t hysteriax-acme-test-node:0003 .
-      - run: PEBBLE_NODE_BIN="$(go env GOPATH)/bin/pebble" scripts/verify-node-acme-systemd.py
+      - run: scripts/build/build-node-acme.sh
+      - run: docker build -f tests/fixtures/runtime/systemd-node.Dockerfile -t hysteriax-acme-test-node:0003 .
+      - run: PEBBLE_NODE_BIN="$(go env GOPATH)/bin/pebble" tests/integration/verify-node-acme-systemd.py

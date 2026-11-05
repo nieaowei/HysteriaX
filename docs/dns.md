@@ -126,13 +126,13 @@ cargo fmt --all -- --check
 cargo check --workspace --all-targets
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
-ruby scripts/generate-swift-api-models.rb --check
-scripts/verify-dns-client.sh
-python3 scripts/verify-dns-ui.py
-scripts/verify-acme-dns-client.sh
-scripts/verify-subscription-client.sh
-scripts/verify-node-package-client.sh
-./script/build_and_run.sh --verify
+ruby scripts/generate/generate-swift-api-models.rb --check
+apps/macos/Tests/runners/verify-dns-client.sh
+python3 apps/macos/Tests/runners/verify-dns-ui.py
+apps/macos/Tests/runners/verify-acme-dns-client.sh
+apps/macos/Tests/runners/verify-subscription-client.sh
+apps/macos/Tests/runners/verify-node-package-client.sh
+./scripts/build/build-macos.sh --verify
 ```
 
 Rust database tests require an isolated `TEST_DATABASE_URL`. Provider tests use

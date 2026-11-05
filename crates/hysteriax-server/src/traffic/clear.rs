@@ -146,7 +146,9 @@ pub async fn uncertain(pool: &PgPool, work: &crate::background::Work) -> Result<
 }
 
 #[cfg(test)]
+#[path = "clear_tests.rs"]
 mod tests;
 
 #[cfg(test)]
+#[path = "clear_response_tests.rs"]
 mod response_tests;
