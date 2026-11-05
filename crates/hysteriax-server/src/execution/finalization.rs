@@ -173,6 +173,7 @@ impl Attempt {
             return tx.commit().await;
         }
         let mut tx = tx;
+        crate::db::diagnostics::phase("finalization_validate");
         if let Err(error) = self.validate(&mut tx).await {
             self.rollback(tx).await?;
             return Err(error);
@@ -191,6 +192,7 @@ impl Attempt {
         });
         self.committing = true;
         lifecycle.record(self.id, disposition, "committing");
+        crate::db::diagnostics::phase("commit");
         let result = tokio::time::timeout(acknowledgement_timeout(), tx.commit()).await;
         match result {
             Ok(Ok(())) => {
@@ -275,6 +277,10 @@ impl Attempt {
         Ok(())
     }
     pub async fn rollback(self, tx: Transaction<'static, Postgres>) -> Result<(), sqlx::Error> {
+        crate::db::diagnostics::cleanup(self.rollback_inner(tx)).await
+    }
+
+    async fn rollback_inner(self, tx: Transaction<'static, Postgres>) -> Result<(), sqlx::Error> {
         let result = if self.has_finish() {
             tokio::time::timeout(acknowledgement_timeout(), tx.rollback())
                 .await

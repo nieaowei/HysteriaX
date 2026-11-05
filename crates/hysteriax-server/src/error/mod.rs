@@ -129,7 +129,12 @@ impl From<sqlx::Error> for ApiError {
                 "credential version is referenced or no longer available; reload before retrying",
             );
         }
-        tracing::error!(error = %error, "database operation failed");
+        crate::db::diagnostics::record(&error);
+        if !(crate::db::diagnostics::active()
+            && crate::db::RetryableTransactionError::retryable_transaction(&error))
+        {
+            tracing::error!(error = %error, "database operation failed");
+        }
         if crate::db::RetryableTransactionError::retryable_transaction(&error) {
             return Self::new(
                 StatusCode::SERVICE_UNAVAILABLE,
@@ -154,7 +159,12 @@ impl From<anyhow::Error> for ApiError {
             tracing::warn!("database pool capacity unavailable");
             return Self::pool_busy();
         }
-        tracing::error!(error = %error, "request operation failed");
+        crate::db::diagnostics::record_anyhow(&error);
+        if !(crate::db::diagnostics::active()
+            && crate::db::RetryableTransactionError::retryable_transaction(&error))
+        {
+            tracing::error!(error = %error, "request operation failed");
+        }
         if crate::db::RetryableTransactionError::retryable_transaction(&error) {
             return Self::new(
                 StatusCode::SERVICE_UNAVAILABLE,

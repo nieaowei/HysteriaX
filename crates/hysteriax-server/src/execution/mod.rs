@@ -179,6 +179,23 @@ struct Scope {
 }
 tokio::task_local! { static CURRENT: Scope; }
 
+/// Diagnostic correlation only; never grants execution authority.
+pub(crate) fn diagnostic_execution() -> Option<Execution> {
+    CURRENT
+        .try_with(|scope| {
+            scope
+                .leases
+                .iter()
+                .find(|lease| {
+                    lease.resource.starts_with("work:") || lease.resource.starts_with("job:")
+                })
+                .or(scope.leases.first())
+                .cloned()
+        })
+        .ok()
+        .flatten()
+}
+
 /// A job writer must own its exact job and, when present, its node.
 pub(crate) fn require_job_scope(job: &str, node: Option<&str>) -> anyhow::Result<()> {
     finalization::ensure_active()?;

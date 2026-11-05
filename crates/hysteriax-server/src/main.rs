@@ -35,7 +35,7 @@ use std::{env, future::IntoFuture, time::Duration};
 
 use anyhow::{Context, Result, bail};
 use sqlx::PgPool;
-use tracing_subscriber::EnvFilter;
+use tracing_subscriber::{EnvFilter, prelude::*};
 
 use crate::{security::SecretBox, state::AppState};
 
@@ -53,9 +53,14 @@ async fn main() -> Result<()> {
         [arg] if arg == "--migrate-only" => true,
         _ => bail!("usage: hysteriax-server [--migrate-only | --check-template-runtime]"),
     };
-    tracing_subscriber::fmt()
-        .with_env_filter(
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::fmt::layer().with_filter(
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+        ))
+        .with(
+            db::diagnostics::QueryLayer.with_filter(tracing_subscriber::filter::filter_fn(
+                |metadata| metadata.target() == "sqlx::query",
+            )),
         )
         .init();
 
@@ -94,6 +99,8 @@ async fn main() -> Result<()> {
     bootstrap::check_runtime(&pool, &secret_box).await?;
     let state = AppState::new(pool, secret_box);
     proxy_monitor::cleanup_probe_directories()?;
+    let transaction_metrics =
+        tokio::spawn(db::diagnostics::run_summaries(state.shutdown.subscribe()));
     let publisher = tokio::spawn(events::run_publisher(state.clone()));
     let heartbeat = tokio::spawn(execution::run_heartbeats(state.clone()));
     let sampling_expiry = tokio::spawn(background::run_expiry(state.clone()));
@@ -135,6 +142,7 @@ async fn main() -> Result<()> {
         heartbeat,
         publisher,
         sampling_expiry,
+        transaction_metrics,
     ];
     for worker in &workers {
         worker.abort();
