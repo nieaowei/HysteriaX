@@ -171,41 +171,101 @@ async fn background_contention_comparison() {
         ))
         .try_init()
         .unwrap();
-    let direct = db::test_pool_with_max_connections(32).await;
-    let secrets = SecretBox::from_base64("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA").unwrap();
-    crate::credentials::reference_index::initialize(&direct, &secrets)
+    let seconds: u64 = std::env::var("HX_MAINTENANCE_BENCH_SECONDS")
+        .unwrap_or_else(|_| "90".into())
+        .parse()
+        .unwrap();
+    assert!((90..=600).contains(&seconds));
+    let warmup: u64 = std::env::var("HX_MAINTENANCE_BENCH_WARMUP")
+        .unwrap_or_else(|_| "0".into())
+        .parse()
+        .unwrap();
+    assert!(warmup < seconds);
+    let reuse = std::env::var("HX_MAINTENANCE_BENCH_SCHEMA").ok();
+    let direct = if let Some(schema) = &reuse {
+        assert!(schema.starts_with("hysteriax_test_"));
+        assert!(
+            schema
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_')
+        );
+        let database_url = std::env::var("TEST_DATABASE_URL").unwrap();
+        let url = url::Url::parse(&database_url).unwrap();
+        assert!(matches!(
+            url.host_str(),
+            Some("127.0.0.1" | "localhost" | "[::1]")
+        ));
+        let schema = schema.clone();
+        db::pool_options()
+            .max_connections(32)
+            .after_connect(move |connection, _| {
+                let schema = schema.clone();
+                Box::pin(async move {
+                    sqlx::query(sqlx::AssertSqlSafe(format!("SET search_path TO {schema}")))
+                        .execute(&mut *connection)
+                        .await?;
+                    sqlx::query("SET lock_timeout='1s'")
+                        .execute(&mut *connection)
+                        .await?;
+                    sqlx::query("SET hysteriax.reference_maintenance='on'")
+                        .execute(connection)
+                        .await?;
+                    Ok(())
+                })
+            })
+            .connect(&database_url)
+            .await
+            .unwrap()
+    } else {
+        db::test_pool_with_max_connections(32).await
+    };
+    let schema: String = sqlx::query_scalar("SELECT current_schema()")
+        .fetch_one(&direct)
         .await
         .unwrap();
-    let original = AppState::new(direct.clone(), secrets);
-    for index in 0..6 {
-        let input = crate::credentials::test_node_request(
-            &original,
-            json!({
-                "name":format!("Benchmark {index}"),"ssh_host":"127.0.0.1","ssh_port":1,
-                "ssh_username":"fixture","ssh_auth_type":"password","ssh_secret":"fixture",
-                "public_host":"example.test","public_port":443,"listen_addr":":443",
-            }),
-        )
-        .await;
-        let (_, Json(receipt)) = crate::api::nodes::create(State(original.clone()), Json(input))
+    if reuse.is_none() {
+        let secrets =
+            SecretBox::from_base64("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA").unwrap();
+        crate::credentials::reference_index::initialize(&direct, &secrets)
             .await
             .unwrap();
-        sqlx::query(
+        let original = AppState::new(direct.clone(), secrets);
+        for index in 0..6 {
+            let input = crate::credentials::test_node_request(
+                &original,
+                json!({
+                    "name":format!("Benchmark {index}"),"ssh_host":"127.0.0.1","ssh_port":1,
+                    "ssh_username":"fixture","ssh_auth_type":"password","ssh_secret":"fixture",
+                    "public_host":"example.test","public_port":443,"listen_addr":":443",
+                }),
+            )
+            .await;
+            let (_, Json(receipt)) =
+                crate::api::nodes::create(State(original.clone()), Json(input))
+                    .await
+                    .unwrap();
+            sqlx::query(
             "UPDATE nodes SET deployed_revision=1,state='deployed',mtls_state='ready' WHERE id=$1",
         )
         .bind(receipt["node"]["id"].as_str().unwrap())
         .execute(&direct)
         .await
         .unwrap();
-    }
-    sqlx::query(
-        "UPDATE jobs SET status='cancelled',stage='benchmark_fixture' WHERE status='queued'",
-    )
-    .execute(&direct)
-    .await
-    .unwrap();
-    sqlx::raw_sql("INSERT INTO background_work(id,kind,state,finished_at) SELECT 'historical:'||lpad(i::text,9,'0'),'benchmark-history','complete',clock_timestamp()-interval '1 day' FROM generate_series(1,260000)i; INSERT INTO resource_leases(resource_key) SELECT 'work:historical:'||lpad(i::text,9,'0') FROM generate_series(1,240000)i; ANALYZE background_work; ANALYZE resource_leases; ANALYZE nodes; ANALYZE jobs;")
+        }
+        sqlx::query(
+            "UPDATE jobs SET status='cancelled',stage='benchmark_fixture' WHERE status='queued'",
+        )
+        .execute(&direct)
+        .await
+        .unwrap();
+        sqlx::raw_sql("INSERT INTO background_work(id,kind,state,finished_at) SELECT 'historical:'||lpad(i::text,9,'0'),'benchmark-history','complete',clock_timestamp()-interval '1 day' FROM generate_series(1,260000)i; INSERT INTO resource_leases(resource_key) SELECT 'work:historical:'||lpad(i::text,9,'0') FROM generate_series(1,240000)i; ANALYZE background_work; ANALYZE resource_leases; ANALYZE nodes; ANALYZE jobs;")
         .execute(&direct).await.unwrap();
+    }
+    if std::env::var("HX_MAINTENANCE_BENCH_PREPARE_ONLY").as_deref() == Ok("1") {
+        println!("BACKGROUND_FIXTURE {}", json!({"schema":schema}));
+        direct.close().await;
+        return;
+    }
     let relay = db::test_relay::SqlRelay::new(&direct, Duration::from_millis(25), 32).await;
     let state = AppState::new(
         relay.pool.clone(),
@@ -223,19 +283,26 @@ async fn background_contention_comparison() {
     tasks.spawn(crate::node_limits::collect(state.clone()));
     tasks.spawn(crate::proxy_monitor::run(state.clone()));
     tasks.spawn(crate::node_limits::run(state.clone()));
-    tokio::time::sleep(Duration::from_secs(90)).await;
+    if warmup > 0 {
+        tokio::time::sleep(Duration::from_secs(warmup)).await;
+        println!("BACKGROUND_WINDOW_START");
+        db::diagnostics::summaries();
+        println!("BACKGROUND_WINDOW_OPEN");
+    }
+    tokio::time::sleep(Duration::from_secs(seconds - warmup)).await;
+    // Take the terminal measurement before aborting fixture tasks, so test
+    // shutdown cancellations do not masquerade as business failures.
+    println!("BACKGROUND_WINDOW_END");
+    db::diagnostics::summaries();
+    println!("BACKGROUND_WINDOW_CLOSED");
     state.shutdown.send_replace(true);
     tasks.abort_all();
     while tasks.join_next().await.is_some() {}
     db::diagnostics::summaries();
-    let schema: String = sqlx::query_scalar("SELECT current_schema()")
-        .fetch_one(&direct)
-        .await
-        .unwrap();
     println!(
         "BACKGROUND_BENCHMARK {}",
         json!({
-            "schema":schema,"seconds":90,"response_delay_ms":25,
+            "schema":schema,"seconds":seconds,"warmup_seconds":warmup,"response_delay_ms":25,
             "historical_work":260000,"historical_leases":240000,
             "nodes":6,"wire_commands":relay.commands.load(Ordering::SeqCst),
             "scope":"local fixture; SSH only to loopback port 1; not capacity acceptance",
