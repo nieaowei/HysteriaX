@@ -47,6 +47,15 @@ TEST_DATABASE_URL=postgresql://... bash tests/performance/verify-query-plans.sh
 
 同一 Rust 夹具另有显式忽略的 `credentials::retention::tests::benchmarks::background_contention_comparison`，在隔离数据库运行 90 秒真实后台循环，使用 26 万历史工作、24 万历史租约和 6 个合成节点。SSH 固定指向 `127.0.0.1:1`；该夹具观察事务竞争，不验证远端采样成功，也不替代 10 万用户 / 1 万节点容量场景。
 
+0026 第一批的受控归因使用两个入口：`prepare-maintenance-variants.py` 从指定提交构建“基线、仅释放改动、仅空闲改动、合并”四个组合，每次构建后立即冻结二进制及摘要；`benchmark-maintenance-causality.py` 读取这两份元数据，新建自管本地 PostgreSQL 18.6，将同一份已准备数据库克隆给每轮运行。前置构建和计时应分开执行，计时期间不并行运行其他编译或测试。
+
+```sh
+python3 tests/performance/prepare-maintenance-variants.py --baseline-revision 523e151 --candidate-revision f119a5d --output-dir target/maintenance-variants
+python3 tests/performance/benchmark-maintenance-causality.py --binaries target/maintenance-variants/variant-binaries.json --sources target/maintenance-variants/variant-sources.json --output-dir target/maintenance-causality --seconds 180 --warmup 60 --replicates 2
+```
+
+每轮先预热 60 秒，再测量 120 秒；控制器在两个时钟相位下反转运行顺序，使用窗口前后的累计计数差分，测量结束后才中止夹具任务。`results.json` 保留完成量、冲突、失败、耗时及截点在途差值；控制器核对克隆的节点摘要/关系计数、冻结二进制摘要和两个改动的文件组合。它只连接自己创建的回环数据库，结束时按容器 ID 与专属标签核对并删除该容器及匿名卷。夹具中的远程采样有意失败，前后窗口仍非确定性线程调度；结果属于本地合成负载归因，不能直接认定为生产因果或容量验收。
+
 ## 全进程与部署专项
 
 | 入口 | 验证范围 |
