@@ -3,8 +3,10 @@
 //! A lease fences database writes, never an already dispatched SSH/DNS request.
 //! Uncertain operations keep their resource blocked after expiry until verified.
 mod identity_scope;
+mod lease_set;
 mod sampling_admission;
 pub(crate) use identity_scope::with_identity_leases;
+pub(crate) use lease_set::{acquire_all, guard_all};
 pub(crate) use sampling_admission::admit_sampling_read;
 
 use serde_json::Value;
@@ -328,9 +330,7 @@ pub async fn guard_current(connection: &mut PgConnection) -> Result<(), sqlx::Er
     let leases = CURRENT
         .try_with(|scope| scope.leases.clone())
         .unwrap_or_default();
-    for lease in &leases {
-        lease.guard(connection).await?;
-    }
+    guard_all(connection, &leases).await?;
     if let Some(job) = leases
         .iter()
         .find(|lease| lease.resource.starts_with("job:"))

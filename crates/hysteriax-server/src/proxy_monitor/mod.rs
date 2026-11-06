@@ -339,9 +339,7 @@ async fn guard_token_work(
     work: &crate::background::Work,
 ) -> Result<()> {
     let (primary, _) = token_leases(work)?;
-    for lease in &work.leases {
-        lease.guard(tx).await?;
-    }
+    crate::execution::guard_all(tx, &work.leases).await?;
     let current: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM background_work WHERE id=$1 AND kind='proxy' AND node_id=$2 AND cycle_id=$3 AND payload=$4 AND state='running' AND owner=$5 AND generation=$6 FOR UPDATE)")
         .bind(&work.id).bind(&work.node).bind(work.cycle).bind(&work.payload)
         .bind(&primary.owner).bind(primary.generation).fetch_one(&mut **tx).await?;

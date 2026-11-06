@@ -19,6 +19,8 @@ pub(crate) mod access;
 mod batch_tests;
 pub(crate) mod batches;
 pub(crate) mod clear;
+#[cfg(test)]
+mod sampling_tests;
 pub mod work;
 
 pub async fn run(state: AppState) {
@@ -115,7 +117,7 @@ pub async fn finish_captured_for_removal(pool: &PgPool, node: &str) -> Result<()
 
 pub(crate) async fn sample_work(state: &AppState, work: &crate::background::Work) -> Result<()> {
     if batches::captured(&state.pool, &work.id).await? {
-        batches::drain(&state.pool, &work.id).await?;
+        batches::process(&state.pool, &work.id).await?;
         return Ok(());
     }
     let requested: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM traffic_sample_batches WHERE sample_id=$1 AND clear_requested_at IS NOT NULL AND payload_digest IS NULL AND state='capturing')")
@@ -224,7 +226,7 @@ async fn sample_node(
     let sample_id = format!("{cycle}:{node_id}");
     let state = batches::reserve_work(pool, work).await?;
     if state != "capturing" {
-        batches::drain(pool, &sample_id).await?;
+        batches::process(pool, &sample_id).await?;
         return Ok(());
     }
     let node = deployment::load_ssh_node(pool, secrets, node_id).await?;
@@ -237,17 +239,7 @@ async fn sample_node(
             bail!("SSH host fingerprint changed from {expected} to {observed}")
         }
     };
-    if let Err(error) = tokio::time::timeout(
-        Duration::from_secs(crate::runtime_config::operation_timeout_seconds(8)),
-        crate::node_acme::sample(pool, secrets, node_id, &session),
-    )
-    .await
-    .unwrap_or_else(|_| Err(anyhow::anyhow!("ACME status collection timed out")))
-    {
-        tracing::debug!(node_id, %error, "ACME observation unavailable");
-    }
     crate::kick_requests::resume_node(pool, node_id).await?;
-    let before_instance = systemd_instance(&session).await?;
     let stats_secret_enc: String =
         sqlx::query_scalar("SELECT traffic_stats_secret_enc FROM nodes WHERE id = $1")
             .bind(node_id)
@@ -256,45 +248,81 @@ async fn sample_node(
     let stats_secret = secrets.decrypt(&stats_secret_enc)?;
     let traffic_stats_port =
         deployment::load_deployed_traffic_stats_port(pool, secrets, node_id).await?;
-    // Online failures are isolated from the accounting transaction.
-    let online = session
-        .loopback_http_get(u32::from(traffic_stats_port), "/online", &stats_secret)
-        .await;
-    if let Err(error) = crate::overview::record_online(
-        pool,
-        node_id,
-        cycle,
-        cycle_started,
-        expected_nodes,
-        online.ok().as_deref(),
-    )
-    .await
-    {
-        tracing::warn!(node_id, %error, "online sample could not be saved");
-    }
-    match clear::prepare(pool, work).await? {
-        clear::Admission::Send => {}
-        clear::Admission::AlreadyRequested => bail!("traffic clear response was not persisted"),
-        clear::Admission::Captured => {
-            batches::drain(pool, &sample_id).await?;
-            return Ok(());
-        }
-    };
-    let body = session
-        .loopback_traffic_clear(u32::from(traffic_stats_port), &stats_secret)
+
+    // Auxiliary reads use independent SSH channels under the SAME node/work
+    // leases. They cannot consume the capture's slot before clear admission.
+    // Join rather than try_join: an observation failure must not cancel a
+    // destructive request or abandon its received response.
+    let capture = async {
+        let before_instance = systemd_instance(&session).await?;
+        match clear::prepare(pool, work).await? {
+            clear::Admission::Send => {}
+            clear::Admission::AlreadyRequested => bail!("traffic clear response was not persisted"),
+            clear::Admission::Captured => {
+                batches::process(pool, &sample_id).await?;
+                return Ok(());
+            }
+        };
+        let body = session
+            .loopback_traffic_clear(u32::from(traffic_stats_port), &stats_secret)
+            .await?;
+        let counters = parse_response(&body)?;
+        capture_clear_response(
+            pool,
+            work,
+            &before_instance,
+            &counters,
+            &body,
+            systemd_instance(&session),
+        )
         .await?;
-    let counters = parse_response(&body)?;
-    capture_clear_response(
-        pool,
-        work,
-        &before_instance,
-        &counters,
-        &body,
-        systemd_instance(&session),
-    )
-    .await?;
-    batches::drain(pool, &sample_id).await?;
-    Ok(())
+        // One bounded billing page per ownership turn. Ready batches yield in
+        // background::finish so other sampling kinds can acquire the node.
+        batches::process(pool, &sample_id).await?;
+        Ok(())
+    };
+    let observations = async {
+        tokio::join!(
+            async {
+                if let Err(error) = tokio::time::timeout(
+                    Duration::from_secs(crate::runtime_config::operation_timeout_seconds(8).min(8)),
+                    crate::node_acme::sample(pool, secrets, node_id, &session),
+                )
+                .await
+                .unwrap_or_else(|_| Err(anyhow::anyhow!("ACME status collection timed out")))
+                {
+                    tracing::debug!(node_id, %error, "ACME observation unavailable");
+                }
+            },
+            async {
+                // Online failures are isolated from the accounting transaction.
+                let online = tokio::time::timeout(
+                    Duration::from_secs(crate::runtime_config::operation_timeout_seconds(8).min(8)),
+                    session.loopback_http_get(
+                        u32::from(traffic_stats_port),
+                        "/online",
+                        &stats_secret,
+                    ),
+                )
+                .await
+                .unwrap_or_else(|_| Err(anyhow::anyhow!("online observation timed out")));
+                if let Err(error) = crate::overview::record_online(
+                    pool,
+                    node_id,
+                    cycle,
+                    cycle_started,
+                    expected_nodes,
+                    online.ok().as_deref(),
+                )
+                .await
+                {
+                    tracing::warn!(node_id, %error, "online sample could not be saved");
+                }
+            }
+        );
+    };
+    let (result, ()) = tokio::join!(capture, observations);
+    result
 }
 
 async fn capture_clear_response(
