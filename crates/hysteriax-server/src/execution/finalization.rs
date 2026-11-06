@@ -128,11 +128,14 @@ tokio::task_local! { static ATTEMPT: Arc<AttemptContext>; }
 struct AttemptContext {
     connection: usize,
     lifecycle: Option<Arc<Lifecycle>>,
+    guarded_leases: Vec<Execution>,
     intent: Mutex<Intent>,
 }
 
 impl Attempt {
-    pub fn new(connection: &mut PgConnection) -> Self {
+    /// Construct only after guard_current succeeded on this transaction. Its
+    /// row locks predate operation savepoints and remain held until completion.
+    pub fn after_guard(connection: &mut PgConnection) -> Self {
         let lifecycle = CURRENT.try_with(|s| s.lifecycle.clone()).ok().flatten();
         let leases = CURRENT.try_with(|s| s.leases.clone()).unwrap_or_default();
         let id = lifecycle
@@ -155,6 +158,7 @@ impl Attempt {
         let context = Arc::new(AttemptContext {
             connection: self.connection,
             lifecycle: self.lifecycle.clone(),
+            guarded_leases: self.leases.clone(),
             intent: Mutex::new(Intent::default()),
         });
         let result = ATTEMPT.scope(context.clone(), work).await;
@@ -404,8 +408,8 @@ pub(super) fn ensure_active() -> Result<(), sqlx::Error> {
 pub(super) fn validate_release_scope(
     connection: &mut PgConnection,
     lease: &Execution,
-) -> Result<(), sqlx::Error> {
-    CURRENT
+) -> Result<bool, sqlx::Error> {
+    let supervised = CURRENT
         .try_with(|scope| {
             if let Some(lifecycle) = &scope.lifecycle {
                 lifecycle.active()?;
@@ -415,10 +419,14 @@ pub(super) fn validate_release_scope(
                     ));
                 }
             }
-            Ok(())
+            Ok(scope.lifecycle.is_some())
         })
-        .unwrap_or(Ok(()))?;
-    require_attempt(connection)
+        .unwrap_or(Ok(false))?;
+    require_attempt(connection)?;
+    Ok(supervised
+        && ATTEMPT
+            .try_with(|attempt| attempt.guarded_leases.contains(lease))
+            .unwrap_or(false))
 }
 
 pub(crate) fn require_attempt(connection: &mut PgConnection) -> Result<(), sqlx::Error> {

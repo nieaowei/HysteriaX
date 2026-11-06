@@ -81,12 +81,30 @@ impl Execution {
     }
 
     pub async fn release(&self, connection: &mut PgConnection) -> Result<bool, sqlx::Error> {
-        finalization::validate_release_scope(connection, self)?;
-        self.guard(connection).await?;
-        let released=sqlx::query("UPDATE resource_leases SET owner=NULL,expires_at=NULL,work_id=NULL WHERE resource_key=$1 AND NOT EXISTS(SELECT 1 FROM execution_operations WHERE resource_key=$1 AND state IN ('dispatching','reconciling','needs_attention'))")
-            .bind(&self.resource).execute(&mut *connection).await?.rows_affected()==1;
+        let guarded_at_entry = finalization::validate_release_scope(connection, self)?;
+        if !guarded_at_entry {
+            // Lock in a prior statement: a lock holder may commit a remote
+            // intent while we wait, so one locking CTE cannot supply a fresh
+            // READ COMMITTED snapshot for the subsequent barrier check.
+            self.guard(connection).await?;
+        }
+        let released = sqlx::query(
+            "UPDATE resource_leases l SET owner=NULL,expires_at=NULL,work_id=NULL WHERE l.resource_key=$1 AND l.owner=$2 AND l.generation=$3 AND l.work_id=$4 AND l.epoch=$5 AND l.epoch=hysteriax_execution_epoch() AND l.expires_at>clock_timestamp() AND NOT l.blocked AND NOT EXISTS(SELECT 1 FROM execution_operations o WHERE o.resource_key=l.resource_key AND o.state IN ('dispatching','reconciling','needs_attention'))",
+        )
+        .bind(&self.resource)
+        .bind(&self.owner)
+        .bind(self.generation)
+        .bind(&self.work)
+        .bind(&self.epoch)
+        .execute(&mut *connection)
+        .await?
+        .rows_affected() == 1;
         if released {
             finalization::released(connection, self)?;
+        } else {
+            // Preserve Err for lost/expired identity and Ok(false) for a live
+            // lease whose remote operation still needs verification.
+            self.guard(connection).await?;
         }
         Ok(released)
     }

@@ -54,6 +54,16 @@ pub async fn prune(state: &AppState) -> Result<u64> {
 }
 
 async fn prune_work(pool: &PgPool, work: &maintenance::Work) -> Result<u64> {
+    // Only a previously completed empty sweep enables the probe. Busy pages
+    // keep their original single SERIALIZABLE transaction and bounded throughput.
+    // This flag is a scheduling hint, never authority to delete private material.
+    if work.payload["idle"].as_bool() == Some(true) && finish_empty_page(pool, work).await? {
+        return Ok(0);
+    }
+    prune_candidates(pool, work).await
+}
+
+async fn prune_candidates(pool: &PgPool, work: &maintenance::Work) -> Result<u64> {
     let work = work.clone();
     db::serializable::<_,anyhow::Error,_>(pool,move|tx| {
         let work=work.clone();
@@ -80,11 +90,52 @@ async fn prune_work(pool: &PgPool, work: &maintenance::Work) -> Result<u64> {
             }
             let last=if candidates.len()==PAGE as usize {candidates.last()} else {None};
             sqlx::query("UPDATE background_work SET payload=$2 WHERE id=$1")
-                .bind(&work.id).bind(json!({"after_id":last.map(|(id,_)|id),"after_version":last.map(|(_,v)|*v).unwrap_or(0)})).execute(&mut **tx).await?;
+                .bind(&work.id).bind(json!({"after_id":last.map(|(id,_)|id),"after_version":last.map(|(_,v)|*v).unwrap_or(0),"idle":candidates.is_empty() && after.is_none()})).execute(&mut **tx).await?;
             work.finish_on(tx,false,if candidates.is_empty() && after.is_none(){60}else{1},None).await?;
             Ok(removed)
         })
     }).await
+}
+
+/// An empty probe only acknowledges a bounded delay. If candidates appeared
+/// since the last sweep, leave the work untouched and recheck everything in the
+/// original SERIALIZABLE transaction, with a fresh snapshot and ownership guard.
+async fn finish_empty_page(pool: &PgPool, work: &maintenance::Work) -> Result<bool> {
+    let work = work.clone();
+    db::write(pool, move |tx| {
+        let work = work.clone();
+        Box::pin(async move {
+            work.guard_on(tx).await?;
+            super::reference_index::assert_clean_on(tx).await?;
+            let deadline: DateTime<Utc> =
+                sqlx::query_scalar("SELECT clock_timestamp()-interval '5 minutes'")
+                    .fetch_one(&mut **tx)
+                    .await?;
+            let after = work.payload["after_id"].as_str();
+            let version = work.payload["after_version"].as_i64().unwrap_or(0);
+            let has_candidates: bool = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+                "SELECT EXISTS({CANDIDATES} LIMIT $2)"
+            )))
+            .bind(deadline)
+            .bind(1_i64)
+            .bind(after)
+            .bind(version)
+            .fetch_one(&mut **tx)
+            .await?;
+            if has_candidates {
+                return Ok(false);
+            }
+            sqlx::query("UPDATE background_work SET payload=$2 WHERE id=$1")
+                .bind(&work.id)
+                .bind(json!({"after_id":null,"after_version":0,"idle":after.is_none()}))
+                .execute(&mut **tx)
+                .await?;
+            work.finish_on(tx, false, if after.is_none() { 60 } else { 1 }, None)
+                .await?;
+            Ok(true)
+        })
+    })
+    .await
 }
 
 #[cfg(test)]
