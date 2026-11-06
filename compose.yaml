@@ -38,6 +38,8 @@ services:
     build: .
     image: "${HYSTERIAX_IMAGE:-hysteriax-server}:${HYSTERIAX_VERSION:-dev}"
     restart: unless-stopped
+    # HTTP drain (8s) + sampling drain (120s), with process-exit headroom.
+    stop_grace_period: 150s
     depends_on:
       redis:
         condition: service_healthy

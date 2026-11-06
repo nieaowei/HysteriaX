@@ -18,6 +18,20 @@ SPEC.loader.exec_module(backup_restore)
 
 
 class BackupArchiveTests(unittest.TestCase):
+    def test_backup_allows_capture_drain_before_snapshot_and_restarts_afterward(self):
+        with tempfile.TemporaryDirectory(prefix="hysteriax-drain-backup-") as folder:
+            root = pathlib.Path(folder)
+            actions = []
+            with patch.object(backup_restore, "read_master_key", return_value=b"k" * 32), patch.object(
+                backup_restore, "api_is_ready", return_value=True
+            ), patch.object(backup_restore, "compose", side_effect=lambda *a: actions.append(a)), patch.object(
+                backup_restore, "create_archive", side_effect=lambda *a: actions.append("snapshot") or {
+                    "schema_version": 10, "master_key_sha256": "fixture"
+                }
+            ), patch.object(backup_restore, "start_api", side_effect=lambda *a: actions.append("restart")), patch("sys.stdout", new_callable=io.StringIO):
+                backup_restore.backup(root)
+            self.assertEqual(actions, [(root.resolve(), "stop", "--timeout", "150", "api"), "snapshot", "restart"])
+
     def test_backup_extracts_verified_postgresql_custom_dump(self):
         with tempfile.TemporaryDirectory(prefix="hysteriax-backup-test-") as folder:
             root = pathlib.Path(folder)
@@ -171,6 +185,10 @@ class RestoreTimelineTests(unittest.TestCase):
             replacements["_rename_database"].assert_not_called()
             replacements["_drop_database"].assert_called_once()
             self.assertEqual(actions, ["stop", "audit", "stop", "maintenance", "resume"])
+            # The fallback stop must retain the same drain budget as the
+            # original stop, before database repair or maintenance can begin.
+            for call in replacements["compose"].call_args_list:
+                self.assertEqual(call.args, (root.resolve(), "stop", "--timeout", "150", "api"))
 
 
 if __name__ == "__main__":

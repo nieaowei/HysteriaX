@@ -163,8 +163,13 @@ const RETENTION_TABLES: [&str; 3] = [
 async fn retention_loop(state: AppState) {
     let mut timer = tokio::time::interval(Duration::from_secs(1));
     timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut shutdown = state.shutdown.subscribe();
     loop {
-        timer.tick().await;
+        tokio::select! {
+            biased;
+            _=shutdown.wait_for(|stop|*stop)=>return,
+            _=timer.tick()=>{}
+        }
         if let Err(error) = retention_pass(&state).await {
             tracing::warn!(%error,"monitoring retention cleanup deferred");
         }

@@ -6,10 +6,11 @@ use serde_json::{Map, Value};
 use sqlx::PgPool;
 use uuid::Uuid;
 
+#[cfg(test)]
+use crate::security::SecretBox;
 use crate::{
     api::now,
     deployment,
-    security::SecretBox,
     ssh::{self, FingerprintResult},
     state::AppState,
 };
@@ -34,8 +35,13 @@ pub async fn run(state: AppState) {
 async fn maintenance_loop(state: AppState) {
     let mut tick = tokio::time::interval(Duration::from_secs(1));
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut shutdown = state.shutdown.subscribe();
     loop {
-        tick.tick().await;
+        tokio::select! {
+            biased;
+            _=shutdown.wait_for(|stop|*stop)=>return,
+            _=tick.tick()=>{}
+        }
         if let Err(error) = maintenance_pass(&state).await {
             tracing::warn!(%error,"traffic maintenance deferred");
         }
@@ -129,12 +135,16 @@ pub(crate) async fn sample_work(state: &AppState, work: &crate::background::Work
     if !crate::runtime_config::traffic_capture_enabled() {
         return Ok(());
     }
+    if *state.shutdown.borrow() {
+        return Err(crate::background::Draining.into());
+    }
     crate::background::admit_read(&state.pool, work).await?;
     // Individual SSH and HTTP operations have bounded budgets. Do not wrap
     // the whole function in a timeout that could discard a received response
     // while its database transaction is retrying.
-    let result = sample_node(&state.pool, &state.secrets, work).await;
+    let result = sample_node(state, work).await;
     if let Err(error) = &result
+        && !error.is::<crate::background::Draining>()
         && !clear::uncertain(&state.pool, work).await?
     {
         record_failed_sample(
@@ -214,18 +224,15 @@ where
     }
 }
 
-async fn sample_node(
-    pool: &PgPool,
-    secrets: &SecretBox,
-    work: &crate::background::Work,
-) -> Result<()> {
+async fn sample_node(state: &AppState, work: &crate::background::Work) -> Result<()> {
+    let (pool, secrets) = (&state.pool, state.secrets.as_ref());
     let node_id = &work.node;
     let cycle = work.cycle;
     let cycle_started = work.period_start;
     let expected_nodes = work.expected;
     let sample_id = format!("{cycle}:{node_id}");
-    let state = batches::reserve_work(pool, work).await?;
-    if state != "capturing" {
+    let batch_state = batches::reserve_work(pool, work).await?;
+    if batch_state != "capturing" {
         batches::process(pool, &sample_id).await?;
         return Ok(());
     }
@@ -255,6 +262,12 @@ async fn sample_node(
     // destructive request or abandon its received response.
     let capture = async {
         let before_instance = systemd_instance(&session).await?;
+        // This synchronous check is the local admission boundary. A capture
+        // admitted before shutdown remains in the worker's drain set through
+        // marker commit, the single request, and durable response capture.
+        if *state.shutdown.borrow() {
+            return Err(crate::background::Draining.into());
+        }
         match clear::prepare(pool, work).await? {
             clear::Admission::Send => {}
             clear::Admission::AlreadyRequested => bail!("traffic clear response was not persisted"),

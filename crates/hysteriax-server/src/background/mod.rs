@@ -112,6 +112,16 @@ pub async fn admit_read(pool: &PgPool, work: &Work) -> Result<()> {
 }
 
 pub async fn finish(pool: &PgPool, work: &Work, success: bool) -> Result<()> {
+    finish_or_defer(pool, work, Some(success)).await
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("sampling admission stopped for shutdown")]
+pub struct Draining;
+
+/// Yield an unstarted capture without inventing a failed observation. A clear
+/// marker must never be released this way: it needs capture or uncertainty.
+async fn finish_or_defer(pool: &PgPool, work: &Work, success: Option<bool>) -> Result<()> {
     let work = work.clone();
     db::write(pool,move |tx| {
         let work=work.clone();
@@ -119,9 +129,14 @@ pub async fn finish(pool: &PgPool, work: &Work, success: bool) -> Result<()> {
             execution::guard_all(tx,&work.leases).await?;
             let own=work.leases.iter().find(|l|l.resource.starts_with("work:")).unwrap();
             let batch:Option<String>=if work.kind=="traffic" {sqlx::query_scalar("SELECT state FROM traffic_sample_batches WHERE sample_id=$1 AND payload_digest IS NOT NULL").bind(&work.id).fetch_optional(&mut **tx).await?} else {None};
-            let state=match batch.as_deref() {Some("complete")=>"complete",Some("ready")=>"queued",_ if success=>"complete",_=>"failed"};
+            if success.is_none() {
+                let requested:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM traffic_sample_batches WHERE sample_id=$1 AND clear_requested_at IS NOT NULL AND payload_digest IS NULL)")
+                    .bind(&work.id).fetch_one(&mut **tx).await?;
+                anyhow::ensure!(!requested,"cannot defer an unresolved traffic clear");
+            }
+            let state=match batch.as_deref() {Some("complete")=>"complete",Some("ready")=>"queued",_ if success.is_none()=>"queued",_ if success==Some(true)=>"complete",_=>"failed"};
             let changed=sqlx::query("UPDATE background_work SET state=$4,owner=NULL,finished_at=CASE WHEN $4='queued' THEN NULL ELSE clock_timestamp() END,available_at=CASE WHEN $4='queued' THEN clock_timestamp()+interval '1 second' ELSE available_at END,error_code=$5 WHERE id=$1 AND owner=$2 AND generation=$3 AND state='running'")
-                .bind(&work.id).bind(&own.owner).bind(own.generation).bind(state).bind(if state=="queued"{Some("billing_deferred")}else if state=="failed"{Some("sampling_failed")}else{None}).execute(&mut **tx).await?.rows_affected();
+                .bind(&work.id).bind(&own.owner).bind(own.generation).bind(state).bind(if state=="queued"{Some(if success.is_none(){"shutdown_deferred"}else{"billing_deferred"})}else if state=="failed"{Some("sampling_failed")}else{None}).execute(&mut **tx).await?.rows_affected();
             anyhow::ensure!(changed==1,"sampling ownership was lost");
             if work.kind=="traffic" && state!="queued" {
                 sqlx::query("UPDATE online_samples SET pending=false WHERE cycle_id=$1 AND node_id=$2 AND pending").bind(work.cycle).bind(&work.node).execute(&mut **tx).await?;
@@ -230,11 +245,20 @@ pub async fn run_sampling(state: AppState, kind: &'static str) {
     let mut timer = tokio::time::interval(std::time::Duration::from_secs(1));
     timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut tasks = tokio::task::JoinSet::new();
+    let mut shutdown = state.shutdown.subscribe();
     loop {
         tokio::select! {
+            biased;
+            _=async { let _ = shutdown.wait_for(|stop|*stop).await; }=>break,
+            // Reap finished tasks before another due tick. Slow database
+            // passes can leave the timer continuously ready; they must not
+            // starve the JoinSet and permanently consume every worker slot.
+            Some(result)=tasks.join_next(),if !tasks.is_empty()=>{
+                if let Err(error)=result {tracing::error!(kind,%error,"sampling task failed");}
+            }
             _=timer.tick()=>{
                 if let Err(error)=ensure_cycle(&state.pool,kind).await {tracing::warn!(kind,%error,"sampling cycle deferred");continue;}
-                while tasks.len()<max_parallel {
+                while tasks.len()<max_parallel && !*state.shutdown.borrow() {
                     let claiming=std::time::Instant::now();
                     let work=match claim(&state.pool,kind,&state.instance_id).await {Ok(Some(work))=>work,Ok(None)=>break,Err(error)=>{tracing::warn!(kind,%error,"sampling claim deferred");break;}};
                     let claim_ms=claiming.elapsed().as_millis() as u64;
@@ -249,17 +273,29 @@ pub async fn run_sampling(state: AppState, kind: &'static str) {
                                 _=>unreachable!(),
                             };
                             let collection_ms=collecting.elapsed().as_millis() as u64;
-                            if let Err(error)=&result {tracing::warn!(kind,node_id=%work.node,work_id=%work.id,claim_ms,collection_ms,slot_expired=error.is::<SlotExpired>(),%error,"sampling work failed");}
+                            let draining=result.as_ref().is_err_and(|error|error.is::<Draining>());
+                            if let Err(error)=&result && !draining {tracing::warn!(kind,node_id=%work.node,work_id=%work.id,claim_ms,collection_ms,slot_expired=error.is::<SlotExpired>(),%error,"sampling work failed");}
                             let confirming=std::time::Instant::now();
-                            if let Err(error)=finish(&app.pool,&work,result.is_ok()).await {tracing::warn!(work_id=%work.id,claim_ms,collection_ms,confirmation_ms=confirming.elapsed().as_millis() as u64,%error,"sampling completion deferred");}
+                            let confirmation=if draining{finish_or_defer(&app.pool,&work,None).await}else{finish(&app.pool,&work,result.is_ok()).await};
+                            if let Err(error)=confirmation {tracing::warn!(work_id=%work.id,claim_ms,collection_ms,confirmation_ms=confirming.elapsed().as_millis() as u64,%error,"sampling completion deferred");}
                             else {tracing::debug!(kind,node_id=%work.node,work_id=%work.id,claim_ms,collection_ms,confirmation_ms=confirming.elapsed().as_millis() as u64,success=result.is_ok(),"sampling work completed");}
                         }).await;
                     });
                 }
             }
-            Some(_)=tasks.join_next(),if !tasks.is_empty()=>{}
         }
     }
+    tracing::info!(
+        kind,
+        in_flight = tasks.len(),
+        "sampling admission stopped; draining claimed work"
+    );
+    while let Some(result) = tasks.join_next().await {
+        if let Err(error) = result {
+            tracing::error!(kind,%error,"sampling task failed during drain");
+        }
+    }
+    tracing::info!(kind, "sampling queue drained");
 }
 #[cfg(test)]
 mod tests;

@@ -3,6 +3,71 @@ use crate::security::SecretBox;
 use axum::{Json, extract::State};
 
 #[tokio::test]
+async fn stopped_sampling_workers_do_not_create_cycles_or_claim_work() {
+    let (state, _) = fixture().await;
+    state.shutdown.send_replace(true);
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        tokio::join!(
+            run_sampling(state.clone(), "traffic"),
+            run_sampling(state.clone(), "network"),
+            run_sampling(state.clone(), "proxy"),
+            crate::traffic::run(state.clone()),
+            crate::proxy_monitor::run(state.clone()),
+        );
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        count(&state, "SELECT count(*) FROM sampling_cycles").await,
+        0
+    );
+    assert_eq!(
+        count(&state, "SELECT count(*) FROM resource_leases").await,
+        0
+    );
+}
+
+#[tokio::test]
+async fn shutdown_cannot_yield_an_unresolved_clear_or_release_its_leases() {
+    let (state, _) = fixture().await;
+    freeze(&state, "traffic").await;
+    let work = claim(&state.pool, "traffic", "old").await.unwrap().unwrap();
+    crate::traffic::batches::reserve_work(&state.pool, &work)
+        .await
+        .unwrap();
+    crate::traffic::clear::prepare(&state.pool, &work)
+        .await
+        .unwrap();
+    execution::supervise(state.pool.clone(), work.leases.clone(), async {
+        let error = finish_or_defer(&state.pool, &work, None).await.unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("cannot defer an unresolved traffic clear")
+        );
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        count(
+            &state,
+            "SELECT count(*) FROM resource_leases WHERE owner='old'"
+        )
+        .await,
+        2
+    );
+    assert_eq!(
+        count(
+            &state,
+            "SELECT count(*) FROM background_work WHERE state='running' AND owner='old'"
+        )
+        .await,
+        1
+    );
+    assert_eq!(count(&state, "SELECT count(*) FROM traffic_sample_batches WHERE state='capturing' AND clear_requested_at IS NOT NULL AND payload_digest IS NULL").await, 1);
+}
+
+#[tokio::test]
 async fn a_slot_expiring_during_resource_acquisition_does_not_keep_partial_ownership() {
     let (state, node) = fixture().await;
     let cycle = freeze(&state, "network").await;
