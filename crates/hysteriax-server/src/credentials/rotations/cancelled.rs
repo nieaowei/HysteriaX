@@ -58,8 +58,10 @@ async fn scan_pass(state: &AppState) -> Result<()> {
     Ok(())
 }
 async fn scan(pool: &PgPool, work: &Work) -> Result<()> {
+    // Admission only creates a guarded, idempotent hint. The cancellation page
+    // rechecks the source under its original SERIALIZABLE transaction and locks.
     let work = work.clone();
-    db::serializable(pool,move |tx|{let work=work.clone();Box::pin(async move {
+    db::write(pool,move |tx|{let work=work.clone();Box::pin(async move {
         work.guard_on(tx).await?;
         ensure!(work.id=="maintenance:mtls:superseded-node-jobs","wrong superseded job admission scope");
         // This also discovers historical supersessions and tasks requeued by
