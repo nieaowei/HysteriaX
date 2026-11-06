@@ -192,7 +192,7 @@ where
                     diagnostics::record(&error);
                     E::from(error)
                 })?;
-            let attempt = crate::execution::TransactionAttempt::new(&mut tx);
+            let attempt = crate::execution::TransactionAttempt::after_guard(&mut tx);
             diagnostics::phase("operation");
             match attempt.operation(operation(&mut tx)).await {
                 Ok(value) => {

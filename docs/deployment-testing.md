@@ -21,7 +21,7 @@
 
 ```sh
 cargo fmt --all -- --check
-cargo test --workspace
+RUST_MIN_STACK=16777216 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 ruby scripts/generate/generate-swift-api-models.rb --check
 ruby tests/contracts/verify-management-contract.rb
@@ -33,7 +33,7 @@ python3 -m unittest discover -s tests/unit -p 'test_*.py'
 go -C tests/integration/traffic-clear test -count=1 ./...
 ```
 
-Rust 数据库测试需要可丢弃 PostgreSQL 的 `TEST_DATABASE_URL`；Redis 专项另需 `TEST_REDIS_URL`。保留测试输出中的忽略项和失败，不把部分完成记为全量通过。上述是运行入口，不代表本次已经执行或通过。
+Rust 数据库测试需要可丢弃 PostgreSQL 的 `TEST_DATABASE_URL`；Redis 专项另需 `TEST_REDIS_URL`。全量调试构建沿用 16 MiB 测试线程栈，既有 mTLS 深层异步调用测试可能在默认栈下溢出；此设置仅作用于测试进程，不修改发布服务的线程栈。保留测试输出中的忽略项和失败，不把部分完成记为全量通过。上述是运行入口，不代表本次已经执行或通过。
 
 执行计划性能专项单独运行：
 
@@ -42,6 +42,10 @@ TEST_DATABASE_URL=postgresql://... bash tests/performance/verify-query-plans.sh
 ```
 
 该入口串行执行 3 个显式忽略的重型测试，检查搜索/分页索引、在线历史扫描路径和聚合脏区间扫描规模。常规 `cargo test --workspace` 保留业务结果和事务正确性回归，不默认运行这 3 项。脚本只选择这些性能用例，不会执行需要 SSH 或真实快照的其他忽略项。
+
+后台维护事务对照使用 `tests/performance/benchmark-maintenance-transactions.py`。提供挂载相同 `retention_benchmarks.rs` 夹具的基线/候选冻结测试二进制、指向可丢弃本地 PostgreSQL 的 URL 文件和输出目录；`--delay-ms` 注入响应延迟，`--candidate-first` 可反转执行顺序。不同源码副本共用 Cargo target 时输出路径可能相同，应在每个版本构建完成后立即复制冻结并记录 SHA256，再构建下一个版本。入口拒绝同一路径，并核对运行前后摘要。它分别核对空清理、持续非空分页和空闲后新增候选的完成量、事务 SQL 数量及包含监督器的调用耗时，不作为争用率或容量验收。
+
+同一 Rust 夹具另有显式忽略的 `credentials::retention::tests::benchmarks::background_contention_comparison`，在隔离数据库运行 90 秒真实后台循环，使用 26 万历史工作、24 万历史租约和 6 个合成节点。SSH 固定指向 `127.0.0.1:1`；该夹具观察事务竞争，不验证远端采样成功，也不替代 10 万用户 / 1 万节点容量场景。
 
 ## 全进程与部署专项
 
