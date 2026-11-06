@@ -1,6 +1,28 @@
 use super::*;
 
 #[tokio::test]
+async fn sampling_drain_has_one_deadline_and_reports_timeout_or_worker_panic() {
+    let done = tokio::spawn(async {});
+    let hanging = tokio::spawn(std::future::pending());
+    let mut workers = [("done", done), ("hanging", hanging)];
+    let result = drain_sampling_workers(&mut workers, Duration::from_millis(30)).await;
+    assert!(result.unwrap_err().to_string().contains("deadline reached"));
+    assert!(workers.iter().all(|(_, task)| task.is_finished()));
+
+    let panicked = tokio::spawn(async { panic!("fixture worker panic") });
+    let completed = tokio::spawn(async {});
+    let mut workers = [("panicked", panicked), ("completed", completed)];
+    assert!(
+        drain_sampling_workers(&mut workers, Duration::from_secs(1))
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("fixture worker panic")
+    );
+    assert!(workers.iter().all(|(_, task)| task.is_finished()));
+}
+
+#[tokio::test]
 async fn shutdown_closes_sse_and_bounds_unresponsive_requests() {
     let state = AppState::new(
         crate::db::test_pool().await,
