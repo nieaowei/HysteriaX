@@ -232,7 +232,12 @@ async fn request_admission_is_single_shot_and_fenced_by_both_leases_and_slot() {
         .await
         .unwrap()
         .unwrap();
-    assert!(prepare(&pool, &old).await.is_err());
+    assert!(
+        !prepare(&pool, &old)
+            .await
+            .unwrap_err()
+            .is::<crate::background::SlotExpired>()
+    );
     assert_eq!(
         prepare(&pool, &new).await.unwrap(),
         Admission::AlreadyRequested
@@ -244,7 +249,12 @@ async fn request_admission_is_single_shot_and_fenced_by_both_leases_and_slot() {
     .execute(&pool)
     .await
     .unwrap();
-    assert!(prepare(&pool, &new).await.is_err());
+    assert!(
+        prepare(&pool, &new)
+            .await
+            .unwrap_err()
+            .is::<crate::background::SlotExpired>()
+    );
     assert!(uncertain(&pool, &old).await.is_err());
     assert!(uncertain(&pool, &new).await.unwrap());
     assert!(!uncertain(&pool, &new).await.unwrap());

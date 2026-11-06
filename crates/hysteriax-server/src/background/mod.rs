@@ -68,29 +68,30 @@ pub async fn claim(pool: &PgPool, kind: &str, owner: &str) -> Result<Option<Work
             for row in rows {
                 let id:String=row.get("id");let node:String=row.get("node_id");
                 sqlx::query("SAVEPOINT sampling_candidate").execute(&mut **tx).await?;
-                let mut leases=Vec::new();let mut resources=vec![format!("node:{node}"),format!("work:{id}")];resources.sort();
-                for resource in resources {
-                    if let Some(lease)=execution::acquire(tx,&resource,&owner,&id).await? {leases.push(lease);} else {break;}
+                let resources=vec![format!("node:{node}"),format!("work:{id}")];
+                let Some(leases)=execution::acquire_all(tx,&resources,&owner,&id).await? else {
+                    sqlx::query("ROLLBACK TO SAVEPOINT sampling_candidate").execute(&mut **tx).await?;
+                    sqlx::query("RELEASE SAVEPOINT sampling_candidate").execute(&mut **tx).await?;
+                    continue;
+                };
+                let generation=leases.iter().find(|lease|lease.resource.starts_with("work:")).unwrap().generation;
+                let mut payload:Value=row.get("payload");
+                if payload.get("captured_at").is_none() {
+                    let snapshot=sqlx::query("SELECT clock_timestamp() captured_at,n.deployed_revision,p.generation FROM nodes n LEFT JOIN node_packages p ON p.node_id=n.id WHERE n.id=$1")
+                        .bind(&node).fetch_one(&mut **tx).await?;
+                    payload["captured_at"]=json!(snapshot.get::<DateTime<Utc>,_>("captured_at"));
+                    if kind=="proxy" { payload["deployed_revision"]=json!(snapshot.get::<Option<i64>,_>("deployed_revision")); }
+                    if kind=="network" { payload["capture_generation"]=json!(snapshot.try_get::<i64,_>("generation")?); }
                 }
-                if leases.len()!=2 {
+                // Acquiring resources or loading metadata may have consumed the
+                // slot. Captured billing remains recoverable after its deadline.
+                let changed=sqlx::query("UPDATE background_work w SET state='running',owner=$2,generation=$3,payload=$4,started_at=coalesce(started_at,clock_timestamp()) WHERE id=$1 AND (deadline_at>clock_timestamp() OR (kind='traffic' AND EXISTS(SELECT 1 FROM traffic_sample_batches b WHERE b.sample_id=w.id AND b.payload_digest IS NOT NULL)))")
+                    .bind(&id).bind(&owner).bind(generation).bind(&payload).execute(&mut **tx).await?.rows_affected();
+                if changed!=1 {
                     sqlx::query("ROLLBACK TO SAVEPOINT sampling_candidate").execute(&mut **tx).await?;
                     sqlx::query("RELEASE SAVEPOINT sampling_candidate").execute(&mut **tx).await?;
                     continue;
                 }
-                let generation=leases.iter().find(|lease|lease.resource.starts_with("work:")).unwrap().generation;
-                let mut payload:Value=row.get("payload");
-                if payload.get("captured_at").is_none() {
-                    let captured:DateTime<Utc>=sqlx::query_scalar("SELECT clock_timestamp()").fetch_one(&mut **tx).await?;
-                    payload["captured_at"]=json!(captured);
-                    if kind=="proxy" {
-                        payload["deployed_revision"]=json!(sqlx::query_scalar::<_,Option<i64>>("SELECT deployed_revision FROM nodes WHERE id=$1").bind(&node).fetch_one(&mut **tx).await?);
-                    }
-                    if kind=="network" {
-                        payload["capture_generation"]=json!(sqlx::query_scalar::<_,i64>("SELECT generation FROM node_packages WHERE node_id=$1").bind(&node).fetch_one(&mut **tx).await?);
-                    }
-                }
-                sqlx::query("UPDATE background_work SET state='running',owner=$2,generation=$3,payload=$4,started_at=coalesce(started_at,clock_timestamp()) WHERE id=$1")
-                    .bind(&id).bind(&owner).bind(generation).bind(&payload).execute(&mut **tx).await?;
                 sqlx::query("RELEASE SAVEPOINT sampling_candidate").execute(&mut **tx).await?;
                 return Ok(Some(Work{id,kind,cycle:row.get("cycle_id"),node,period_start:row.get("period_start"),expected:row.get("expected_nodes"),payload,leases}));
             }
@@ -115,7 +116,7 @@ pub async fn finish(pool: &PgPool, work: &Work, success: bool) -> Result<()> {
     db::write(pool,move |tx| {
         let work=work.clone();
         Box::pin(async move {
-            for lease in &work.leases {lease.guard(tx).await?;}
+            execution::guard_all(tx,&work.leases).await?;
             let own=work.leases.iter().find(|l|l.resource.starts_with("work:")).unwrap();
             let batch:Option<String>=if work.kind=="traffic" {sqlx::query_scalar("SELECT state FROM traffic_sample_batches WHERE sample_id=$1 AND payload_digest IS NOT NULL").bind(&work.id).fetch_optional(&mut **tx).await?} else {None};
             let state=match batch.as_deref() {Some("complete")=>"complete",Some("ready")=>"queued",_ if success=>"complete",_=>"failed"};
@@ -234,18 +235,24 @@ pub async fn run_sampling(state: AppState, kind: &'static str) {
             _=timer.tick()=>{
                 if let Err(error)=ensure_cycle(&state.pool,kind).await {tracing::warn!(kind,%error,"sampling cycle deferred");continue;}
                 while tasks.len()<max_parallel {
+                    let claiming=std::time::Instant::now();
                     let work=match claim(&state.pool,kind,&state.instance_id).await {Ok(Some(work))=>work,Ok(None)=>break,Err(error)=>{tracing::warn!(kind,%error,"sampling claim deferred");break;}};
+                    let claim_ms=claiming.elapsed().as_millis() as u64;
                     let app=state.clone();
                     tasks.spawn(async move {
                         execution::supervise(app.pool.clone(),work.leases.clone(),async {
+                            let collecting=std::time::Instant::now();
                             let result=match kind {
                                 "traffic"=>crate::traffic::sample_work(&app,&work).await,
                                 "network"=>crate::node_limits::sample_work(&app,&work).await,
                                 "proxy"=>crate::proxy_monitor::sample_work(&app,&work).await,
                                 _=>unreachable!(),
                             };
-                            if let Err(error)=&result {tracing::warn!(kind,node_id=%work.node,%error,"sampling work failed");}
-                            if let Err(error)=finish(&app.pool,&work,result.is_ok()).await {tracing::warn!(work_id=%work.id,%error,"sampling completion deferred");}
+                            let collection_ms=collecting.elapsed().as_millis() as u64;
+                            if let Err(error)=&result {tracing::warn!(kind,node_id=%work.node,work_id=%work.id,claim_ms,collection_ms,slot_expired=error.is::<SlotExpired>(),%error,"sampling work failed");}
+                            let confirming=std::time::Instant::now();
+                            if let Err(error)=finish(&app.pool,&work,result.is_ok()).await {tracing::warn!(work_id=%work.id,claim_ms,collection_ms,confirmation_ms=confirming.elapsed().as_millis() as u64,%error,"sampling completion deferred");}
+                            else {tracing::debug!(kind,node_id=%work.node,work_id=%work.id,claim_ms,collection_ms,confirmation_ms=confirming.elapsed().as_millis() as u64,success=result.is_ok(),"sampling work completed");}
                         }).await;
                     });
                 }

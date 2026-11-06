@@ -1,6 +1,34 @@
 use super::*;
 use crate::security::SecretBox;
 use axum::{Json, extract::State};
+
+#[tokio::test]
+async fn a_slot_expiring_during_resource_acquisition_does_not_keep_partial_ownership() {
+    let (state, node) = fixture().await;
+    let cycle = freeze(&state, "network").await;
+    sqlx::raw_sql("CREATE FUNCTION expire_claim_slot() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.resource_key LIKE 'work:%' THEN UPDATE background_work SET deadline_at=clock_timestamp()-interval '1 second' WHERE id=NEW.work_id; END IF; RETURN NEW; END $$; CREATE TRIGGER expire_claim_slot AFTER UPDATE ON resource_leases FOR EACH ROW EXECUTE FUNCTION expire_claim_slot();")
+        .execute(&state.pool).await.unwrap();
+    assert!(
+        claim(&state.pool, "network", "late")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let row: (String, Option<String>, i64) = sqlx::query_as(
+        "SELECT state,owner,generation FROM background_work WHERE cycle_id=$1 AND node_id=$2",
+    )
+    .bind(cycle)
+    .bind(&node)
+    .fetch_one(&state.pool)
+    .await
+    .unwrap();
+    assert_eq!(row, ("queued".into(), None, 0));
+    let owners: i64 = sqlx::query_scalar("SELECT count(*) FROM resource_leases WHERE owner='late'")
+        .fetch_one(&state.pool)
+        .await
+        .unwrap();
+    assert_eq!(owners, 0);
+}
 async fn node(state: &AppState) -> String {
     let request=crate::credentials::test_node_request(state,json!({"name":"Sample node","ssh_host":"127.0.0.1","ssh_port":1,"ssh_username":"root","ssh_auth_type":"password","ssh_secret":"test","public_host":"example.test","public_port":443,"listen_addr":":443"})).await;
     let (_, Json(receipt)) = crate::api::nodes::create(State(state.clone()), Json(request))
