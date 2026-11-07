@@ -137,6 +137,7 @@ where
         pool,
         "serializable",
         "BEGIN ISOLATION LEVEL SERIALIZABLE",
+        None,
         operation,
     )
     .await
@@ -157,6 +158,33 @@ where
         pool,
         "read_committed",
         "BEGIN ISOLATION LEVEL READ COMMITTED",
+        None,
+        operation,
+    )
+    .await
+}
+
+/// Reuse the connection that performed a non-authoritative scheduling probe.
+/// Only the first attempt uses it; a conflict still retries on a fresh transaction.
+/// The connection must have been acquired from `pool`.
+pub(crate) async fn write_after_probe<T, E, F>(
+    pool: &PgPool,
+    connection: sqlx::pool::PoolConnection<Postgres>,
+    operation: F,
+) -> Result<T, E>
+where
+    E: RetryableTransactionError,
+    F: for<'connection> FnMut(
+        &'connection mut Transaction<'static, Postgres>,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<T, E>> + Send + 'connection>,
+    >,
+{
+    transaction(
+        pool,
+        "read_committed",
+        "BEGIN ISOLATION LEVEL READ COMMITTED",
+        Some(connection),
         operation,
     )
     .await
@@ -166,6 +194,7 @@ async fn transaction<T, E, F>(
     pool: &PgPool,
     isolation: &'static str,
     begin: &'static str,
+    mut first_connection: Option<sqlx::pool::PoolConnection<Postgres>>,
     mut operation: F,
 ) -> Result<T, E>
 where
@@ -181,7 +210,14 @@ where
     for attempt_index in 0..=5 {
         observation.attempted();
         let (result, report) = diagnostics::attempt(async {
-            let mut tx = pool.begin_with(begin).await.map_err(|error| {
+            let begun = match first_connection.take() {
+                Some(connection) => {
+                    Transaction::begin(connection, Some(sqlx::SqlSafeStr::into_sql_str(begin)))
+                        .await
+                }
+                None => pool.begin_with(begin).await,
+            };
+            let mut tx = begun.map_err(|error| {
                 diagnostics::record(&error);
                 E::from(error)
             })?;

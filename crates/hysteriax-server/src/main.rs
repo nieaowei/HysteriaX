@@ -106,6 +106,9 @@ async fn main() -> Result<()> {
         .with_context(|| format!("bind to {address}"))?;
     let transaction_metrics =
         tokio::spawn(db::diagnostics::run_summaries(state.shutdown.subscribe()));
+    let maintenance_metrics = tokio::spawn(background::maintenance::run_summaries(
+        state.shutdown.subscribe(),
+    ));
     let publisher = tokio::spawn(events::run_publisher(state.clone()));
     let heartbeat = tokio::spawn(execution::run_heartbeats(state.clone()));
     let sampling_expiry = tokio::spawn(background::run_expiry(state.clone()));
@@ -140,6 +143,7 @@ async fn main() -> Result<()> {
         mtls,
         sampling_expiry,
         transaction_metrics,
+        maintenance_metrics,
     ];
     for worker in &workers {
         worker.abort();

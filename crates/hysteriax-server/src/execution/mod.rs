@@ -199,6 +199,11 @@ struct Scope {
 }
 tokio::task_local! { static CURRENT: Scope; }
 
+/// A scheduling hint must never bypass an inherited execution's write boundary.
+pub(crate) fn has_scope() -> bool {
+    CURRENT.try_with(|_| ()).is_ok()
+}
+
 /// Diagnostic correlation only; never grants execution authority.
 pub(crate) fn diagnostic_execution() -> Option<Execution> {
     CURRENT
