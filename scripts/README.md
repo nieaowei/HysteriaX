@@ -20,3 +20,13 @@ ruby scripts/generate/generate-swift-api-models.rb --check
 `migrations/` 中的工具只针对说明中明确的历史 schema 和停止状态测试库。常规数据库维护仍使用服务端 `--migrate-only`，版本化 SQL 保留在 `crates/hysteriax-server/migrations/`。该迁移工具的配套回归入口是 `tests/integration/verify-lock-migration.py`。
 
 仓库级验证、单元测试、性能测试和环境辅助代码统一见 [测试索引](../tests/README.md)，Python 测试依赖位于 `tests/requirements.txt`。macOS 专属回归源码及运行入口见 [客户端测试索引](../apps/macos/Tests/README.md)。构建与生产发布方式见 [发布指南](../docs/release.md)。
+
+## 临时数据库连接池诊断构建
+
+`python3 scripts/build/prepare-pool-diagnostic-build.py --output <不存在的目录>` 从已提交且干净的 Git 输入生成临时构建上下文。工具验证锁定的 sqlx-core 0.9.0 crate SHA256，再应用同目录的 `sqlx-pool-timing.patch`；只在输出上下文覆盖依赖、锁文件、Docker COPY 和诊断测试注册，常规 Cargo/Docker 构建保持原依赖。
+
+诊断记录包含同一 acquire 的 permit 等待、存活检查、建连、初始化、回退、丢弃，以及归还侧的调度、清理、检查、应用持有时长和池计数。只为超过原慢获取阈值的获取、归还超过一秒或应用持有超过两秒的连接增加日志，不记录 SQL、绑定值、URL 或凭据。计时包含等待期间的调度延迟，不能单凭阶段名将其解释为纯网络或数据库执行时间。该模式用于受控归因，不替代常规生产构建和容量验收。
+
+诊断专属回归源码位于 `crates/hysteriax-server/src/db/pool_phase_diagnostics_tests.rs`，只由准备工具在冻结上下文注册。在隔离 `TEST_DATABASE_URL` 下从该上下文执行 `cargo test -p hysteriax-server pool_phase_`，验证真实池的等待、初始化、回调、归还和超时行为。
+
+诊断测试使用独立 `CARGO_TARGET_DIR`，或先对冻结上下文执行 `cargo clean -p sqlx-core`；不要在多个补丁版本之间直接相信共享目标目录中的旧产物。生成的诊断 Dockerfile 会在构建前清理 sqlx-core 产物，确保重新编译已核验的补丁源码。
