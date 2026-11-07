@@ -97,7 +97,7 @@ def main():
     build = 'cargo build --locked --release -p hysteriax-server'
     if text.count(build) != 1:
         raise SystemExit('Docker build command changed: review diagnostic cache invalidation')
-    dockerfile.write_text(text.replace(build, 'cargo clean --locked -p sqlx-core && ' + build))
+    dockerfile.write_text(text.replace(build, 'cargo clean --locked --release -p sqlx-core && ' + build))
     metadata = {'source_revision': revision, 'source_archive_sha256': sha(raw),
                 'sqlx_core_version': package['version'], 'upstream_crate_sha256': package['checksum'],
                 'diagnostic_patch_sha256': sha(patch.read_bytes()),

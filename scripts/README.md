@@ -29,4 +29,4 @@ ruby scripts/generate/generate-swift-api-models.rb --check
 
 诊断专属回归源码位于 `crates/hysteriax-server/src/db/pool_phase_diagnostics_tests.rs`，只由准备工具在冻结上下文注册。在隔离 `TEST_DATABASE_URL` 下从该上下文执行 `cargo test -p hysteriax-server pool_phase_`，验证真实池的等待、初始化、回调、归还和超时行为。
 
-诊断测试使用独立 `CARGO_TARGET_DIR`，或先对冻结上下文执行 `cargo clean -p sqlx-core`；不要在多个补丁版本之间直接相信共享目标目录中的旧产物。生成的诊断 Dockerfile 会在构建前清理 sqlx-core 产物，确保重新编译已核验的补丁源码。
+诊断测试使用独立 `CARGO_TARGET_DIR`，或先对冻结上下文执行 `cargo clean -p sqlx-core`；不要在多个补丁版本之间直接相信共享目标目录中的旧产物。生成的诊断 Dockerfile 会在构建前清理 sqlx-core 的 release 产物，确保重新编译已核验的补丁源码。
