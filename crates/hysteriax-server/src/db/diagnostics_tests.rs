@@ -258,23 +258,22 @@ async fn business_conflicts_are_not_retried_and_dropped_calls_are_counted() {
 async fn successful_internal_rollback_preserves_the_validation_failure_statement() {
     let pool = db::test_pool().await;
     let buffer = Buffer::default();
-    async {
-        let mut tx = pool.begin().await.unwrap();
-        let (_, report) = attempt(async {
-            phase("finalization_validate");
-            let error = sqlx::query(CONFLICT).execute(&mut *tx).await.unwrap_err();
-            // Match a finalization validator that cleans up before returning its
-            // original sqlx error to the outer transaction diagnostic boundary.
-            cleanup(tx.rollback()).await.unwrap();
-            record(&error);
-        })
-        .await;
-        assert_eq!(report.failure.phase, "finalization_validate");
-        assert_eq!(report.failure.statement.sql, "DO ?");
-        assert_eq!(report.failure.sqlstate, "40001");
-    }
-    .with_subscriber(subscriber(buffer))
+    // This current-thread fixture also records stream destruction between
+    // polls, rather than limiting the subscriber to the outer future's polls.
+    let _subscriber = tracing::subscriber::set_default(subscriber(buffer));
+    let mut tx = pool.begin().await.unwrap();
+    let (_, report) = attempt(async {
+        phase("finalization_validate");
+        let error = sqlx::query(CONFLICT).execute(&mut *tx).await.unwrap_err();
+        // Match a finalization validator that cleans up before returning its
+        // original sqlx error to the outer transaction diagnostic boundary.
+        cleanup(tx.rollback()).await.unwrap();
+        record(&error);
+    })
     .await;
+    assert_eq!(report.failure.phase, "finalization_validate");
+    assert_eq!(report.failure.statement.sql, "DO ?");
+    assert_eq!(report.failure.sqlstate, "40001");
 }
 
 #[tokio::test]
