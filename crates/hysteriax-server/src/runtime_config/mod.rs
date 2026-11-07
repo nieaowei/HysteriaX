@@ -8,7 +8,8 @@ const DEFAULT_DB_LOCK_TIMEOUT_SECONDS: usize = 1;
 const DEFAULT_DB_STATEMENT_TIMEOUT_SECONDS: usize = 20;
 const DEFAULT_DB_IDLE_TRANSACTION_TIMEOUT_SECONDS: usize = 20;
 const MAX_TIMEOUT_SECONDS: usize = 3600;
-const DEFAULT_BACKGROUND_WORKER_PARALLELISM: usize = 4;
+const DEFAULT_BACKGROUND_WORKER_PARALLELISM: usize = 16;
+const MAX_BACKGROUND_WORKER_PARALLELISM: usize = 16;
 const DEFAULT_SAMPLING_INTERVAL_SECONDS: usize = 10;
 const MAX_SAMPLING_INTERVAL_SECONDS: usize = 3600;
 
@@ -144,14 +145,14 @@ pub(crate) fn ssh_upload_timeout_seconds() -> u64 {
     })
 }
 
-/// Limit parallel tasks within each durable background work queue. This never
-/// raises the existing default of four; deployments can lower it for a remote DB.
+/// Per-instance, per-sampling-queue concurrency. Management jobs apply their
+/// own lower ceiling; deployments can reduce this setting for a remote DB.
 pub(crate) fn background_worker_parallelism() -> usize {
     *BACKGROUND_WORKER_PARALLELISM.get_or_init(|| {
         bounded_usize(
             "HYSTERIAX_BACKGROUND_WORKER_PARALLELISM",
             DEFAULT_BACKGROUND_WORKER_PARALLELISM,
-            DEFAULT_BACKGROUND_WORKER_PARALLELISM,
+            MAX_BACKGROUND_WORKER_PARALLELISM,
         )
     })
 }

@@ -79,6 +79,12 @@ The PostgreSQL release starts with a new, empty database and does not import SQL
 
 Use the initial token from `.env` as the Bearer token. In macOS Settings, create and switch to a new administrator token; the app saves it in Keychain and shows the plaintext once. Confirm that it is marked as this Mac's current token, then revoke the initial token if desired. The API is also available through `POST /api/v2/admin/tokens` and `DELETE /api/v2/admin/tokens/{id}`, with an `Idempotency-Key` for each intended write. The server never returns a token digest as a usable credential.
 
+## Sampling concurrency
+
+`HYSTERIAX_BACKGROUND_WORKER_PARALLELISM` defaults to **16** and accepts 1–16. It limits each sampling queue (`traffic`, `network`, and `proxy`) separately in each API instance. Missing or invalid values use 16; explicit lower values are respected. Management jobs retain their separate ceiling of four. A node's resource lease serializes its sampling and management work across queues and instances.
+
+Compose also defaults to 16. Existing environment files with an explicit value such as 4 continue to use that value; set it to 16 and recreate the API container to adopt the new setting. Sampling cadence, operation timeouts, and the database connection pool have their own settings. The local 16-worker comparison used a 32-connection pool; concurrency alone does not establish a production node-capacity guarantee. See the [sampling comparison scope](deployment-testing.md#采集并发对照).
+
 ## File upload timeout
 
 `HYSTERIAX_SSH_UPLOAD_TIMEOUT_SECONDS` controls each SSH file upload independently of `HYSTERIAX_OPERATION_TIMEOUT_SECONDS`. It defaults to **180 seconds (3 minutes)** and accepts 1–3600 seconds. Missing or invalid values use 180 seconds. For a bandwidth-limited management server, increase only this setting; ordinary SSH commands, probes and sampling retain their existing operation budgets. The client reserves another five seconds after the receiver deadline to collect its completion receipt.

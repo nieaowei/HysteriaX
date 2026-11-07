@@ -1,4 +1,51 @@
 #[test]
+fn background_parallelism_child() {
+    if let Ok(expected) = std::env::var("HYSTERIAX_TEST_EXPECT_BACKGROUND_PARALLELISM") {
+        assert_eq!(
+            super::background_worker_parallelism(),
+            expected.parse::<usize>().unwrap()
+        );
+    }
+}
+
+#[test]
+fn background_parallelism_defaults_to_sixteen_and_accepts_bounded_overrides() {
+    for (configured, expected) in [
+        (None, 16),
+        (Some("1"), 1),
+        (Some("4"), 4),
+        (Some("8"), 8),
+        (Some("16"), 16),
+        (Some("0"), 16),
+        (Some("17"), 16),
+        (Some("32"), 16),
+        (Some("invalid"), 16),
+        (Some(""), 16),
+    ] {
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap());
+        child
+            .args([
+                "--exact",
+                "runtime_config::tests::background_parallelism_child",
+            ])
+            .env(
+                "HYSTERIAX_TEST_EXPECT_BACKGROUND_PARALLELISM",
+                expected.to_string(),
+            )
+            .env_remove("HYSTERIAX_BACKGROUND_WORKER_PARALLELISM");
+        if let Some(value) = configured {
+            child.env("HYSTERIAX_BACKGROUND_WORKER_PARALLELISM", value);
+        }
+        let output = child.output().unwrap();
+        assert!(
+            output.status.success(),
+            "configuration {configured:?}: {}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+    }
+}
+
+#[test]
 fn traffic_capture_setting_child() {
     if let Ok(expected) = std::env::var("HYSTERIAX_TEST_CAPTURE_EXPECTED") {
         assert_eq!(super::traffic_capture_enabled(), expected == "true");

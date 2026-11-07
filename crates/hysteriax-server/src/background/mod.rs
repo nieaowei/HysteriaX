@@ -298,6 +298,8 @@ pub async fn run_sampling(state: AppState, kind: &'static str) {
     tracing::info!(kind, "sampling queue drained");
 }
 #[cfg(test)]
+mod sampling_benchmark;
+#[cfg(test)]
 mod tests;
 
 pub mod maintenance;
