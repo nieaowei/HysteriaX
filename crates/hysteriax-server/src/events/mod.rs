@@ -50,8 +50,7 @@ impl EventHub {
                     let Some(hub) = weak.upgrade() else {
                         break;
                     };
-                    if let Err(error) = publish_pending(&pool).await {
-                        tracing::warn!(%error, "event publication failed");
+                    if hub.changed.receiver_count() == 0 {
                         continue;
                     }
                     match sqlx::query_as::<_, (String, i64)>(
@@ -75,6 +74,9 @@ impl EventHub {
         }
         receiver
     }
+    pub fn notify_published(&self) {
+        self.changed.send_modify(|version| *version += 1);
+    }
     pub fn stats(&self) -> Value {
         let position = self.position.lock().unwrap();
         serde_json::json!({
@@ -89,7 +91,16 @@ impl EventHub {
 /// publishers through commit, so a resume cursor never skips a late commit.
 /// No business transaction acquires this lock.
 pub async fn publish_pending(pool: &PgPool) -> Result<usize, sqlx::Error> {
-    let mut tx = pool.begin().await?;
+    let mut connection = pool.acquire().await?;
+    let pending: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM event_publication_pending)")
+            .fetch_one(&mut *connection)
+            .await?;
+    if !pending {
+        return Ok(0);
+    }
+    use sqlx::Acquire;
+    let mut tx = connection.begin().await?;
     let mut head: i64 =
         sqlx::query_scalar("SELECT head FROM event_publication_stream WHERE id FOR UPDATE")
             .fetch_one(&mut *tx)
@@ -124,8 +135,14 @@ pub async fn publish_pending(pool: &PgPool) -> Result<usize, sqlx::Error> {
 pub async fn run_publisher(state: crate::state::AppState) {
     loop {
         match publish_pending(&state.pool).await {
-            Ok(256) => continue,
-            Ok(_) => {}
+            Ok(count) => {
+                if count > 0 {
+                    state.events.notify_published();
+                }
+                if count == 256 {
+                    continue;
+                }
+            }
             Err(error) => tracing::warn!(%error,"event outbox publisher failed"),
         }
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;

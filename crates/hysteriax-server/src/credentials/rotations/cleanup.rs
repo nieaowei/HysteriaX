@@ -7,19 +7,29 @@ const SCAN_KEY: &str = "mtls:trust-cleanup";
 const KIND: &str = "mtls-trust-cleanup-page";
 const MEMBERS: &str = "SELECT node_id FROM mtls_node_trust WHERE ca_id=$1 AND ca_version=$2 AND deployed UNION SELECT node_id FROM mtls_live_activation_trust WHERE ca_id=$1 AND ca_version=$2";
 const ADMISSION: &str = "SELECT c.ca_id,c.ca_version FROM mtls_trust_cleanup c JOIN mtls_ca_generations g ON g.ca_id=c.ca_id AND g.ca_version=c.ca_version JOIN mtls_authorities a ON a.credential_id=c.ca_id WHERE c.completed_at IS NULL AND c.next_action_at<=$1 AND g.state='retired' AND a.published_version<>c.ca_version AND NOT EXISTS(SELECT 1 FROM background_work w WHERE w.id='trust-cleanup:'||c.ca_id||':'||c.ca_version AND (w.state IN ('queued','running') OR w.available_at>$1)) ORDER BY c.next_action_at,c.ca_id,c.ca_version LIMIT $2";
+const DEMAND: maintenance::Demand = maintenance::Demand {
+    kind: SCAN,
+    key: SCAN_KEY,
+    predicate: "EXISTS(SELECT 1 FROM mtls_trust_cleanup WHERE completed_at IS NULL AND next_action_at<=(SELECT now FROM cutoff))",
+};
 pub(super) async fn run(state: AppState) {
     let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut shutdown = state.shutdown.subscribe();
     loop {
         tokio::select! {_=shutdown.wait_for(|stop|*stop)=>return,_=interval.tick()=>{}}
-        if let Err(error) = scheduled_pass(&state).await {
+        if let Err(error) = state
+            .maintenance
+            .run_when(&[SCAN, KIND], &[SCAN_KEY], DEMAND, scheduled_pass(&state))
+            .await
+        {
             tracing::warn!(%error,"retired trust cleanup deferred");
         }
     }
 }
 pub(super) async fn scheduled_pass(state: &AppState) -> Result<()> {
     scan_pass(state).await?;
+    state.maintenance.refresh_hint().await?;
     if let Some(work) = maintenance::claim(&state.pool, KIND, &state.instance_id).await? {
         execute(&state.pool, &work, false).await?;
     }

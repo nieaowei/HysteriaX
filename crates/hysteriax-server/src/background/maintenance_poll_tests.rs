@@ -4,7 +4,7 @@ use tracing::Subscriber;
 use tracing_subscriber::{Layer, layer::Context, prelude::*};
 
 #[derive(Clone, Default)]
-struct Statements(Arc<Mutex<Vec<String>>>);
+pub(crate) struct Statements(Arc<Mutex<Vec<String>>>);
 impl<S: Subscriber> Layer<S> for Statements {
     fn on_event(&self, event: &tracing::Event<'_>, _: Context<'_, S>) {
         if event.metadata().target() != "sqlx::query" {
@@ -46,12 +46,15 @@ impl<S: Subscriber> Layer<S> for Statements {
     }
 }
 impl Statements {
-    fn snapshot(&self) -> Vec<String> {
+    pub(crate) fn snapshot(&self) -> Vec<String> {
         self.0.lock().unwrap().clone()
     }
 }
 
-async fn recorded<F: std::future::Future>(statements: &Statements, work: F) -> F::Output {
+pub(crate) async fn recorded<F: std::future::Future>(
+    statements: &Statements,
+    work: F,
+) -> F::Output {
     let dispatch = tracing::Dispatch::new(tracing_subscriber::registry().with(statements.clone()));
     // These fixtures use Tokio's current-thread test runtime. Keep the dispatch
     // installed through future destruction as well as polling SQLx's streams.
@@ -61,10 +64,10 @@ async fn recorded<F: std::future::Future>(statements: &Statements, work: F) -> F
 }
 
 tokio::task_local! {
-    static PREFLIGHT_PAUSE: (&'static str, Arc<tokio::sync::Barrier>);
+    pub(crate) static PREFLIGHT_PAUSE: (&'static str, Arc<tokio::sync::Barrier>);
 }
 
-pub(super) async fn after_preflight(operation: &str) {
+pub(crate) async fn after_preflight(operation: &str) {
     let barrier = PREFLIGHT_PAUSE
         .try_with(|(expected, barrier)| (*expected == operation).then(|| barrier.clone()))
         .ok()

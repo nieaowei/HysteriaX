@@ -418,7 +418,8 @@ async fn an_empty_due_range_uses_the_authority_deadline_index() {
         .await
         .unwrap();
     let plan: serde_json::Value = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
-        "EXPLAIN (ANALYZE, FORMAT JSON) {DUE}"
+        "EXPLAIN (ANALYZE, FORMAT JSON) {}",
+        DUE.replace("(SELECT now FROM cutoff)", "$1")
     )))
     .bind(now)
     .bind(PAGE)
@@ -430,5 +431,50 @@ async fn an_empty_due_range_uses_the_authority_deadline_index() {
     assert_eq!(
         count(&state, "SELECT count(*) FROM background_work").await,
         0
+    );
+}
+
+#[tokio::test]
+async fn fresh_business_readiness_bypasses_the_completed_idle_scanner_deadline() {
+    let state = fixture(1).await;
+    sqlx::query("UPDATE mtls_authorities SET next_action_at=clock_timestamp()+interval '1 day'")
+        .execute(&state.pool)
+        .await
+        .unwrap();
+    admit(&state).await;
+    let remaining:i64=sqlx::query_scalar("SELECT extract(epoch FROM available_at-clock_timestamp())::bigint FROM background_work WHERE id=$1").bind(format!("maintenance:{SCAN_KEY}")).fetch_one(&state.pool).await.unwrap();
+    assert!(remaining >= 25);
+    assert!(
+        state
+            .maintenance
+            .run_urgent(&[SCAN_KIND, KIND], &[SCAN_KEY], DEMAND, async { Ok(()) })
+            .await
+            .unwrap()
+            .is_none()
+    );
+    sqlx::query("UPDATE mtls_authorities SET next_action_at=clock_timestamp()-interval '1 second'")
+        .execute(&state.pool)
+        .await
+        .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(1050)).await;
+    state
+        .maintenance
+        .run_urgent(&[SCAN_KIND, KIND], &[SCAN_KEY], DEMAND, async {
+            maintenance::ensure_urgent(&state.pool, DEMAND, json!({})).await?;
+            let work = maintenance::claim(&state.pool, SCAN_KIND, "new-arrival")
+                .await?
+                .unwrap();
+            admit_work(&state.pool, &work).await
+        })
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        count(
+            &state,
+            "SELECT count(*) FROM background_work WHERE kind='mtls-ca-publication'"
+        )
+        .await,
+        1
     );
 }

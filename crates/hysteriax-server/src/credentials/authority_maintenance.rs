@@ -18,20 +18,43 @@ const PAGE: i64 = 100;
 const KIND: &str = "mtls-ca-publication";
 const SCAN_KIND: &str = "mtls-ca-admission";
 const SCAN_KEY: &str = "mtls:authorities";
-const DUE: &str = "SELECT a.credential_id,a.published_version,c.revision FROM mtls_authorities a JOIN credentials c ON c.id=a.credential_id WHERE a.source='generated' AND NOT c.archived AND a.next_action_at<=$1 AND NOT EXISTS(SELECT 1 FROM mtls_rotations r WHERE r.ca_id=a.credential_id AND r.phase<>'complete') AND NOT EXISTS(SELECT 1 FROM background_work w WHERE w.id='mtls-ca-publication:'||a.credential_id||':'||a.published_version::text AND w.state IN ('queued','running')) ORDER BY a.next_action_at,a.credential_id LIMIT $2 FOR NO KEY UPDATE OF a SKIP LOCKED";
+// Share eligibility with readiness, but substitute a direct $1 bind for the
+// locked query so PostgreSQL can estimate the actual due range.
+const DUE: &str = concat!(
+    include_str!("authority_due.sql"),
+    " ORDER BY a.next_action_at,a.credential_id LIMIT $2 FOR NO KEY UPDATE OF a SKIP LOCKED"
+);
+const DEMAND: maintenance::Demand = maintenance::Demand {
+    kind: SCAN_KIND,
+    key: SCAN_KEY,
+    predicate: concat!(
+        // Queued children already keep the worker busy. Let ordinary bounded
+        // admission continue, and avoid rescanning an already admitted backlog
+        // on every shared hint refresh. An empty queue enables urgent discovery.
+        "CASE WHEN EXISTS(SELECT 1 FROM background_work WHERE kind='mtls-ca-publication' AND state='queued') THEN false ELSE (",
+        "EXISTS(WITH eligible AS MATERIALIZED (",
+        include_str!("authority_due.sql"),
+        " ORDER BY a.next_action_at,a.credential_id LIMIT 1) SELECT 1 FROM eligible)",
+        ") END"
+    ),
+};
 pub async fn run(state: AppState) {
     let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut shutdown = state.shutdown.subscribe();
     loop {
         tokio::select! {_=shutdown.wait_for(|stop|*stop)=>return,_=interval.tick()=>{}}
-        if let Err(error) = pass(&state).await {
+        if let Err(error) = state
+            .maintenance
+            .run_urgent(&[SCAN_KIND, KIND], &[SCAN_KEY], DEMAND, pass(&state))
+            .await
+        {
             tracing::warn!(%error,"CA maintenance deferred");
         }
     }
 }
 pub async fn pass(state: &AppState) -> Result<()> {
-    maintenance::ensure(&state.pool, SCAN_KEY, SCAN_KIND, json!({})).await?;
+    maintenance::ensure_urgent(&state.pool, DEMAND, json!({})).await?;
     if let Some(work) = maintenance::claim(&state.pool, SCAN_KIND, &state.instance_id).await? {
         crate::execution::supervise(state.pool.clone(), work.leases.clone(), async {
             if let Err(error) = admit_work(&state.pool, &work).await {
@@ -44,6 +67,7 @@ pub async fn pass(state: &AppState) -> Result<()> {
         .into_result()?
         .transpose()?;
     }
+    state.maintenance.refresh_hint().await?;
     if let Some(work) = maintenance::claim(&state.pool, KIND, &state.instance_id).await? {
         crate::execution::supervise(state.pool.clone(), work.leases.clone(), async {
             if let Err(error) = publish_work(state, &work).await {
@@ -64,13 +88,13 @@ async fn admit_work(pool: &PgPool, work: &Work) -> Result<()> {
         let work=work.clone();Box::pin(async move {
             work.guard_on(tx).await?;
             let now:DateTime<Utc>=sqlx::query_scalar("SELECT clock_timestamp()").fetch_one(&mut **tx).await?;
-            let rows=sqlx::query(DUE).bind(now).bind(PAGE).fetch_all(&mut **tx).await?;
+            let rows=sqlx::query(sqlx::AssertSqlSafe(DUE.replace("(SELECT now FROM cutoff)", "$1"))).bind(now).bind(PAGE).fetch_all(&mut **tx).await?;
             for row in &rows {
                 let ca:String=row.get("credential_id");let version:i64=row.get("published_version");
                 sqlx::query("INSERT INTO background_work(id,kind,payload) VALUES($1,$2,$3) ON CONFLICT(id) DO UPDATE SET state='queued',owner=NULL,started_at=NULL,finished_at=NULL,error_code=NULL,available_at=clock_timestamp(),payload=excluded.payload WHERE background_work.kind=excluded.kind AND background_work.state IN ('complete','failed')")
                     .bind(format!("mtls-ca-publication:{ca}:{version}")).bind(KIND).bind(json!({"ca_id":ca,"published_version":version,"expected_revision":row.get::<i64,_>("revision"),"lease_resources":[format!("ca:{ca}")]})).execute(&mut **tx).await?;
             }
-            work.finish_on(tx,false,if rows.len()==PAGE as usize {1}else{10},None).await
+            work.finish_on(tx,false,if rows.len()==PAGE as usize {1}else{30},None).await
         })
     }).await
 }

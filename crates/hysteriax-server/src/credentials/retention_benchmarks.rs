@@ -181,6 +181,11 @@ async fn background_contention_comparison() {
         .parse()
         .unwrap();
     assert!(warmup < seconds);
+    let pool_max: u32 = std::env::var("HX_MAINTENANCE_BENCH_POOL")
+        .unwrap_or_else(|_| "32".into())
+        .parse()
+        .unwrap();
+    assert!((4..=100).contains(&pool_max));
     let reuse = std::env::var("HX_MAINTENANCE_BENCH_SCHEMA").ok();
     let direct = if let Some(schema) = &reuse {
         assert!(schema.starts_with("hysteriax_test_"));
@@ -197,7 +202,7 @@ async fn background_contention_comparison() {
         ));
         let schema = schema.clone();
         db::pool_options()
-            .max_connections(32)
+            .max_connections(pool_max)
             .after_connect(move |connection, _| {
                 let schema = schema.clone();
                 Box::pin(async move {
@@ -217,7 +222,7 @@ async fn background_contention_comparison() {
             .await
             .unwrap()
     } else {
-        db::test_pool_with_max_connections(32).await
+        db::test_pool_with_max_connections(pool_max).await
     };
     let schema: String = sqlx::query_scalar("SELECT current_schema()")
         .fetch_one(&direct)
@@ -266,7 +271,7 @@ async fn background_contention_comparison() {
         direct.close().await;
         return;
     }
-    let relay = db::test_relay::SqlRelay::new(&direct, Duration::from_millis(25), 32).await;
+    let relay = db::test_relay::SqlRelay::new(&direct, Duration::from_millis(25), pool_max).await;
     let state = AppState::new(
         relay.pool.clone(),
         SecretBox::from_base64("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA").unwrap(),
@@ -274,6 +279,7 @@ async fn background_contention_comparison() {
     let mut tasks = tokio::task::JoinSet::new();
     tasks.spawn(db::diagnostics::run_summaries(state.shutdown.subscribe()));
     tasks.spawn(crate::events::run_publisher(state.clone()));
+    tasks.spawn(crate::quota_rank::run(state.clone()));
     tasks.spawn(crate::execution::run_heartbeats(state.clone()));
     tasks.spawn(crate::background::run_expiry(state.clone()));
     tasks.spawn(crate::credentials::maintenance::run(state.clone()));
@@ -287,6 +293,7 @@ async fn background_contention_comparison() {
         tokio::time::sleep(Duration::from_secs(warmup)).await;
         println!("BACKGROUND_WINDOW_START");
         db::diagnostics::summaries();
+        crate::background::maintenance::poll_summaries();
         println!("BACKGROUND_WINDOW_OPEN");
     }
     tokio::time::sleep(Duration::from_secs(seconds - warmup)).await;
@@ -294,17 +301,19 @@ async fn background_contention_comparison() {
     // shutdown cancellations do not masquerade as business failures.
     println!("BACKGROUND_WINDOW_END");
     db::diagnostics::summaries();
+    crate::background::maintenance::poll_summaries();
     println!("BACKGROUND_WINDOW_CLOSED");
     state.shutdown.send_replace(true);
     tasks.abort_all();
     while tasks.join_next().await.is_some() {}
     db::diagnostics::summaries();
+    crate::background::maintenance::poll_summaries();
     println!(
         "BACKGROUND_BENCHMARK {}",
         json!({
             "schema":schema,"seconds":seconds,"warmup_seconds":warmup,"response_delay_ms":25,
             "historical_work":260000,"historical_leases":240000,
-            "nodes":6,"wire_commands":relay.commands.load(Ordering::SeqCst),
+            "nodes":6,"pool_max_connections":pool_max,"wire_commands":relay.commands.load(Ordering::SeqCst),
             "scope":"local fixture; SSH only to loopback port 1; not capacity acceptance",
         })
     );

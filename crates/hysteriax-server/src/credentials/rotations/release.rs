@@ -9,13 +9,22 @@ const ADMISSION: &str = "SELECT r.id,r.ca_id,r.ca_version FROM mtls_rotations r 
 fn payload(rotation: &str, ca: &str, version: i64) -> Value {
     json!({"rotation_id":rotation,"ca_id":ca,"ca_version":version,"lease_resources":[format!("ca:{ca}")]})
 }
+const DEMAND: maintenance::Demand = maintenance::Demand {
+    kind: SCAN,
+    key: SCAN_KEY,
+    predicate: "EXISTS(SELECT 1 FROM mtls_rotations WHERE phase IN ('identities','publish') AND next_action_at<=(SELECT now FROM cutoff))",
+};
 pub(super) async fn run(state: AppState) {
     let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut shutdown = state.shutdown.subscribe();
     loop {
         tokio::select! {_=shutdown.wait_for(|stop|*stop)=>return,_=interval.tick()=>{}}
-        if let Err(error) = scheduled_pass(&state).await {
+        if let Err(error) = state
+            .maintenance
+            .run_when(&[SCAN, KIND], &[SCAN_KEY], DEMAND, scheduled_pass(&state))
+            .await
+        {
             tracing::warn!(%error,"rotation publication deferred");
         }
     }
@@ -34,6 +43,7 @@ pub(super) async fn scheduled_pass(state: &AppState) -> Result<()> {
         .into_result()?
         .transpose()?;
     }
+    state.maintenance.refresh_hint().await?;
     if let Some(work) = maintenance::claim(&state.pool, KIND, &state.instance_id).await? {
         execute(&state.pool, &work).await?;
     }

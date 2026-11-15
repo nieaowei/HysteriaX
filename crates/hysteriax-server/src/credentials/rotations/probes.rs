@@ -29,13 +29,27 @@ pub(super) async fn enqueue_on(
     .await?;
     Ok(())
 }
+const DEMAND: maintenance::Demand = maintenance::Demand {
+    kind: SCAN,
+    key: SCAN_KEY,
+    predicate: "EXISTS(SELECT 1 FROM mtls_rotations WHERE phase='probes' AND next_action_at<=(SELECT now FROM cutoff))",
+};
 pub(super) async fn run(state: AppState) {
     let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut shutdown = state.shutdown.subscribe();
     loop {
         tokio::select! {_=shutdown.wait_for(|stop|*stop)=>return,_=interval.tick()=>{}}
-        if let Err(error) = scheduled_pass(&state).await {
+        if let Err(error) = state
+            .maintenance
+            .run_when(
+                &[SCAN, ADMIT, CHILD],
+                &[SCAN_KEY],
+                DEMAND,
+                scheduled_pass(&state),
+            )
+            .await
+        {
             tracing::warn!(%error,"rotation probe work deferred");
         }
     }
@@ -45,6 +59,7 @@ pub(super) async fn scheduled_pass(state: &AppState) -> Result<()> {
     if let Some(w) = maintenance::claim(&state.pool, SCAN, &state.instance_id).await? {
         execute(&state.pool, &w, Action::Scan).await?;
     }
+    state.maintenance.refresh_hint().await?;
     if let Some(w) = maintenance::claim(&state.pool, ADMIT, &state.instance_id).await? {
         execute(&state.pool, &w, Action::Page).await?;
     }

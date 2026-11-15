@@ -23,11 +23,29 @@ pub struct Work {
     pub leases: Vec<Execution>,
 }
 
+const CURRENT_CYCLE: &str = "SELECT id FROM sampling_cycles WHERE kind=$1 AND period_start=(SELECT to_timestamp(floor(extract(epoch FROM clock_timestamp())/$2)*$2))";
+
 #[tracing::instrument(name="sampling_cycle", skip(pool,kind), fields(sampling_kind=kind))]
 pub async fn ensure_cycle(pool: &PgPool, kind: &str) -> Result<Uuid> {
+    let seconds = match kind {
+        "traffic" | "network" => crate::runtime_config::sampling_interval_seconds() as i64,
+        "proxy" => 60,
+        _ => anyhow::bail!("unsupported sampling kind"),
+    };
+    let mut connection = pool.acquire().await?;
+    if !execution::has_scope() {
+        let existing: Option<Uuid> = sqlx::query_scalar(CURRENT_CYCLE)
+            .bind(kind)
+            .bind(seconds as f64)
+            .fetch_optional(&mut *connection)
+            .await?;
+        if let Some(id) = existing {
+            return Ok(id);
+        }
+    }
     let kind = kind.to_owned();
     let id = Uuid::new_v4();
-    db::serializable(pool,move |tx| {
+    db::serializable_after_probe(pool,connection,move |tx| {
         let kind=kind.clone();
         Box::pin(async move {
             let seconds=match kind.as_str(){"traffic"|"network"=>crate::runtime_config::sampling_interval_seconds() as i64,"proxy"=>60_i64,_=>anyhow::bail!("unsupported sampling kind")};
@@ -58,13 +76,48 @@ pub async fn ensure_cycle(pool: &PgPool, kind: &str) -> Result<Uuid> {
 
 /// Recover read-only work only while its slot is current. Already captured
 /// traffic is always eligible: recovery must finish billing rather than read SSH.
+const SAMPLING_CANDIDATES: &str = "FROM background_work w JOIN sampling_cycles c ON c.id=w.cycle_id JOIN nodes n ON n.id=w.node_id WHERE w.kind=$1 AND w.state IN ('queued','running') AND n.state NOT IN ('deleting','delete_failed') AND w.available_at<=clock_timestamp() AND (w.deadline_at>clock_timestamp() OR (w.kind='traffic' AND EXISTS(SELECT 1 FROM traffic_sample_batches b WHERE b.sample_id=w.id AND b.payload_digest IS NOT NULL))) AND NOT EXISTS(SELECT 1 FROM resource_leases l WHERE l.resource_key=ANY(ARRAY['work:'||w.id,'node:'||w.node_id]) AND (l.blocked OR (l.owner IS NOT NULL AND l.expires_at>clock_timestamp()) OR EXISTS(SELECT 1 FROM execution_operations o WHERE o.resource_key=l.resource_key AND o.state IN ('dispatching','reconciling','needs_attention'))))";
+
 pub async fn claim(pool: &PgPool, kind: &str, owner: &str) -> Result<Option<Work>> {
+    let mut poll = maintenance::Poll::new(&format!("sampling:{kind}"), "claim");
+    let result = claim_sampling(pool, kind, owner, &poll, true).await;
+    poll.finish(
+        result.is_ok(),
+        result.as_ref().is_ok_and(|work| work.is_some()),
+    );
+    result
+}
+
+async fn claim_sampling(
+    pool: &PgPool,
+    kind: &str,
+    owner: &str,
+    poll: &maintenance::Poll,
+    preflight: bool,
+) -> Result<Option<Work>> {
+    let mut connection = pool.acquire().await?;
+    if preflight && !execution::has_scope() {
+        let present: bool = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+            "SELECT EXISTS(SELECT 1 {SAMPLING_CANDIDATES})"
+        )))
+        .bind(kind)
+        .fetch_one(&mut *connection)
+        .await?;
+        if !present {
+            poll.preflight_empty();
+            return Ok(None);
+        }
+    }
+    #[cfg(test)]
+    maintenance::sampling_preflight().await;
+    poll.transaction();
     let (kind, owner) = (kind.to_owned(), owner.to_owned());
-    db::write(pool,move |tx| {
+    let result = db::write_after_probe(pool,connection,move |tx| {
         let (kind,owner)=(kind.clone(),owner.clone());
         Box::pin(async move {
-            let rows=sqlx::query("SELECT w.*,c.period_start,c.expected_nodes FROM background_work w JOIN sampling_cycles c ON c.id=w.cycle_id JOIN nodes n ON n.id=w.node_id WHERE w.kind=$1 AND w.state IN ('queued','running') AND n.state NOT IN ('deleting','delete_failed') AND w.available_at<=clock_timestamp() AND (w.deadline_at>clock_timestamp() OR (w.kind='traffic' AND EXISTS(SELECT 1 FROM traffic_sample_batches b WHERE b.sample_id=w.id AND b.payload_digest IS NOT NULL))) AND NOT EXISTS(SELECT 1 FROM resource_leases l WHERE l.resource_key=ANY(ARRAY['work:'||w.id,'node:'||w.node_id]) AND (l.blocked OR (l.owner IS NOT NULL AND l.expires_at>clock_timestamp()) OR EXISTS(SELECT 1 FROM execution_operations o WHERE o.resource_key=l.resource_key AND o.state IN ('dispatching','reconciling','needs_attention')))) ORDER BY w.available_at,w.id LIMIT 32 FOR UPDATE OF w SKIP LOCKED")
+            let rows=sqlx::query(sqlx::AssertSqlSafe(format!("SELECT w.*,c.period_start,c.expected_nodes, (w.kind='traffic' AND EXISTS(SELECT 1 FROM traffic_sample_batches b WHERE b.sample_id=w.id AND b.payload_digest IS NOT NULL)) has_capture {SAMPLING_CANDIDATES} ORDER BY w.available_at,w.id LIMIT 32 FOR UPDATE OF w SKIP LOCKED")))
                 .bind(&kind).fetch_all(&mut **tx).await?;
+            let mut rejected = 0_u64;
             for row in rows {
                 let id:String=row.get("id");let node:String=row.get("node_id");
                 sqlx::query("SAVEPOINT sampling_candidate").execute(&mut **tx).await?;
@@ -72,6 +125,7 @@ pub async fn claim(pool: &PgPool, kind: &str, owner: &str) -> Result<Option<Work
                 let Some(leases)=execution::acquire_all(tx,&resources,&owner,&id).await? else {
                     sqlx::query("ROLLBACK TO SAVEPOINT sampling_candidate").execute(&mut **tx).await?;
                     sqlx::query("RELEASE SAVEPOINT sampling_candidate").execute(&mut **tx).await?;
+                    rejected += 1;
                     continue;
                 };
                 let generation=leases.iter().find(|lease|lease.resource.starts_with("work:")).unwrap().generation;
@@ -90,14 +144,19 @@ pub async fn claim(pool: &PgPool, kind: &str, owner: &str) -> Result<Option<Work
                 if changed!=1 {
                     sqlx::query("ROLLBACK TO SAVEPOINT sampling_candidate").execute(&mut **tx).await?;
                     sqlx::query("RELEASE SAVEPOINT sampling_candidate").execute(&mut **tx).await?;
+                    rejected += 1;
                     continue;
                 }
                 sqlx::query("RELEASE SAVEPOINT sampling_candidate").execute(&mut **tx).await?;
-                return Ok(Some(Work{id,kind,cycle:row.get("cycle_id"),node,period_start:row.get("period_start"),expected:row.get("expected_nodes"),payload,leases}));
+                return Ok((Some(Work{id,kind,cycle:row.get("cycle_id"),node,period_start:row.get("period_start"),expected:row.get("expected_nodes"),payload,leases}),rejected,row.get::<bool,_>("has_capture")));
             }
-            Ok(None)
+            Ok((None,rejected,false))
         })
-    }).await
+    }).await;
+    if let Ok((work, rejected, captured)) = &result {
+        poll.claim_details(work.is_none(), *rejected, *captured);
+    }
+    result.map(|(work, _, _)| work)
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -148,18 +207,7 @@ async fn finish_or_defer(pool: &PgPool, work: &Work, success: Option<bool>) -> R
     }).await
 }
 
-pub async fn expire(pool: &PgPool) -> Result<usize> {
-    db::write(pool, |tx| {
-        Box::pin(async move {
-            // Work rows remain locked until both task and online status changes
-            // commit. Competing expiry workers skip this bounded cohort; live
-            // owners and captured billing retain their original exclusions.
-            let expired: i64 = sqlx::query_scalar(
-                r#"
-                WITH candidates AS MATERIALIZED (
-                    SELECT w.id
-                    FROM background_work w
-                    WHERE w.cycle_id IS NOT NULL
+const EXPIRY_FILTER: &str = r#"w.cycle_id IS NOT NULL
                       AND w.state IN ('queued','running')
                       AND (w.deadline_at <= clock_timestamp() OR NOT EXISTS (
                           SELECT 1 FROM nodes n
@@ -173,7 +221,30 @@ pub async fn expire(pool: &PgPool) -> Result<usize> {
                       AND NOT (w.kind='traffic' AND EXISTS (
                           SELECT 1 FROM traffic_sample_batches b
                           WHERE b.sample_id=w.id AND b.payload_digest IS NOT NULL
-                      ))
+                      ))"#;
+
+pub async fn expire(pool: &PgPool) -> Result<usize> {
+    let mut connection = pool.acquire().await?;
+    if !execution::has_scope() {
+        let sql = format!("SELECT EXISTS(SELECT 1 FROM background_work w WHERE {EXPIRY_FILTER})");
+        let present: bool = sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
+            .fetch_one(&mut *connection)
+            .await?;
+        if !present {
+            return Ok(0);
+        }
+    }
+    db::write_after_probe(pool, connection, |tx| {
+        Box::pin(async move {
+            // Work rows remain locked until both task and online status changes
+            // commit. Competing expiry workers skip this bounded cohort; live
+            // owners and captured billing retain their original exclusions.
+            let expired: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+                r#"
+                WITH candidates AS MATERIALIZED (
+                    SELECT w.id
+                    FROM background_work w
+                    WHERE {EXPIRY_FILTER}
                     ORDER BY w.deadline_at,w.id
                     LIMIT 256
                     FOR UPDATE OF w SKIP LOCKED
@@ -193,8 +264,8 @@ pub async fn expire(pool: &PgPool) -> Result<usize> {
                     RETURNING s.id
                 )
                 SELECT count(*) FROM expired
-                "#,
-            )
+                "#
+            )))
             .fetch_one(&mut **tx)
             .await?;
             Ok(expired as usize)
@@ -207,19 +278,34 @@ pub async fn expire(pool: &PgPool) -> Result<usize> {
 /// handles all queues; row locks and SKIP LOCKED coordinate multiple instances.
 pub async fn run_expiry(state: AppState) {
     tracing::info!(batch_limit = 256, "sampling expiry worker started");
-    let mut timer = tokio::time::interval(std::time::Duration::from_secs(1));
-    timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut shutdown = state.shutdown.subscribe();
     loop {
-        timer.tick().await;
+        if *shutdown.borrow() {
+            return;
+        }
         let started = std::time::Instant::now();
-        match expire(&state.pool).await {
-            Ok(expired) if expired > 0 => tracing::info!(
-                expired,
-                elapsed_ms = started.elapsed().as_millis() as u64,
-                "sampling expiry batch completed"
-            ),
-            Ok(_) => {}
-            Err(error) => tracing::warn!(%error, "sampling expiry deferred"),
+        let pause = match expire(&state.pool).await {
+            Ok(expired) if expired > 0 => {
+                tracing::info!(
+                    expired,
+                    elapsed_ms = started.elapsed().as_millis() as u64,
+                    "sampling expiry batch completed"
+                );
+                false
+            }
+            Ok(_) => true,
+            Err(error) => {
+                tracing::warn!(%error, "sampling expiry deferred");
+                true
+            }
+        };
+        if pause {
+            tokio::select! {
+                _ = shutdown.wait_for(|stop| *stop) => return,
+                _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {},
+            }
+        } else {
+            tokio::task::yield_now().await;
         }
     }
 }

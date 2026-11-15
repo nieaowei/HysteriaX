@@ -28,3 +28,11 @@ bash apps/macos/Tests/runners/verify-localization.sh
 组件专属测试靠近组件：独立 macOS 回归源码与运行入口位于 [apps/macos/Tests/](../apps/macos/Tests/README.md)，UI 用例保留在 `apps/macos/UITests/`，Rust 测试继续位于所属 Rust 模块中。
 
 性能与功能验证分别调用。正式锁争用验收、快照容量和查询计划有独立规模、时长和环境要求，冒烟模式不能替代正式结果。环境要求及完整矩阵见 [部署与回归验证](../docs/deployment-testing.md)。构建、生成、运维和实际迁移工具见 [操作脚本索引](../scripts/README.md)。
+
+`python3 tests/performance/summarize-pool-comparison.py <本地证据目录>` 仅汇总已取回的生产池大小交叉观察，不连接生产。结果分开列出启动与稳定窗口、慢获取分段、就绪探测延迟、采集终态和资源消耗；阈值日志不构成全量 acquire 分布，三个完整周期的生产观察也不替代容量验收。执行与边界见 [0035](../docs/plans/0035-pool-size-comparison.md)。相关配置保存/失败恢复和时间边界测试可用 `python3 -m unittest discover -s tests/unit -p 'test_pool_comparison*.py'` 执行。
+
+`python3 tests/performance/benchmark-maintenance-scheduler.py --baseline <冻结基线测试二进制> --candidate <冻结候选测试二进制> --output <新证据目录>` 在自管隔离 PostgreSQL 上按 ABBA 顺序比较后台空预检合并。默认连接池 100，每轮 120 秒、预热 30 秒；两份二进制须包含相同的池大小与窗口汇总测试插桩。汇总区分实际数据库空预检与内存跳过，协议命令总数包含预热；回环 SSH 故意失败，不能作为采集成功率或容量验收。实现及结果见 [0038](../docs/plans/0038-maintenance-poll-coalescing.md)。解析器测试：`python3 -m unittest discover -s tests/unit -p test_maintenance_scheduler_benchmark.py`。 加 `--redis` 会创建隔离 Redis，并要求两份二进制的相同夹具都启动配额排行榜 worker；其直接只读事务计入协议总量，但不计入 db helper 事务汇总。
+
+`TEST_DATABASE_URL=<可丢弃本地 PostgreSQL> RUST_MIN_STACK=16777216 cargo test --locked -p hysteriax-server node_limits::tests::background_idle_probes_at_target_cardinality_are_bounded -- --ignored --exact --nocapture --test-threads=1` 显式创建 10 万用户、1 万节点，验证采样周期成员冻结、空闲节点扫描使用到期索引，以及管理任务/采样过期/统计队列在该基数下的空闲路径。只做数据库与分页检查，不运行 SSH，也不证明采集容量。后台优化说明与同池对照见 [0042](../docs/plans/0042-background-idle-work-reduction.md)。
+
+`python3 tests/integration/verify-maintenance-startup.py --image <本地发布镜像> --output <新证据目录>` 在自管内部 Docker 网络与 PostgreSQL/Redis 上验证完整 linux/amd64 服务默认线程栈启动。默认运行 330 秒以覆盖 300 秒维护兜底，检查持续就绪、零重启和 SIGTERM 后三类采样排空、正常退出；只清理带本次专属标签的夹具，保留日志和 inspect 证据。此场景没有真实采集节点，不替代容量测试。发布栈回归见 [0039](../docs/plans/0039-deploy-maintenance-scheduler.md)。
