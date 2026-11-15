@@ -88,6 +88,7 @@ pub(super) struct Claim {
     pub rows: Vec<Value>,
     pub cursor: Option<Value>,
     pub scanned: usize,
+    pub has_more: bool,
 }
 
 /// The cursor advances over busy keys too; a held first key cannot hide later
@@ -115,11 +116,15 @@ pub(super) async fn claim_on(
     after: Option<&Value>,
 ) -> Result<Claim, sqlx::Error> {
     let sql = candidates_sql(queue, after.is_some());
-    let candidates: Vec<(Value, Value)> = sqlx::query_as(sqlx::AssertSqlSafe(sql))
+    let mut candidates: Vec<(Value, Value)> = sqlx::query_as(sqlx::AssertSqlSafe(sql))
         .bind(after)
-        .bind(queue.limit())
+        .bind(queue.limit() + 1)
         .fetch_all(&mut *connection)
         .await?;
+    // One extra, unlocked row identifies the tail without another DB round trip.
+    // Never lock, compute, acknowledge or advance the cursor over this sentinel.
+    let has_more = candidates.len() > queue.limit() as usize;
+    candidates.truncate(queue.limit() as usize);
     let scanned = candidates.len();
     let cursor = candidates.last().map(|(_, key)| key.clone());
     if candidates.is_empty() {
@@ -127,6 +132,7 @@ pub(super) async fn claim_on(
             rows: vec![],
             cursor,
             scanned,
+            has_more,
         });
     }
     let payload = Value::Array(candidates.into_iter().map(|(row, _)| row).collect());
@@ -146,6 +152,7 @@ pub(super) async fn claim_on(
         rows,
         cursor,
         scanned,
+        has_more,
     })
 }
 
@@ -287,13 +294,14 @@ async fn sweep(pool: &PgPool, queue: Queue, deadline: Instant) -> Result<u64, sq
     while Instant::now() < deadline {
         let after = cursor.clone();
         let began = Instant::now();
-        let (count, next, scanned) = db::write(pool, move |tx| {
+        let (count, next, scanned, has_more) = db::write(pool, move |tx| {
             let after = after.clone();
             Box::pin(async move {
                 let claim = claim_on(tx, queue, after.as_ref()).await?;
-                let (next, scanned) = (claim.cursor.clone(), claim.scanned);
+                let (next, scanned, has_more) =
+                    (claim.cursor.clone(), claim.scanned, claim.has_more);
                 let count = refresh_queue_on(tx, queue, claim).await?;
-                Ok::<_, sqlx::Error>((count, next, scanned))
+                Ok::<_, sqlx::Error>((count, next, scanned, has_more))
             })
         })
         .await?;
@@ -306,7 +314,7 @@ async fn sweep(pool: &PgPool, queue: Queue, deadline: Instant) -> Result<u64, sq
         );
         acknowledged += count;
         cursor = next;
-        if scanned == 0 {
+        if !has_more {
             break;
         }
     }
@@ -318,11 +326,27 @@ pub async fn refresh(pool: &PgPool) -> Result<(), sqlx::Error> {
     // prevents a continuously changing source from monopolizing the worker.
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
+        let ready: (bool, bool, bool, bool) = if crate::execution::has_scope() {
+            (true, true, true, true)
+        } else {
+            sqlx::query_as("SELECT EXISTS(SELECT 1 FROM analytics_dirty_cycles),EXISTS(SELECT 1 FROM traffic_dirty_hours),EXISTS(SELECT 1 FROM online_dirty_minutes),EXISTS(SELECT 1 FROM job_retry_state_dirty)")
+                .fetch_one(pool).await?
+        };
+        if !ready.0 && !ready.1 && !ready.2 && !ready.3 {
+            return Ok(());
+        }
+        let run = |ready, queue| async move {
+            if ready {
+                sweep(pool, queue, deadline).await
+            } else {
+                Ok(0)
+            }
+        };
         let (a, b, c, d) = tokio::join!(
-            sweep(pool, Queue::ALL[0], deadline),
-            sweep(pool, Queue::ALL[1], deadline),
-            sweep(pool, Queue::ALL[2], deadline),
-            sweep(pool, Queue::ALL[3], deadline)
+            run(ready.0, Queue::ALL[0]),
+            run(ready.1, Queue::ALL[1]),
+            run(ready.2, Queue::ALL[2]),
+            run(ready.3, Queue::ALL[3])
         );
         if a? + b? + c? + d? == 0 || Instant::now() >= deadline {
             return Ok(());

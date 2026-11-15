@@ -249,6 +249,7 @@ impl QuotaRank {
                 .await?,
         )
     }
+    #[cfg(test)]
     async fn update(&self, pool: &PgPool, _id: &str, _version: i64) -> Result<(), ApiError> {
         // A notification only wakes reconciliation. Never advance a vector on
         // the assumption that unrelated notifications arrived in order.
@@ -268,8 +269,10 @@ impl QuotaRank {
 #[derive(Deserialize)]
 struct Change {
     schema: String,
-    id: Option<String>,
-    version: i64,
+    #[serde(rename = "id")]
+    _id: Option<String>,
+    #[serde(rename = "version")]
+    _version: i64,
 }
 
 pub async fn run(state: AppState) {
@@ -289,28 +292,38 @@ async fn listen(state: &AppState) -> anyhow::Result<()> {
         .await?;
     let mut listener = PgListener::connect_with(&state.pool).await?;
     listener.listen("hysteriax_quota_rank").await?;
-    let mut tick = tokio::time::interval(Duration::from_secs(1));
+    let mut tick = tokio::time::interval(Duration::from_secs(5));
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut pending = false;
+    let debounce = tokio::time::sleep(Duration::from_millis(100));
+    tokio::pin!(debounce);
     loop {
         tokio::select! {
+            // A sustained notification stream cannot starve the bounded refresh.
+            biased;
+            _ = &mut debounce, if pending => {
+                pending = false;
+                state.quota_rank.refresh(&state.pool).await
+                    .map_err(|e| anyhow::anyhow!("{}",e.message))?;
+            }
+            _ = tick.tick() => {
+                if state.caches.redis.as_ref().is_some_and(|r| r.available()) {
+                    pending = false;
+                    state.quota_rank.refresh(&state.pool).await
+                        .map_err(|e| anyhow::anyhow!("{}",e.message))?;
+                }
+            }
             notification = listener.recv() => {
                 let notification = notification?;
                 if let Ok(change) = serde_json::from_str::<Change>(notification.payload())
                     && change.schema == schema {
-                    if let Some(id) = change.id {
-                        state.quota_rank.update(&state.pool,&id,change.version).await
-                            .map_err(|e| anyhow::anyhow!("{}",e.message))?;
-                    } else {
-                        state.quota_rank.refresh(&state.pool).await
-                            .map_err(|e| anyhow::anyhow!("{}",e.message))?;
+                    // Only the first notification starts the debounce deadline.
+                    // Every refresh reads the complete version vector, not IDs
+                    // inferred from potentially missing/out-of-order messages.
+                    if !pending {
+                        pending = true;
+                        debounce.as_mut().reset(tokio::time::Instant::now()+Duration::from_millis(100));
                     }
-                }
-            }
-            _ = tick.tick() => {
-                // The 64-row version vector detects lost notifications and
-                // evicted keys. Redis applies due resets before reading Top 10.
-                if state.caches.redis.as_ref().is_some_and(|r| r.available()) {
-                    state.quota_rank.refresh(&state.pool).await
-                        .map_err(|e| anyhow::anyhow!("{}",e.message))?;
                 }
             }
         }

@@ -24,7 +24,11 @@ pub(super) async fn run(state: AppState) {
     let mut shutdown = state.shutdown.subscribe();
     loop {
         tokio::select! {_=shutdown.wait_for(|stop|*stop)=>return,_=interval.tick()=>{}}
-        if let Err(error) = scheduled_pass(&state).await {
+        if let Err(error) = state
+            .maintenance
+            .run(&[KIND], &[], scheduled_pass(&state))
+            .await
+        {
             tracing::warn!(%error,"superseded identity materialization deferred");
         }
     }

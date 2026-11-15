@@ -12,13 +12,27 @@ const MEMBERS: &str = "SELECT node_id FROM mtls_node_trust WHERE ca_id=$1 AND (d
 const ELIGIBLE: &str = "u.enabled AND (u.expires_at IS NULL OR u.expires_at>$3) AND (u.quota_bytes IS NULL OR u.usage_bytes<u.quota_bytes)";
 const LEAF: &str = "EXISTS(SELECT 1 FROM mtls_user_versions v WHERE v.identity_id=i.id AND v.ca_id=$1 AND v.ca_version=$2 AND NOT v.discarded AND v.not_before<=$3 AND v.expires_at>$3)";
 
+const DEMAND: maintenance::Demand = maintenance::Demand {
+    kind: SCAN,
+    key: SCAN_KEY,
+    predicate: "EXISTS(SELECT 1 FROM mtls_rotations WHERE phase IN ('identities','publish') AND next_action_at<=(SELECT now FROM cutoff))",
+};
 pub(super) async fn run(state: AppState) {
     let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut shutdown = state.shutdown.subscribe();
     loop {
         tokio::select! {_=shutdown.wait_for(|stop|*stop)=>return,_=interval.tick()=>{}}
-        if let Err(error) = scheduled_pass(&state).await {
+        if let Err(error) = state
+            .maintenance
+            .run_when(
+                &[SCAN, ADMIT, ISSUE],
+                &[SCAN_KEY],
+                DEMAND,
+                scheduled_pass(&state),
+            )
+            .await
+        {
             tracing::warn!(%error,"rotation identity scheduling deferred");
         }
     }
@@ -37,6 +51,7 @@ pub(super) async fn scheduled_pass(state: &AppState) -> Result<()> {
         .into_result()?
         .transpose()?;
     }
+    state.maintenance.refresh_hint().await?;
     if let Some(work) = maintenance::claim(&state.pool, ADMIT, &state.instance_id).await? {
         execute_admission(&state.pool, &work).await?;
     }

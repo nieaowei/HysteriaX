@@ -161,6 +161,8 @@ const RETENTION_TABLES: [&str; 3] = [
     "monitoring_probe_tokens",
 ];
 async fn retention_loop(state: AppState) {
+    let keys = RETENTION_TABLES.map(|table| format!("monitoring-retention:{table}"));
+    let key_refs: Vec<_> = keys.iter().map(String::as_str).collect();
     let mut timer = tokio::time::interval(Duration::from_secs(1));
     timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut shutdown = state.shutdown.subscribe();
@@ -170,7 +172,11 @@ async fn retention_loop(state: AppState) {
             _=shutdown.wait_for(|stop|*stop)=>return,
             _=timer.tick()=>{}
         }
-        if let Err(error) = retention_pass(&state).await {
+        if let Err(error) = state
+            .maintenance
+            .run(&["monitoring-retention"], &key_refs, retention_pass(&state))
+            .await
+        {
             tracing::warn!(%error,"monitoring retention cleanup deferred");
         }
     }
@@ -216,7 +222,7 @@ async fn cleanup_work(state: &AppState, work: &crate::background::maintenance::W
         "unsupported retention table"
     );
     let (key, at, age_days, interval) = if table == "monitoring_probe_tokens" {
-        ("node_id", "expires_at", 0_i32, 60)
+        ("node_id", "expires_at", 0_i32, 300)
     } else {
         ("id", "sampled_at", 31_i32, 86400)
     };

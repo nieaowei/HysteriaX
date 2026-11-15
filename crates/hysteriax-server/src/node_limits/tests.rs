@@ -766,3 +766,123 @@ async fn correction_fences_failed_samples_as_well_as_successful_ones() {
         1
     );
 }
+
+#[tokio::test]
+async fn a_no_due_nodes_pass_still_drains_previously_queued_restriction_work() {
+    let pool = db::test_pool_with_max_connections(3).await;
+    // A removed node is a valid no-op dispatch which must still be acknowledged.
+    crate::background::maintenance::ensure(
+        &pool,
+        "pending-restriction",
+        maintenance::KIND,
+        json!({"node_id":"removed-node", "restriction_generation":1, "restricted":true}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(maintenance::pass(&pool, "owner").await.unwrap(), 0);
+    let state: String = sqlx::query_scalar(
+        "SELECT state FROM background_work WHERE id='maintenance:pending-restriction'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(state, "complete");
+    let scans: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM background_work WHERE kind='node-limit-scan'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        scans, 0,
+        "an empty scan must not create four recurring lanes"
+    );
+}
+
+#[tokio::test]
+#[ignore = "explicit 100k-user/10k-node background database regression"]
+async fn background_idle_probes_at_target_cardinality_are_bounded() {
+    let pool = db::test_pool_with_max_connections(4).await;
+    sqlx::query("INSERT INTO users(id,name,created_at,updated_at) SELECT 'scale-user-'||i,'User '||i,now(),now() FROM generate_series(1,100000)i")
+        .execute(&pool).await.unwrap();
+    sqlx::query("WITH fixture_ssh AS (INSERT INTO credentials(id,name,kind,created_at,updated_at) VALUES('fixture-ssh','Fixture SSH','ssh_password',now(),now())), fixture_ssh_version AS (INSERT INTO credential_versions(credential_id,version,payload_enc,created_at) VALUES('fixture-ssh',1,'unused',now())) INSERT INTO nodes(id,name,ssh_host,ssh_port,ssh_username,public_host,public_port,listen_addr,node_token_hash,node_token_enc,traffic_stats_secret_enc,desired_config_enc,created_at,updated_at,ssh_credential_id,ssh_credential_version,deployed_revision,state) SELECT 'scale-node-'||i,'Node '||i,'127.0.0.1',1,'fixture','example.test',443,':443','hash'||i,'unused','unused','{}',now(),now(),'fixture-ssh',1,1,'deployed' FROM generate_series(1,10000)i")
+        .execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO node_packages(node_id,period_id,next_evaluation_at) SELECT id,'fixture',clock_timestamp()+interval '1 day' FROM nodes")
+        .execute(&pool).await.unwrap();
+    sqlx::raw_sql("ANALYZE users; ANALYZE nodes; ANALYZE node_packages")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let began = std::time::Instant::now();
+    let cycle = crate::background::ensure_cycle(&pool, "network")
+        .await
+        .unwrap();
+    let expected: i64 =
+        sqlx::query_scalar("SELECT expected_nodes FROM sampling_cycles WHERE id=$1")
+            .bind(cycle)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(expected, 10000, "membership must freeze all eligible nodes");
+    let creation_ms = began.elapsed().as_millis();
+    // Keep this a database/cardinality test independent of a minute boundary.
+    sqlx::query("UPDATE background_work SET deadline_at=clock_timestamp()+interval '1 hour' WHERE cycle_id=$1")
+        .bind(cycle).execute(&pool).await.unwrap();
+    let plan: Value = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) {}",
+        maintenance::DUE_HINT
+    )))
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(
+        plan.to_string()
+            .contains("node_packages_evaluation_due_idx"),
+        "idle probe must use the due index: {plan}"
+    );
+    let began = std::time::Instant::now();
+    for _ in 0..10 {
+        assert_eq!(maintenance::pass(&pool, "scale-owner").await.unwrap(), 0);
+        assert!(crate::jobs::claim_next(&pool).await.unwrap().is_none());
+        assert_eq!(crate::background::expire(&pool).await.unwrap(), 0);
+        crate::analytics::refresh(&pool).await.unwrap();
+    }
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM background_work WHERE kind='node-limit-scan'"
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        0
+    );
+    println!(
+        "BACKGROUND_IDLE_SCALE {}",
+        json!({"users":100000,"nodes":10000,"passes":10,"cycle_creation_ms":creation_ms,"idle_passes_ms":began.elapsed().as_millis(),"due_plan":plan,"scope":"DB membership and idle index paths; no SSH/collection capacity claim"})
+    );
+}
+
+#[tokio::test]
+async fn overdue_packages_on_inactive_nodes_do_not_start_empty_scan_lanes() {
+    let (state, node, _) = fixture().await;
+    set_package(&state, &node, &Package::default()).await;
+    sqlx::query("UPDATE node_packages SET next_evaluation_at=clock_timestamp()-interval '1 day' WHERE node_id=$1")
+        .bind(&node).execute(&state.pool).await.unwrap();
+    for status in ["deleting", "delete_failed"] {
+        sqlx::query("UPDATE nodes SET state=$2 WHERE id=$1")
+            .bind(&node)
+            .bind(status)
+            .execute(&state.pool)
+            .await
+            .unwrap();
+        assert_eq!(maintenance::pass(&state.pool, "owner").await.unwrap(), 0);
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT count(*) FROM background_work WHERE kind='node-limit-scan'"
+            )
+            .fetch_one(&state.pool)
+            .await
+            .unwrap(),
+            0
+        );
+    }
+}

@@ -5,6 +5,11 @@ use crate::background::maintenance::{self as work_queue, Work};
 
 pub const NODE_BATCH: i64 = 64;
 const EVALUATION_LANES: usize = 4;
+// Match due_nodes.sql's non-locking conditions, including inactive nodes.
+// Its stable DB statement clock is indexable and avoids a volatile/unknown
+// cutoff's sequential-scan plan on an entirely future 10k-node queue.
+pub(super) const DUE_HINT: &str = "SELECT EXISTS(SELECT 1 FROM node_packages p JOIN nodes n ON n.id=p.node_id WHERE p.next_evaluation_at<=statement_timestamp() AND n.state NOT IN ('deleting','delete_failed'))";
+
 pub const USER_BATCH: i64 = 128;
 pub const KIND: &str = "node-limit-dispatch";
 const SCAN_KIND: &str = "node-limit-scan";
@@ -122,36 +127,44 @@ pub async fn pass(pool: &PgPool, owner: &str) -> Result<usize> {
     let keys: Vec<String> = (0..EVALUATION_LANES)
         .map(|lane| format!("node-limits:evaluate:{lane}"))
         .collect();
-    work_queue::ensure_many(pool, &keys, SCAN_KIND, json!({})).await?;
-    let mut tasks = tokio::task::JoinSet::new();
-    for key in keys {
-        let pool = pool.clone();
-        let owner = owner.to_owned();
-        tasks.spawn(async move {
-            let Some(work) =
-                work_queue::claim_id(&pool, SCAN_KIND, &owner, &format!("maintenance:{key}"))
-                    .await?
-            else {
-                return Ok(0);
-            };
-            crate::execution::supervise(pool.clone(), work.leases.clone(), async {
-                match scan_work(&pool, &work).await {
-                    Ok(count) => Ok(count),
-                    Err(error) => {
-                        tracing::warn!(%error,"due node package work deferred");
-                        work.retry(&pool).await?;
-                        Ok::<_, anyhow::Error>(0)
-                    }
-                }
-            })
-            .await
-            .into_result()?
-            .unwrap_or(Ok(0))
-        });
-    }
     let mut processed = 0;
-    while let Some(result) = tasks.join_next().await {
-        processed += result??;
+    let due = crate::execution::has_scope()
+        || sqlx::query_scalar::<_, bool>(DUE_HINT)
+            .fetch_one(pool)
+            .await?;
+    if due {
+        work_queue::ensure_many(pool, &keys, SCAN_KIND, json!({})).await?;
+        let mut tasks = tokio::task::JoinSet::new();
+        for key in keys {
+            let pool = pool.clone();
+            let owner = owner.to_owned();
+            tasks.spawn(async move {
+                let Some(work) =
+                    work_queue::claim_id(&pool, SCAN_KIND, &owner, &format!("maintenance:{key}"))
+                        .await?
+                else {
+                    return Ok(0);
+                };
+                crate::execution::supervise(pool.clone(), work.leases.clone(), async {
+                    match scan_work(&pool, &work).await {
+                        Ok(count) => Ok(count),
+                        Err(error) => {
+                            tracing::warn!(%error,"due node package work deferred");
+                            work.retry(&pool).await?;
+                            Ok::<_, anyhow::Error>(0)
+                        }
+                    }
+                })
+                .await
+                .into_result()?
+                .unwrap_or(Ok(0))
+            });
+        }
+        let mut scanned = 0;
+        while let Some(result) = tasks.join_next().await {
+            scanned += result??;
+        }
+        processed = scanned;
     }
     if let Some(work) = work_queue::claim(pool, KIND, owner).await? {
         crate::execution::supervise(pool.clone(), work.leases.clone(), async {

@@ -12,17 +12,21 @@ use std::{
 struct Counters {
     calls: AtomicU64,
     preflight_empty: AtomicU64,
+    coalesced_empty: AtomicU64,
     transactions: AtomicU64,
     claimed: AtomicU64,
     empty: AtomicU64,
     failed: AtomicU64,
     cancelled: AtomicU64,
+    transaction_empty: AtomicU64,
+    candidate_rejected: AtomicU64,
+    captured_claimed: AtomicU64,
     duration_us: AtomicU64,
 }
 type Registry = HashMap<(String, &'static str), Arc<Counters>>;
 static REGISTRY: OnceLock<RwLock<Registry>> = OnceLock::new();
 
-pub(super) struct Poll {
+pub(crate) struct Poll {
     counters: Arc<Counters>,
     started: Instant,
     finished: bool,
@@ -51,6 +55,22 @@ impl Poll {
     pub fn transaction(&self) {
         self.counters.transactions.fetch_add(1, Ordering::Relaxed);
     }
+    pub fn claim_details(&self, empty: bool, rejected: u64, captured: bool) {
+        self.counters
+            .transaction_empty
+            .fetch_add(u64::from(empty), Ordering::Relaxed);
+        self.counters
+            .candidate_rejected
+            .fetch_add(rejected, Ordering::Relaxed);
+        self.counters
+            .captured_claimed
+            .fetch_add(u64::from(captured), Ordering::Relaxed);
+    }
+    pub fn coalesced_empty(&self) {
+        self.counters
+            .coalesced_empty
+            .fetch_add(1, Ordering::Relaxed);
+    }
     pub fn finish(&mut self, success: bool, claimed: bool) {
         self.finished = true;
         if !success {
@@ -78,7 +98,7 @@ impl Drop for Poll {
     }
 }
 
-fn summaries() {
+pub(super) fn summaries() {
     let Some(registry) = REGISTRY.get() else {
         return;
     };
@@ -96,11 +116,15 @@ fn summaries() {
             cumulative = true,
             calls = load(&c.calls),
             preflight_empty = load(&c.preflight_empty),
+            coalesced_empty = load(&c.coalesced_empty),
             transactions = load(&c.transactions),
             claimed = load(&c.claimed),
             empty = load(&c.empty),
             failed = load(&c.failed),
             cancelled = load(&c.cancelled),
+            transaction_empty = load(&c.transaction_empty),
+            candidate_rejected = load(&c.candidate_rejected),
+            captured_claimed = load(&c.captured_claimed),
             duration_us = load(&c.duration_us),
             "maintenance poll summary"
         );

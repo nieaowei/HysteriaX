@@ -21,7 +21,7 @@ pub async fn run(state: AppState) {
             _=shutdown.wait_for(|stop|*stop)=>return,
             _=interval.tick()=>{}
         }
-        if let Err(error) = prune(&state).await {
+        if let Err(error) = state.maintenance.run(&[KIND], &[KEY], prune(&state)).await {
             tracing::warn!(%error,"credential retention deferred");
         }
     }
@@ -91,7 +91,7 @@ async fn prune_candidates(pool: &PgPool, work: &maintenance::Work) -> Result<u64
             let last=if candidates.len()==PAGE as usize {candidates.last()} else {None};
             sqlx::query("UPDATE background_work SET payload=$2 WHERE id=$1")
                 .bind(&work.id).bind(json!({"after_id":last.map(|(id,_)|id),"after_version":last.map(|(_,v)|*v).unwrap_or(0),"idle":candidates.is_empty() && after.is_none()})).execute(&mut **tx).await?;
-            work.finish_on(tx,false,if candidates.is_empty() && after.is_none(){60}else{1},None).await?;
+            work.finish_on(tx,false,if candidates.is_empty() && after.is_none(){300}else{1},None).await?;
             Ok(removed)
         })
     }).await
@@ -130,7 +130,7 @@ async fn finish_empty_page(pool: &PgPool, work: &maintenance::Work) -> Result<bo
                 .bind(json!({"after_id":null,"after_version":0,"idle":after.is_none()}))
                 .execute(&mut **tx)
                 .await?;
-            work.finish_on(tx, false, if after.is_none() { 60 } else { 1 }, None)
+            work.finish_on(tx, false, if after.is_none() { 300 } else { 1 }, None)
                 .await?;
             Ok(true)
         })

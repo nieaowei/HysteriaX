@@ -16,19 +16,40 @@ const KIND: &str = "mtls-identity-renewal";
 const SCAN_KIND: &str = "mtls-identity-admission";
 const SCAN_KEY: &str = "mtls:identities";
 
+const DEMAND: maintenance::Demand = maintenance::Demand {
+    kind: SCAN_KIND,
+    key: SCAN_KEY,
+    predicate: concat!(
+        // Queued children already keep the worker busy. Let ordinary bounded
+        // admission continue, and avoid rescanning an already admitted backlog
+        // on every shared hint refresh. An empty queue enables urgent discovery.
+        "CASE WHEN EXISTS(SELECT 1 FROM background_work WHERE kind='mtls-identity-renewal' AND state='queued') THEN false ELSE (",
+        "EXISTS(WITH due AS MATERIALIZED (",
+        include_str!("identity_due.sql"),
+        " ORDER BY i.next_action_at,i.id LIMIT 1) SELECT 1 FROM due) OR EXISTS(WITH pending AS MATERIALIZED (",
+        include_str!("identity_pending.sql"),
+        " ORDER BY i.id LIMIT 1) SELECT 1 FROM pending)",
+        ") END"
+    ),
+};
+
 pub async fn run(state: AppState) {
     let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut shutdown = state.shutdown.subscribe();
     loop {
         tokio::select! {_=shutdown.wait_for(|stop|*stop)=>return,_=interval.tick()=>{}}
-        if let Err(error) = pass(&state).await {
+        if let Err(error) = state
+            .maintenance
+            .run_urgent(&[SCAN_KIND, KIND], &[SCAN_KEY], DEMAND, pass(&state))
+            .await
+        {
             tracing::warn!(%error,"identity maintenance deferred");
         }
     }
 }
 pub async fn pass(state: &AppState) -> Result<()> {
-    maintenance::ensure(&state.pool, SCAN_KEY, SCAN_KIND, json!({})).await?;
+    maintenance::ensure_urgent(&state.pool, DEMAND, json!({})).await?;
     if let Some(work) = maintenance::claim(&state.pool, SCAN_KIND, &state.instance_id).await? {
         crate::execution::supervise(state.pool.clone(), work.leases.clone(), async {
             if let Err(error) = admit_work(&state.pool, &work).await {
@@ -41,6 +62,7 @@ pub async fn pass(state: &AppState) -> Result<()> {
         .into_result()?
         .transpose()?;
     }
+    state.maintenance.refresh_hint().await?;
     if let Some(work) = maintenance::claim(&state.pool, KIND, &state.instance_id).await? {
         crate::execution::supervise(state.pool.clone(), work.leases.clone(), async {
             if let Err(error) = renew_work(state, &work).await {
@@ -65,16 +87,16 @@ async fn admit_work(pool: &PgPool, work: &Work) -> Result<()> {
             let now:DateTime<Utc>=sqlx::query_scalar("SELECT clock_timestamp()").fetch_one(&mut **tx).await?;
             // Excluding active work, rather than repeatedly reading the first
             // due page, lets admission progress while earlier signers are busy.
-            let due=sqlx::query("SELECT i.id,i.user_id,i.ca_id FROM mtls_user_identities i WHERE NOT i.archived AND i.next_action_at<=$1 AND NOT EXISTS(SELECT 1 FROM background_work w WHERE w.id='mtls-identity:'||i.id AND w.state IN ('queued','running')) ORDER BY i.next_action_at,i.id LIMIT $2 FOR NO KEY UPDATE OF i SKIP LOCKED")
+            let due=sqlx::query(sqlx::AssertSqlSafe(concat!(include_str!("identity_due.sql")," ORDER BY i.next_action_at,i.id LIMIT $2 FOR NO KEY UPDATE OF i SKIP LOCKED").replace("(SELECT now FROM cutoff)", "$1")))
                 .bind(now).bind(PAGE).fetch_all(&mut **tx).await?;
-            let pending=sqlx::query("SELECT i.id,i.user_id,i.ca_id FROM mtls_user_identities i JOIN users u ON u.id=i.user_id WHERE NOT i.archived AND i.next_action_at IS NULL AND u.enabled AND (u.expires_at IS NULL OR u.expires_at>$1) AND (u.quota_bytes IS NULL OR u.usage_bytes<u.quota_bytes) AND NOT EXISTS(SELECT 1 FROM background_work w WHERE w.id='mtls-identity:'||i.id AND w.state IN ('queued','running')) ORDER BY i.id LIMIT $2 FOR NO KEY UPDATE OF i SKIP LOCKED")
+            let pending=sqlx::query(sqlx::AssertSqlSafe(concat!(include_str!("identity_pending.sql")," ORDER BY i.id LIMIT $2 FOR NO KEY UPDATE OF i SKIP LOCKED").replace("(SELECT now FROM cutoff)", "$1")))
                 .bind(now).bind(PAGE).fetch_all(&mut **tx).await?;
             for row in due.iter().chain(pending.iter()) {
                 let id:String=row.get("id");
                 sqlx::query("INSERT INTO background_work(id,kind,payload) VALUES('mtls-identity:'||$1,$2,$3) ON CONFLICT(id) DO UPDATE SET state='queued',owner=NULL,started_at=NULL,finished_at=NULL,error_code=NULL,available_at=clock_timestamp() WHERE background_work.kind=excluded.kind AND background_work.state IN ('complete','failed')")
                     .bind(&id).bind(KIND).bind(json!({"identity_id":id,"user_id":row.get::<String,_>("user_id"),"ca_id":row.get::<String,_>("ca_id"),"lease_resources":[format!("identity:{id}")]})).execute(&mut **tx).await?;
             }
-            work.finish_on(tx,false,if due.len()==PAGE as usize || pending.len()==PAGE as usize {1}else{10},None).await
+            work.finish_on(tx,false,if due.len()==PAGE as usize || pending.len()==PAGE as usize {1}else{30},None).await
         })
     }).await
 }

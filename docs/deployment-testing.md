@@ -35,6 +35,8 @@ go -C tests/integration/traffic-clear test -count=1 ./...
 
 Rust 数据库测试需要可丢弃 PostgreSQL 的 `TEST_DATABASE_URL`；Redis 专项另需 `TEST_REDIS_URL`。全量调试构建沿用 16 MiB 测试线程栈，既有 mTLS 深层异步调用测试可能在默认栈下溢出；此设置仅作用于测试进程，不修改发布服务的线程栈。保留测试输出中的忽略项和失败，不把部分完成记为全量通过。上述是运行入口，不代表本次已经执行或通过。
 
+调度器或后台任务 future 结构改动还需验证完整发布镜像的默认线程栈：`python3 tests/integration/verify-maintenance-startup.py --image <本地 linux/amd64 镜像> --output <新证据目录>`。该入口在带专属标签的内部 Docker 网络中创建 PostgreSQL/Redis，显式初始化测试库后启动完整服务；不设置 `RUST_MIN_STACK`，默认运行 330 秒以覆盖 300 秒维护兜底，随后验证三类采样排空、零重启和退出码 0。仅删除本次夹具并保留日志、inspect 和结果。大栈下的模块测试不能替代这个检查；空节点夹具及本机架构模拟也不能替代生产稳定观察。栈修复和发布记录见 [0039](plans/0039-deploy-maintenance-scheduler.md)。
+
 执行计划性能专项单独运行：
 
 ```sh
@@ -46,6 +48,8 @@ TEST_DATABASE_URL=postgresql://... bash tests/performance/verify-query-plans.sh
 后台维护事务对照使用 `tests/performance/benchmark-maintenance-transactions.py`。提供挂载相同 `retention_benchmarks.rs` 夹具的基线/候选冻结测试二进制、指向可丢弃本地 PostgreSQL 的 URL 文件和输出目录；`--delay-ms` 注入响应延迟，`--candidate-first` 可反转执行顺序。不同源码副本共用 Cargo target 时输出路径可能相同，应在每个版本构建完成后立即复制冻结并记录 SHA256，再构建下一个版本。入口拒绝同一路径，并核对运行前后摘要。它分别核对空清理、持续非空分页和空闲后新增候选的完成量、事务 SQL 数量及包含监督器的调用耗时，不作为争用率或容量验收。
 
 同一 Rust 夹具另有显式忽略的 `credentials::retention::tests::benchmarks::background_contention_comparison`，在隔离数据库运行 90 秒真实后台循环，使用 26 万历史工作、24 万历史租约和 6 个合成节点。SSH 固定指向 `127.0.0.1:1`；该夹具观察事务竞争，不验证远端采样成功，也不替代 10 万用户 / 1 万节点容量场景。
+
+空预检合并的交叉对照使用 `tests/performance/benchmark-maintenance-scheduler.py --baseline <冻结基线> --candidate <冻结候选> --output <新目录>`。两份测试二进制须有相同的池大小与窗口汇总插桩，默认池 100、每轮 120 秒、预热 30 秒，按 ABBA 顺序各运行两次；不并行编译或测试。入口默认创建带专属标签的回环 PostgreSQL，逐轮创建相同规模的隔离 schema；`--container` 只复用带 `maintenance-coalescing` 标签的测试容器且不删除它。结果区分实际空数据库预检与内存跳过，并保留窗口差分、包含预热的协议命令数和运行前后二进制摘要。事务墙钟耗时包含等待，不能当作 CPU 时间或精确连接占用；仍不能外推成功采样率、线上访问延迟或节点容量。实现与对照记录见 [0038](plans/0038-maintenance-poll-coalescing.md)。
 
 0026 第一批的受控归因使用两个入口：`prepare-maintenance-variants.py` 从指定提交构建“基线、仅释放改动、仅空闲改动、合并”四个组合，每次构建后立即冻结二进制及摘要；`benchmark-maintenance-causality.py` 读取这两份元数据，新建自管本地 PostgreSQL 18.6，将同一份已准备数据库克隆给每轮运行。前置构建和计时应分开执行，计时期间不并行运行其他编译或测试。
 

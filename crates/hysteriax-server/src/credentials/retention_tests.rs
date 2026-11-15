@@ -300,7 +300,7 @@ async fn idle_sweeps_use_read_committed_and_preserve_latest_material_and_delay()
         .bind(&work.id).fetch_one(&state.pool).await.unwrap();
     assert_eq!(status, "complete");
     assert!(owner.is_none());
-    assert!((59.0..=61.0).contains(&delay));
+    assert!((299.0..=301.0).contains(&delay));
 }
 
 #[tokio::test]

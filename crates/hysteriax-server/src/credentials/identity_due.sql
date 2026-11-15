@@ -1,0 +1,1 @@
+SELECT i.id,i.user_id,i.ca_id FROM mtls_user_identities i WHERE NOT i.archived AND i.next_action_at<=(SELECT now FROM cutoff) AND NOT EXISTS(SELECT 1 FROM background_work w WHERE w.id='mtls-identity:'||i.id AND w.state IN ('queued','running'))

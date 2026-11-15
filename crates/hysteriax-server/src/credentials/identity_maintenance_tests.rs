@@ -420,3 +420,139 @@ async fn due_inactive_identities_are_admitted_in_pages_then_paused_without_signi
     admit(&state).await;
     assert_eq!(count(&state,"SELECT count(*) FROM background_work WHERE kind='mtls-identity-renewal' AND state='complete'").await,1);
 }
+
+#[tokio::test]
+async fn fresh_business_readiness_bypasses_the_completed_idle_scanner_deadline() {
+    let (state, _) = fixture(1).await;
+    sqlx::query(
+        "UPDATE mtls_user_identities SET next_action_at=clock_timestamp()+interval '1 day'",
+    )
+    .execute(&state.pool)
+    .await
+    .unwrap();
+    admit(&state).await;
+    let remaining:i64=sqlx::query_scalar("SELECT extract(epoch FROM available_at-clock_timestamp())::bigint FROM background_work WHERE id=$1").bind(format!("maintenance:{SCAN_KEY}")).fetch_one(&state.pool).await.unwrap();
+    assert!(remaining >= 25);
+    assert!(
+        state
+            .maintenance
+            .run_urgent(&[SCAN_KIND, KIND], &[SCAN_KEY], DEMAND, async { Ok(()) })
+            .await
+            .unwrap()
+            .is_none()
+    );
+    sqlx::query("UPDATE mtls_user_identities SET next_action_at=NULL")
+        .execute(&state.pool)
+        .await
+        .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(1050)).await;
+    state
+        .maintenance
+        .run_urgent(&[SCAN_KIND, KIND], &[SCAN_KEY], DEMAND, async {
+            maintenance::ensure_urgent(&state.pool, DEMAND, json!({})).await?;
+            let work = maintenance::claim(&state.pool, SCAN_KIND, "new-arrival")
+                .await?
+                .unwrap();
+            admit_work(&state.pool, &work).await
+        })
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        count(
+            &state,
+            "SELECT count(*) FROM background_work WHERE kind='mtls-identity-renewal'"
+        )
+        .await,
+        1
+    );
+}
+
+#[tokio::test]
+async fn shared_readiness_with_one_hundred_thousand_future_identities_is_indexed_and_admission_stays_bounded()
+ {
+    let (state, _) = fixture(0).await;
+    let ca: String = sqlx::query_scalar("SELECT credential_id FROM mtls_authorities LIMIT 1")
+        .fetch_one(&state.pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO users(id,name,created_at,updated_at) SELECT 'scale-'||g,'User',now(),now() FROM generate_series(1,100000)g").execute(&state.pool).await.unwrap();
+    sqlx::query("INSERT INTO mtls_user_identities(id,user_id,ca_id,next_action_at,created_at,updated_at) SELECT id,id,$1,clock_timestamp()+interval '1 day',now(),now() FROM users").bind(ca).execute(&state.pool).await.unwrap();
+    sqlx::raw_sql("ANALYZE mtls_user_identities; ANALYZE users;")
+        .execute(&state.pool)
+        .await
+        .unwrap();
+    let query = format!(
+        "WITH cutoff AS MATERIALIZED (SELECT clock_timestamp() AS now) SELECT ({})",
+        DEMAND.predicate
+    );
+    let plan: serde_json::Value = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "EXPLAIN (ANALYZE,BUFFERS,FORMAT JSON) {query}"
+    )))
+    .fetch_one(&state.pool)
+    .await
+    .unwrap();
+    let plan = plan.to_string();
+    println!("100k identity readiness: {plan}");
+    assert!(
+        plan.contains("mtls_user_identities_due") && plan.contains("mtls_user_pending"),
+        "{plan}"
+    );
+    assert!(
+        !sqlx::query_scalar::<_, bool>(sqlx::AssertSqlSafe(query.clone()))
+            .fetch_one(&state.pool)
+            .await
+            .unwrap()
+    );
+    sqlx::query(
+        "UPDATE mtls_user_identities SET next_action_at=clock_timestamp()-interval '1 second'",
+    )
+    .execute(&state.pool)
+    .await
+    .unwrap();
+    assert!(
+        sqlx::query_scalar::<_, bool>(sqlx::AssertSqlSafe(query))
+            .fetch_one(&state.pool)
+            .await
+            .unwrap()
+    );
+    admit(&state).await;
+    assert_eq!(
+        count(
+            &state,
+            "SELECT count(*) FROM background_work WHERE kind='mtls-identity-renewal'"
+        )
+        .await,
+        100
+    );
+    let next:i64=sqlx::query_scalar("SELECT extract(epoch FROM available_at-finished_at)::bigint FROM background_work WHERE id=$1").bind(format!("maintenance:{SCAN_KEY}")).fetch_one(&state.pool).await.unwrap();
+    assert_eq!(next, 1);
+    // All 100k identities are already admitted: readiness must not walk them
+    // again every second while the independent signer consumes the backlog.
+    sqlx::query("INSERT INTO background_work(id,kind,payload) SELECT 'mtls-identity:'||id,'mtls-identity-renewal','{}' FROM mtls_user_identities ON CONFLICT(id) DO NOTHING").execute(&state.pool).await.unwrap();
+    let busy:serde_json::Value=sqlx::query_scalar(sqlx::AssertSqlSafe(format!("EXPLAIN (ANALYZE,BUFFERS,FORMAT JSON) WITH cutoff AS MATERIALIZED (SELECT clock_timestamp() AS now) SELECT ({})",DEMAND.predicate))).fetch_one(&state.pool).await.unwrap();
+    fn identities_not_visited(value: &serde_json::Value) -> bool {
+        if value["Relation Name"] == "mtls_user_identities"
+            && value["Actual Loops"].as_u64() != Some(0)
+        {
+            return false;
+        }
+        match value {
+            serde_json::Value::Array(v) => v.iter().all(identities_not_visited),
+            serde_json::Value::Object(v) => v.values().all(identities_not_visited),
+            _ => true,
+        }
+    }
+    println!("100k already queued readiness: {busy}");
+    assert!(identities_not_visited(&busy), "{busy}");
+    let query = format!(
+        "WITH cutoff AS MATERIALIZED (SELECT clock_timestamp() AS now) SELECT ({})",
+        DEMAND.predicate
+    );
+    assert!(
+        !sqlx::query_scalar::<_, bool>(sqlx::AssertSqlSafe(query))
+            .fetch_one(&state.pool)
+            .await
+            .unwrap()
+    );
+}
