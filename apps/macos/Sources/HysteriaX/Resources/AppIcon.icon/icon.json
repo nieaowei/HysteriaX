@@ -1,0 +1,19 @@
+{
+  "fill": {
+    "solid": "srgb:1.00000,1.00000,1.00000,1.00000"
+  },
+  "groups": [
+    {
+      "layers": [
+        {
+          "image-name": "lightning.svg",
+          "name": "Lightning"
+        }
+      ],
+      "name": "Lightning"
+    }
+  ],
+  "supported-platforms": {
+    "squares": "shared"
+  }
+}
