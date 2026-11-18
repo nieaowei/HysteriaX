@@ -128,11 +128,14 @@ tokio::task_local! { static ATTEMPT: Arc<AttemptContext>; }
 struct AttemptContext {
     connection: usize,
     lifecycle: Option<Arc<Lifecycle>>,
+    guarded_leases: Vec<Execution>,
     intent: Mutex<Intent>,
 }
 
 impl Attempt {
-    pub fn new(connection: &mut PgConnection) -> Self {
+    /// Construct only after guard_current succeeded on this transaction. Its
+    /// row locks predate operation savepoints and remain held until completion.
+    pub fn after_guard(connection: &mut PgConnection) -> Self {
         let lifecycle = CURRENT.try_with(|s| s.lifecycle.clone()).ok().flatten();
         let leases = CURRENT.try_with(|s| s.leases.clone()).unwrap_or_default();
         let id = lifecycle
@@ -155,6 +158,7 @@ impl Attempt {
         let context = Arc::new(AttemptContext {
             connection: self.connection,
             lifecycle: self.lifecycle.clone(),
+            guarded_leases: self.leases.clone(),
             intent: Mutex::new(Intent::default()),
         });
         let result = ATTEMPT.scope(context.clone(), work).await;
@@ -173,6 +177,7 @@ impl Attempt {
             return tx.commit().await;
         }
         let mut tx = tx;
+        crate::db::diagnostics::phase("finalization_validate");
         if let Err(error) = self.validate(&mut tx).await {
             self.rollback(tx).await?;
             return Err(error);
@@ -191,6 +196,7 @@ impl Attempt {
         });
         self.committing = true;
         lifecycle.record(self.id, disposition, "committing");
+        crate::db::diagnostics::phase("commit");
         let result = tokio::time::timeout(acknowledgement_timeout(), tx.commit()).await;
         match result {
             Ok(Ok(())) => {
@@ -275,6 +281,10 @@ impl Attempt {
         Ok(())
     }
     pub async fn rollback(self, tx: Transaction<'static, Postgres>) -> Result<(), sqlx::Error> {
+        crate::db::diagnostics::cleanup(self.rollback_inner(tx)).await
+    }
+
+    async fn rollback_inner(self, tx: Transaction<'static, Postgres>) -> Result<(), sqlx::Error> {
         let result = if self.has_finish() {
             tokio::time::timeout(acknowledgement_timeout(), tx.rollback())
                 .await
@@ -398,8 +408,8 @@ pub(super) fn ensure_active() -> Result<(), sqlx::Error> {
 pub(super) fn validate_release_scope(
     connection: &mut PgConnection,
     lease: &Execution,
-) -> Result<(), sqlx::Error> {
-    CURRENT
+) -> Result<bool, sqlx::Error> {
+    let supervised = CURRENT
         .try_with(|scope| {
             if let Some(lifecycle) = &scope.lifecycle {
                 lifecycle.active()?;
@@ -409,10 +419,14 @@ pub(super) fn validate_release_scope(
                     ));
                 }
             }
-            Ok(())
+            Ok(scope.lifecycle.is_some())
         })
-        .unwrap_or(Ok(()))?;
-    require_attempt(connection)
+        .unwrap_or(Ok(false))?;
+    require_attempt(connection)?;
+    Ok(supervised
+        && ATTEMPT
+            .try_with(|attempt| attempt.guarded_leases.contains(lease))
+            .unwrap_or(false))
 }
 
 pub(crate) fn require_attempt(connection: &mut PgConnection) -> Result<(), sqlx::Error> {

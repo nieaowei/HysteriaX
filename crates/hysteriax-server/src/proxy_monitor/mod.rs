@@ -161,11 +161,22 @@ const RETENTION_TABLES: [&str; 3] = [
     "monitoring_probe_tokens",
 ];
 async fn retention_loop(state: AppState) {
+    let keys = RETENTION_TABLES.map(|table| format!("monitoring-retention:{table}"));
+    let key_refs: Vec<_> = keys.iter().map(String::as_str).collect();
     let mut timer = tokio::time::interval(Duration::from_secs(1));
     timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut shutdown = state.shutdown.subscribe();
     loop {
-        timer.tick().await;
-        if let Err(error) = retention_pass(&state).await {
+        tokio::select! {
+            biased;
+            _=shutdown.wait_for(|stop|*stop)=>return,
+            _=timer.tick()=>{}
+        }
+        if let Err(error) = state
+            .maintenance
+            .run(&["monitoring-retention"], &key_refs, retention_pass(&state))
+            .await
+        {
             tracing::warn!(%error,"monitoring retention cleanup deferred");
         }
     }
@@ -211,7 +222,7 @@ async fn cleanup_work(state: &AppState, work: &crate::background::maintenance::W
         "unsupported retention table"
     );
     let (key, at, age_days, interval) = if table == "monitoring_probe_tokens" {
-        ("node_id", "expires_at", 0_i32, 60)
+        ("node_id", "expires_at", 0_i32, 300)
     } else {
         ("id", "sampled_at", 31_i32, 86400)
     };
@@ -339,9 +350,7 @@ async fn guard_token_work(
     work: &crate::background::Work,
 ) -> Result<()> {
     let (primary, _) = token_leases(work)?;
-    for lease in &work.leases {
-        lease.guard(tx).await?;
-    }
+    crate::execution::guard_all(tx, &work.leases).await?;
     let current: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM background_work WHERE id=$1 AND kind='proxy' AND node_id=$2 AND cycle_id=$3 AND payload=$4 AND state='running' AND owner=$5 AND generation=$6 FOR UPDATE)")
         .bind(&work.id).bind(&work.node).bind(work.cycle).bind(&work.payload)
         .bind(&primary.owner).bind(primary.generation).fetch_one(&mut **tx).await?;

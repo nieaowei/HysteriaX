@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		F11C00000000000000000004 /* AppIcon.icon in Resources */ = {isa = PBXBuildFile; fileRef = F11C00000000000000000003 /* AppIcon.icon */; };
+		F11C00000000000000000002 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = F11C00000000000000000001 /* Assets.xcassets */; };
 		F03400000000000000000006 /* Services/ManagementEvent.swift in Sources */ = {isa = PBXBuildFile; fileRef = F03400000000000000000005; };
 		F03400000000000000000004 /* Services/ManagementWriteJournal.swift in Sources */ = {isa = PBXBuildFile; fileRef = F03400000000000000000003; };
 		F03400000000000000000002 /* JobExecutionRechecksView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F03400000000000000000001; };
@@ -120,6 +122,8 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		F11C00000000000000000003 /* AppIcon.icon */ = {isa = PBXFileReference; lastKnownFileType = folder.icon; path = Resources/AppIcon.icon; sourceTree = "<group>"; };
+		F11C00000000000000000001 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Resources/Assets.xcassets; sourceTree = "<group>"; };
 		F03400000000000000000005 /* Services/ManagementEvent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Services/ManagementEvent.swift; sourceTree = "<group>"; };
 		F03400000000000000000003 /* Services/ManagementWriteJournal.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Services/ManagementWriteJournal.swift; sourceTree = "<group>"; };
 		F03400000000000000000001 /* JobExecutionRechecksView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/JobExecutionRechecksView.swift; sourceTree = "<group>"; };
@@ -252,6 +256,8 @@
 		000000000000000000003001 /* Sources/HysteriaX */ = {
 			isa = PBXGroup;
 			children = (
+				F11C00000000000000000003 /* AppIcon.icon */,
+				F11C00000000000000000001 /* Assets.xcassets */,
 				00DD25B4749AA5E518D61257 /* Models/MihomoTemplateRule.swift */,
 				E6A1671076FE13DA6D3DCACD /* Models/SubscriptionTemplateDocument.swift */,
 				AE6D6D6486D144D09CF00002 /* Models/TemplateEditorGuidance.swift */,
@@ -440,6 +446,8 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				F11C00000000000000000004 /* AppIcon.icon in Resources */,
+				F11C00000000000000000002 /* Assets.xcassets in Resources */,
 				000000000000000000002C01 /* Localizable.strings in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -591,6 +599,7 @@
 		000000000000000000007201 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 2Q8B34FN8L;
@@ -613,6 +622,7 @@
 		000000000000000000007202 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ARCHS = (
 					arm64,
 					x86_64,

@@ -1,6 +1,99 @@
 use super::*;
 use crate::security::SecretBox;
 use axum::{Json, extract::State};
+
+#[tokio::test]
+async fn stopped_sampling_workers_do_not_create_cycles_or_claim_work() {
+    let (state, _) = fixture().await;
+    state.shutdown.send_replace(true);
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        tokio::join!(
+            run_sampling(state.clone(), "traffic"),
+            run_sampling(state.clone(), "network"),
+            run_sampling(state.clone(), "proxy"),
+            crate::traffic::run(state.clone()),
+            crate::proxy_monitor::run(state.clone()),
+        );
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        count(&state, "SELECT count(*) FROM sampling_cycles").await,
+        0
+    );
+    assert_eq!(
+        count(&state, "SELECT count(*) FROM resource_leases").await,
+        0
+    );
+}
+
+#[tokio::test]
+async fn shutdown_cannot_yield_an_unresolved_clear_or_release_its_leases() {
+    let (state, _) = fixture().await;
+    freeze(&state, "traffic").await;
+    let work = claim(&state.pool, "traffic", "old").await.unwrap().unwrap();
+    crate::traffic::batches::reserve_work(&state.pool, &work)
+        .await
+        .unwrap();
+    crate::traffic::clear::prepare(&state.pool, &work)
+        .await
+        .unwrap();
+    execution::supervise(state.pool.clone(), work.leases.clone(), async {
+        let error = finish_or_defer(&state.pool, &work, None).await.unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("cannot defer an unresolved traffic clear")
+        );
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        count(
+            &state,
+            "SELECT count(*) FROM resource_leases WHERE owner='old'"
+        )
+        .await,
+        2
+    );
+    assert_eq!(
+        count(
+            &state,
+            "SELECT count(*) FROM background_work WHERE state='running' AND owner='old'"
+        )
+        .await,
+        1
+    );
+    assert_eq!(count(&state, "SELECT count(*) FROM traffic_sample_batches WHERE state='capturing' AND clear_requested_at IS NOT NULL AND payload_digest IS NULL").await, 1);
+}
+
+#[tokio::test]
+async fn a_slot_expiring_during_resource_acquisition_does_not_keep_partial_ownership() {
+    let (state, node) = fixture().await;
+    let cycle = freeze(&state, "network").await;
+    sqlx::raw_sql("CREATE FUNCTION expire_claim_slot() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.resource_key LIKE 'work:%' THEN UPDATE background_work SET deadline_at=clock_timestamp()-interval '1 second' WHERE id=NEW.work_id; END IF; RETURN NEW; END $$; CREATE TRIGGER expire_claim_slot AFTER UPDATE ON resource_leases FOR EACH ROW EXECUTE FUNCTION expire_claim_slot();")
+        .execute(&state.pool).await.unwrap();
+    assert!(
+        claim(&state.pool, "network", "late")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let row: (String, Option<String>, i64) = sqlx::query_as(
+        "SELECT state,owner,generation FROM background_work WHERE cycle_id=$1 AND node_id=$2",
+    )
+    .bind(cycle)
+    .bind(&node)
+    .fetch_one(&state.pool)
+    .await
+    .unwrap();
+    assert_eq!(row, ("queued".into(), None, 0));
+    let owners: i64 = sqlx::query_scalar("SELECT count(*) FROM resource_leases WHERE owner='late'")
+        .fetch_one(&state.pool)
+        .await
+        .unwrap();
+    assert_eq!(owners, 0);
+}
 async fn node(state: &AppState) -> String {
     let request=crate::credentials::test_node_request(state,json!({"name":"Sample node","ssh_host":"127.0.0.1","ssh_port":1,"ssh_username":"root","ssh_auth_type":"password","ssh_secret":"test","public_host":"example.test","public_port":443,"listen_addr":":443"})).await;
     let (_, Json(receipt)) = crate::api::nodes::create(State(state.clone()), Json(request))
@@ -462,4 +555,107 @@ async fn a_claimant_paused_past_the_slot_cannot_start_an_uncaptured_read() {
             0
         );
     }
+}
+
+#[tokio::test]
+async fn sampling_empty_preflight_avoids_begin_and_positive_races_keep_authoritative_ownership() {
+    let (state, _) = fixture().await;
+    let statements = maintenance::Statements::default();
+    maintenance::recorded(&statements, async {
+        assert!(
+            claim(&state.pool, "network", "empty")
+                .await
+                .unwrap()
+                .is_none()
+        );
+    })
+    .await;
+    let sql = statements.snapshot();
+    assert!(sql.iter().any(|s| s.contains("SELECT EXISTS")));
+    assert!(
+        !sql.iter().any(|s| s.trim_start().starts_with("BEGIN")),
+        "{sql:?}"
+    );
+    freeze(&state, "network").await;
+    let barrier = std::sync::Arc::new(tokio::sync::Barrier::new(2));
+    let task = tokio::spawn({
+        let pool = state.pool.clone();
+        let barrier = barrier.clone();
+        async move {
+            maintenance::PREFLIGHT_PAUSE
+                .scope(
+                    ("sampling-claim", barrier),
+                    claim(&pool, "network", "loser"),
+                )
+                .await
+        }
+    });
+    barrier.wait().await;
+    let winner = claim(&state.pool, "network", "winner")
+        .await
+        .unwrap()
+        .unwrap();
+    barrier.wait().await;
+    assert!(task.await.unwrap().unwrap().is_none());
+    let actual: (String, i64) =
+        sqlx::query_as("SELECT owner,generation FROM background_work WHERE id=$1")
+            .bind(&winner.id)
+            .fetch_one(&state.pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        actual,
+        (
+            "winner".into(),
+            winner
+                .leases
+                .iter()
+                .find(|l| l.resource.starts_with("work:"))
+                .unwrap()
+                .generation
+        )
+    );
+}
+#[tokio::test]
+async fn expiry_drains_ten_thousand_nodes_without_a_five_second_pause_per_page() {
+    let (state, first) = fixture().await;
+    sqlx::query("INSERT INTO nodes(id,name,ssh_host,ssh_port,ssh_username,ssh_credential_id,ssh_credential_version,public_host,public_port,listen_addr,node_token_hash,node_token_enc,traffic_stats_secret_enc,desired_config_enc,created_at,updated_at,deployed_revision,state) SELECT 'expiry-'||g,'Node',n.ssh_host,n.ssh_port,n.ssh_username,n.ssh_credential_id,n.ssh_credential_version,n.public_host,n.public_port,n.listen_addr,'expiry-'||g,n.node_token_enc,n.traffic_stats_secret_enc,n.desired_config_enc,now(),now(),n.deployed_revision,n.state FROM nodes n CROSS JOIN generate_series(1,9999)g WHERE n.id=$1").bind(first).execute(&state.pool).await.unwrap();
+    freeze(&state, "traffic").await;
+    sqlx::query("UPDATE background_work SET deadline_at=clock_timestamp()-interval '1 second' WHERE cycle_id IS NOT NULL").execute(&state.pool).await.unwrap();
+    assert_eq!(
+        count(
+            &state,
+            "SELECT count(*) FROM background_work WHERE state='queued' AND cycle_id IS NOT NULL"
+        )
+        .await,
+        10000
+    );
+    let worker = tokio::spawn(run_expiry(state.clone()));
+    let start = std::time::Instant::now();
+    tokio::time::timeout(std::time::Duration::from_secs(40), async {
+        loop {
+            if count(
+                &state,
+                "SELECT count(*) FROM background_work WHERE state='expired'",
+            )
+            .await
+                == 10000
+            {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        count(&state, "SELECT count(*) FROM online_samples WHERE pending").await,
+        0
+    );
+    println!("10k node expiry drained in {:?}", start.elapsed());
+    state.shutdown.send_replace(true);
+    tokio::time::timeout(std::time::Duration::from_secs(2), worker)
+        .await
+        .unwrap()
+        .unwrap();
 }

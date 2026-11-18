@@ -39,6 +39,10 @@ For a new empty database, run `--migrate-only` before the first API startup. It 
 
 For compatible upgrades, stop every API replica, retain a recoverable backup and matching old image, run maintenance once, then start the corresponding server and macOS client. Follow the complete current migration chain and its checksum requirements in [migration maintenance](../crates/hysteriax-server/migrations/README.md); historical deployment records do not describe the current schema requirement.
 
+Use `docker compose stop api` so the API's configured 150-second stop grace applies. On SIGTERM, sampling stops admitting work and drains in-flight collections while their leases continue renewing; HTTP requests have an 8-second drain budget, followed by up to 120 seconds for sampling. A sampling drain timeout exits with an error and requires inspection of uncaptured clear requests. For a direct Docker stop, use `docker stop --time 150 <api-container>`; a shorter override can kill the process before it saves a destructive traffic response. The grace period applies when the container is created, so recreate existing API containers with the current Compose configuration.
+
+This protection requires the draining implementation to be running before the stop. The first upgrade from an older image still uses that image's shutdown behavior. Retain and inspect its in-flight capture records; existing `traffic_clear_uncertain` gaps cannot be reconstructed by deploying the fix. SIGKILL, crashes, network response loss and database outages can still leave uncertain clear requests. Never resend a destructive request to guess the missing interval.
+
 ## Local development and tests
 
 The Rust workspace declares a minimum version of 1.94; [Cargo.toml](../Cargo.toml) is authoritative. Mac source builds use Xcode; the separate SwiftPM requirements are declared in [Package.swift](../apps/macos/Package.swift) and explained in [compatibility](compatibility.md). Build and run the client with `scripts/build/build-macos.sh`, or use its `--verify` mode to check startup. See the [operation index](../scripts/README.md) for build tools and [architecture](architecture.md#api-and-event-contract) for the management API contract.
@@ -74,6 +78,12 @@ The PostgreSQL release starts with a new, empty database and does not import SQL
 ## First administrator connection
 
 Use the initial token from `.env` as the Bearer token. In macOS Settings, create and switch to a new administrator token; the app saves it in Keychain and shows the plaintext once. Confirm that it is marked as this Mac's current token, then revoke the initial token if desired. The API is also available through `POST /api/v2/admin/tokens` and `DELETE /api/v2/admin/tokens/{id}`, with an `Idempotency-Key` for each intended write. The server never returns a token digest as a usable credential.
+
+## Sampling concurrency
+
+`HYSTERIAX_BACKGROUND_WORKER_PARALLELISM` defaults to **16** and accepts 1–16. It limits each sampling queue (`traffic`, `network`, and `proxy`) separately in each API instance. Missing or invalid values use 16; explicit lower values are respected. Management jobs retain their separate ceiling of four. A node's resource lease serializes its sampling and management work across queues and instances.
+
+Compose also defaults to 16. Existing environment files with an explicit value such as 4 continue to use that value; set it to 16 and recreate the API container to adopt the new setting. Sampling cadence, operation timeouts, and the database connection pool have their own settings. The local 16-worker comparison used a 32-connection pool; concurrency alone does not establish a production node-capacity guarantee. See the [sampling comparison scope](deployment-testing.md#采集并发对照).
 
 ## File upload timeout
 

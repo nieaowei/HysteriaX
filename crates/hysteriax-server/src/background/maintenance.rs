@@ -8,6 +8,14 @@ use anyhow::{Context, Result};
 use serde_json::Value;
 use sqlx::{PgPool, Postgres, Row, Transaction};
 
+#[path = "maintenance_observations.rs"]
+mod observations;
+pub(crate) use observations::{Poll, run_summaries};
+
+#[path = "maintenance_scheduler.rs"]
+mod scheduler;
+pub use scheduler::{Demand, Scheduler};
+
 #[derive(Clone, Debug)]
 pub struct Work {
     pub id: String,
@@ -18,47 +26,111 @@ pub struct Work {
 /// A recurring key has one durable work row and one monotonically increasing
 /// work lease. A live running owner is never reset by another scheduler.
 pub async fn ensure(pool: &PgPool, key: &str, kind: &str, payload: Value) -> Result<()> {
-    let (id, kind) = (format!("maintenance:{key}"), kind.to_owned());
-    db::write(pool,move |tx| {
-        let (id,kind,payload)=(id.clone(),kind.clone(),payload.clone());
-        Box::pin(async move {
-            // ON CONFLICT DO UPDATE waits for the conflicting tuple before
-            // evaluating its WHERE clause. Re-admitting a healthy worker must
-            // not consume a pool connection waiting for its guarded batch.
-            let existing:Option<bool>=sqlx::query_scalar("SELECT kind=$2 AND state IN ('complete','failed') AND available_at<=clock_timestamp() FROM background_work WHERE id=$1")
-                .bind(&id).bind(&kind).fetch_optional(&mut **tx).await?;
-            match existing {
-                Some(false) => {},
-                Some(true) => {
-                    sqlx::query("UPDATE background_work w SET state='queued',finished_at=NULL,error_code=NULL FROM (SELECT id FROM background_work WHERE id=$1 AND kind=$2 AND state IN ('complete','failed') AND available_at<=clock_timestamp() FOR UPDATE SKIP LOCKED) due WHERE w.id=due.id")
-                        .bind(&id).bind(&kind).execute(&mut **tx).await?;
-                },
-                None => {
-                    sqlx::query("INSERT INTO background_work(id,kind,payload) VALUES($1,$2,$3) ON CONFLICT(id) DO NOTHING")
-                        .bind(&id).bind(&kind).bind(payload).execute(&mut **tx).await?;
-                },
-            }
-            Ok(())
-        })
-    }).await
+    ensure_many(pool, &[key.to_owned()], kind, payload).await
 }
 
 /// Admit a fixed set of recurring lanes in one transaction. As with `ensure`,
 /// live owners are read without waiting and completed rows use SKIP LOCKED.
 pub async fn ensure_many(pool: &PgPool, keys: &[String], kind: &str, payload: Value) -> Result<()> {
+    ensure_selected(pool, keys, kind, payload, None).await
+}
+
+/// Readiness is only a hint: the trusted business SQL is rechecked while the
+/// completed scanner row is locked. Never reset a running owner or queued retry.
+pub async fn ensure_urgent(pool: &PgPool, demand: Demand, payload: Value) -> Result<()> {
+    ensure_selected(
+        pool,
+        &[demand.key.to_owned()],
+        demand.kind,
+        payload,
+        Some(demand.predicate),
+    )
+    .await
+}
+
+async fn ensure_selected(
+    pool: &PgPool,
+    keys: &[String],
+    kind: &str,
+    payload: Value,
+    urgency: Option<&'static str>,
+) -> Result<()> {
     let ids: Vec<String> = keys
         .iter()
         .map(|key| format!("maintenance:{key}"))
         .collect();
+    let mut poll = observations::Poll::new(kind, "ensure");
+    if scheduler::skip_ensure(pool, &ids) {
+        poll.coalesced_empty();
+        poll.finish(true, false);
+        return Ok(());
+    }
+    let result = ensure_due(pool, ids, kind, payload, &poll, urgency).await;
+    poll.finish(result.is_ok(), false);
+    if result.is_ok() {
+        scheduler::ensured(pool, kind);
+    }
+    result
+}
+
+async fn ensure_due(
+    pool: &PgPool,
+    ids: Vec<String>,
+    kind: &str,
+    payload: Value,
+    poll: &observations::Poll,
+    urgency: Option<&'static str>,
+) -> Result<()> {
+    let urgent = urgency.unwrap_or("false");
+    let eligible = format!(
+        "((w.state IN ('complete','failed') AND w.available_at<=(SELECT now FROM cutoff)) OR (w.state='complete' AND ({urgent})))"
+    );
+    let mut connection = pool.acquire().await?;
+    if !execution::has_scope() {
+        // This is only a hint. The mutation below rechecks due state after
+        // locking; a concurrent claimant cannot have its ownership reset.
+        let needed: bool = sqlx::query_scalar(sqlx::AssertSqlSafe(format!("WITH cutoff AS MATERIALIZED (SELECT clock_timestamp() AS now) SELECT EXISTS(SELECT 1 FROM unnest($1::text[]) candidate(id) LEFT JOIN background_work w ON w.id=candidate.id WHERE w.id IS NULL OR (w.kind=$2 AND {eligible}))")))
+            .bind(&ids).bind(kind).fetch_one(&mut *connection).await?;
+        if !needed {
+            poll.preflight_empty();
+            return Ok(());
+        }
+        #[cfg(test)]
+        poll_tests::after_preflight("ensure").await;
+    }
+    poll.transaction();
     let kind = kind.to_owned();
-    db::write(pool,move |tx| {
-        let (ids,kind,payload)=(ids.clone(),kind.clone(),payload.clone());
+    db::write_after_probe(pool,connection,move |tx| {
+        let (ids,kind,payload,eligible)=(ids.clone(),kind.clone(),payload.clone(),eligible.clone());
         Box::pin(async move {
-            sqlx::query("WITH due AS MATERIALIZED (SELECT id FROM background_work WHERE id=ANY($1::text[]) AND kind=$2 AND state IN ('complete','failed') AND available_at<=clock_timestamp() ORDER BY id FOR UPDATE SKIP LOCKED), updated AS (UPDATE background_work w SET state='queued',finished_at=NULL,error_code=NULL FROM due WHERE w.id=due.id) INSERT INTO background_work(id,kind,payload) SELECT candidate.id,$2,$3 FROM unnest($1::text[]) AS candidate(id) WHERE NOT EXISTS(SELECT 1 FROM background_work w WHERE w.id=candidate.id) ON CONFLICT(id) DO NOTHING")
+            sqlx::query(sqlx::AssertSqlSafe(format!("WITH cutoff AS MATERIALIZED (SELECT clock_timestamp() AS now), due AS MATERIALIZED (SELECT w.id FROM background_work w WHERE w.id=ANY($1::text[]) AND w.kind=$2 AND {eligible} ORDER BY w.id FOR UPDATE OF w SKIP LOCKED), updated AS (UPDATE background_work w SET state='queued',available_at=LEAST(w.available_at,(SELECT now FROM cutoff)),finished_at=NULL,error_code=NULL FROM due WHERE w.id=due.id) INSERT INTO background_work(id,kind,payload) SELECT candidate.id,$2,$3 FROM unnest($1::text[]) AS candidate(id) WHERE NOT EXISTS(SELECT 1 FROM background_work w WHERE w.id=candidate.id) ON CONFLICT(id) DO NOTHING")))
                 .bind(&ids).bind(&kind).bind(&payload).execute(&mut **tx).await?;
             Ok::<_,anyhow::Error>(())
         })
     }).await
+}
+
+/// Both queries use the same exclusion rules. The unlocked query is a hint;
+/// only the bounded, locked query inside the transaction grants a candidate.
+fn candidates_sql(locked: bool) -> String {
+    let (columns, tail) = if locked {
+        (
+            "id,payload",
+            "ORDER BY available_at,id LIMIT 32 FOR UPDATE OF w SKIP LOCKED",
+        )
+    } else {
+        ("1", "LIMIT 1")
+    };
+    format!(
+        "WITH cutoff AS MATERIALIZED (SELECT clock_timestamp() AS now) SELECT {columns} FROM background_work w WHERE {} {tail}",
+        candidate_filter("$1", "$2::text IS NULL OR w.id=$2")
+    )
+}
+
+fn candidate_filter(kind: &str, id: &str) -> String {
+    format!(
+        "w.kind={kind} AND ({id}) AND w.cycle_id IS NULL AND w.node_id IS NULL AND w.state IN ('queued','running') AND w.available_at<=(SELECT now FROM cutoff) AND NOT EXISTS(SELECT 1 FROM resource_leases l WHERE l.resource_key=ANY(ARRAY['work:'||w.id] || ARRAY(SELECT jsonb_array_elements_text(coalesce(w.payload->'lease_resources','[]'::jsonb)))) AND (l.blocked OR (l.owner IS NOT NULL AND l.expires_at>clock_timestamp()) OR EXISTS(SELECT 1 FROM execution_operations o WHERE o.resource_key=l.resource_key AND o.state IN ('dispatching','reconciling','needs_attention'))))"
+    )
 }
 
 pub async fn claim(pool: &PgPool, kind: &str, owner: &str) -> Result<Option<Work>> {
@@ -77,13 +149,54 @@ async fn claim_selected(
     owner: &str,
     id: Option<String>,
 ) -> Result<Option<Work>> {
+    let mut poll = observations::Poll::new(kind, "claim");
+    if scheduler::skip_claim(pool, kind) {
+        poll.coalesced_empty();
+        poll.finish(true, false);
+        return Ok(None);
+    }
+    let result = claim_due(pool, kind, owner, id, &poll).await;
+    poll.finish(
+        result.is_ok(),
+        result.as_ref().is_ok_and(|work| work.is_some()),
+    );
+    result
+}
+
+#[cfg(test)]
+pub(crate) fn poll_summaries() {
+    observations::summaries();
+}
+
+async fn claim_due(
+    pool: &PgPool,
+    kind: &str,
+    owner: &str,
+    id: Option<String>,
+    poll: &observations::Poll,
+) -> Result<Option<Work>> {
+    let mut connection = pool.acquire().await?;
+    if !execution::has_scope() {
+        let eligible = sqlx::query(sqlx::AssertSqlSafe(candidates_sql(false)))
+            .bind(kind)
+            .bind(id.as_deref())
+            .fetch_optional(&mut *connection)
+            .await?
+            .is_some();
+        if !eligible {
+            poll.preflight_empty();
+            return Ok(None);
+        }
+        #[cfg(test)]
+        poll_tests::after_preflight("claim").await;
+    }
+    poll.transaction();
     let (kind, owner) = (kind.to_owned(), owner.to_owned());
-    db::write(pool,move |tx| {
+    db::write_after_probe(pool,connection,move |tx| {
         let (kind,owner,id)=(kind.clone(),owner.clone(),id.clone());
         Box::pin(async move {
-            let now:chrono::DateTime<chrono::Utc>=sqlx::query_scalar("SELECT clock_timestamp()").fetch_one(&mut **tx).await?;
-            let rows=sqlx::query("SELECT id,payload FROM background_work w WHERE kind=$1 AND ($3::text IS NULL OR w.id=$3) AND cycle_id IS NULL AND node_id IS NULL AND state IN ('queued','running') AND available_at<=$2 AND NOT EXISTS(SELECT 1 FROM resource_leases l WHERE l.resource_key=ANY(ARRAY['work:'||w.id] || ARRAY(SELECT jsonb_array_elements_text(coalesce(w.payload->'lease_resources','[]'::jsonb)))) AND (l.blocked OR (l.owner IS NOT NULL AND l.expires_at>clock_timestamp()) OR EXISTS(SELECT 1 FROM execution_operations o WHERE o.resource_key=l.resource_key AND o.state IN ('dispatching','reconciling','needs_attention')))) ORDER BY available_at,id LIMIT 32 FOR UPDATE OF w SKIP LOCKED")
-                .bind(&kind).bind(now).bind(id).fetch_all(&mut **tx).await?;
+            let rows=sqlx::query(sqlx::AssertSqlSafe(candidates_sql(true)))
+                .bind(&kind).bind(id).fetch_all(&mut **tx).await?;
             for row in rows {
                 let id:String=row.get("id");
                 let payload:Value=row.get("payload");
@@ -91,15 +204,11 @@ async fn claim_selected(
                 anyhow::ensure!(resources.len()<=8 && resources.iter().all(|key|["node:","ca:","identity:"].iter().any(|prefix|key.starts_with(prefix) && key.len()>prefix.len()) && key.len()<=256),"unsupported maintenance resource scope");
                 resources.push(format!("work:{id}"));resources.sort();resources.dedup();
                 sqlx::query("SAVEPOINT maintenance_candidate").execute(&mut **tx).await?;
-                let mut leases=Vec::new();
-                for resource in &resources {
-                    if let Some(lease)=execution::acquire(tx,resource,&owner,&id).await? {leases.push(lease);} else {break;}
-                }
-                if leases.len()!=resources.len() {
+                let Some(leases)=execution::acquire_all(tx,&resources,&owner,&id).await? else {
                     sqlx::query("ROLLBACK TO SAVEPOINT maintenance_candidate").execute(&mut **tx).await?;
                     sqlx::query("RELEASE SAVEPOINT maintenance_candidate").execute(&mut **tx).await?;
                     continue;
-                }
+                };
                 let generation=leases.iter().find(|lease|lease.resource==format!("work:{id}")).context("missing work lease")?.generation;
                 sqlx::query("UPDATE background_work SET state='running',owner=$2,generation=$3,started_at=clock_timestamp(),finished_at=NULL WHERE id=$1")
                     .bind(&id).bind(&owner).bind(generation).execute(&mut **tx).await?;
@@ -119,9 +228,7 @@ impl Work {
             .context("missing maintenance work lease")
     }
     pub async fn guard_on(&self, tx: &mut Transaction<'static, Postgres>) -> Result<()> {
-        for lease in &self.leases {
-            lease.guard(tx).await?;
-        }
+        execution::guard_all(tx, &self.leases).await?;
         let lease = self.primary()?;
         let own:Option<bool>=sqlx::query_scalar("SELECT true FROM background_work WHERE id=$1 AND owner=$2 AND generation=$3 AND state='running' FOR UPDATE")
             .bind(&self.id).bind(&lease.owner).bind(lease.generation).fetch_optional(&mut **tx).await?;
@@ -186,3 +293,14 @@ mod scope_tests;
 #[cfg(test)]
 #[path = "maintenance_admission_tests.rs"]
 mod admission_tests;
+
+#[cfg(test)]
+#[path = "maintenance_poll_tests.rs"]
+mod poll_tests;
+
+#[cfg(test)]
+pub(super) async fn sampling_preflight() {
+    poll_tests::after_preflight("sampling-claim").await;
+}
+#[cfg(test)]
+pub(super) use poll_tests::{PREFLIGHT_PAUSE, Statements, recorded};

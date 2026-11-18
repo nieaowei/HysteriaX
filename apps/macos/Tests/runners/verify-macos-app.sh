@@ -14,6 +14,11 @@ INFO_PLIST="$APP_PATH/Contents/Info.plist"
 [[ -f "$BINARY_PATH" ]] || { echo "App executable not found: $BINARY_PATH" >&2; exit 1; }
 [[ -f "$INFO_PLIST" ]] || { echo "App Info.plist not found: $INFO_PLIST" >&2; exit 1; }
 
+ICON_FILE="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIconFile' "$INFO_PLIST")"
+[[ -n "$ICON_FILE" ]] || { echo "App Info.plist is missing its icon filename" >&2; exit 1; }
+ICON_PATH="$APP_PATH/Contents/Resources/${ICON_FILE%.icns}.icns"
+[[ -s "$ICON_PATH" ]] || { echo "App icon not found or empty: $ICON_PATH" >&2; exit 1; }
+
 ARCHITECTURES="$(lipo -archs "$BINARY_PATH")"
 for architecture in arm64 x86_64; do
   case " $ARCHITECTURES " in
@@ -40,4 +45,4 @@ for architecture in arm64 x86_64; do
   fi
 done
 
-echo "Verified HysteriaX Universal app: arm64 + x86_64, macOS 26.0 minimum."
+echo "Verified HysteriaX Universal app: bundled icon, arm64 + x86_64, macOS 26.0 minimum."

@@ -18,13 +18,14 @@ const MAX_ATTEMPTS: i64 = 3;
 mod node_cleanup_tests;
 
 pub async fn run(state: AppState) {
-    let max_parallel = crate::runtime_config::background_worker_parallelism();
+    let max_parallel =
+        crate::runtime_config::background_worker_parallelism().min(DEFAULT_MAX_PARALLEL_NODES);
     tracing::info!(max_parallel, "background job worker started");
     let mut tasks = JoinSet::new();
     let mut reconciliation = tokio::time::interval(Duration::from_secs(1));
     reconciliation.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
-        while tasks.len() < max_parallel.min(DEFAULT_MAX_PARALLEL_NODES) {
+        while tasks.len() < max_parallel {
             match claim_next_for(&state.pool, Some(&state.instance_id)).await {
                 Ok(Some(job)) => {
                     let worker_state = state.clone();
@@ -45,7 +46,7 @@ pub async fn run(state: AppState) {
                 }
             }
             _ = reconciliation.tick() => {
-                if let Err(error) = maintenance_pass(&state).await {
+                if let Err(error) = state.maintenance.run(&["jobs-maintenance"], &["jobs:recovery", "jobs:kick_schedule"], maintenance_pass(&state)).await {
                     tracing::error!(%error, "job maintenance deferred");
                 }
             }
@@ -96,7 +97,7 @@ async fn maintenance_work(
                 .await
                 .map_err(crate::error::ApiError::from)?;
             let delay=match work.payload["operation"].as_str() {
-                Some("recovery")=>if recover_interrupted_on(tx).await?==256 {1}else{10},
+                Some("recovery")=>if recover_interrupted_on(tx).await?==256 {1}else{30},
                 Some("kick_schedule")=>{
                     let page=crate::kick_requests::schedule_page(tx,None,false,work.payload["node_after"].as_str()).await?;
                     sqlx::query("UPDATE background_work SET payload=jsonb_set(payload,'{node_after}',$2) WHERE id=$1")
@@ -221,6 +222,8 @@ pub(crate) async fn claim_next(pool: &PgPool) -> Result<Option<JobInput>, sqlx::
     Ok(claim_next_for(pool, None).await?.map(|claimed| claimed.job))
 }
 
+const JOB_CANDIDATE_FILTER: &str = "candidate.status = 'queued' AND candidate.available_at <= $3 AND NOT EXISTS(SELECT 1 FROM mtls_superseded_node_jobs s WHERE s.job_id=candidate.id) AND (candidate.node_id IS NULL OR NOT EXISTS (SELECT 1 FROM jobs AS active WHERE active.node_id = candidate.node_id AND active.status = 'running')) AND (candidate.kind NOT IN ('deploy','sync','rollback') OR NOT EXISTS (SELECT 1 FROM jobs AS dependency WHERE dependency.node_id=candidate.node_id AND dependency.kind LIKE 'dns-%' AND dependency.status IN ('queued','running'))) AND (candidate.resource_key IS NULL OR NOT EXISTS (SELECT 1 FROM jobs AS resource_active WHERE resource_active.resource_key=candidate.resource_key AND resource_active.status='running')) AND NOT EXISTS(SELECT 1 FROM resource_leases l WHERE l.resource_key=ANY(ARRAY['job:'||candidate.id,'node:'||candidate.node_id,candidate.resource_key]) AND (l.blocked OR (l.owner IS NOT NULL AND l.expires_at>clock_timestamp()) OR EXISTS(SELECT 1 FROM execution_operations o WHERE o.resource_key=l.resource_key AND o.state IN ('dispatching','reconciling','needs_attention'))))";
+
 async fn claim_next_for(
     pool: &PgPool,
     owner: Option<&str>,
@@ -230,15 +233,28 @@ async fn claim_next_for(
             "job claim requires an instance owner".into(),
         ));
     }
+    let mut connection = pool.acquire().await?;
+    if !crate::execution::has_scope() {
+        let sql = format!(
+            "WITH cutoff AS MATERIALIZED (SELECT clock_timestamp() AS now) SELECT EXISTS(SELECT 1 FROM jobs candidate WHERE {})",
+            JOB_CANDIDATE_FILTER.replace("$3", "(SELECT now FROM cutoff)")
+        );
+        let present: bool = sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
+            .fetch_one(&mut *connection)
+            .await?;
+        if !present {
+            return Ok(None);
+        }
+    }
     let owner = owner.map(str::to_owned);
-    db::write(pool, move |tx| {
+    db::write_after_probe(pool, connection, move |tx| {
         let owner = owner.clone();
         Box::pin(async move {
     let timestamp: chrono::DateTime<chrono::Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
         .fetch_one(&mut **tx).await?;
     sqlx::query("SAVEPOINT job_claim").execute(&mut **tx).await?;
     let mut leases = Vec::new();
-    let row = sqlx::query("UPDATE jobs SET status = 'running', stage = 'starting', attempts = attempts + CASE WHEN stage IN ('fingerprint_confirmed','batch_continue') THEN 0 ELSE 1 END, started_at = COALESCE(started_at, $1), updated_at = $2 WHERE id = (SELECT candidate.id FROM jobs AS candidate WHERE candidate.status = 'queued' AND candidate.available_at <= $3 AND NOT EXISTS(SELECT 1 FROM mtls_superseded_node_jobs s WHERE s.job_id=candidate.id) AND (candidate.node_id IS NULL OR NOT EXISTS (SELECT 1 FROM jobs AS active WHERE active.node_id = candidate.node_id AND active.status = 'running')) AND (candidate.kind NOT IN ('deploy','sync','rollback') OR NOT EXISTS (SELECT 1 FROM jobs AS dependency WHERE dependency.node_id=candidate.node_id AND dependency.kind LIKE 'dns-%' AND dependency.status IN ('queued','running'))) AND (candidate.resource_key IS NULL OR NOT EXISTS (SELECT 1 FROM jobs AS resource_active WHERE resource_active.resource_key=candidate.resource_key AND resource_active.status='running')) AND NOT EXISTS(SELECT 1 FROM resource_leases l WHERE l.resource_key=ANY(ARRAY['job:'||candidate.id,'node:'||candidate.node_id,candidate.resource_key]) AND (l.blocked OR (l.owner IS NOT NULL AND l.expires_at>clock_timestamp()) OR EXISTS(SELECT 1 FROM execution_operations o WHERE o.resource_key=l.resource_key AND o.state IN ('dispatching','reconciling','needs_attention')))) ORDER BY candidate.available_at, candidate.created_at, candidate.id LIMIT 1 FOR UPDATE OF candidate SKIP LOCKED) RETURNING id, kind, node_id, target_revision, payload_json, attempts, resource_key")
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!("UPDATE jobs SET status = 'running', stage = 'starting', attempts = attempts + CASE WHEN stage IN ('fingerprint_confirmed','batch_continue') THEN 0 ELSE 1 END, started_at = COALESCE(started_at, $1), updated_at = $2 WHERE id = (SELECT candidate.id FROM jobs AS candidate WHERE {JOB_CANDIDATE_FILTER} ORDER BY candidate.available_at, candidate.created_at, candidate.id LIMIT 1 FOR UPDATE OF candidate SKIP LOCKED) RETURNING id, kind, node_id, target_revision, payload_json, attempts, resource_key")))
         .bind(timestamp).bind(timestamp).bind(timestamp).fetch_optional(&mut **tx).await?;
     let job = if let Some(row) = row {
         let job = JobInput {

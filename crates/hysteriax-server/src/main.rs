@@ -35,7 +35,7 @@ use std::{env, future::IntoFuture, time::Duration};
 
 use anyhow::{Context, Result, bail};
 use sqlx::PgPool;
-use tracing_subscriber::EnvFilter;
+use tracing_subscriber::{EnvFilter, prelude::*};
 
 use crate::{security::SecretBox, state::AppState};
 
@@ -53,9 +53,14 @@ async fn main() -> Result<()> {
         [arg] if arg == "--migrate-only" => true,
         _ => bail!("usage: hysteriax-server [--migrate-only | --check-template-runtime]"),
     };
-    tracing_subscriber::fmt()
-        .with_env_filter(
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::fmt::layer().with_filter(
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+        ))
+        .with(
+            db::diagnostics::QueryLayer.with_filter(tracing_subscriber::filter::filter_fn(
+                |metadata| metadata.target() == "sqlx::query",
+            )),
         )
         .init();
 
@@ -94,6 +99,16 @@ async fn main() -> Result<()> {
     bootstrap::check_runtime(&pool, &secret_box).await?;
     let state = AppState::new(pool, secret_box);
     proxy_monitor::cleanup_probe_directories()?;
+    // Fail listener setup before starting workers that can clear remote counters.
+    let address = env::var("HYSTERIAX_LISTEN_ADDR").unwrap_or_else(|_| "0.0.0.0:8080".to_owned());
+    let listener = tokio::net::TcpListener::bind(&address)
+        .await
+        .with_context(|| format!("bind to {address}"))?;
+    let transaction_metrics =
+        tokio::spawn(db::diagnostics::run_summaries(state.shutdown.subscribe()));
+    let maintenance_metrics = tokio::spawn(background::maintenance::run_summaries(
+        state.shutdown.subscribe(),
+    ));
     let publisher = tokio::spawn(events::run_publisher(state.clone()));
     let heartbeat = tokio::spawn(execution::run_heartbeats(state.clone()));
     let sampling_expiry = tokio::spawn(background::run_expiry(state.clone()));
@@ -108,10 +123,6 @@ async fn main() -> Result<()> {
     let shutdown = state.shutdown.clone();
     let app = api::router(state);
 
-    let address = env::var("HYSTERIAX_LISTEN_ADDR").unwrap_or_else(|_| "0.0.0.0:8080".to_owned());
-    let listener = tokio::net::TcpListener::bind(&address)
-        .await
-        .with_context(|| format!("bind to {address}"))?;
     tracing::info!(%address, "HysteriaX management API listening");
     let server = serve_with_shutdown(
         listener,
@@ -121,20 +132,18 @@ async fn main() -> Result<()> {
         Duration::from_secs(8),
     );
     let result = server.await;
-    // Stop all workers before returning. Recovery is driven by expired resource
-    // leases; another healthy instance continues its own claimed work.
+    // Also quiesce on an HTTP server error. Sampling owns destructive clear
+    // responses: dropping its JoinSets here can lose counters already cleared.
+    shutdown.send_replace(true);
     let workers = [
         analytics,
         jobs,
-        traffic,
-        network,
         limits,
-        probes,
         quota_rank,
         mtls,
-        heartbeat,
-        publisher,
         sampling_expiry,
+        transaction_metrics,
+        maintenance_metrics,
     ];
     for worker in &workers {
         worker.abort();
@@ -142,7 +151,65 @@ async fn main() -> Result<()> {
     for worker in workers {
         let _ = worker.await;
     }
+    // Keep instance heartbeats and per-execution renewal alive until the
+    // sampling futures have persisted their responses and finalized ownership.
+    let drained = drain_sampling_workers(
+        &mut [
+            ("traffic", traffic),
+            ("network", network),
+            ("proxy", probes),
+        ],
+        Duration::from_secs(120),
+    )
+    .await;
+    for worker in [&heartbeat, &publisher] {
+        worker.abort();
+    }
+    let _ = tokio::join!(heartbeat, publisher);
     result?;
+    drained?;
+    Ok(())
+}
+
+async fn drain_sampling_workers(
+    workers: &mut [(&str, tokio::task::JoinHandle<()>)],
+    timeout: Duration,
+) -> Result<()> {
+    let started = std::time::Instant::now();
+    let mut failures = Vec::new();
+    let mut completed = 0;
+    let result = tokio::time::timeout(timeout, async {
+        for (kind, worker) in workers.iter_mut() {
+            if let Err(error) = worker.await {
+                failures.push(format!("{kind}: {error}"));
+            }
+            completed += 1;
+        }
+    })
+    .await;
+    if result.is_err() {
+        let pending: Vec<_> = workers
+            .iter()
+            .filter(|(_, worker)| !worker.is_finished())
+            .map(|(kind, _)| *kind)
+            .collect();
+        tracing::error!(
+            ?pending,
+            "sampling drain deadline reached; capture recovery may be required"
+        );
+        for (_, worker) in workers.iter().skip(completed) {
+            worker.abort();
+        }
+        for (_, worker) in workers.iter_mut().skip(completed) {
+            let _ = worker.await;
+        }
+        bail!("sampling drain deadline reached; capture recovery may be required");
+    }
+    anyhow::ensure!(failures.is_empty(), "sampling drain failed: {failures:?}");
+    tracing::info!(
+        elapsed_ms = started.elapsed().as_millis() as u64,
+        "sampling workers drained"
+    );
     Ok(())
 }
 
@@ -184,13 +251,13 @@ async fn shutdown_signal() {
         _ = tokio::signal::ctrl_c() => {}
         _ = terminate.recv() => {}
     }
-    tracing::info!("shutdown signal received; draining HTTP requests");
+    tracing::info!("shutdown signal received; draining HTTP requests and sampling work");
 }
 
 #[cfg(not(unix))]
 async fn shutdown_signal() {
     let _ = tokio::signal::ctrl_c().await;
-    tracing::info!("shutdown signal received; draining HTTP requests");
+    tracing::info!("shutdown signal received; draining HTTP requests and sampling work");
 }
 
 async fn initialize_admin_token(pool: &PgPool) -> Result<()> {

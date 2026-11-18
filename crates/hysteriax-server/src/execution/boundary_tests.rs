@@ -16,6 +16,47 @@ async fn fixture() -> (PgPool, Execution) {
 }
 
 #[tokio::test]
+async fn empty_maintenance_hints_cannot_bypass_an_inherited_stale_execution() {
+    let (pool, lease) = fixture().await;
+    crate::background::maintenance::ensure(&pool, "future", "scope-poll", serde_json::json!({}))
+        .await
+        .unwrap();
+    sqlx::query("UPDATE background_work SET state='complete',available_at=clock_timestamp()+interval '1 hour'")
+        .execute(&pool).await.unwrap();
+    sqlx::query("UPDATE resource_leases SET generation=generation+1 WHERE resource_key='node:a'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    // A task-local scope without a renewal task makes the stale-caller race
+    // deterministic: each scheduling API itself must reject the old identity.
+    let scope = Scope {
+        pool: pool.clone(),
+        leases: vec![lease],
+        lifecycle: None,
+        sequence: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+    };
+    CURRENT
+        .scope(scope, async {
+            assert!(
+                crate::background::maintenance::ensure(
+                    &pool,
+                    "future",
+                    "scope-poll",
+                    serde_json::json!({})
+                )
+                .await
+                .is_err()
+            );
+            assert!(
+                crate::background::maintenance::claim(&pool, "empty-kind", "owner")
+                    .await
+                    .is_err()
+            );
+        })
+        .await;
+}
+
+#[tokio::test]
 async fn a_guarded_database_batch_does_not_lose_ownership_to_its_own_renewal_lock_wait() {
     let (pool, lease) = fixture().await;
     sqlx::query("CREATE TABLE guarded_progress(value bigint)")

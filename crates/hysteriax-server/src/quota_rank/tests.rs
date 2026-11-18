@@ -443,3 +443,68 @@ async fn lost_and_reordered_notifications_reconcile_every_entity_with_exact_bigi
         .unwrap();
     assert_eq!(ids(&state, Utc::now()).await[0], nodes[1]);
 }
+
+#[tokio::test]
+async fn continuous_notifications_cannot_postpone_reconciliation_until_the_five_second_fallback() {
+    if std::env::var("TEST_REDIS_URL").is_err() {
+        return;
+    }
+    let (state, redis, nodes) = fixture().await;
+    ids(&state, Utc::now()).await;
+    let schema: String = sqlx::query_scalar("SELECT current_schema()")
+        .fetch_one(&state.pool)
+        .await
+        .unwrap();
+    let worker = tokio::spawn(run(state.clone()));
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    sqlx::query("UPDATE node_packages SET usage_bytes=2000 WHERE node_id=$1")
+        .bind(&nodes[0])
+        .execute(&state.pool)
+        .await
+        .unwrap();
+    let mut connection = state.pool.acquire().await.unwrap();
+    let (version, _) = RankVersion::read(&mut connection).await.unwrap();
+    drop(connection);
+    let base = QuotaRank::base(&redis, &schema, &version);
+    let expected = format!("{}|", version.stamp());
+    let writer = tokio::spawn({
+        let pool = state.pool.clone();
+        async move {
+            for i in 0..150 {
+                let payload = json!({"schema":schema,"id":null,"version":i}).to_string();
+                sqlx::query("SELECT pg_notify('hysteriax_quota_rank',$1)")
+                    .bind(payload)
+                    .execute(&pool)
+                    .await
+                    .unwrap();
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        }
+    });
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            let meta: Option<String> = redis
+                .command(redis::cmd("GET").arg(format!("{base}:meta")).to_owned())
+                .await
+                .flatten();
+            if meta.is_some_and(|m| m.starts_with(&expected)) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(
+        !writer.is_finished(),
+        "refresh must occur while notifications continue"
+    );
+    writer.abort();
+    let _ = writer.await;
+    worker.abort();
+    let _ = worker.await;
+    assert_eq!(
+        warm_without_package_access(&state, Utc::now()).await[0],
+        nodes[0]
+    );
+}

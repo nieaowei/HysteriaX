@@ -41,13 +41,26 @@ async fn authenticated_reads_remain_available_while_writer_lock_is_held() {
         .await
         .unwrap();
     assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
-    holder.rollback().await.unwrap();
-    let independent_touch: bool =
-        sqlx::query_scalar("SELECT last_used_at IS NOT NULL FROM admin_tokens WHERE id='active'")
+    // Usage is optional asynchronous metadata. Wait for its commit while the
+    // writer lock is STILL held, proving independence rather than assuming
+    // that returning the HTTP response also awaited the background update.
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            let independent_touch: bool = sqlx::query_scalar(
+                "SELECT last_used_at IS NOT NULL FROM admin_tokens WHERE id='active'",
+            )
             .fetch_one(&pool)
             .await
             .unwrap();
-    assert!(independent_touch);
+            if independent_touch {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("token usage must commit without releasing the writer lock");
+    holder.rollback().await.unwrap();
     assert_eq!(
         client
             .get(format!("{base}/api/v2/version"))

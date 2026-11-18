@@ -12,6 +12,8 @@ scripts/ops/backup-restore.py backup
 
 The command requires a ready API, stops all API replicas to make a consistent snapshot, creates a PostgreSQL custom-format dump, and then restarts the replicas. The mode-600 archive under `backups/` contains the dump, schema version, SHA-256 checksums, and a fingerprint of the master key. It never contains the key. An alternate destination can be passed as an argument.
 
+Backup and restore allow 150 seconds for API stops, matching the supplied Compose `stop_grace_period` so in-flight traffic capture can persist before process exit. Keep that configuration current and inspect sampling drain errors or forced kills before treating a stop as clean; see [upgrade shutdown behavior](installation.md#database-baseline).
+
 The archive is a database snapshot. Caddy's named certificate volumes are separate and require their own protected backup when their state matters. Retain the key needed to decrypt the records in each database archive.
 
 ## Restore

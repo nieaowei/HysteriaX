@@ -842,3 +842,133 @@ async fn an_expired_published_target_cancels_old_jobs_without_discarding_its_pub
         0
     );
 }
+
+async fn pause_historical_admission(
+    state: &AppState,
+    outbox: &str,
+) -> (sqlx::Transaction<'static, sqlx::Postgres>, i32) {
+    let mut connections = vec![];
+    for _ in 0..8 {
+        let mut connection = state.pool.acquire().await.unwrap();
+        sqlx::query("SET lock_timeout='5s'")
+            .execute(&mut *connection)
+            .await
+            .unwrap();
+        connections.push(connection);
+    }
+    drop(connections);
+    sqlx::raw_sql("CREATE FUNCTION pause_historical_admission() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.kind='mtls-superseded-node-jobs' THEN PERFORM pg_advisory_xact_lock(hashtextextended(current_schema()||':'||NEW.id,0)); END IF; RETURN NEW; END $$; CREATE TRIGGER pause_historical_admission BEFORE INSERT ON background_work FOR EACH ROW EXECUTE FUNCTION pause_historical_admission();")
+        .execute(&state.pool).await.unwrap();
+    let mut barrier = state.pool.begin().await.unwrap();
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended(current_schema()||':'||$1,0))")
+        .bind(outbox)
+        .execute(&mut *barrier)
+        .await
+        .unwrap();
+    let pid = sqlx::query_scalar("SELECT pg_backend_pid()")
+        .fetch_one(&mut *barrier)
+        .await
+        .unwrap();
+    (barrier, pid)
+}
+
+async fn supervised_scan(state: AppState, work: Work) {
+    execution::supervise(
+        state.pool.clone(),
+        work.leases.clone(),
+        scan(&state.pool, &work),
+    )
+    .await
+    .into_result()
+    .unwrap()
+    .expect("scanner must retain ownership")
+    .unwrap();
+}
+
+#[tokio::test]
+async fn historical_scan_rechecks_an_outbox_claimed_after_discovery() {
+    let (state, ca, rotation) = fixture(1).await;
+    replace(&state, &ca, &rotation).await.unwrap();
+    let outbox = format!("superseded-node-jobs:{rotation}");
+    sqlx::query(
+        "UPDATE background_work SET state='complete',available_at='2000-01-01' WHERE id=$1",
+    )
+    .bind(&outbox)
+    .execute(&state.pool)
+    .await
+    .unwrap();
+    let scanner = scanner(&state, "discover").await;
+    let (barrier, pid) = pause_historical_admission(&state, &outbox).await;
+    let pending = tokio::spawn(supervised_scan(state.clone(), scanner));
+    blocked_by(&state, pid).await;
+    sqlx::query("UPDATE background_work SET state='queued' WHERE id=$1")
+        .bind(&outbox)
+        .execute(&state.pool)
+        .await
+        .unwrap();
+    let claimed = claim(&state, "claimed-after-discovery").await;
+    let before: Value = sqlx::query_scalar("SELECT to_jsonb(w) FROM background_work w WHERE id=$1")
+        .bind(&outbox)
+        .fetch_one(&state.pool)
+        .await
+        .unwrap();
+    let leases: Value = sqlx::query_scalar("SELECT jsonb_agg(to_jsonb(l) ORDER BY resource_key) FROM resource_leases l WHERE work_id=$1")
+        .bind(&outbox).fetch_one(&state.pool).await.unwrap();
+    barrier.commit().await.unwrap();
+    pending.await.unwrap();
+    assert_eq!(
+        before,
+        sqlx::query_scalar::<_, Value>("SELECT to_jsonb(w) FROM background_work w WHERE id=$1")
+            .bind(&outbox)
+            .fetch_one(&state.pool)
+            .await
+            .unwrap()
+    );
+    assert_eq!(leases, sqlx::query_scalar::<_, Value>("SELECT jsonb_agg(to_jsonb(l) ORDER BY resource_key) FROM resource_leases l WHERE work_id=$1")
+        .bind(&outbox).fetch_one(&state.pool).await.unwrap());
+    sqlx::raw_sql("CREATE FUNCTION require_serializable_cancel() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.status='cancelled' AND current_setting('transaction_isolation')<>'serializable' THEN RAISE EXCEPTION 'cancellation must retain SERIALIZABLE'; END IF; RETURN NEW; END $$; CREATE TRIGGER require_serializable_cancel BEFORE UPDATE ON jobs FOR EACH ROW EXECUTE FUNCTION require_serializable_cancel();")
+        .execute(&state.pool).await.unwrap();
+    page(&state.pool, &claimed).await.unwrap();
+    assert_eq!(
+        count(&state, "SELECT count(*) FROM jobs WHERE status='cancelled'").await,
+        1
+    );
+}
+
+#[tokio::test]
+async fn stale_historical_discovery_cannot_cancel_a_changed_source() {
+    let (state, ca, rotation) = fixture(1).await;
+    replace(&state, &ca, &rotation).await.unwrap();
+    let outbox = format!("superseded-node-jobs:{rotation}");
+    sqlx::query(
+        "UPDATE background_work SET state='complete',available_at='2000-01-01' WHERE id=$1",
+    )
+    .bind(&outbox)
+    .execute(&state.pool)
+    .await
+    .unwrap();
+    let scanner = scanner(&state, "discover").await;
+    let (mut barrier, pid) = pause_historical_admission(&state, &outbox).await;
+    let pending = tokio::spawn(supervised_scan(state.clone(), scanner));
+    blocked_by(&state, pid).await;
+    sqlx::query("UPDATE mtls_rotations SET outcome=NULL WHERE id=$1")
+        .bind(&rotation)
+        .execute(&mut *barrier)
+        .await
+        .unwrap();
+    barrier.commit().await.unwrap();
+    pending.await.unwrap();
+    // Discovery may enqueue a stale hint; the real cancellation transaction
+    // must reject it using the source locks and its own eligibility check.
+    let stale = claim(&state, "verify-source").await;
+    page(&state.pool, &stale).await.unwrap();
+    assert_eq!(
+        count(&state, "SELECT count(*) FROM jobs WHERE status='cancelled'").await,
+        0
+    );
+    assert_eq!(
+        count(&state, "SELECT count(*) FROM jobs WHERE status='queued'").await,
+        1
+    );
+    assert_eq!(count(&state, "SELECT count(*) FROM background_work WHERE kind='mtls-superseded-node-jobs' AND state='complete' AND error_code='superseded_job_source_changed'").await, 1);
+}

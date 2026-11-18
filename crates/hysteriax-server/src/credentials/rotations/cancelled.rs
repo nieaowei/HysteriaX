@@ -18,19 +18,34 @@ pub(crate) async fn enqueue_on(
         .execute(&mut **tx).await?;
     Ok(())
 }
+const DEMAND: maintenance::Demand = maintenance::Demand {
+    kind: SCAN,
+    key: "mtls:superseded-node-jobs",
+    predicate: "EXISTS(SELECT 1 FROM mtls_node_operations o JOIN mtls_rotations r ON r.id=o.rotation_id WHERE o.pending_job AND r.phase='complete' AND r.outcome IN ('superseded_unpublished_target','superseded_expired_publication'))",
+};
 pub(super) async fn run(state: AppState) {
     let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut shutdown = state.shutdown.subscribe();
     loop {
         tokio::select! {_=shutdown.wait_for(|stop|*stop)=>return,_=interval.tick()=>{}}
-        if let Err(error) = scheduled_pass(&state).await {
+        if let Err(error) = state
+            .maintenance
+            .run_when(
+                &[SCAN, KIND],
+                &["mtls:superseded-node-jobs"],
+                DEMAND,
+                scheduled_pass(&state),
+            )
+            .await
+        {
             tracing::warn!(%error,"superseded job admission deferred");
         }
     }
 }
 pub(super) async fn scheduled_pass(state: &AppState) -> Result<()> {
     scan_pass(state).await?;
+    state.maintenance.refresh_hint().await?;
     if let Some(work) = maintenance::claim(&state.pool, KIND, &state.instance_id).await? {
         let _ = crate::execution::supervise(state.pool.clone(), work.leases.clone(), async {
             if let Err(error) = page(&state.pool, &work).await {
@@ -58,8 +73,10 @@ async fn scan_pass(state: &AppState) -> Result<()> {
     Ok(())
 }
 async fn scan(pool: &PgPool, work: &Work) -> Result<()> {
+    // Admission only creates a guarded, idempotent hint. The cancellation page
+    // rechecks the source under its original SERIALIZABLE transaction and locks.
     let work = work.clone();
-    db::serializable(pool,move |tx|{let work=work.clone();Box::pin(async move {
+    db::write(pool,move |tx|{let work=work.clone();Box::pin(async move {
         work.guard_on(tx).await?;
         ensure!(work.id=="maintenance:mtls:superseded-node-jobs","wrong superseded job admission scope");
         // This also discovers historical supersessions and tasks requeued by

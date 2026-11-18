@@ -1,0 +1,189 @@
+--- a/src/pool/mod.rs
++++ b/src/pool/mod.rs
+@@ -87,0 +88 @@
++mod diagnostics;
+--- a/src/pool/inner.rs
++++ b/src/pool/inner.rs
+@@ -1,0 +2 @@
++use super::diagnostics::{self, Phase};
+@@ -25,0 +27,2 @@
++    pub(super) diagnostic_id: u64,
++    pub(super) diagnostic_waiters: AtomicUsize,
+@@ -54,0 +58,2 @@
++            diagnostic_id: diagnostics::next_id(),
++            diagnostic_waiters: AtomicUsize::new(0),
+@@ -246 +251,2 @@
+-    pub(super) async fn acquire(self: &Arc<Self>) -> Result<Floating<DB, Live<DB>>, Error> {
++    pub(super) fn acquire(self: &Arc<Self>) -> futures_core::future::BoxFuture<'_, Result<Floating<DB, Live<DB>>, Error>> {
++        Box::pin(async move {
+@@ -251,0 +258 @@
++        let mut diagnostic = Box::new(diagnostics::Timing::new("acquire", self.diagnostic_id, self.options.acquire_slow_threshold, self.size(), self.num_idle(), self.diagnostic_waiters.load(Ordering::Relaxed), self.options.max_connections));
+@@ -259 +266,3 @@
+-                    let permit = self.acquire_permit().await?;
++                    let waiting = diagnostics::Waiter::new(&self.diagnostic_waiters);
++                    let permit = diagnostic.measure(Phase::Permit, self.acquire_permit()).await?;
++                    drop(waiting);
+@@ -266 +275,3 @@
+-                        Ok(conn) => match check_idle_conn(conn, &self.options).await {
++                        Ok(conn) => {
++                            diagnostic.connection = conn.inner.live.diagnostic_id;
++                            match check_idle_conn(conn, &self.options, &mut diagnostic).await {
+@@ -273,0 +285 @@
++                            }
+@@ -292 +304,3 @@
+-                    return self.connect(deadline, guard).await;
++                    let result = self.connect(deadline, guard, Some(&mut diagnostic)).await;
++                    if let Ok(conn) = &result { diagnostic.connection=conn.inner.diagnostic_id; }
++                    return result;
+@@ -295,3 +309,3 @@
+-        )
+-            .await
+-            .map_err(|_| Error::PoolTimedOut)??;
++        ).await.map_err(|_| Error::PoolTimedOut).and_then(|r|r);
++        diagnostic.finish(if acquired.is_ok() {"ok"} else {"error"}, self.size(), self.num_idle(), self.diagnostic_waiters.load(Ordering::Relaxed));
++        let acquired = acquired?;
+@@ -322,0 +337 @@
++        })
+@@ -328,0 +344 @@
++        mut diagnostic: Option<&mut diagnostics::Timing>,
+@@ -350 +366 @@
+-            match crate::rt::timeout(timeout, connect_options.connect()).await {
++            match diagnostics::optional(diagnostic.as_deref_mut(), Phase::Connect, crate::rt::timeout(timeout, connect_options.connect())).await {
+@@ -360 +376 @@
+-                        callback(&mut raw, meta).await
++                        diagnostics::optional(diagnostic.as_deref_mut(), Phase::Init, callback(&mut raw, meta)).await
+@@ -394 +410 @@
+-            crate::rt::sleep(backoff).await;
++            diagnostics::optional(diagnostic.as_deref_mut(), Phase::Backoff, crate::rt::sleep(backoff)).await;
+@@ -417 +433 @@
+-            self.release(self.connect(deadline, guard).await?);
++            self.release(self.connect(deadline, guard, None).await?);
+@@ -471,0 +488 @@
++    diagnostic: &mut diagnostics::Timing,
+@@ -475 +492 @@
+-        if let Err(error) = conn.ping().await {
++        if let Err(error) = diagnostic.measure(Phase::Ping, conn.ping()).await {
+@@ -481 +498 @@
+-            return Err(conn.close_hard().await);
++            return Err(diagnostic.measure(Phase::Discard, conn.close_hard()).await);
+@@ -487 +504 @@
+-        match test(&mut conn.live.raw, meta).await {
++        match diagnostic.measure(Phase::Before, test(&mut conn.live.raw, meta)).await {
+@@ -490 +507 @@
+-                return Err(conn.close().await);
++                return Err(diagnostic.measure(Phase::Discard, conn.close()).await);
+@@ -496 +513 @@
+-                return Err(conn.close_hard().await);
++                return Err(diagnostic.measure(Phase::Discard, conn.close_hard()).await);
+--- a/src/pool/connection.rs
++++ b/src/pool/connection.rs
+@@ -4 +4,2 @@
+-use std::sync::Arc;
++use std::sync::{Arc, atomic::Ordering};
++use super::diagnostics::{self, Phase};
+@@ -29,0 +31,4 @@
++    pub(super) diagnostic_id: u64,
++    diagnostic_checked_out: Option<Instant>,
++    diagnostic_return_enqueued: Option<Instant>,
++    diagnostic_span: tracing::Span,
+@@ -140 +145 @@
+-            self.live.take().map(|live| live.float(self.pool.clone()));
++            self.live.take().map(|mut live| {live.diagnostic_return_enqueued=Some(Instant::now());live.float(self.pool.clone())});
+@@ -249,0 +255,4 @@
++                diagnostic_id: diagnostics::next_id(),
++                diagnostic_checked_out: None,
++                diagnostic_return_enqueued: None,
++                diagnostic_span: tracing::Span::none(),
+@@ -256 +265,4 @@
+-        let Floating { inner, guard } = self;
++        let Floating { mut inner, guard } = self;
++        inner.diagnostic_checked_out=Some(Instant::now());
++        inner.diagnostic_return_enqueued=None;
++        inner.diagnostic_span=tracing::Span::current();
+@@ -275 +287,7 @@
+-    async fn return_to_pool(mut self) -> bool {
++    fn return_to_pool(mut self) -> futures_core::future::BoxFuture<'static, bool> {
++        Box::pin(async move {
++        let pool=self.guard.pool.clone();
++        let mut diagnostic=Box::new(diagnostics::Timing::new("release", pool.diagnostic_id, Duration::from_secs(1),pool.size(),pool.num_idle(),pool.diagnostic_waiters.load(Ordering::Relaxed),pool.options.max_connections));
++        diagnostic.connection=self.inner.diagnostic_id;
++        diagnostic.span=self.inner.diagnostic_span.clone();
++        if let Some(at)=self.inner.diagnostic_return_enqueued {diagnostic.returned_at(at);diagnostic.hold=self.inner.diagnostic_checked_out.map(|start|at.saturating_duration_since(start)).unwrap_or_default();}
+@@ -278,2 +296 @@
+-            self.close().await;
+-            return false;
++            diagnostic.measure(Phase::Discard, self.close()).await; diagnostic.finish("pool_closed",pool.size(),pool.num_idle(),pool.diagnostic_waiters.load(Ordering::Relaxed)); return false;
+@@ -285,2 +302 @@
+-            self.close().await;
+-            return false;
++            diagnostic.measure(Phase::Discard, self.close()).await; diagnostic.finish("max_lifetime",pool.size(),pool.num_idle(),pool.diagnostic_waiters.load(Ordering::Relaxed)); return false;
+@@ -291 +307 @@
+-            match (test)(&mut self.inner.raw, meta).await {
++            match diagnostic.measure(Phase::Reset, (test)(&mut self.inner.raw, meta)).await {
+@@ -294,2 +310 @@
+-                    self.close().await;
+-                    return false;
++                    diagnostic.measure(Phase::Discard, self.close()).await; diagnostic.finish("rejected",pool.size(),pool.num_idle(),pool.diagnostic_waiters.load(Ordering::Relaxed)); return false;
+@@ -301,2 +316 @@
+-                    self.close_hard().await;
+-                    return false;
++                    diagnostic.measure(Phase::Discard, self.close_hard()).await; diagnostic.finish("reset_error",pool.size(),pool.num_idle(),pool.diagnostic_waiters.load(Ordering::Relaxed)); return false;
+@@ -314 +328 @@
+-        if let Err(error) = self.raw.ping().await {
++        if let Err(error) = diagnostic.measure(Phase::ReleasePing, self.raw.ping()).await {
+@@ -321,2 +335 @@
+-            self.close_hard().await;
+-            false
++            diagnostic.measure(Phase::Discard, self.close_hard()).await; diagnostic.finish("release_ping_error",pool.size(),pool.num_idle(),pool.diagnostic_waiters.load(Ordering::Relaxed)); false
+@@ -325,0 +339 @@
++            diagnostic.finish("ok",pool.size(),pool.num_idle(),pool.diagnostic_waiters.load(Ordering::Relaxed));
+@@ -327,0 +342 @@
++        })
+--- a/src/pool/diagnostics.rs
++++ b/src/pool/diagnostics.rs
+@@ -0,0 +1,45 @@
++// Temporary, bounded per-operation diagnostic timing; no query, URL or credential fields.
++use std::{future::{Future, poll_fn}, sync::atomic::{AtomicU64, AtomicUsize, Ordering}, time::{Duration, Instant}};
++static NEXT_ID: AtomicU64 = AtomicU64::new(1);
++pub(super) fn next_id() -> u64 { NEXT_ID.fetch_add(1, Ordering::Relaxed) }
++#[derive(Clone, Copy)]
++pub(super) enum Phase { Permit, Ping, Before, Connect, Init, Backoff, Discard, Reset, ReleasePing, ReturnSchedule }
++impl Phase { fn index(self) -> usize { self as usize } }
++const NAMES: [&str; 10] = ["permit_wait", "checkout_ping", "before_acquire", "connect", "initialize", "connect_backoff", "discard", "release_reset", "release_ping", "return_schedule"];
++pub(super) struct Timing {
++ start: Instant, threshold: Duration, elapsed: [Duration; 10], active: Duration, max_poll: Duration, polls: u64,
++ pub id: u64, pool: u64, pub connection: u64, operation: &'static str, outcome: &'static str,
++ size_start: u32, idle_start: usize, waiters_start: usize, size_end: u32, idle_end: usize, waiters_end: usize, max: u32,
++ pub hold: Duration, pub span: tracing::Span, finished: Option<Duration>,
++}
++impl Timing {
++ pub fn new(operation: &'static str, pool: u64, threshold: Duration, size: u32, idle: usize, waiters: usize, max: u32) -> Self {
++  Self { start: Instant::now(), threshold, elapsed: [Duration::ZERO;10], active: Duration::ZERO, max_poll: Duration::ZERO, polls:0, id:next_id(), pool, connection:0, operation, outcome:"cancelled", size_start:size, idle_start:idle, waiters_start:waiters, size_end:size, idle_end:idle, waiters_end:waiters, max, hold:Duration::ZERO, span:tracing::Span::current(), finished:None }
++ }
++ pub fn returned_at(&mut self, at: Instant) { self.start=at; self.elapsed[Phase::ReturnSchedule.index()]=at.elapsed(); }
++ pub fn finish(&mut self, outcome: &'static str, size:u32, idle:usize, waiters:usize) { self.outcome=outcome;self.size_end=size;self.idle_end=idle;self.waiters_end=waiters;self.finished=Some(self.start.elapsed()); }
++ pub fn measure<'a, F: Future + 'a>(&'a mut self, phase: Phase, future:F) -> impl Future<Output=F::Output> + 'a {
++  let mut future=Box::pin(future);
++  async move {
++   let timer=Timer { observation:self, phase, start:Instant::now() };
++   poll_fn(|cx| { let start=Instant::now(); let result=future.as_mut().poll(cx); let active=start.elapsed(); timer.observation.active+=active;timer.observation.max_poll=timer.observation.max_poll.max(active);timer.observation.polls+=1; result }).await
++  }
++ }
++}
++struct Timer<'a> { observation:&'a mut Timing, phase:Phase, start:Instant }
++impl Drop for Timer<'_> { fn drop(&mut self) { self.observation.elapsed[self.phase.index()]+=self.start.elapsed(); } }
++impl Drop for Timing {
++ fn drop(&mut self) {
++  let total=self.finished.unwrap_or_else(||self.start.elapsed());
++  if total<self.threshold && self.hold<Duration::from_secs(2) { return; }
++  let sum:Duration=self.elapsed.iter().copied().sum(); let other=total.saturating_sub(sum);
++  let index=self.elapsed.iter().enumerate().max_by_key(|(_,v)|**v).map(|(i,_)|i).unwrap_or(0);
++  let dominant=if other>self.elapsed[index] {"unattributed"} else {NAMES[index]};
++  self.span.in_scope(|| tracing::warn!(target:"sqlx::pool::phase", diagnostic_version=1u32, operation=self.operation, operation_id=self.id, pool_id=self.pool, connection_id=self.connection, outcome=self.outcome, dominant_phase=dominant,
++   total_secs=total.as_secs_f64(), permit_wait_secs=self.elapsed[0].as_secs_f64(), checkout_ping_secs=self.elapsed[1].as_secs_f64(), before_acquire_secs=self.elapsed[2].as_secs_f64(), connect_secs=self.elapsed[3].as_secs_f64(), initialize_secs=self.elapsed[4].as_secs_f64(), connect_backoff_secs=self.elapsed[5].as_secs_f64(), discard_secs=self.elapsed[6].as_secs_f64(), release_reset_secs=self.elapsed[7].as_secs_f64(), release_ping_secs=self.elapsed[8].as_secs_f64(), return_schedule_secs=self.elapsed[9].as_secs_f64(), unattributed_secs=other.as_secs_f64(), active_poll_secs=self.active.as_secs_f64(), max_poll_secs=self.max_poll.as_secs_f64(), polls=self.polls, application_hold_secs=self.hold.as_secs_f64(), pool_size_start=self.size_start, pool_idle_start=self.idle_start, pool_waiters_start=self.waiters_start, pool_size_end=self.size_end, pool_idle_end=self.idle_end, pool_waiters_end=self.waiters_end, pool_max=self.max, "pool operation phase timings"));
++ }
++}
++pub(super) fn optional<'a, F: Future + 'a>(timing:Option<&'a mut Timing>,phase:Phase,future:F)->impl Future<Output=F::Output> + 'a {let future=Box::pin(future); async move {match timing {Some(t)=>t.measure(phase,future).await,None=>future.await}}}
++pub(super) struct Waiter<'a>(&'a AtomicUsize);
++impl<'a> Waiter<'a> { pub fn new(value:&'a AtomicUsize)->Self {value.fetch_add(1,Ordering::Relaxed);Self(value)} }
++impl Drop for Waiter<'_> {fn drop(&mut self) {self.0.fetch_sub(1,Ordering::Relaxed);}}

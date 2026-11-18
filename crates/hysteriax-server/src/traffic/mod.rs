@@ -6,10 +6,11 @@ use serde_json::{Map, Value};
 use sqlx::PgPool;
 use uuid::Uuid;
 
+#[cfg(test)]
+use crate::security::SecretBox;
 use crate::{
     api::now,
     deployment,
-    security::SecretBox,
     ssh::{self, FingerprintResult},
     state::AppState,
 };
@@ -19,6 +20,8 @@ pub(crate) mod access;
 mod batch_tests;
 pub(crate) mod batches;
 pub(crate) mod clear;
+#[cfg(test)]
+mod sampling_tests;
 pub mod work;
 
 pub async fn run(state: AppState) {
@@ -32,8 +35,13 @@ pub async fn run(state: AppState) {
 async fn maintenance_loop(state: AppState) {
     let mut tick = tokio::time::interval(Duration::from_secs(1));
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut shutdown = state.shutdown.subscribe();
     loop {
-        tick.tick().await;
+        tokio::select! {
+            biased;
+            _=shutdown.wait_for(|stop|*stop)=>return,
+            _=tick.tick()=>{}
+        }
         if let Err(error) = maintenance_pass(&state).await {
             tracing::warn!(%error,"traffic maintenance deferred");
         }
@@ -115,7 +123,7 @@ pub async fn finish_captured_for_removal(pool: &PgPool, node: &str) -> Result<()
 
 pub(crate) async fn sample_work(state: &AppState, work: &crate::background::Work) -> Result<()> {
     if batches::captured(&state.pool, &work.id).await? {
-        batches::drain(&state.pool, &work.id).await?;
+        batches::process(&state.pool, &work.id).await?;
         return Ok(());
     }
     let requested: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM traffic_sample_batches WHERE sample_id=$1 AND clear_requested_at IS NOT NULL AND payload_digest IS NULL AND state='capturing')")
@@ -127,12 +135,16 @@ pub(crate) async fn sample_work(state: &AppState, work: &crate::background::Work
     if !crate::runtime_config::traffic_capture_enabled() {
         return Ok(());
     }
+    if *state.shutdown.borrow() {
+        return Err(crate::background::Draining.into());
+    }
     crate::background::admit_read(&state.pool, work).await?;
     // Individual SSH and HTTP operations have bounded budgets. Do not wrap
     // the whole function in a timeout that could discard a received response
     // while its database transaction is retrying.
-    let result = sample_node(&state.pool, &state.secrets, work).await;
+    let result = sample_node(state, work).await;
     if let Err(error) = &result
+        && !error.is::<crate::background::Draining>()
         && !clear::uncertain(&state.pool, work).await?
     {
         record_failed_sample(
@@ -212,19 +224,16 @@ where
     }
 }
 
-async fn sample_node(
-    pool: &PgPool,
-    secrets: &SecretBox,
-    work: &crate::background::Work,
-) -> Result<()> {
+async fn sample_node(state: &AppState, work: &crate::background::Work) -> Result<()> {
+    let (pool, secrets) = (&state.pool, state.secrets.as_ref());
     let node_id = &work.node;
     let cycle = work.cycle;
     let cycle_started = work.period_start;
     let expected_nodes = work.expected;
     let sample_id = format!("{cycle}:{node_id}");
-    let state = batches::reserve_work(pool, work).await?;
-    if state != "capturing" {
-        batches::drain(pool, &sample_id).await?;
+    let batch_state = batches::reserve_work(pool, work).await?;
+    if batch_state != "capturing" {
+        batches::process(pool, &sample_id).await?;
         return Ok(());
     }
     let node = deployment::load_ssh_node(pool, secrets, node_id).await?;
@@ -237,17 +246,7 @@ async fn sample_node(
             bail!("SSH host fingerprint changed from {expected} to {observed}")
         }
     };
-    if let Err(error) = tokio::time::timeout(
-        Duration::from_secs(crate::runtime_config::operation_timeout_seconds(8)),
-        crate::node_acme::sample(pool, secrets, node_id, &session),
-    )
-    .await
-    .unwrap_or_else(|_| Err(anyhow::anyhow!("ACME status collection timed out")))
-    {
-        tracing::debug!(node_id, %error, "ACME observation unavailable");
-    }
     crate::kick_requests::resume_node(pool, node_id).await?;
-    let before_instance = systemd_instance(&session).await?;
     let stats_secret_enc: String =
         sqlx::query_scalar("SELECT traffic_stats_secret_enc FROM nodes WHERE id = $1")
             .bind(node_id)
@@ -256,45 +255,87 @@ async fn sample_node(
     let stats_secret = secrets.decrypt(&stats_secret_enc)?;
     let traffic_stats_port =
         deployment::load_deployed_traffic_stats_port(pool, secrets, node_id).await?;
-    // Online failures are isolated from the accounting transaction.
-    let online = session
-        .loopback_http_get(u32::from(traffic_stats_port), "/online", &stats_secret)
-        .await;
-    if let Err(error) = crate::overview::record_online(
-        pool,
-        node_id,
-        cycle,
-        cycle_started,
-        expected_nodes,
-        online.ok().as_deref(),
-    )
-    .await
-    {
-        tracing::warn!(node_id, %error, "online sample could not be saved");
-    }
-    match clear::prepare(pool, work).await? {
-        clear::Admission::Send => {}
-        clear::Admission::AlreadyRequested => bail!("traffic clear response was not persisted"),
-        clear::Admission::Captured => {
-            batches::drain(pool, &sample_id).await?;
-            return Ok(());
+
+    // Auxiliary reads use independent SSH channels under the SAME node/work
+    // leases. They cannot consume the capture's slot before clear admission.
+    // Join rather than try_join: an observation failure must not cancel a
+    // destructive request or abandon its received response.
+    let capture = async {
+        let before_instance = systemd_instance(&session).await?;
+        // This synchronous check is the local admission boundary. A capture
+        // admitted before shutdown remains in the worker's drain set through
+        // marker commit, the single request, and durable response capture.
+        if *state.shutdown.borrow() {
+            return Err(crate::background::Draining.into());
         }
-    };
-    let body = session
-        .loopback_traffic_clear(u32::from(traffic_stats_port), &stats_secret)
+        match clear::prepare(pool, work).await? {
+            clear::Admission::Send => {}
+            clear::Admission::AlreadyRequested => bail!("traffic clear response was not persisted"),
+            clear::Admission::Captured => {
+                batches::process(pool, &sample_id).await?;
+                return Ok(());
+            }
+        };
+        let body = session
+            .loopback_traffic_clear(u32::from(traffic_stats_port), &stats_secret)
+            .await?;
+        let counters = parse_response(&body)?;
+        capture_clear_response(
+            pool,
+            work,
+            &before_instance,
+            &counters,
+            &body,
+            systemd_instance(&session),
+        )
         .await?;
-    let counters = parse_response(&body)?;
-    capture_clear_response(
-        pool,
-        work,
-        &before_instance,
-        &counters,
-        &body,
-        systemd_instance(&session),
-    )
-    .await?;
-    batches::drain(pool, &sample_id).await?;
-    Ok(())
+        // One bounded billing page per ownership turn. Ready batches yield in
+        // background::finish so other sampling kinds can acquire the node.
+        batches::process(pool, &sample_id).await?;
+        Ok(())
+    };
+    let observations = async {
+        tokio::join!(
+            async {
+                if let Err(error) = tokio::time::timeout(
+                    Duration::from_secs(crate::runtime_config::operation_timeout_seconds(8).min(8)),
+                    crate::node_acme::sample(pool, secrets, node_id, &session),
+                )
+                .await
+                .unwrap_or_else(|_| Err(anyhow::anyhow!("ACME status collection timed out")))
+                {
+                    tracing::debug!(node_id, %error, "ACME observation unavailable");
+                }
+            },
+            async {
+                // Online failures are isolated from the accounting transaction.
+                let online = tokio::time::timeout(
+                    Duration::from_secs(crate::runtime_config::operation_timeout_seconds(8).min(8)),
+                    session.loopback_http_get(
+                        u32::from(traffic_stats_port),
+                        "/online",
+                        &stats_secret,
+                    ),
+                )
+                .await
+                .unwrap_or_else(|_| Err(anyhow::anyhow!("online observation timed out")));
+                if let Err(error) = crate::overview::record_online(
+                    pool,
+                    node_id,
+                    cycle,
+                    cycle_started,
+                    expected_nodes,
+                    online.ok().as_deref(),
+                )
+                .await
+                {
+                    tracing::warn!(node_id, %error, "online sample could not be saved");
+                }
+            }
+        );
+    };
+    let (result, ()) = tokio::join!(capture, observations);
+    result
 }
 
 async fn capture_clear_response(

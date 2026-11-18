@@ -7,6 +7,8 @@ use sqlx::{
     postgres::{PgConnectOptions, PgPoolOptions},
 };
 
+pub(crate) mod diagnostics;
+
 pub static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
 
 #[cfg(test)]
@@ -88,8 +90,14 @@ pub fn pool_options_for_maintenance(maintenance: bool) -> PgPoolOptions {
 /// (including revision conflicts) must return false.
 pub trait RetryableTransactionError: From<sqlx::Error> {
     fn retryable_transaction(&self) -> bool;
+    fn database_error(&self) -> Option<&sqlx::Error> {
+        None
+    }
 }
 impl RetryableTransactionError for sqlx::Error {
+    fn database_error(&self) -> Option<&sqlx::Error> {
+        Some(self)
+    }
     fn retryable_transaction(&self) -> bool {
         self.as_database_error()
             .and_then(|error| error.code())
@@ -97,6 +105,10 @@ impl RetryableTransactionError for sqlx::Error {
     }
 }
 impl RetryableTransactionError for anyhow::Error {
+    fn database_error(&self) -> Option<&sqlx::Error> {
+        self.chain()
+            .find_map(|error| error.downcast_ref::<sqlx::Error>())
+    }
     fn retryable_transaction(&self) -> bool {
         self.chain().any(|error| {
             error
@@ -112,7 +124,7 @@ impl RetryableTransactionError for anyhow::Error {
 /// Retry ONLY database work. Never put SSH, DNS, HTTP, file writes or other
 /// external side effects in this closure. Each attempt uses a fresh snapshot.
 /// A transaction may be attempted once plus at most five conflict retries.
-pub async fn serializable<T, E, F>(pool: &PgPool, mut operation: F) -> Result<T, E>
+pub async fn serializable<T, E, F>(pool: &PgPool, operation: F) -> Result<T, E>
 where
     E: RetryableTransactionError,
     F: for<'connection> FnMut(
@@ -121,46 +133,21 @@ where
         Box<dyn std::future::Future<Output = Result<T, E>> + Send + 'connection>,
     >,
 {
-    for attempt in 0..=5 {
-        let result = async {
-            let mut tx = pool
-                .begin_with("BEGIN ISOLATION LEVEL SERIALIZABLE")
-                .await
-                .map_err(E::from)?;
-            crate::execution::guard_current(&mut tx)
-                .await
-                .map_err(E::from)?;
-            let attempt = crate::execution::TransactionAttempt::new(&mut tx);
-            match attempt.operation(operation(&mut tx)).await {
-                Ok(value) => attempt.commit(tx).await.map(|()| value).map_err(E::from),
-                Err(error) => {
-                    // Finish rollback before retrying or returning a connection.
-                    attempt.rollback(tx).await.map_err(E::from)?;
-                    Err(error)
-                }
-            }
-        }
-        .await;
-        match result {
-            Err(error) if error.retryable_transaction() && attempt < 5 => {
-                let delay = rand::random_range(10..40) * (1_u64 << attempt);
-                tracing::debug!(
-                    attempt = attempt + 1,
-                    delay_ms = delay,
-                    "retrying database transaction"
-                );
-                tokio::time::sleep(Duration::from_millis(delay)).await;
-            }
-            result => return result,
-        }
-    }
-    unreachable!("bounded transaction attempts always return")
+    transaction(
+        pool,
+        "serializable",
+        "BEGIN ISOLATION LEVEL SERIALIZABLE",
+        None,
+        operation,
+    )
+    .await
 }
 
-/// READ COMMITTED database work protected by explicit resource/row locks.
-/// The closure has the same side-effect prohibition and retry budget as
-/// `serializable`; callers must acquire resource rows in a fixed order.
-pub async fn write<T, E, F>(pool: &PgPool, mut operation: F) -> Result<T, E>
+pub(crate) async fn serializable_after_probe<T, E, F>(
+    pool: &PgPool,
+    connection: sqlx::pool::PoolConnection<Postgres>,
+    operation: F,
+) -> Result<T, E>
 where
     E: RetryableTransactionError,
     F: for<'connection> FnMut(
@@ -169,37 +156,151 @@ where
         Box<dyn std::future::Future<Output = Result<T, E>> + Send + 'connection>,
     >,
 {
-    for attempt in 0..=5 {
-        let result = async {
-            let mut tx = pool
-                .begin_with("BEGIN ISOLATION LEVEL READ COMMITTED")
-                .await
-                .map_err(E::from)?;
+    transaction(
+        pool,
+        "serializable",
+        "BEGIN ISOLATION LEVEL SERIALIZABLE",
+        Some(connection),
+        operation,
+    )
+    .await
+}
+
+/// READ COMMITTED work protected by explicit, consistently ordered row locks.
+/// Same side-effect prohibition and retry budget as `serializable`.
+pub async fn write<T, E, F>(pool: &PgPool, operation: F) -> Result<T, E>
+where
+    E: RetryableTransactionError,
+    F: for<'connection> FnMut(
+        &'connection mut Transaction<'static, Postgres>,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<T, E>> + Send + 'connection>,
+    >,
+{
+    transaction(
+        pool,
+        "read_committed",
+        "BEGIN ISOLATION LEVEL READ COMMITTED",
+        None,
+        operation,
+    )
+    .await
+}
+
+/// Reuse the connection that performed a non-authoritative scheduling probe.
+/// Only the first attempt uses it; a conflict still retries on a fresh transaction.
+/// The connection must have been acquired from `pool`.
+pub(crate) async fn write_after_probe<T, E, F>(
+    pool: &PgPool,
+    connection: sqlx::pool::PoolConnection<Postgres>,
+    operation: F,
+) -> Result<T, E>
+where
+    E: RetryableTransactionError,
+    F: for<'connection> FnMut(
+        &'connection mut Transaction<'static, Postgres>,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<T, E>> + Send + 'connection>,
+    >,
+{
+    transaction(
+        pool,
+        "read_committed",
+        "BEGIN ISOLATION LEVEL READ COMMITTED",
+        Some(connection),
+        operation,
+    )
+    .await
+}
+
+async fn transaction<T, E, F>(
+    pool: &PgPool,
+    isolation: &'static str,
+    begin: &'static str,
+    mut first_connection: Option<sqlx::pool::PoolConnection<Postgres>>,
+    mut operation: F,
+) -> Result<T, E>
+where
+    E: RetryableTransactionError,
+    F: for<'connection> FnMut(
+        &'connection mut Transaction<'static, Postgres>,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<T, E>> + Send + 'connection>,
+    >,
+{
+    let mut observation = diagnostics::Observation::new(std::any::type_name::<F>(), isolation);
+    let mut last_conflict = None;
+    for attempt_index in 0..=5 {
+        observation.attempted();
+        let (result, report) = diagnostics::attempt(async {
+            let begun = match first_connection.take() {
+                Some(connection) => {
+                    Transaction::begin(connection, Some(sqlx::SqlSafeStr::into_sql_str(begin)))
+                        .await
+                }
+                None => pool.begin_with(begin).await,
+            };
+            let mut tx = begun.map_err(|error| {
+                diagnostics::record(&error);
+                E::from(error)
+            })?;
+            diagnostics::phase("guard");
             crate::execution::guard_current(&mut tx)
                 .await
-                .map_err(E::from)?;
-            let attempt = crate::execution::TransactionAttempt::new(&mut tx);
+                .map_err(|error| {
+                    diagnostics::record(&error);
+                    E::from(error)
+                })?;
+            let attempt = crate::execution::TransactionAttempt::after_guard(&mut tx);
+            diagnostics::phase("operation");
             match attempt.operation(operation(&mut tx)).await {
-                Ok(value) => attempt.commit(tx).await.map(|()| value).map_err(E::from),
+                Ok(value) => {
+                    diagnostics::phase("commit");
+                    attempt.commit(tx).await.map(|()| value).map_err(|error| {
+                        diagnostics::record(&error);
+                        E::from(error)
+                    })
+                }
                 Err(error) => {
-                    // Finish rollback before retrying or returning a connection.
-                    attempt.rollback(tx).await.map_err(E::from)?;
+                    if let Some(cause) = error.database_error() {
+                        diagnostics::record(cause);
+                    }
+                    // Preserve the failing statement before rollback's query event.
+                    diagnostics::phase("rollback");
+                    attempt.rollback(tx).await.map_err(|error| {
+                        diagnostics::record(&error);
+                        E::from(error)
+                    })?;
                     Err(error)
                 }
             }
-        }
+        })
         .await;
         match result {
-            Err(error) if error.retryable_transaction() && attempt < 5 => {
-                let delay = rand::random_range(10..40) * (1_u64 << attempt);
-                tracing::debug!(
-                    attempt = attempt + 1,
-                    delay_ms = delay,
-                    "retrying database transaction"
-                );
+            Err(error) if error.retryable_transaction() => {
+                observation.conflict();
+                if attempt_index == 5 {
+                    observation.event(&report, attempt_index + 1, "retry_exhausted", 0);
+                    observation.finish(false, true);
+                    return Err(error);
+                }
+                let delay = rand::random_range(10..40) * (1_u64 << attempt_index);
+                observation.event(&report, attempt_index + 1, "retry", delay);
+                last_conflict = Some(report);
                 tokio::time::sleep(Duration::from_millis(delay)).await;
             }
-            result => return result,
+            Ok(value) => {
+                if let Some(report) = last_conflict {
+                    observation.event(&report, attempt_index + 1, "succeeded_after_retry", 0);
+                }
+                observation.finish(true, false);
+                return Ok(value);
+            }
+            Err(error) => {
+                observation.event(&report, attempt_index + 1, "failed", 0);
+                observation.finish(false, false);
+                return Err(error);
+            }
         }
     }
     unreachable!("bounded transaction attempts always return")

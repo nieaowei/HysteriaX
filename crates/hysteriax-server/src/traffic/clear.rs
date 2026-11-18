@@ -40,11 +40,15 @@ pub async fn prepare(pool: &PgPool, work: &crate::background::Work) -> Result<Ad
         Box::pin(async move {
             let mut leases = [node_lease.clone(), work_lease.clone()];
             leases.sort_by(|a,b| a.resource.cmp(&b.resource));
-            for lease in &leases { lease.guard(tx).await?; }
-            let valid: Option<bool> = sqlx::query_scalar("SELECT true FROM background_work WHERE id=$1 AND kind='traffic' AND node_id=$2 AND owner=$3 AND generation=$4 AND state='running' AND deadline_at>clock_timestamp() FOR UPDATE")
+            crate::execution::guard_all(tx,&leases).await?;
+            let timely: Option<bool> = sqlx::query_scalar("SELECT deadline_at>clock_timestamp() FROM background_work WHERE id=$1 AND kind='traffic' AND node_id=$2 AND owner=$3 AND generation=$4 AND state='running' FOR UPDATE")
                 .bind(&work.id).bind(&work.node).bind(&work_lease.owner).bind(work_lease.generation)
                 .fetch_optional(&mut **tx).await?;
-            ensure!(valid == Some(true), "traffic work ownership was lost or its slot expired");
+            match timely {
+                Some(true) => {},
+                Some(false) => return Err(crate::background::SlotExpired.into()),
+                None => anyhow::bail!("traffic work ownership was lost"),
+            }
             let active: Option<bool> = sqlx::query_scalar("SELECT true FROM nodes WHERE id=$1 AND state NOT IN ('deleting','delete_failed') FOR NO KEY UPDATE")
                 .bind(&work.node).fetch_optional(&mut **tx).await?;
             ensure!(active == Some(true), "node is missing or being deleted");
@@ -62,14 +66,14 @@ pub async fn prepare(pool: &PgPool, work: &crate::background::Work) -> Result<Ad
             // A node or batch lock may have delayed admission past the slot or
             // lease expiry after the first check. Recheck immediately before
             // committing the one-shot marker.
-            for lease in &leases { lease.guard(tx).await?; }
+            crate::execution::guard_all(tx,&leases).await?;
             let timely: bool = sqlx::query_scalar("SELECT deadline_at>clock_timestamp() FROM background_work WHERE id=$1")
                 .bind(&work.id).fetch_one(&mut **tx).await?;
-            ensure!(timely, "traffic work slot expired before clear request");
+            if !timely { return Err(crate::background::SlotExpired.into()); }
             sqlx::query("UPDATE traffic_sample_batches SET clear_requested_at=clock_timestamp(),clear_owner=$2,clear_work_generation=$3,clear_node_generation=$4,clear_epoch=$5 WHERE sample_id=$1")
                 .bind(&work.id).bind(&work_lease.owner).bind(work_lease.generation)
                 .bind(node_lease.generation).bind(&work_lease.epoch).execute(&mut **tx).await?;
-            for lease in &leases { lease.guard(tx).await?; }
+            crate::execution::guard_all(tx,&leases).await?;
             Ok(Admission::Send)
         })
     }).await
@@ -131,15 +135,15 @@ pub async fn uncertain(pool: &PgPool, work: &crate::background::Work) -> Result<
             let work_lease = work.leases.iter().find(|l| l.resource == format!("work:{}", work.id))
                 .ok_or_else(|| anyhow::anyhow!("missing work lease"))?;
             ensure!(node_lease.work == work.id && work_lease.work == work.id && node_lease.owner == work_lease.owner && node_lease.epoch == work_lease.epoch, "mismatched traffic execution leases");
-            let mut leases = [node_lease, work_lease];
+            let mut leases = [node_lease.clone(), work_lease.clone()];
             leases.sort_by(|a,b| a.resource.cmp(&b.resource));
-            for lease in &leases { lease.guard(tx).await?; }
+            crate::execution::guard_all(tx,&leases).await?;
             let valid: Option<bool> = sqlx::query_scalar("SELECT true FROM background_work WHERE id=$1 AND kind='traffic' AND node_id=$2 AND owner=$3 AND generation=$4 AND state='running' FOR UPDATE")
                 .bind(&work.id).bind(&work.node).bind(&work_lease.owner).bind(work_lease.generation)
                 .fetch_optional(&mut **tx).await?;
             ensure!(valid == Some(true), "traffic work ownership was lost");
             let changed = uncertain_on(tx, &work.id).await?;
-            for lease in &leases { lease.guard(tx).await?; }
+            crate::execution::guard_all(tx,&leases).await?;
             Ok(changed)
         })
     }).await

@@ -4,7 +4,11 @@ HysteriaX is distributed directly as an unsigned downloadable DMG; it is not sub
 
 The Universal app contains `arm64` and `x86_64` slices and targets macOS 26.0. The Xcode release project sets the minimum macOS version to 26.0 for both slices; this is separate from the SwiftPM development manifest. See [compatibility](compatibility.md).
 
-Both CI and the release script run `apps/macos/Tests/runners/verify-macos-app.sh` to check the two executable slices, bundle minimum, and Mach-O minimum versions before accepting the app.
+Both CI and the release script run `apps/macos/Tests/runners/verify-macos-app.sh` to check the bundled application icon, two executable slices, bundle minimum, and Mach-O minimum versions before accepting the app.
+
+The Debug and Release targets use the layered `apps/macos/Sources/HysteriaX/Resources/AppIcon.icon` document. Its black lightning SVG comes directly from `apps/macos/Design/AppIcon/hysteriax-lightning-black.sketch`; the white background is a separate native icon layer. This avoids the extra background and reduced artwork size observed when macOS processed the flattened monochrome icon. The SVG viewport maps the original Sketch 824 × 824 safe area into the Icon Composer canvas so that the rendered artwork matches Decentralized’s size and placement.
+
+The original Sketch file and its 10 exported PNG sizes remain available in `apps/macos/Design/AppIcon` and `apps/macos/Sources/HysteriaX/Resources/Assets.xcassets/AppIcon.appiconset`. Xcode uses the same-name Icon Composer document for the application icon. After changing it, rebuild and relaunch the project app; inspect the actual system-rendered icon as well as the exported PNG.
 
 Run `scripts/build/release-macos.sh` locally with `HYSTERIAX_RELEASE_VERSION` set to a version such as `1.2.3`. The DMG is written under `dist/` by default; set `HYSTERIAX_RELEASE_OUTPUT_DIR` to choose another output directory. The script does not access Keychain or sign the app or disk image.
 

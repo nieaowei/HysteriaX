@@ -15,7 +15,28 @@ const PAGE: i64 = 100;
 const KIND: &str = "mtls-probe-renewal";
 const SCAN_KIND: &str = "mtls-probe-admission";
 const SCAN_KEY: &str = "mtls:probes";
-const DUE: &str = "SELECT p.node_id,p.ca_id,p.ca_version,p.credential_id,p.credential_version FROM mtls_probe_versions p JOIN mtls_ca_generations g ON g.ca_id=p.ca_id AND g.ca_version=p.ca_version JOIN nodes n ON n.id=p.node_id JOIN credentials c ON c.id=g.ca_id WHERE g.state='published' AND NOT c.archived AND n.state NOT IN ('deleting','delete_failed') AND NOT p.discarded AND p.next_action_at<=$1 AND NOT EXISTS(SELECT 1 FROM mtls_probe_versions newer WHERE newer.node_id=p.node_id AND newer.ca_id=p.ca_id AND newer.ca_version=p.ca_version AND newer.credential_version>p.credential_version AND NOT newer.discarded) AND EXISTS(SELECT 1 FROM mtls_node_trust t WHERE t.node_id=p.node_id AND t.ca_id=p.ca_id AND t.ca_version=p.ca_version AND (t.desired OR t.deployed)) AND NOT EXISTS(SELECT 1 FROM background_work w WHERE w.id='mtls-probe:'||p.node_id||':'||p.ca_id||':'||p.ca_version::text AND w.state IN ('queued','running')) ORDER BY p.next_action_at,p.node_id,p.ca_id,p.ca_version LIMIT $2 FOR NO KEY UPDATE OF p SKIP LOCKED";
+// Share eligibility with readiness, but substitute a direct $1 bind for the
+// locked query so PostgreSQL can estimate the actual due range.
+const DUE: &str = concat!(
+    include_str!("probe_due.sql"),
+    " ORDER BY p.next_action_at,p.node_id,p.ca_id,p.ca_version LIMIT $2 FOR NO KEY UPDATE OF p SKIP LOCKED"
+);
+const DEMAND: maintenance::Demand = maintenance::Demand {
+    kind: SCAN_KIND,
+    key: SCAN_KEY,
+    predicate: concat!(
+        // Queued children already keep the worker busy. Let ordinary bounded
+        // admission continue, and avoid rescanning an already admitted backlog
+        // on every shared hint refresh. An empty queue enables urgent discovery.
+        "CASE WHEN EXISTS(SELECT 1 FROM background_work WHERE kind='mtls-probe-renewal' AND state='queued') THEN false ELSE (",
+        // Gate the joined readiness check with an ordered due-range lookup.
+        // With an unknown DB cutoff, joining first can walk every future node.
+        "CASE WHEN EXISTS(WITH first_due AS MATERIALIZED (SELECT 1 FROM mtls_probe_versions p WHERE NOT p.discarded AND p.next_action_at<=(SELECT now FROM cutoff) ORDER BY p.next_action_at,p.node_id,p.ca_id,p.ca_version LIMIT 1) SELECT 1 FROM first_due) THEN EXISTS(WITH eligible AS MATERIALIZED (",
+        include_str!("probe_due.sql"),
+        " ORDER BY p.next_action_at,p.node_id,p.ca_id,p.ca_version LIMIT 1) SELECT 1 FROM eligible) ELSE false END",
+        ") END"
+    ),
+};
 
 pub async fn run(state: AppState) {
     let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
@@ -23,13 +44,17 @@ pub async fn run(state: AppState) {
     let mut shutdown = state.shutdown.subscribe();
     loop {
         tokio::select! {_=shutdown.wait_for(|stop|*stop)=>return,_=interval.tick()=>{}}
-        if let Err(error) = pass(&state).await {
+        if let Err(error) = state
+            .maintenance
+            .run_urgent(&[SCAN_KIND, KIND], &[SCAN_KEY], DEMAND, pass(&state))
+            .await
+        {
             tracing::warn!(%error,"probe renewal deferred");
         }
     }
 }
 pub async fn pass(state: &AppState) -> Result<()> {
-    maintenance::ensure(&state.pool, SCAN_KEY, SCAN_KIND, json!({})).await?;
+    maintenance::ensure_urgent(&state.pool, DEMAND, json!({})).await?;
     if let Some(work) = maintenance::claim(&state.pool, SCAN_KIND, &state.instance_id).await? {
         crate::execution::supervise(state.pool.clone(), work.leases.clone(), async {
             if let Err(error) = admit_work(&state.pool, &work).await {
@@ -42,6 +67,7 @@ pub async fn pass(state: &AppState) -> Result<()> {
         .into_result()?
         .transpose()?;
     }
+    state.maintenance.refresh_hint().await?;
     if let Some(work) = maintenance::claim(&state.pool, KIND, &state.instance_id).await? {
         crate::execution::supervise(state.pool.clone(), work.leases.clone(), async {
             if let Err(error) = renew_work(state, &work).await {
@@ -62,14 +88,14 @@ async fn admit_work(pool: &PgPool, work: &Work) -> Result<()> {
         let work=work.clone();Box::pin(async move {
             work.guard_on(tx).await?;
             let now:DateTime<Utc>=sqlx::query_scalar("SELECT clock_timestamp()").fetch_one(&mut **tx).await?;
-            let rows=sqlx::query(DUE).bind(now).bind(PAGE).fetch_all(&mut **tx).await?;
+            let rows=sqlx::query(sqlx::AssertSqlSafe(DUE.replace("(SELECT now FROM cutoff)", "$1"))).bind(now).bind(PAGE).fetch_all(&mut **tx).await?;
             for row in &rows {
                 let node:String=row.get("node_id");let ca:String=row.get("ca_id");let version:i64=row.get("ca_version");
                 let id=format!("mtls-probe:{node}:{ca}:{version}");
                 sqlx::query("INSERT INTO background_work(id,kind,payload) VALUES($1,$2,$3) ON CONFLICT(id) DO UPDATE SET state='queued',owner=NULL,started_at=NULL,finished_at=NULL,error_code=NULL,available_at=clock_timestamp(),payload=excluded.payload WHERE background_work.kind=excluded.kind AND background_work.state IN ('complete','failed')")
                     .bind(id).bind(KIND).bind(json!({"node_id":node,"ca_id":ca,"ca_version":version,"credential_id":row.get::<String,_>("credential_id"),"credential_version":row.get::<i64,_>("credential_version"),"lease_resources":[format!("ca:{ca}"),format!("node:{node}")]})).execute(&mut **tx).await?;
             }
-            work.finish_on(tx,false,if rows.len()==PAGE as usize {1}else{10},None).await
+            work.finish_on(tx,false,if rows.len()==PAGE as usize {1}else{30},None).await
         })
     }).await
 }

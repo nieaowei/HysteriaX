@@ -86,6 +86,8 @@ async fn subscribers_observe_publication_and_epoch_changes() {
     assert_eq!(hub.stats()["watermark"], 0);
     sqlx::query("INSERT INTO job_events(job_id,event_type,payload_json,created_at) VALUES('a','new','{}',now())")
             .execute(&pool).await.unwrap();
+    // A separate publisher commits; the hub only observes durable publication.
+    assert_eq!(publish_pending(&pool).await.unwrap(), 1);
     updated(&mut first).await;
     updated(&mut second).await;
     assert_eq!(hub.stats()["watermark"], 1);
@@ -99,4 +101,45 @@ async fn subscribers_observe_publication_and_epoch_changes() {
     updated(&mut second).await;
     assert_eq!(hub.stats()["epoch"], epoch);
     assert_eq!(hub.stats()["watermark"], 1);
+}
+
+#[tokio::test]
+async fn an_empty_outbox_does_not_wait_for_the_stream_lock() {
+    let pool = crate::db::test_pool_with_max_connections(2).await;
+    let mut held = pool.begin().await.unwrap();
+    sqlx::query("SELECT head FROM event_publication_stream WHERE id FOR UPDATE")
+        .execute(&mut *held)
+        .await
+        .unwrap();
+    assert_eq!(
+        tokio::time::timeout(std::time::Duration::from_secs(1), publish_pending(&pool))
+            .await
+            .expect("empty publication must not acquire the stream lock")
+            .unwrap(),
+        0
+    );
+    held.rollback().await.unwrap();
+}
+
+#[tokio::test]
+async fn publisher_notifies_local_subscribers_after_publication_is_committed() {
+    let pool = crate::db::test_pool_with_max_connections(3).await;
+    fixture(&pool).await;
+    let state = crate::state::AppState::new(
+        pool.clone(),
+        crate::security::SecretBox::from_base64("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+            .unwrap(),
+    );
+    // Subscribe directly so the notification is from the publisher, not the head poller.
+    let mut receiver = state.events.changed.subscribe();
+    sqlx::query("INSERT INTO job_events(job_id,event_type,payload_json,created_at) VALUES('a','new','{}',now())")
+        .execute(&pool).await.unwrap();
+    let publisher = tokio::spawn(run_publisher(state));
+    tokio::time::timeout(std::time::Duration::from_secs(2), receiver.changed())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(read_database(&pool, 0).await.unwrap().len(), 1);
+    publisher.abort();
+    let _ = publisher.await;
 }

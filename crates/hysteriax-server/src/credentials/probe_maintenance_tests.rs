@@ -475,7 +475,8 @@ async fn empty_due_range_uses_the_due_index_with_many_future_probes() {
         .await
         .unwrap();
     let plan: serde_json::Value = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
-        "EXPLAIN (ANALYZE,BUFFERS,FORMAT JSON) {DUE}"
+        "EXPLAIN (ANALYZE,BUFFERS,FORMAT JSON) {}",
+        DUE.replace("(SELECT now FROM cutoff)", "$1")
     )))
     .bind(now)
     .bind(PAGE)
@@ -495,6 +496,8 @@ async fn empty_due_range_uses_the_due_index_with_many_future_probes() {
         }
     }
     assert!(indexed_empty(&plan), "{plan}");
+    let readiness:serde_json::Value=sqlx::query_scalar(sqlx::AssertSqlSafe(format!("EXPLAIN (ANALYZE,BUFFERS,FORMAT JSON) WITH cutoff AS MATERIALIZED (SELECT clock_timestamp() AS now) SELECT ({})",DEMAND.predicate))).fetch_one(&state.pool).await.unwrap();
+    assert!(indexed_empty(&readiness), "{readiness}");
 }
 
 #[tokio::test]
@@ -513,4 +516,51 @@ async fn repeat_migration_preserves_existing_certificates_nodes_and_current_prob
         .unwrap();
     assert_eq!(before, after);
     assert_eq!(count(&state,"SELECT count(*) FROM pg_indexes WHERE schemaname=current_schema() AND indexname='mtls_probe_current_scope_idx'").await,1);
+}
+
+#[tokio::test]
+async fn fresh_business_readiness_bypasses_the_completed_idle_scanner_deadline() {
+    let (state, _) = fixture(1).await;
+    sqlx::query("UPDATE mtls_probe_versions SET next_action_at=clock_timestamp()+interval '1 day'")
+        .execute(&state.pool)
+        .await
+        .unwrap();
+    admit(&state).await;
+    let remaining:i64=sqlx::query_scalar("SELECT extract(epoch FROM available_at-clock_timestamp())::bigint FROM background_work WHERE id=$1").bind(format!("maintenance:{SCAN_KEY}")).fetch_one(&state.pool).await.unwrap();
+    assert!(remaining >= 25);
+    assert!(
+        state
+            .maintenance
+            .run_urgent(&[SCAN_KIND, KIND], &[SCAN_KEY], DEMAND, async { Ok(()) })
+            .await
+            .unwrap()
+            .is_none()
+    );
+    sqlx::query(
+        "UPDATE mtls_probe_versions SET next_action_at=clock_timestamp()-interval '1 second'",
+    )
+    .execute(&state.pool)
+    .await
+    .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(1050)).await;
+    state
+        .maintenance
+        .run_urgent(&[SCAN_KIND, KIND], &[SCAN_KEY], DEMAND, async {
+            maintenance::ensure_urgent(&state.pool, DEMAND, json!({})).await?;
+            let work = maintenance::claim(&state.pool, SCAN_KIND, "new-arrival")
+                .await?
+                .unwrap();
+            admit_work(&state.pool, &work).await
+        })
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        count(
+            &state,
+            "SELECT count(*) FROM background_work WHERE kind='mtls-probe-renewal'"
+        )
+        .await,
+        1
+    );
 }

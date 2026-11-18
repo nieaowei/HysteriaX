@@ -55,6 +55,42 @@ async fn retention_preserves_accounting_and_removes_only_old_monitoring() {
     }
 }
 #[tokio::test]
+async fn scheduled_retention_reacts_to_external_deadline_changes_without_manual_passes() {
+    let (state, node) = fixture().await;
+    let insert_old = || async {
+        sqlx::query("INSERT INTO online_samples(cycle_id,node_id,sampled_at,status) VALUES($1,$2,clock_timestamp()-interval '32 days','ok')")
+            .bind(Uuid::new_v4()).bind(&node).execute(&state.pool).await.unwrap();
+    };
+    insert_old().await;
+    sqlx::query("INSERT INTO online_samples(cycle_id,node_id,sampled_at,status) VALUES($1,$2,clock_timestamp(),'ok')")
+        .bind(Uuid::new_v4()).bind(&node).execute(&state.pool).await.unwrap();
+    let worker = tokio::spawn(retention_loop(state.clone()));
+    tokio::time::timeout(Duration::from_secs(6), async {
+        while number(&state, "SELECT count(*) FROM background_work WHERE kind='monitoring-retention' AND state='complete'").await != 3 {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }).await.unwrap();
+    assert_eq!(
+        number(&state, "SELECT count(*) FROM online_samples").await,
+        1
+    );
+    // Another instance advances a daily task after the local snapshot was read.
+    insert_old().await;
+    sqlx::query("UPDATE background_work SET available_at=clock_timestamp()-interval '1 second' WHERE id='maintenance:monitoring-retention:online_samples'")
+        .execute(&state.pool).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(6), async {
+        while number(&state, "SELECT count(*) FROM online_samples").await != 1 {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
+    state.shutdown.send_replace(true);
+    worker.await.unwrap();
+    assert_eq!(number(&state, "SELECT count(*) FROM background_work WHERE kind='monitoring-retention' AND state='complete'").await, 3);
+}
+
+#[tokio::test]
 async fn monitoring_retention_is_bounded_skips_claimed_rows_and_recovers_its_remaining_work() {
     use crate::background::maintenance;
     let (state, node) = fixture().await;

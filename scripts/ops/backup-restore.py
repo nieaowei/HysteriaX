@@ -289,7 +289,7 @@ def backup(project_root, requested_path=None):
     archive_path = archive_path.resolve()
     if not api_is_ready(project_root):
         raise RuntimeError("API must be running and ready before backup")
-    compose(project_root, "stop", "--timeout", "60", "api")
+    compose(project_root, "stop", "--timeout", "150", "api")
     try:
         metadata = create_archive(project_root, archive_path, master_key)
     finally:
@@ -472,7 +472,7 @@ def restore(project_root, archive_path):
             if restored_version != metadata.get("schema_version"):
                 raise RuntimeError("restored database schema version does not match its manifest")
 
-            compose(project_root, "stop", "--timeout", "60", "api")
+            compose(project_root, "stop", "--timeout", "150", "api")
             api_stopped = True
             _psql_admin(
                 project_root,
@@ -488,7 +488,7 @@ def restore(project_root, archive_path):
             start_api(project_root)
         except Exception:
             if api_stopped:
-                compose(project_root, "stop", "--timeout", "60", "api", check=False)
+                compose(project_root, "stop", "--timeout", "150", "api", check=False)
             if restored_renamed:
                 _rename_database(project_root, DATABASE_NAME, failed_db)
                 created_staging = False

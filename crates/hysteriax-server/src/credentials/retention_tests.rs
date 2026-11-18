@@ -1,6 +1,9 @@
 use super::*;
 use crate::security::SecretBox;
 
+#[path = "retention_benchmarks.rs"]
+mod benchmarks;
+
 async fn fixture(expired: i64) -> AppState {
     let pool = db::test_pool_with_max_connections(8).await;
     sqlx::raw_sql("INSERT INTO credentials(id,name,kind,created_at,updated_at) VALUES('ca','CA','ca_identity',now(),now()); INSERT INTO credential_versions(credential_id,version,payload_enc,created_at) VALUES('ca',1,'ca-preserved',now()); INSERT INTO mtls_authorities(credential_id,source) VALUES('ca','generated'); INSERT INTO mtls_ca_generations(ca_id,ca_version,state,expires_at) VALUES('ca',1,'published',now()+interval '1 year');").execute(&pool).await.unwrap();
@@ -259,4 +262,194 @@ async fn concurrent_history_pin_protects_its_version_while_other_material_is_col
         count(&state, "SELECT count(*) FROM credential_batches").await,
         1
     );
+}
+
+#[tokio::test]
+async fn idle_sweeps_use_read_committed_and_preserve_latest_material_and_delay() {
+    let state = fixture(0).await;
+    assert_eq!(page(&state).await, 0);
+    let work = claim(&state, "idle-owner").await;
+    assert_eq!(work.payload["idle"], true);
+    let before: serde_json::Value = sqlx::query_scalar(
+        "SELECT to_jsonb(v) FROM credential_versions v WHERE credential_id='leaf' AND version=1",
+    )
+    .fetch_one(&state.pool)
+    .await
+    .unwrap();
+    sqlx::raw_sql("CREATE FUNCTION require_idle_read_committed() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.kind='credential-retention' AND NEW.state='complete' AND current_setting('transaction_isolation')<>'read committed' THEN RAISE EXCEPTION 'idle acknowledgement must use READ COMMITTED'; END IF; RETURN NEW; END $$; CREATE TRIGGER require_idle_read_committed BEFORE UPDATE ON background_work FOR EACH ROW EXECUTE FUNCTION require_idle_read_committed();")
+        .execute(&state.pool).await.unwrap();
+    let result = crate::execution::supervise(
+        state.pool.clone(),
+        work.leases.clone(),
+        prune_work(&state.pool, &work),
+    )
+    .await
+    .into_result()
+    .unwrap()
+    .unwrap()
+    .unwrap();
+    assert_eq!(result, 0);
+    let after: serde_json::Value = sqlx::query_scalar(
+        "SELECT to_jsonb(v) FROM credential_versions v WHERE credential_id='leaf' AND version=1",
+    )
+    .fetch_one(&state.pool)
+    .await
+    .unwrap();
+    assert_eq!(before, after);
+    let (status,owner,delay):(String,Option<String>,f64)=sqlx::query_as("SELECT state,owner,extract(epoch FROM available_at-finished_at)::double precision FROM background_work WHERE id=$1")
+        .bind(&work.id).fetch_one(&state.pool).await.unwrap();
+    assert_eq!(status, "complete");
+    assert!(owner.is_none());
+    assert!((299.0..=301.0).contains(&delay));
+}
+
+#[tokio::test]
+async fn idle_probe_with_new_candidates_keeps_deletion_serializable() {
+    let state = fixture(0).await;
+    assert_eq!(page(&state).await, 0);
+    add_leaf(&state.pool, "later", 1).await;
+    let work = claim(&state, "idle-owner").await;
+    assert_eq!(work.payload["idle"], true);
+    sqlx::raw_sql("CREATE FUNCTION require_serializable_deletion() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF current_setting('transaction_isolation')<>'serializable' THEN RAISE EXCEPTION 'private material deletion must remain SERIALIZABLE'; END IF; RETURN OLD; END $$; CREATE TRIGGER require_serializable_deletion BEFORE DELETE ON credential_versions FOR EACH ROW EXECUTE FUNCTION require_serializable_deletion();")
+        .execute(&state.pool).await.unwrap();
+    assert_eq!(prune_work(&state.pool, &work).await.unwrap(), 1);
+    assert_eq!(
+        count(
+            &state,
+            "SELECT count(*) FROM credential_versions WHERE credential_id='later' AND version=1"
+        )
+        .await,
+        0
+    );
+    assert_eq!(
+        count(
+            &state,
+            "SELECT count(*) FROM credential_versions WHERE credential_id='later' AND version=2"
+        )
+        .await,
+        1
+    );
+    let payload: serde_json::Value =
+        sqlx::query_scalar("SELECT payload FROM background_work WHERE id=$1")
+            .bind(&work.id)
+            .fetch_one(&state.pool)
+            .await
+            .unwrap();
+    assert_eq!(payload["idle"], false);
+}
+
+#[tokio::test]
+async fn a_pin_after_the_idle_probe_is_rechecked_by_the_deletion_transaction() {
+    let state = fixture(0).await;
+    assert_eq!(page(&state).await, 0);
+    add_leaf(&state.pool, "later", 1).await;
+    let work = claim(&state, "idle-owner").await;
+    assert!(!finish_empty_page(&state.pool, &work).await.unwrap());
+    sqlx::query("INSERT INTO credential_batches(id,credential_id,version,created_at) VALUES('new-pin','later',1,now())")
+        .execute(&state.pool).await.unwrap();
+    assert_eq!(prune_candidates(&state.pool, &work).await.unwrap(), 0);
+    assert_eq!(
+        count(
+            &state,
+            "SELECT count(*) FROM credential_versions WHERE credential_id='later'"
+        )
+        .await,
+        2
+    );
+    assert_eq!(
+        count(
+            &state,
+            "SELECT count(*) FROM credential_batches WHERE id='new-pin'"
+        )
+        .await,
+        1
+    );
+}
+
+#[tokio::test]
+async fn an_empty_tail_resets_the_cursor_and_revisits_earlier_candidates() {
+    let state = fixture(1).await;
+    let mut work = claim(&state, "idle-owner").await;
+    work.payload = json!({"after_id":"leaf","after_version":999,"idle":true});
+    sqlx::query("UPDATE background_work SET payload=$2 WHERE id=$1")
+        .bind(&work.id)
+        .bind(&work.payload)
+        .execute(&state.pool)
+        .await
+        .unwrap();
+    assert_eq!(prune_work(&state.pool, &work).await.unwrap(), 0);
+    let (payload,delay):(serde_json::Value,f64)=sqlx::query_as("SELECT payload,extract(epoch FROM available_at-finished_at)::double precision FROM background_work WHERE id=$1")
+        .bind(&work.id).fetch_one(&state.pool).await.unwrap();
+    assert!(payload["after_id"].is_null());
+    assert_eq!(payload["idle"], false);
+    assert!((0.0..=1.1).contains(&delay));
+    assert_eq!(page(&state).await, 1);
+}
+
+#[tokio::test]
+async fn idle_probe_rejects_dirty_reference_state_and_a_replaced_owner() {
+    let state = fixture(0).await;
+    assert_eq!(page(&state).await, 0);
+    let old = claim(&state, "old-owner").await;
+    sqlx::query("INSERT INTO credential_reference_dirty(kind,source_id) VALUES('node','missing')")
+        .execute(&state.pool)
+        .await
+        .unwrap();
+    assert!(prune_work(&state.pool, &old).await.is_err());
+    assert_eq!(
+        count(
+            &state,
+            "SELECT count(*) FROM background_work WHERE owner='old-owner' AND state='running'"
+        )
+        .await,
+        1
+    );
+    sqlx::query("DELETE FROM credential_reference_dirty")
+        .execute(&state.pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE resource_leases SET expires_at=clock_timestamp()-interval '1 second' WHERE work_id=$1")
+        .bind(&old.id).execute(&state.pool).await.unwrap();
+    let current = maintenance::claim(&state.pool, KIND, "new-owner")
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(prune_work(&state.pool, &old).await.is_err());
+    assert_eq!(
+        count(
+            &state,
+            "SELECT count(*) FROM background_work WHERE owner='new-owner' AND state='running'"
+        )
+        .await,
+        1
+    );
+    assert_eq!(prune_work(&state.pool, &current).await.unwrap(), 0);
+}
+
+#[tokio::test]
+async fn failed_idle_acknowledgement_preserves_cursor_and_live_lease() {
+    let state = fixture(0).await;
+    assert_eq!(page(&state).await, 0);
+    let mut work = claim(&state, "idle-owner").await;
+    work.payload = json!({"after_id":"tail","after_version":99,"idle":true});
+    sqlx::query("UPDATE background_work SET payload=$2 WHERE id=$1")
+        .bind(&work.id)
+        .bind(&work.payload)
+        .execute(&state.pool)
+        .await
+        .unwrap();
+    sqlx::raw_sql("CREATE FUNCTION reject_empty_ack() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.kind='credential-retention' AND NEW.state='complete' THEN RAISE EXCEPTION 'empty acknowledgement rejected'; END IF; RETURN NEW; END $$; CREATE TRIGGER reject_empty_ack BEFORE UPDATE ON background_work FOR EACH ROW EXECUTE FUNCTION reject_empty_ack();")
+        .execute(&state.pool).await.unwrap();
+    assert!(prune_work(&state.pool, &work).await.is_err());
+    let (payload, status, owner): (serde_json::Value, String, String) =
+        sqlx::query_as("SELECT payload,state,owner FROM background_work WHERE id=$1")
+            .bind(&work.id)
+            .fetch_one(&state.pool)
+            .await
+            .unwrap();
+    assert_eq!(payload, work.payload);
+    assert_eq!((status.as_str(), owner.as_str()), ("running", "idle-owner"));
+    work.guard_on(&mut state.pool.begin().await.unwrap())
+        .await
+        .unwrap();
 }
