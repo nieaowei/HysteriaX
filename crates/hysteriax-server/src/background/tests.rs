@@ -218,6 +218,51 @@ async fn claims_share_node_leases_with_jobs_and_skip_unrelated_busy_nodes() {
     assert_eq!(other.node, first);
 }
 #[tokio::test]
+async fn sampling_claim_rolls_back_each_contended_candidate_before_claiming_the_next() {
+    let (state, first) = fixture().await;
+    let second = node(&state).await;
+    let third = node(&state).await;
+    let cycle = freeze(&state, "network").await;
+    let blocked_nodes = [&first, &second];
+    sqlx::query(
+        "UPDATE background_work SET available_at=available_at-interval '1 second'
+         WHERE cycle_id=$1 AND node_id=ANY($2)",
+    )
+    .bind(cycle)
+    .bind(&blocked_nodes[..])
+    .execute(&state.pool)
+    .await
+    .unwrap();
+    let keys = blocked_nodes.map(|id| format!("node:{id}"));
+    sqlx::query("INSERT INTO resource_leases(resource_key) SELECT unnest($1::text[])")
+        .bind(&keys[..])
+        .execute(&state.pool)
+        .await
+        .unwrap();
+    let mut lock = state.pool.begin().await.unwrap();
+    sqlx::query("SELECT resource_key FROM resource_leases WHERE resource_key=ANY($1) FOR UPDATE")
+        .bind(&keys[..])
+        .execute(&mut *lock)
+        .await
+        .unwrap();
+
+    let work = claim(&state.pool, "network", "owner")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(work.node, third);
+    let rejected_work_keys = blocked_nodes.map(|id| format!("work:{cycle}:{id}"));
+    let partial: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM resource_leases WHERE resource_key=ANY($1)")
+            .bind(&rejected_work_keys[..])
+            .fetch_one(&state.pool)
+            .await
+            .unwrap();
+    assert_eq!(partial, 0);
+    lock.rollback().await.unwrap();
+}
+
+#[tokio::test]
 async fn takeover_preserves_capture_identity_and_fences_previous_owner() {
     let (state, _) = fixture().await;
     freeze(&state, "network").await;

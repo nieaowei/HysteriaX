@@ -85,6 +85,26 @@ Use the initial token from `.env` as the Bearer token. In macOS Settings, create
 
 Compose also defaults to 16. Existing environment files with an explicit value such as 4 continue to use that value; set it to 16 and recreate the API container to adopt the new setting. Sampling cadence, operation timeouts, and the database connection pool have their own settings. The local 16-worker comparison used a 32-connection pool; concurrency alone does not establish a production node-capacity guarantee. See the [sampling comparison scope](deployment-testing.md#采集并发对照).
 
+## Sampling history retention
+
+The API automatically deletes eligible terminal sampling work and sampling cycles after 14 days. It can also remove their released work leases and discarded batches that never requested a remote counter clear or captured a payload.
+
+The worker checks every five minutes when idle and resumes a partial sweep after one second. Logs under `sampling retention claim finished` report committed deletions by table, elapsed time and remaining pages.
+
+## Database history retention
+
+The API starts all three database history cleanup groups automatically.
+
+| Cleanup group | Data handled |
+| --- | --- |
+| Traffic detail | Fully settled capture details after 14 days. |
+| Traffic history | Traffic ledger, eligible network samples, settled batch headers and resolved gaps after 60 days. |
+| Operations history | Event replay after 30 days, eligible terminal jobs, job events and audit after 90 days, and expired instance or probe metadata. |
+
+Logs under `history retention page committed` record the table, counts, oldest inspected timestamp and skip reasons. Each traffic group uses four node-based lanes with independent cursors. Database rules and exceptions are listed in [Database tables](database-tables.md).
+
+Before upgrading from an older database schema, stop the old API, verify a recoverable backup and apply pending migrations with `--migrate-only`. Index builds need additional PostgreSQL storage during maintenance. Investigate data recovery in an isolated restored database. Compare live rows, dead rows and reusable space separately from filesystem allocation.
+
 ## File upload timeout
 
 `HYSTERIAX_SSH_UPLOAD_TIMEOUT_SECONDS` controls each SSH file upload independently of `HYSTERIAX_OPERATION_TIMEOUT_SECONDS`. It defaults to **180 seconds (3 minutes)** and accepts 1–3600 seconds. Missing or invalid values use 180 seconds. For a bandwidth-limited management server, increase only this setting; ordinary SSH commands, probes and sampling retain their existing operation budgets. The client reserves another five seconds after the receiver deadline to collect its completion receipt.

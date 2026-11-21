@@ -26,7 +26,8 @@ def main():
     containers = []
     api = None
     result = {'image': args.image, 'runtime_stack_override': False,
-              'scope': 'fresh isolated database; full worker startup, 300-second fallback and graceful stop; no node capacity claim'}
+              'scope': 'fresh isolated database with complete worker startup and graceful stop',
+              'duration_seconds': args.seconds}
     command('docker', 'network', 'create', '--internal', '--label', 'hysteriax.test=' + label, network)
 
     def run(name, *options):
@@ -75,6 +76,24 @@ def main():
         with (args.output / 'migrate.log').open('w') as log:
             subprocess.run(['docker', 'logs', init], stdout=log, stderr=subprocess.STDOUT, check=True)
         assert init_state['ExitCode'] == 0, 'Fixture migration failed'
+        command('docker', 'exec', pg, 'psql', '-U', 'postgres', '-d', 'startup',
+                '-v', 'ON_ERROR_STOP=1', '-c', """
+            WITH cycle AS (
+              INSERT INTO sampling_cycles(id,kind,period_start,deadline_at,expected_nodes)
+              VALUES(gen_random_uuid(),'network',now()-interval '20 days 1 minute',
+                     now()-interval '20 days',1)
+              RETURNING id,kind,deadline_at
+            )
+            INSERT INTO background_work(id,kind,cycle_id,node_id,state,deadline_at,finished_at)
+            SELECT id::text||':retention-fixture',kind,id,'retention-fixture','complete',
+                   deadline_at,deadline_at FROM cycle
+        """)
+        command('docker', 'exec', pg, 'psql', '-U', 'postgres', '-d', 'startup',
+                '-v', 'ON_ERROR_STOP=1', '-c', """
+            INSERT INTO audit_records(id,actor,action,entity_type,entity_id,detail_json,created_at)
+            VALUES ('history-retention-fixture','fixture','test','audit','fixture','{}',
+                    clock_timestamp()-interval '100 days')
+        """)
         api = run('api', '--platform', 'linux/amd64', '--read-only', '--tmpfs', '/tmp',
             '--stop-timeout', '150', *env_args, args.image)
         data = json.loads(command('docker', 'inspect', api))[0]
@@ -104,8 +123,32 @@ def main():
         assert 'stack overflow' not in raw and 'panicked at' not in raw
         assert raw.count('sampling queue drained') == 3 and 'sampling workers drained' in raw
         assert 'maintenance poll summary' in raw and 'coalesced_empty=' in raw, 'Missing maintenance counters'
+        assert raw.count('sampling retention worker started') == 1
+        workers = [line for line in raw.splitlines() if 'history retention started' in line]
+        assert len(workers) == 9
+        for group, count in (('traffic-detail-retention', 4),
+                             ('traffic-history-retention', 4),
+                             ('operations-history-retention', 1)):
+            assert sum(f'kind="{group}"' in line for line in workers) == count
+        claims = [line for line in raw.splitlines() if 'sampling retention claim finished' in line]
+        assert claims and all('failed=false' in line for line in claims), 'Retention worker did not complete'
+        assert any(re.search(r'\beligible=[1-9]\d*\b', line) for line in claims)
+        deleted = sum(int(re.search(r'\bwork_deleted=(\d+)\b', line)[1]) for line in claims)
+        remaining = command('docker', 'exec', pg, 'psql', '-U', 'postgres', '-d', 'startup',
+                            '-Atc', "SELECT count(*) FROM background_work WHERE node_id='retention-fixture'")
+        assert (deleted, int(remaining)) == (1, 0)
+        result.update(retention_work_deleted=deleted,
+                      retention_work_remaining=int(remaining))
+        assert any('history retention page committed' in line
+                   and 'table="audit_records"' in line and 'eligible=1' in line
+                   and 'deleted=1' in line for line in raw.splitlines())
+        remaining = command('docker', 'exec', pg, 'psql', '-U', 'postgres', '-d', 'startup',
+                            '-Atc', "SELECT count(*) FROM audit_records WHERE id='history-retention-fixture'")
+        assert int(remaining) == 0
+        result.update(history_retention_audit_remaining=int(remaining))
         result.update(passed=True, probes=probes, exit_code=0, restart_count=0,
-                      graceful_sampling_queues=3, image_id=data['Image'])
+                      graceful_sampling_queues=3, history_retention_workers=len(workers),
+                      image_id=data['Image'])
     except Exception as error:
         result.update(passed=False, error=str(error) or type(error).__name__)
         raise

@@ -101,30 +101,38 @@ pub async fn publish_pending(pool: &PgPool) -> Result<usize, sqlx::Error> {
     }
     use sqlx::Acquire;
     let mut tx = connection.begin().await?;
-    let mut head: i64 =
-        sqlx::query_scalar("SELECT head FROM event_publication_stream WHERE id FOR UPDATE")
-            .fetch_one(&mut *tx)
-            .await?;
+    let (head, last_published): (i64, chrono::DateTime<chrono::Utc>) = sqlx::query_as(
+        "SELECT head,last_published_at FROM event_publication_stream WHERE id FOR UPDATE",
+    )
+    .fetch_one(&mut *tx)
+    .await?;
     let pending: Vec<i64> = sqlx::query_scalar(
         "SELECT event_id FROM event_publication_pending ORDER BY event_id LIMIT 256",
     )
     .fetch_all(&mut *tx)
     .await?;
-    for id in &pending {
-        head += 1;
-        sqlx::query("INSERT INTO event_publications(publication_seq,event_id) VALUES($1,$2)")
-            .bind(head)
-            .bind(id)
-            .execute(&mut *tx)
-            .await?;
-    }
     if !pending.is_empty() {
+        // Use one timestamp for the ordered batch, after taking the stream lock.
+        let published_at: chrono::DateTime<chrono::Utc> = sqlx::query_scalar(
+            "WITH published AS (
+                INSERT INTO event_publications(publication_seq,event_id,published_at)
+                SELECT $1+p.position,p.event_id,greatest($3::timestamptz,statement_timestamp())
+                FROM unnest($2::bigint[]) WITH ORDINALITY p(event_id,position)
+                RETURNING published_at
+             ) SELECT max(published_at) FROM published",
+        )
+        .bind(head)
+        .bind(&pending)
+        .bind(last_published)
+        .fetch_one(&mut *tx)
+        .await?;
         sqlx::query("DELETE FROM event_publication_pending WHERE event_id=ANY($1)")
             .bind(&pending)
             .execute(&mut *tx)
             .await?;
-        sqlx::query("UPDATE event_publication_stream SET head=$1 WHERE id")
-            .bind(head)
+        sqlx::query("UPDATE event_publication_stream SET head=$1,last_published_at=$2 WHERE id")
+            .bind(head + pending.len() as i64)
+            .bind(published_at)
             .execute(&mut *tx)
             .await?;
     }

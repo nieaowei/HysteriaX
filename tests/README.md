@@ -4,6 +4,10 @@
 
 与操作工具、组件专属测试的边界见 [目录与测试归属](../docs/code-layout.md)。新增验证程序按下表归组，正式验收的环境和门槛以各入口说明为准。
 
+历史采样清理回归入口是 `cargo test -p hysteriax-server background::retention::tests`。持续容量对照使用可丢弃的本地 `TEST_DATABASE_URL`、本机可运行的 `HYSTERIAX_PROBE_BINARY` 和私有 `HX_SAMPLING_OUTPUT`。设置 `HYSTERIAX_SAMPLING_INTERVAL_SECONDS=60`、`HYSTERIAX_EXECUTION_LEASE_SECONDS=180`、`HYSTERIAX_DB_POOL_MAX_CONNECTIONS=100` 和 `RUST_MIN_STACK=16777216`，执行 `cargo test --locked -p hysteriax-server background::sampling_benchmark::retention::sampling_retention_capacity -- --ignored --exact --nocapture --test-threads=1`。夹具含 10 万用户、1 万节点、每分钟 3 万条进入清理窗口的合成工作及 6 个走本地 SSH/QUIC 路径的采样节点。
+
+数据库历史清理回归入口是 `cargo test -p hysteriax-server background::history_retention::tests`。容量入口复用上段的 PostgreSQL、Hysteria 及运行环境，测试名为 `history_retention_capacity`，参数为 `--ignored --nocapture --test-threads=1`。基线 5 分钟，清理 30 分钟，均从完整采样周期开始。两阶段均运行 0048 并注入每分钟 3 万条到期采样工作。设置 `HX_HISTORY_RETENTION_SMOKE=1` 时两阶段各 65 秒，供检查夹具与入口。
+
 | 目录 | 内容 | 常用入口 |
 | --- | --- | --- |
 | [unit/](unit/) | 运维脚本、测试辅助代码和文档提取工具的 Python 单元测试 | `unittest discover` |
@@ -35,4 +39,4 @@ bash apps/macos/Tests/runners/verify-localization.sh
 
 `TEST_DATABASE_URL=<可丢弃本地 PostgreSQL> RUST_MIN_STACK=16777216 cargo test --locked -p hysteriax-server node_limits::tests::background_idle_probes_at_target_cardinality_are_bounded -- --ignored --exact --nocapture --test-threads=1` 显式创建 10 万用户、1 万节点，验证采样周期成员冻结、空闲节点扫描使用到期索引，以及管理任务/采样过期/统计队列在该基数下的空闲路径。只做数据库与分页检查，不运行 SSH，也不证明采集容量。后台优化说明与同池对照见 [0042](../docs/plans/0042-background-idle-work-reduction.md)。
 
-`python3 tests/integration/verify-maintenance-startup.py --image <本地发布镜像> --output <新证据目录>` 在自管内部 Docker 网络与 PostgreSQL/Redis 上验证完整 linux/amd64 服务默认线程栈启动。默认运行 330 秒以覆盖 300 秒维护兜底，检查持续就绪、零重启和 SIGTERM 后三类采样排空、正常退出；只清理带本次专属标签的夹具，保留日志和 inspect 证据。此场景没有真实采集节点，不替代容量测试。发布栈回归见 [0039](../docs/plans/0039-deploy-maintenance-scheduler.md)。
+`python3 tests/integration/verify-maintenance-startup.py --image <本地发布镜像> --output <新证据目录>` 在自管内部 Docker 网络与 PostgreSQL/Redis 上验证完整 linux/amd64 服务默认线程栈启动。默认运行 330 秒以覆盖 300 秒维护兜底，检查持续就绪、零重启和 SIGTERM 后三类采样排空、正常退出；只清理带本次专属标签的夹具，保留日志和 inspect 证据。测试验证 0048 自动删除一条到期采样工作，0049 启动 9 个 worker 并删除一条过期审计记录。该场景用于启动与功能验证。发布栈回归见 [0039](../docs/plans/0039-deploy-maintenance-scheduler.md)。

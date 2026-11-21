@@ -440,3 +440,55 @@ async fn rollup_refresh_reads_only_dirty_ranges_and_skips_empty_queues() {
     .unwrap();
     assert_eq!(users, 1);
 }
+
+#[tokio::test]
+async fn ledger_batch_delete_recomputes_the_latest_remaining_sample_and_rolls_back_cleanly() {
+    let pool = super::tests::seed().await;
+    let at: DateTime<Utc> = "2026-10-14T12:00:00Z".parse().unwrap();
+    sqlx::query(
+        "INSERT INTO traffic_records
+         (id,node_id,user_id,instance_id,baseline_tx,baseline_rx,delta_tx,delta_rx,gap_reason,sampled_at)
+         VALUES ('kept','n1','u','instance',0,0,7,8,NULL,$1::timestamptz),
+                ('old1','n1','u','instance',0,0,10,11,'gap',$1+interval '10 seconds'),
+                ('old2','n1','u','instance',0,0,20,21,NULL,$1+interval '20 seconds'),
+                ('old3','n1','u','instance',0,0,30,31,NULL,$1+interval '1 minute')",
+    )
+    .bind(at)
+    .execute(&pool)
+    .await
+    .unwrap();
+    refresh(&pool).await.unwrap();
+
+    let deletion = "DELETE FROM traffic_records WHERE id IN ('old1','old2','old3')";
+    let usage_sql = "SELECT tx::bigint,rx::bigint,samples,sampled_at
+                     FROM user_node_usage WHERE node_id='n1' AND user_id='u'";
+    let minutes_sql =
+        "SELECT tx::bigint,rx::bigint,samples,incomplete_samples FROM traffic_minute_totals
+         WHERE node_id='n1' AND source='users' ORDER BY minute";
+
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query(deletion).execute(&mut *tx).await.unwrap();
+    let usage: (i64, i64, i64, DateTime<Utc>) =
+        sqlx::query_as(usage_sql).fetch_one(&mut *tx).await.unwrap();
+    assert_eq!(usage, (7, 8, 1, at));
+    let minutes: Vec<(i64, i64, i64, i64)> = sqlx::query_as(minutes_sql)
+        .fetch_all(&mut *tx)
+        .await
+        .unwrap();
+    assert_eq!(minutes, [(7, 8, 1, 0)]);
+    tx.rollback().await.unwrap();
+    let surviving: (i64, i64, i64, DateTime<Utc>) =
+        sqlx::query_as(usage_sql).fetch_one(&pool).await.unwrap();
+    assert_eq!(surviving, (67, 71, 4, at + Duration::minutes(1)));
+
+    sqlx::query(deletion).execute(&pool).await.unwrap();
+    refresh(&pool).await.unwrap();
+    let hour: (i64, i64, i64, i64) = sqlx::query_as(
+        "SELECT tx::bigint,rx::bigint,samples,incomplete_samples FROM traffic_hour_totals
+         WHERE node_id='n1' AND source='users'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(hour, (7, 8, 1, 0));
+}
