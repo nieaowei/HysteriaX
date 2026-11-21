@@ -11,6 +11,9 @@ use tokio::task::JoinSet;
 #[path = "sampling_benchmark_fixture.rs"]
 mod fixture;
 
+#[path = "retention_benchmark.rs"]
+mod retention;
+
 fn distribution(mut values: Vec<f64>) -> Value {
     values.sort_by(f64::total_cmp);
     if values.is_empty() {

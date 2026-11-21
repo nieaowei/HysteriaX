@@ -18,7 +18,7 @@ cargo run -p hysteriax-server -- --migrate-only
 
 ## 后续迁移
 
-- 从 `0011_<description>.sql` 继续递增；已发布的 SQL 不再修改、重命名或重排。
+- 从 `0012_<description>.sql` 继续递增。已发布的 SQL 不再修改、重命名或重排。
 - SQLx 内嵌 SQL 并记录 SHA-384 checksum；启动逐项验证完整历史，重复执行维护不会重新应用已成功迁移。
 - 应用对象使用相对 schema 名称，以支持隔离测试 schema。`pg_trgm` 仍安装到 `public`，索引显式引用 `public.gin_trgm_ops`。
 - 新增或移除对象时同步更新 [数据库表用途](../../../docs/database-tables.md)，并验证当前基线上的后续升级。
@@ -98,6 +98,10 @@ current migration chain.
 
 2026-11-05 已停止生产 API、保存数据库快照，再以新服务 `--migrate-only` 将 schema 9 升至 10。历史 0001～0009 校验和、原主密钥及业务数据摘要保持，生产运行 schema 10。新空库依次执行 1～10；旧镜像不支持 schema 10，不能直接切回 schema 9 镜像。
 
+## 0011 历史采样清理索引
+
+`0011_sampling_retention.sql` 为终态采样工作、租约关联的执行证据和周期关联的未结算批次增加索引。迁移自身只创建索引。对已停止的 schema 10 测试库，可以用 [一次性演练工具](../../../scripts/migrations/migrate-sampling-retention-test-db.py) 执行维护初始化并检查候选与计划。
+
 另提供一次性测试环境工具，迁移前后逐表比较业务值摘要，DDL、迁移记录和运行时版本在同一事务更新，失败整体回滚、重复执行安全：
 
 ```sh
@@ -109,3 +113,11 @@ python3 scripts/migrations/migrate-lock-contention-test-db.py \
 ```
 
 该工具不轮换秘密、不启动 worker，也不处理旧历史升级链。
+
+## 0012 历史数据留存
+
+`0012_history_retention.sql` 为三组历史清理增加索引与发布时间，并用五个独立版本序列替换 `dirty_key_versions`。现有脏队列保留原版本令牌，已有发布从迁移时间起计入回放窗口。先停止旧 API，再用 `--migrate-only` 应用。一次性 [schema 11 测试库演练工具](../../../scripts/migrations/migrate-history-retention-test-db.py) 检查前后历史行数和 schema 12 结构。运行规则见[安装指南](../../../docs/installation.md#database-history-retention)。
+
+## 0013 流量账本批量删除
+
+`0013_history_retention_throughput.sql` 为 `traffic_records` 的 DELETE 增加语句级触发器，按删除集合更新分钟汇总、用户节点汇总和缓存版本。提交时按集合刷新桶版本和普通实体版本。迁移也创建采样领取的活动队列索引，支持同一到期时间内按采样类型分散节点。迁移不删历史行。对已停止的 schema 12 测试库，用 [测试库演练工具](../../../scripts/migrations/migrate-history-retention-test-db.py) 的 `--target-schema 13` 参数核对源表计数、触发器及索引。

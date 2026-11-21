@@ -222,7 +222,7 @@ DNS 连接凭据轮换还使用前述 [`dns_credential_batch_items`](#凭据分�
 | `job_retry_chain_members` | `job_id` | 任务到重试链根的映射。 | 支持快速定位受影响的整条重试链。 |
 | `job_retry_state_dirty` | `job_id` | 待刷新重试链的任务 ID 及 generation。 | 任务或重试关系变化时标记；不能用旧刷新结果确认较新变更。 |
 
-刷新机制另用 `dirty_key_versions` 和 `analytics_retry_guards`，统一列在 [后台调度、执行与维护](#后台调度执行与维护)。
+刷新使用各队列独立的版本序列，确认时只比较版本令牌是否相等。
 
 ## 任务、事件与审计
 
@@ -255,9 +255,11 @@ DNS 连接凭据轮换还使用前述 [`dns_credential_batch_items`](#凭据分�
 | `execution_rechecks` | `id` | 可恢复的远端 fencing 复核过程，保存唯一请求命名空间、目标操作、准备数据、状态及证明。 | 同一 operation 最多一个 prepared/dispatching 复核；这是受类型约束的复核，不是重发原业务命令。 |
 | `runtime_contract` | `id=true` | 已初始化 schema 版本、管理协议和共享主密钥指纹。 | 仅显式维护写入；正常启动校验一致性。指纹不包含主密钥。 |
 | `node_authorization_versions` | `node_id` | 节点有效授权成员的单调版本，支持分页部署身份准备时判断来源是否变化。 | 由 `node_assignments` 成员变更触发更新；独立于缓存/监控版本，随节点删除及 ID 更新。 |
-| `dirty_key_versions` | `(queue, entity_key)` | 各脏队列逻辑键的持续单调版本目录。队列项被确认移除后仍能避免版本从头开始。 | `hysteriax_mark_dirty` 同步更新目录和具体队列；不能只比较来源 ID 后清队列。 |
+| 五个脏队列的版本序列 | 每队列一个 `bigint` 序列 | `hysteriax_mark_dirty` 分配不复用的版本令牌。 | 0012 替换了永久版本目录。确认必须匹配令牌，令牌数值顺序不表示提交顺序。 |
 
 基线不包含全局业务写锁：没有 `hysteriax_serialize_writes` 触发器及函数。SQLx 维护迁移互斥、资源租约、行锁、约束和事务重试继续生效。流程见 [架构](architecture.md)。
+
+历史采样清理自动运行。超过 14 天且符合依赖检查的终态采样工作可删除。清理可在同一事务回收对应工作已释放的专用租约，以及未发起清零、未捕获且无明细或账本引用的丢弃批次。没有剩余工作、待处理在线样本和未结算流量的过期周期也可清理。已结算批次和监控样本保留其周期 ID 供历史查看。配置和频次见 [安装指南](installation.md#sampling-history-retention)。
 
 ## 缓存版本
 
@@ -327,7 +329,18 @@ DNS 连接凭据轮换还使用前述 [`dns_credential_batch_items`](#凭据分�
 
 备份应以完整数据库为单位，并独立保存对应主密钥。执行意图、DNS 操作、断连义务、mTLS 激活、应用回执、复核证据、租约版本与墓碑均不应按“缓存”处理。数据库恢复还须核对备份之后的外部副作用时间线，详见 [备份与恢复](backup-restore.md)。
 
-普通监控历史可由现有保留任务清理；节点删除使用有界历史清理及持久游标。没有在上文列出保留期限的表，不应据此推断存在自动 TTL。修改源表时还可能触发统计调整、引用约束和缓存版本更新，直接 `TRUNCATE` 不等同业务删除。
+普通监控历史由监控保留任务清理，节点删除使用有界历史清理及持久游标。源表删除通过触发器更新统计与缓存版本。历史清理运行规则见[安装指南](installation.md#database-history-retention)。
+
+| 表 | 自动清理窗口与依赖 |
+| --- | --- |
+| `traffic_sample_items` | 批次完成 14 天后回收已结算明细。 |
+| `traffic_records`、`node_network_samples` | 60 天。月度套餐的当前周期保留，固定套餐按 60 天清理。用户当前配额、整机累计用量和采集基线由各自业务表管理。 |
+| `traffic_minute_totals`、`traffic_hour_totals`、`user_node_usage` | 随源数据清理收敛。 |
+| `traffic_sample_batches`、`data_gaps` | 已完整结算的批次与已解决缺口保留 60 天。批次仍须通过实例检查点、明细、账本和恢复依赖检查。 |
+| `service_instances`、`deployment_probe_tokens` | 停止心跳 30 天且无活跃执行依赖，或部署探测令牌已过期。 |
+| `event_publications` | 回收超过 30 天的连续发布前缀。 |
+| `jobs`、`job_events`、`audit_records` | 90 天。待发或可回放的事件，以及仍有业务或恢复引用的任务链延迟清理。 |
+| `management_receipts` | 保留幂等响应。回执引用的任务历史到期后，按任务 ID 查询可能返回 HTTP 404。 |
 
 ## 核对实际数据库与维护本文
 

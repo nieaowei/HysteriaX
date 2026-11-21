@@ -1132,9 +1132,32 @@ async fn deploy_with_probe(
         let _ = session.execute(&format!("rm -rf {remote_staging}")).await;
     }
     let deployed_config = secrets.encrypt(&options.to_string())?;
+    let desired_revision = row.get::<i64, _>("desired_revision");
+    let newer_deployment_required = if desired_revision > revision {
+        let digests: Option<(String, String)> = sqlx::query_as(
+            "SELECT desired.content_sha256,target.content_sha256
+             FROM config_versions desired
+             JOIN config_versions target ON target.node_id=desired.node_id
+             WHERE desired.node_id=$1 AND desired.revision=$2 AND target.revision=$3",
+        )
+        .bind(node_id)
+        .bind(desired_revision)
+        .bind(revision)
+        .fetch_optional(pool)
+        .await?;
+        followup_sync_required(
+            desired_revision,
+            revision,
+            digests
+                .as_ref()
+                .map(|(desired, target)| (desired.as_str(), target.as_str())),
+        )
+    } else {
+        false
+    };
     let state = if job.kind == "rollback" {
         "rolled_back"
-    } else if row.get::<i64, _>("desired_revision") > revision {
+    } else if newer_deployment_required {
         "syncing"
     } else {
         "deployed"
@@ -1149,6 +1172,14 @@ async fn deploy_with_probe(
         published_connection: Some(connection_snapshot(&snapshot)?),
         delete_node: false,
     })
+}
+
+fn followup_sync_required(
+    desired_revision: i64,
+    target_revision: i64,
+    digests: Option<(&str, &str)>,
+) -> bool {
+    desired_revision > target_revision && digests.is_none_or(|(desired, target)| desired != target)
 }
 
 fn startup_health_timeout(options: &Value) -> Duration {

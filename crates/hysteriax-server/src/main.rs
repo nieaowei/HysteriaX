@@ -112,6 +112,8 @@ async fn main() -> Result<()> {
     let publisher = tokio::spawn(events::run_publisher(state.clone()));
     let heartbeat = tokio::spawn(execution::run_heartbeats(state.clone()));
     let sampling_expiry = tokio::spawn(background::run_expiry(state.clone()));
+    let sampling_retention = tokio::spawn(background::retention::run(state.clone()));
+    let history_retention = tokio::spawn(background::history_retention::run(state.clone()));
     let mtls = tokio::spawn(credentials::maintenance::run(state.clone()));
     let analytics = tokio::spawn(analytics::run(state.clone()));
     let jobs = tokio::spawn(jobs::run(state.clone()));
@@ -158,6 +160,8 @@ async fn main() -> Result<()> {
             ("traffic", traffic),
             ("network", network),
             ("proxy", probes),
+            ("sampling retention", sampling_retention),
+            ("history retention", history_retention),
         ],
         Duration::from_secs(120),
     )

@@ -11,6 +11,9 @@ use serde_json::{Value, json};
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
+pub(crate) mod history_retention;
+pub(crate) mod retention;
+
 #[derive(Clone, Debug)]
 pub struct Work {
     pub id: String,
@@ -76,7 +79,7 @@ pub async fn ensure_cycle(pool: &PgPool, kind: &str) -> Result<Uuid> {
 
 /// Recover read-only work only while its slot is current. Already captured
 /// traffic is always eligible: recovery must finish billing rather than read SSH.
-const SAMPLING_CANDIDATES: &str = "FROM background_work w JOIN sampling_cycles c ON c.id=w.cycle_id JOIN nodes n ON n.id=w.node_id WHERE w.kind=$1 AND w.state IN ('queued','running') AND n.state NOT IN ('deleting','delete_failed') AND w.available_at<=clock_timestamp() AND (w.deadline_at>clock_timestamp() OR (w.kind='traffic' AND EXISTS(SELECT 1 FROM traffic_sample_batches b WHERE b.sample_id=w.id AND b.payload_digest IS NOT NULL))) AND NOT EXISTS(SELECT 1 FROM resource_leases l WHERE l.resource_key=ANY(ARRAY['work:'||w.id,'node:'||w.node_id]) AND (l.blocked OR (l.owner IS NOT NULL AND l.expires_at>clock_timestamp()) OR EXISTS(SELECT 1 FROM execution_operations o WHERE o.resource_key=l.resource_key AND o.state IN ('dispatching','reconciling','needs_attention'))))";
+const SAMPLING_CANDIDATES: &str = "FROM background_work w JOIN sampling_cycles c ON c.id=w.cycle_id JOIN nodes n ON n.id=w.node_id WHERE w.kind=$1 AND w.cycle_id IS NOT NULL AND w.state IN ('queued','running') AND n.state NOT IN ('deleting','delete_failed') AND w.available_at<=clock_timestamp() AND (w.deadline_at>clock_timestamp() OR (w.kind='traffic' AND EXISTS(SELECT 1 FROM traffic_sample_batches b WHERE b.sample_id=w.id AND b.payload_digest IS NOT NULL))) AND NOT EXISTS(SELECT 1 FROM resource_leases l WHERE l.resource_key=ANY(ARRAY['work:'||w.id,'node:'||w.node_id]) AND (l.blocked OR (l.owner IS NOT NULL AND l.expires_at>clock_timestamp()) OR EXISTS(SELECT 1 FROM execution_operations o WHERE o.resource_key=l.resource_key AND o.state IN ('dispatching','reconciling','needs_attention'))))";
 
 pub async fn claim(pool: &PgPool, kind: &str, owner: &str) -> Result<Option<Work>> {
     let mut poll = maintenance::Poll::new(&format!("sampling:{kind}"), "claim");
@@ -115,16 +118,21 @@ async fn claim_sampling(
     let result = db::write_after_probe(pool,connection,move |tx| {
         let (kind,owner)=(kind.clone(),owner.clone());
         Box::pin(async move {
-            let rows=sqlx::query(sqlx::AssertSqlSafe(format!("SELECT w.*,c.period_start,c.expected_nodes, (w.kind='traffic' AND EXISTS(SELECT 1 FROM traffic_sample_batches b WHERE b.sample_id=w.id AND b.payload_digest IS NOT NULL)) has_capture {SAMPLING_CANDIDATES} ORDER BY w.available_at,w.id LIMIT 32 FOR UPDATE OF w SKIP LOCKED")))
+            // Keep due-time order, but give each kind a stable, different node
+            // order within a slot to reduce collisions on shared node leases.
+            let rows=sqlx::query(sqlx::AssertSqlSafe(format!("SELECT w.*,c.period_start,c.expected_nodes, (w.kind='traffic' AND EXISTS(SELECT 1 FROM traffic_sample_batches b WHERE b.sample_id=w.id AND b.payload_digest IS NOT NULL)) has_capture {SAMPLING_CANDIDATES} ORDER BY w.available_at,hashtext(w.kind||':'||w.node_id),w.id LIMIT 32 FOR UPDATE OF w SKIP LOCKED")))
                 .bind(&kind).fetch_all(&mut **tx).await?;
+            if !rows.is_empty() {
+                // ROLLBACK TO keeps the savepoint. The enclosing transaction
+                // releases it when the winning claim commits.
+                sqlx::query("SAVEPOINT sampling_candidate").execute(&mut **tx).await?;
+            }
             let mut rejected = 0_u64;
             for row in rows {
                 let id:String=row.get("id");let node:String=row.get("node_id");
-                sqlx::query("SAVEPOINT sampling_candidate").execute(&mut **tx).await?;
                 let resources=vec![format!("node:{node}"),format!("work:{id}")];
                 let Some(leases)=execution::acquire_all(tx,&resources,&owner,&id).await? else {
                     sqlx::query("ROLLBACK TO SAVEPOINT sampling_candidate").execute(&mut **tx).await?;
-                    sqlx::query("RELEASE SAVEPOINT sampling_candidate").execute(&mut **tx).await?;
                     rejected += 1;
                     continue;
                 };
@@ -143,11 +151,9 @@ async fn claim_sampling(
                     .bind(&id).bind(&owner).bind(generation).bind(&payload).execute(&mut **tx).await?.rows_affected();
                 if changed!=1 {
                     sqlx::query("ROLLBACK TO SAVEPOINT sampling_candidate").execute(&mut **tx).await?;
-                    sqlx::query("RELEASE SAVEPOINT sampling_candidate").execute(&mut **tx).await?;
                     rejected += 1;
                     continue;
                 }
-                sqlx::query("RELEASE SAVEPOINT sampling_candidate").execute(&mut **tx).await?;
                 return Ok((Some(Work{id,kind,cycle:row.get("cycle_id"),node,period_start:row.get("period_start"),expected:row.get("expected_nodes"),payload,leases}),rejected,row.get::<bool,_>("has_capture")));
             }
             Ok((None,rejected,false))

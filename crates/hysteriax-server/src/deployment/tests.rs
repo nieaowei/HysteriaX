@@ -222,3 +222,11 @@ fn extracts_the_first_listener_port_for_preflight_checks() {
     assert_eq!(primary_listener_port("[::]:12000-12010"), Some(12000));
     assert_eq!(primary_listener_port("not-a-listener"), None);
 }
+
+#[test]
+fn newer_revision_with_the_same_deployment_snapshot_stays_deployed() {
+    assert!(!super::followup_sync_required(9, 8, Some(("same", "same"))));
+    assert!(super::followup_sync_required(9, 8, Some(("new", "old"))));
+    assert!(super::followup_sync_required(9, 8, None));
+    assert!(!super::followup_sync_required(8, 8, Some(("new", "old"))));
+}
