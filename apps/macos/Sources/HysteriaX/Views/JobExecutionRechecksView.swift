@@ -44,6 +44,7 @@ struct JobExecutionRechecksView: View {
                         VStack(alignment: .leading, spacing: 4) {
                             Text(operation.kind == "ssh-command" ? L10n.text("SSH 命令") : operation.kind == "ssh-upload" ? L10n.text("文件上传") : L10n.text("外部操作"))
                             Text(JobDisplayText.status(operation.state)).font(.caption).foregroundStyle(.secondary)
+                            Text(DateDisplayText.local(operation.createdAt)).font(.caption).foregroundStyle(.secondary)
                             Text(operation.operationId).font(.system(.caption, design: .monospaced)).foregroundStyle(.secondary).textSelection(.enabled)
                         }
                         Spacer(minLength: 8)

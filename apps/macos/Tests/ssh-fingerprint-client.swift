@@ -63,7 +63,7 @@ final class FingerprintTransport: URLProtocol, @unchecked Sendable {
             }
             if path.hasSuffix("/execution-operations") {
                 executionFilters = Dictionary(uniqueKeysWithValues: URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!.queryItems!.map { ($0.name, $0.value!) })
-                return json(["items": [["operation_id":"operation-1", "resource_key":"node:node-1", "work_id":"job-1", "generation":5, "epoch":"ec829402-b930-4c88-a949-bd9450eb3b38", "step":"ssh-command:0", "state":"needs_attention", "kind":"ssh-command", "protocol":"ssh-journal-v2"]], "next_cursor":NSNull()])
+                return json(["items": [["operation_id":"operation-1", "resource_key":"node:node-1", "work_id":"job-1", "generation":5, "epoch":"ec829402-b930-4c88-a949-bd9450eb3b38", "step":"ssh-command:0", "state":"needs_attention", "created_at":"2026-11-21T00:00:00Z", "kind":"ssh-command", "protocol":"ssh-journal-v2"]], "next_cursor":NSNull()])
             }
             if path.hasSuffix("/execution-operations/operation-1/reverify") {
                 let key = request.value(forHTTPHeaderField: "Idempotency-Key") ?? ""
