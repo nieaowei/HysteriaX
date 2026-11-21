@@ -75,6 +75,7 @@ final class ManagementStore {
     var isLoading = false
     var lastUpdated: Date?
     var dataRefreshToken = UUID()
+    var jobsRefreshToken = UUID()
     var listCacheSession = UUID()
     let listPageCache = ListPageCache()
     private var directoryVersion: String?
@@ -302,10 +303,17 @@ final class ManagementStore {
             guard refreshGeneration == serviceGeneration, !Task.isCancelled else { return false }
             errorMessage = nil
             if !changed {
-                try await refreshClientSummary(using: api)
-                let monitoring=await fetchServerMonitoring(using:api)
-                guard refreshGeneration==serviceGeneration,!Task.isCancelled else {return false}
-                serverMonitoring=monitoring.value ?? serverMonitoring; serverMonitoringError=monitoring.error
+                // These reads are independent. Keeping them in the same refresh
+                // flight avoids making the 15-second heartbeat wait for the
+                // summary request before starting monitoring.
+                async let loadedSummary: ClientSummary = api.get(APIEndpoints.getClientSummary)
+                async let loadedMonitoring = fetchServerMonitoring(using: api)
+                let summary = try await loadedSummary
+                let monitoring = await loadedMonitoring
+                guard refreshGeneration == serviceGeneration, !Task.isCancelled else { return false }
+                clientSummary = summary
+                serverMonitoring = monitoring.value ?? serverMonitoring
+                serverMonitoringError = monitoring.error
             }
             await (nodeNotifications ?? .shared).deliver(nodes: clientSummary?.notificationNodes ?? [], service: serviceAddress)
             await (nodeNotifications ?? .shared).deliver(credentials: clientSummary?.notificationCredentials ?? [], service: serviceAddress)
@@ -348,6 +356,46 @@ final class ManagementStore {
         } catch {
             guard generation == serviceGeneration, request == overviewRequestGeneration, !Task.isCancelled else { return false }
             overviewError = L10n.text("概览监控暂不可用：{0}", String(describing: (error.localizedDescription)))
+            return false
+        }
+    }
+
+    private func refreshJobProgress(using client: APIClient) async -> Bool {
+        let generation = serviceGeneration
+        let request = UUID()
+        overviewRequestGeneration = request
+        listPageCache.invalidate(types: [String(reflecting: JobsPage.self)])
+        do {
+            async let loadedJobs: JobsPage = client.get(APIEndpoints.listJobs(pageSize: 200), bypassCache: true)
+            async let loadedOverview: OverviewResponse = client.get(APIEndpoints.getOverview, bypassCache: true)
+            let jobsPage = try await loadedJobs
+            let overviewValue = try await loadedOverview
+            guard generation == serviceGeneration, request == overviewRequestGeneration,
+                  api === client, !Task.isCancelled else { return false }
+            jobs = jobsPage.items
+            overview = overviewValue
+            overviewError = nil
+            lastUpdated = Date()
+            let snapshot = ClientDisplaySnapshot(
+                credentials: Array(credentials.prefix(50)),
+                nodes: Array(nodes.prefix(50)),
+                users: Array(users.prefix(50)),
+                jobs: jobs,
+                auditRecords: auditRecords,
+                updatedAt: lastUpdated ?? Date(),
+                serverMonitoring: serverMonitoring,
+                overview: overviewValue,
+                clientSummary: clientSummary
+            )
+            if let data = try? JSONEncoder().encode(snapshot) {
+                UserDefaults.standard.set(data, forKey: displaySnapshotKey)
+            }
+            jobsRefreshToken = UUID()
+            return true
+        } catch {
+            guard generation == serviceGeneration, request == overviewRequestGeneration,
+                  api === client, !Task.isCancelled else { return false }
+            overviewError = L10n.text("概览监控暂不可用：{0}", String(describing: error.localizedDescription))
             return false
         }
     }
@@ -780,9 +828,11 @@ final class ManagementStore {
         async let loadedUsers: UsersPage = client.get(APIEndpoints.listUsers(page: 1, pageSize: 50), bypassCache: bypassCache)
         async let loadedJobs: JobsPage = client.get(APIEndpoints.listJobs(pageSize: 200), bypassCache: bypassCache)
         async let loadedAudit: AuditPage = client.get(APIEndpoints.listAuditRecords(pageSize: 200), bypassCache: bypassCache)
-        async let loadedAdminTokens: [AdminTokenSummary] = client.get(APIEndpoints.listAdminTokens)
+        async let loadedAdminTokens: [AdminTokenSummary] = client.get(APIEndpoints.listAdminTokens, bypassCache: bypassCache)
+        async let loadedClientSummary: ClientSummary = client.get(APIEndpoints.getClientSummary, bypassCache: bypassCache)
         let tokens = try await loadedAdminTokens
         let monitoring = await loadedMonitoring
+        let summary = try await loadedClientSummary
         let snapshot = try await ClientDisplaySnapshot(
             credentials: loadedCredentials.items,
             nodes: loadedNodes.items,
@@ -791,7 +841,8 @@ final class ManagementStore {
             auditRecords: loadedAudit.items,
             updatedAt: Date(),
             serverMonitoring: monitoring.value ?? serverMonitoring,
-            overview: overview
+            overview: overview,
+            clientSummary: summary
         )
         guard generation == serviceGeneration, !Task.isCancelled else { throw CancellationError() }
         serverMonitoring = snapshot.serverMonitoring
@@ -802,23 +853,13 @@ final class ManagementStore {
         jobs = snapshot.jobs
         auditRecords = snapshot.auditRecords
         adminTokens = tokens
-
-        try await refreshClientSummary(using: client)
         guard generation == serviceGeneration, !Task.isCancelled else { throw CancellationError() }
+        clientSummary = snapshot.clientSummary
         lastUpdated = snapshot.updatedAt
-        var display = snapshot
-        display.clientSummary = clientSummary
+        let display = snapshot
         if let data = try? JSONEncoder().encode(display) {
             UserDefaults.standard.set(data, forKey: displaySnapshotKey)
         }
-    }
-
-    private func refreshClientSummary(using client: APIClient) async throws {
-        let generation = serviceGeneration
-        // Preserve the last complete summary and propagate the actual failure.
-        let value = try await client.get(APIEndpoints.getClientSummary)
-        guard generation == serviceGeneration, !Task.isCancelled else { throw CancellationError() }
-        clientSummary = value
     }
 
     // Full directories are loaded only for explicit bulk-selection controls. Deduplicate
@@ -939,7 +980,9 @@ final class ManagementStore {
                             throw APIClientError.invalidResponse
                         }
                         let duplicate = event.sourceID.map { appliedSources.contains($0) } == true
-                        if event.kind != "stream.cursor", !duplicate {
+                        if event.kind == "job.progress", !duplicate {
+                            guard await self.refreshJobProgress(using: client) else { throw APIClientError.invalidResponse }
+                        } else if event.kind != "stream.cursor", !duplicate {
                             self.listPageCache.invalidate(types: [NodesPage.self, UsersPage.self, JobsPage.self, OverviewNodesPage.self].map { String(reflecting: $0) })
                             guard await self.refresh(forceDirectories: true) else { throw APIClientError.invalidResponse }
                         }

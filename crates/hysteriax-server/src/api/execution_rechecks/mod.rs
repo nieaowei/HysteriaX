@@ -12,6 +12,7 @@ use crate::{
     },
 };
 use axum::extract::OriginalUri;
+use chrono::{DateTime, SecondsFormat, Utc};
 use sha2::{Digest, Sha256};
 
 #[derive(Clone, Deserialize)]
@@ -24,6 +25,38 @@ pub(crate) struct Input {
 pub(crate) struct ListInput {
     work_id: Option<String>,
     after: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+struct ListCursor {
+    created_at: DateTime<Utc>,
+    operation_id: String,
+}
+
+impl ListCursor {
+    fn parse(value: &str) -> Result<Self, ApiError> {
+        let (created_at, operation_id) = value
+            .split_once('|')
+            .ok_or_else(|| ApiError::bad_request("invalid execution cursor"))?;
+        if operation_id.is_empty() {
+            return Err(ApiError::bad_request("invalid execution cursor"));
+        }
+        let created_at = DateTime::parse_from_rfc3339(created_at)
+            .map_err(|_| ApiError::bad_request("invalid execution cursor"))?
+            .with_timezone(&Utc);
+        Ok(Self {
+            created_at,
+            operation_id: operation_id.to_owned(),
+        })
+    }
+
+    fn wire(&self) -> String {
+        format!(
+            "{}|{}",
+            self.created_at.to_rfc3339_opts(SecondsFormat::Nanos, true),
+            self.operation_id
+        )
+    }
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 struct Operation {
@@ -183,19 +216,32 @@ pub(crate) async fn list(
     {
         return Err(ApiError::bad_request("invalid execution filter"));
     }
+    let after = input.after.as_deref().map(ListCursor::parse).transpose()?;
     let mut tx = crate::read_snapshot::begin(&state.pool).await?;
-    let rows=sqlx::query("SELECT operation_id,resource_key,generation,epoch,work_id,step,state,intent->>'kind' AS kind,intent->'verification'->>'protocol' AS protocol FROM execution_operations WHERE state IN ('dispatching','reconciling','needs_attention') AND ($1::text IS NULL OR work_id=$1) AND operation_id>$2 ORDER BY operation_id LIMIT 101")
-        .bind(input.work_id).bind(input.after.unwrap_or_default()).fetch_all(&mut *tx).await?;
+    let rows=sqlx::query("SELECT operation_id,resource_key,generation,epoch,work_id,step,state,created_at,intent->>'kind' AS kind,intent->'verification'->>'protocol' AS protocol FROM execution_operations WHERE state IN ('dispatching','reconciling','needs_attention') AND ($1::text IS NULL OR work_id=$1) AND ($2::timestamptz IS NULL OR (created_at, operation_id) < ($2, $3)) ORDER BY created_at DESC, operation_id DESC LIMIT 101")
+        .bind(input.work_id)
+        .bind(after.as_ref().map(|cursor| cursor.created_at))
+        .bind(after.as_ref().map(|cursor| cursor.operation_id.as_str()))
+        .fetch_all(&mut *tx).await?;
     let more = rows.len() > 100;
     let mut items = Vec::new();
     for r in rows.into_iter().take(100) {
-        items.push(json!({"operation_id":r.get::<String,_>("operation_id"),"resource_key":r.get::<String,_>("resource_key"),"work_id":r.get::<String,_>("work_id"),"generation":r.get::<i64,_>("generation"),"epoch":r.get::<String,_>("epoch"),"step":r.get::<String,_>("step"),"state":r.get::<String,_>("state"),"kind":r.get::<Option<String>,_>("kind"),"protocol":r.get::<Option<String>,_>("protocol")}));
+        items.push(json!({"operation_id":r.get::<String,_>("operation_id"),"resource_key":r.get::<String,_>("resource_key"),"work_id":r.get::<String,_>("work_id"),"generation":r.get::<i64,_>("generation"),"epoch":r.get::<String,_>("epoch"),"step":r.get::<String,_>("step"),"state":r.get::<String,_>("state"),"created_at":r.get::<DateTime<Utc>,_>("created_at"),"kind":r.get::<Option<String>,_>("kind"),"protocol":r.get::<Option<String>,_>("protocol")}));
     }
     tx.commit().await?;
     let next = if more {
         items
             .last()
-            .map(|v| v["operation_id"].clone())
+            .and_then(|value| {
+                Some(
+                    ListCursor {
+                        created_at: value["created_at"].as_str()?.parse().ok()?,
+                        operation_id: value["operation_id"].as_str()?.to_owned(),
+                    }
+                    .wire(),
+                )
+            })
+            .map(Value::String)
             .unwrap_or(Value::Null)
     } else {
         Value::Null

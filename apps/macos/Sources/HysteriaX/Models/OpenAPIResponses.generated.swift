@@ -1633,6 +1633,7 @@ struct ExecutionOperation: Codable, Sendable {
     let epoch: String
     let step: String
     let state: String
+    let createdAt: String
     let kind: String?
     let verificationProtocol: String?
 
@@ -1644,6 +1645,7 @@ struct ExecutionOperation: Codable, Sendable {
         case epoch
         case step
         case state
+        case createdAt = "created_at"
         case kind
         case verificationProtocol = "protocol"
     }

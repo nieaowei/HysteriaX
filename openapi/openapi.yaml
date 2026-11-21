@@ -1708,7 +1708,7 @@ paths:
         - { name: after, in: query, schema: { type: string, maxLength: 200 } }
       responses:
         '200':
-          description: Up to 100 unresolved operations ordered by operation identifier
+          description: Up to 100 unresolved operations ordered by creation time descending
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ExecutionOperationsPage' }
@@ -2474,7 +2474,7 @@ components:
   schemas:
     ExecutionOperation:
       type: object
-      required: [operation_id, resource_key, work_id, generation, epoch, step, state]
+      required: [operation_id, resource_key, work_id, generation, epoch, step, state, created_at]
       properties:
         operation_id: { type: string, format: uuid }
         resource_key: { type: string }
@@ -2483,6 +2483,7 @@ components:
         epoch: { type: string, format: uuid }
         step: { type: string }
         state: { type: string, enum: [dispatching, reconciling, needs_attention] }
+        created_at: { type: string, format: date-time }
         kind: { type: [string, 'null'] }
         protocol: { type: [string, 'null'] }
     ExecutionOperationsPage:

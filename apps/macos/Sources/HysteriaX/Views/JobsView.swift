@@ -49,7 +49,7 @@ struct JobsView: View {
     }
     private var sortDirection: String { sortOrder.first?.order == .forward ? "asc" : "desc" }
     private var pageKey: String { store.listPageKey([String(page), String(pageSize), query, sortField, sortDirection]) }
-    private var pageRequestKey: String { "\(pageKey)|\(store.isConnected)|\(store.dataRefreshToken)|\(retryPageToken)" }
+    private var pageRequestKey: String { "\(pageKey)|\(store.isConnected)|\(store.dataRefreshToken)|\(store.jobsRefreshToken)|\(retryPageToken)" }
     private var currentPageResponse: JobsPage? { store.cachedListPage(pageKey, as: JobsPage.self) ?? (loadedPageKey == pageKey ? pageResponse : nil) }
     private var totalJobs: Int { store.isConnected ? (currentPageResponse?.total ?? 0) : snapshotJobs.count }
     private var pageCount: Int { max(1, (totalJobs + pageSize - 1) / pageSize) }
@@ -73,8 +73,10 @@ struct JobsView: View {
 
     private var detailRequestKey: String {
         guard let selectedJobID else { return "none" }
-        let updatedAt = visibleJobs.first { $0.id == selectedJobID }?.updatedAt ?? store.jobs.first { $0.id == selectedJobID }?.updatedAt ?? "detail"
-        return "\(store.serviceAddress):\(selectedJobID):\(updatedAt):\(store.isConnected):\(store.dataRefreshToken)"
+        let job = visibleJobs.first { $0.id == selectedJobID } ?? store.jobs.first { $0.id == selectedJobID }
+        let status = job?.status ?? "detail"
+        let finishedAt = job?.finishedAt ?? ""
+        return "\(store.serviceAddress):\(selectedJobID):\(status):\(finishedAt):\(store.isConnected)"
     }
 
     var body: some View {
@@ -332,16 +334,12 @@ struct JobsView: View {
 
     private func executionRecords(_ job: JobSummary) -> some View {
         GroupBox {
-            if isLoadingJobDetail {
-                ProgressView(L10n.text("读取任务记录…")).controlSize(.small)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.vertical, 8)
-            } else if let detail = currentDetail(job), !detail.logs.isEmpty {
+            if let detail = currentDetail(job), !detail.logs.isEmpty {
                 LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(detail.logs.indices, id: \.self) { index in
+                    ForEach(detail.logs.indices.reversed(), id: \.self) { index in
                         let entry = detail.logs[index]
                         HStack(alignment: .top, spacing: 12) {
-                            Text(String(index + 1))
+                            Text(String(detail.logs.count - index))
                                 .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                                 .frame(width: 24, height: 24)
                                 .background(.quaternary, in: Circle())
@@ -364,10 +362,14 @@ struct JobsView: View {
                             }
                         }
                         .padding(.vertical, 10)
-                        if index < detail.logs.count - 1 { Divider().padding(.leading, 36) }
+                        if index > 0 { Divider().padding(.leading, 36) }
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
+            } else if isLoadingJobDetail {
+                ProgressView(L10n.text("读取任务记录…")).controlSize(.small)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 8)
             } else {
                 Text(store.isConnected ? L10n.text("暂无执行记录") : L10n.text("服务断开时保留任务摘要；恢复连接后可读取执行记录。"))
                     .foregroundStyle(.secondary)
@@ -415,7 +417,6 @@ struct JobsView: View {
             selectedJobDetail = detail
         } catch {
             guard !Task.isCancelled, requestKey == detailRequestKey else { return }
-            selectedJobDetail = nil
             actionError = error.localizedDescription
         }
     }
