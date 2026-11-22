@@ -2,11 +2,7 @@
 //! Linux counters and user traffic are deterministic synthetic observations.
 use super::*;
 use russh::{Channel, ChannelMsg, server};
-use std::{
-    collections::HashMap,
-    path::PathBuf,
-    sync::atomic::{AtomicUsize, Ordering},
-};
+use std::{collections::HashMap, path::PathBuf};
 
 #[derive(Clone)]
 struct SshPeer {
@@ -120,8 +116,6 @@ impl server::Handler for SshPeer {
 
 pub(super) struct Remote {
     pub secrets: crate::security::SecretBox,
-    pub clears: Arc<Mutex<HashMap<String, usize>>>,
-    pub connections: Arc<AtomicUsize>,
     ssh_port: u16,
     fingerprint: String,
     proxy_port: u16,
@@ -156,9 +150,7 @@ impl Remote {
             .to_string();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let ssh_port = listener.local_addr().unwrap().port();
-        let clears = Arc::new(Mutex::new(HashMap::new()));
-        let connections = Arc::new(AtomicUsize::new(0));
-        let (counts, accepted) = (clears.clone(), connections.clone());
+        let counts = Arc::new(Mutex::new(HashMap::new()));
         let peer = tokio::spawn(async move {
             let mut sessions = JoinSet::new();
             loop {
@@ -166,7 +158,7 @@ impl Remote {
                     Some(_)=sessions.join_next(),if !sessions.is_empty()=>{},
                     incoming=listener.accept()=>{
                         let (stream,_)=incoming.unwrap(); stream.set_nodelay(true).unwrap();
-                        accepted.fetch_add(1,Ordering::SeqCst);
+
                         let (key,clears)=(key.clone(),counts.clone());
                         sessions.spawn(async move {if let Ok(s)=server::run_stream(Arc::new(server::Config{keys:vec![key],..Default::default()}),stream,SshPeer{node:String::new(),clears}).await {let _=s.await;}});
                     }
@@ -247,8 +239,6 @@ impl Remote {
         .expect("real Hysteria stats server did not start; inspect retained server.log");
         Self {
             secrets,
-            clears,
-            connections,
             ssh_port,
             fingerprint,
             proxy_port,

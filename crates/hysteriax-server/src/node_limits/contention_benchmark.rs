@@ -242,7 +242,7 @@ pub(crate) async fn run_lock_contention_benchmark() -> Value {
     let mut injected = 0_i64;
     let mut next_injection = Instant::now();
     while started.elapsed() < Duration::from_secs(seconds) {
-        let waits:Vec<(String,f64)>=sqlx::query_as("SELECT l.pid::text||':'||l.waitstart::text,extract(epoch FROM clock_timestamp()-l.waitstart)::double precision*1000 FROM pg_locks l JOIN pg_stat_activity a ON a.pid=l.pid WHERE NOT l.granted AND l.waitstart IS NOT NULL AND a.datname=current_database() AND a.query LIKE '%/* lock-contention-probe */%' AND a.pid<>pg_backend_pid()")
+        let waits:Vec<(String,f64)>=sqlx::query_as("SELECT l.pid::text||':'||l.waitstart::text,extract(epoch FROM clock_timestamp()-l.waitstart)::double precision*1000 FROM pg_locks l JOIN pg_stat_activity a ON a.pid=l.pid WHERE NOT l.granted AND l.waitstart IS NOT NULL AND a.application_name=current_setting('application_name') AND a.query LIKE '%/* lock-contention-probe */%' AND a.pid<>pg_backend_pid()")
             .fetch_all(&direct).await.unwrap();
         for (key, ms) in waits {
             node_waits

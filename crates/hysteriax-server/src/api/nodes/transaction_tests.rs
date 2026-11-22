@@ -24,7 +24,7 @@ async fn count(state: &AppState, sql: &str) -> i64 {
 async fn waiting(state: &AppState) {
     tokio::time::timeout(std::time::Duration::from_secs(2), async {
         loop {
-            if sqlx::query_scalar::<_,bool>("SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND query LIKE 'SELECT desired_revision,deployed_revision,state,mtls_state,mtls_recovery_configured FROM nodes%' AND wait_event_type='Lock')").fetch_one(&state.pool).await.unwrap() {break;}
+            if sqlx::query_scalar::<_,bool>("SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE application_name=current_setting('application_name') AND query LIKE 'SELECT desired_revision,deployed_revision,state,mtls_state,mtls_recovery_configured FROM nodes%' AND wait_event_type='Lock')").fetch_one(&state.pool).await.unwrap() {break;}
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
     }).await.unwrap();
@@ -83,42 +83,39 @@ async fn retried_action_commits_one_job_event_and_actual_actor() {
     );
 }
 #[tokio::test]
-async fn action_waiting_for_revision_change_rejects_the_old_revision() {
+async fn action_waiting_for_a_revision_change_or_deletion_is_rejected_without_queueing() {
     let (state, node) = fixture().await;
-    let mut editing = state.pool.begin().await.unwrap();
-    sqlx::query("UPDATE nodes SET desired_revision=2 WHERE id=$1")
-        .bind(&node)
-        .execute(&mut *editing)
-        .await
-        .unwrap();
-    let (app, id) = (state.clone(), node.clone());
-    let request = tokio::spawn(async move { action(&app, &id, 1, "deploy").await });
-    waiting(&state).await;
-    editing.commit().await.unwrap();
-    assert_eq!(
-        request.await.unwrap().unwrap_err().status,
-        StatusCode::CONFLICT
-    );
-    assert_eq!(count(&state, "SELECT count(*) FROM jobs").await, 0);
-}
-#[tokio::test]
-async fn action_waiting_for_deletion_does_not_queue_remote_work() {
-    let (state, node) = fixture().await;
-    let mut deleting = state.pool.begin().await.unwrap();
-    sqlx::query("UPDATE nodes SET state='deleting' WHERE id=$1")
-        .bind(&node)
-        .execute(&mut *deleting)
-        .await
-        .unwrap();
-    let (app, id) = (state.clone(), node.clone());
-    let request = tokio::spawn(async move { action(&app, &id, 1, "sync").await });
-    waiting(&state).await;
-    deleting.commit().await.unwrap();
-    assert_eq!(
-        request.await.unwrap().unwrap_err().status,
-        StatusCode::CONFLICT
-    );
-    assert_eq!(count(&state, "SELECT count(*) FROM jobs").await, 0);
+    // Each change is committed while the request waits on the node row lock.
+    // The second case targets the new revision so only the deletion can reject it.
+    for (change, revision, kind) in [
+        (
+            "UPDATE nodes SET desired_revision=2 WHERE id=$1",
+            1,
+            "deploy",
+        ),
+        ("UPDATE nodes SET state='deleting' WHERE id=$1", 2, "sync"),
+    ] {
+        let mut changing = state.pool.begin().await.unwrap();
+        sqlx::query(sqlx::AssertSqlSafe(change))
+            .bind(&node)
+            .execute(&mut *changing)
+            .await
+            .unwrap();
+        let (app, id) = (state.clone(), node.clone());
+        let request = tokio::spawn(async move { action(&app, &id, revision, kind).await });
+        waiting(&state).await;
+        changing.commit().await.unwrap();
+        assert_eq!(
+            request.await.unwrap().unwrap_err().status,
+            StatusCode::CONFLICT,
+            "{change}"
+        );
+        assert_eq!(
+            count(&state, "SELECT count(*) FROM jobs").await,
+            0,
+            "{change}"
+        );
+    }
 }
 #[tokio::test]
 async fn rollback_selects_history_from_the_deployment_seen_after_waiting() {
@@ -175,7 +172,7 @@ async fn forget_node(state: &AppState, node: &str) -> Result<StatusCode, ApiErro
 async fn waiting_removal(state: &AppState) {
     tokio::time::timeout(std::time::Duration::from_secs(2), async {
         loop {
-            if sqlx::query_scalar::<_,bool>("SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND query LIKE 'SELECT id FROM nodes WHERE id=$1 FOR UPDATE%' AND wait_event_type='Lock')").fetch_one(&state.pool).await.unwrap() {break;}
+            if sqlx::query_scalar::<_,bool>("SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE application_name=current_setting('application_name') AND query LIKE 'SELECT id FROM nodes WHERE id=$1 FOR UPDATE%' AND wait_event_type='Lock')").fetch_one(&state.pool).await.unwrap() {break;}
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
     }).await.unwrap();
@@ -439,7 +436,7 @@ async fn edit_waiting_for_deletion_rechecks_state_before_writing() {
     });
     tokio::time::timeout(std::time::Duration::from_secs(2),async {
         loop {
-            if sqlx::query_scalar::<_,bool>("SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND query LIKE 'SELECT * FROM nodes WHERE id=$1 FOR NO KEY UPDATE%' AND wait_event_type='Lock')").fetch_one(&state.pool).await.unwrap() {break;}
+            if sqlx::query_scalar::<_,bool>("SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE application_name=current_setting('application_name') AND query LIKE 'SELECT * FROM nodes WHERE id=$1 FOR NO KEY UPDATE%' AND wait_event_type='Lock')").fetch_one(&state.pool).await.unwrap() {break;}
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
     }).await.unwrap();

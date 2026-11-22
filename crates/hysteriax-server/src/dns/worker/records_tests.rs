@@ -165,21 +165,6 @@ async fn record_receipt_check_and_audit_commit_once() {
 }
 
 #[tokio::test]
-async fn an_identical_new_pending_document_is_not_the_old_operation_source() {
-    let f = fixture().await;
-    let s = source(&f).await;
-    sqlx::query("UPDATE dns_records SET revision=revision+1 WHERE id=$1")
-        .bind(&f.id)
-        .execute(&f.state.pool)
-        .await
-        .unwrap();
-    let before = snapshot(&f).await;
-    assert!(prepared(&f).await.is_err());
-    assert!(save(&f, &s, &result(&f)).await.unwrap().is_err());
-    assert_eq!(snapshot(&f).await, before);
-}
-
-#[tokio::test]
 async fn a_provider_response_for_different_desired_content_cannot_clear_the_pending_document() {
     let f = fixture().await;
     let s = source(&f).await;
@@ -231,7 +216,7 @@ async fn native_nested_enqueue_retry_and_audit_failure_preserve_one_atomic_recor
 }
 
 #[tokio::test]
-async fn wrong_job_input_or_transferred_operation_cannot_publish_a_result() {
+async fn wrong_job_input_newer_revision_or_transferred_operation_cannot_publish_a_result() {
     let f = fixture().await;
     let s = source(&f).await;
     sqlx::query("INSERT INTO dns_records(id,zone_id,name,record_type,content,ttl,proxied,origin,desired,state,revision) SELECT 'other-record',zone_id,'other.'||name,record_type,content,ttl,proxied,origin,desired,state,revision FROM dns_records WHERE id=$1")
@@ -254,6 +239,21 @@ async fn wrong_job_input_or_transferred_operation_cannot_publish_a_result() {
         assert!(save(&f, &wrong, &result(&f)).await.unwrap().is_err());
         assert_eq!(snapshot(&f).await, before);
     }
+    // An identical document with a newer pending revision is a different source.
+    sqlx::query("UPDATE dns_records SET revision=revision+1 WHERE id=$1")
+        .bind(&f.id)
+        .execute(&f.state.pool)
+        .await
+        .unwrap();
+    let before = snapshot(&f).await;
+    assert!(prepared(&f).await.is_err());
+    assert!(save(&f, &s, &result(&f)).await.unwrap().is_err());
+    assert_eq!(snapshot(&f).await, before);
+    sqlx::query("UPDATE dns_records SET revision=revision-1 WHERE id=$1")
+        .bind(&f.id)
+        .execute(&f.state.pool)
+        .await
+        .unwrap();
     sqlx::query("UPDATE dns_operations SET job_id=NULL WHERE id=$1")
         .bind(&f.operation)
         .execute(&f.state.pool)

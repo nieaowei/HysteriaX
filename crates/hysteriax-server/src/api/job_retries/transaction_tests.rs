@@ -152,7 +152,7 @@ async fn retry_waiting_for_node_change_rechecks_revision() {
     let request = tokio::spawn(async move { submit(&app, &id).await });
     tokio::time::timeout(std::time::Duration::from_secs(2),async {
         loop {
-            if sqlx::query_scalar::<_,bool>("SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND query LIKE 'SELECT id FROM nodes WHERE id=$1 FOR NO KEY UPDATE%' AND wait_event_type='Lock')").fetch_one(&state.pool).await.unwrap() {break;}
+            if sqlx::query_scalar::<_,bool>("SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE application_name=current_setting('application_name') AND query LIKE 'SELECT id FROM nodes WHERE id=$1 FOR NO KEY UPDATE%' AND wait_event_type='Lock')").fetch_one(&state.pool).await.unwrap() {break;}
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
     }).await.unwrap();

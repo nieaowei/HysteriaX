@@ -1,9 +1,6 @@
 use super::*;
 use crate::security::SecretBox;
 
-#[path = "retention_benchmarks.rs"]
-mod benchmarks;
-
 async fn fixture(expired: i64) -> AppState {
     let pool = db::test_pool_with_max_connections(8).await;
     sqlx::raw_sql("INSERT INTO credentials(id,name,kind,created_at,updated_at) VALUES('ca','CA','ca_identity',now(),now()); INSERT INTO credential_versions(credential_id,version,payload_enc,created_at) VALUES('ca',1,'ca-preserved',now()); INSERT INTO mtls_authorities(credential_id,source) VALUES('ca','generated'); INSERT INTO mtls_ca_generations(ca_id,ca_version,state,expires_at) VALUES('ca',1,'published',now()+interval '1 year');").execute(&pool).await.unwrap();

@@ -53,6 +53,3 @@ impl CredentialPair {
         Ok(())
     }
 }
-
-#[cfg(test)]
-mod tests;

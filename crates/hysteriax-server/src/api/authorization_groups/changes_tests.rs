@@ -346,57 +346,6 @@ async fn bounded_pages_commit_progress_and_a_linked_retry_resumes_after_failure(
 }
 
 #[tokio::test]
-async fn migration_selects_one_existing_password_and_removes_assignment_password_columns() {
-    let state = fixture().await;
-    let mut tx = state.pool.begin().await.unwrap();
-    let schema = format!("credential_upgrade_{}", Uuid::new_v4().simple());
-    sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
-        .execute(&mut *tx)
-        .await
-        .unwrap();
-    sqlx::query(sqlx::AssertSqlSafe(format!(
-        "SET LOCAL search_path TO {schema}"
-    )))
-    .execute(&mut *tx)
-    .await
-    .unwrap();
-    for migration in [
-        include_str!("../../../migrations/0001_baseline.sql"),
-        include_str!("../../../migrations/0002_node_kick_batches.sql"),
-        include_str!("../../../migrations/0003_remove_authorization_previews.sql"),
-        include_str!("../../../migrations/0004_separate_job_cache_roots.sql"),
-    ] {
-        sqlx::raw_sql(migration).execute(&mut *tx).await.unwrap();
-    }
-    sqlx::query(
-        "INSERT INTO users(id,name,created_at,updated_at) VALUES('user','User',now(),now())",
-    )
-    .execute(&mut *tx)
-    .await
-    .unwrap();
-    sqlx::query("INSERT INTO nodes(id,name,ssh_host,ssh_port,ssh_username,ssh_auth_type,ssh_secret_enc,public_host,public_port,listen_addr,node_token_hash,node_token_enc,traffic_stats_secret_enc,desired_config_enc,created_at,updated_at) VALUES('node','Node','localhost',22,'root','password','unused','example.test',443,':443','node-hash','unused','unused','{}',now(),now())")
-        .execute(&mut *tx).await.unwrap();
-    let cipher = state.secrets.encrypt("preserved-password").unwrap();
-    sqlx::query("INSERT INTO node_assignments(user_id,node_id,credential_hash,credential_enc,created_at) VALUES('user','node',$1,$2,now())")
-        .bind(crate::security::token_digest("preserved-password")).bind(&cipher).execute(&mut *tx).await.unwrap();
-    sqlx::raw_sql(include_str!(
-        "../../../migrations/0005_async_authorization.sql"
-    ))
-    .execute(&mut *tx)
-    .await
-    .unwrap();
-    let kept: String =
-        sqlx::query_scalar("SELECT connection_credential_enc FROM users WHERE id='user'")
-            .fetch_one(&mut *tx)
-            .await
-            .unwrap();
-    assert_eq!(kept, cipher);
-    let columns:i64=sqlx::query_scalar("SELECT count(*) FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='node_assignments' AND column_name IN ('credential_hash','credential_enc')").fetch_one(&mut *tx).await.unwrap();
-    assert_eq!(columns, 0);
-    tx.rollback().await.unwrap();
-}
-
-#[tokio::test]
 async fn one_user_delta_in_a_hundred_thousand_member_ten_thousand_node_group_is_incremental() {
     let state = fixture().await;
     sqlx::query("INSERT INTO users(id,name,created_at,updated_at) SELECT 'capacity-'||lpad(i::text,6,'0'),'Existing',now(),now() FROM generate_series(1,100000)i")

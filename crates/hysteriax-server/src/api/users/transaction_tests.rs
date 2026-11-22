@@ -137,7 +137,7 @@ async fn a_patch_waiting_on_billing_retries_with_current_usage_and_keeps_the_rev
         tokio::spawn(async move { patch(State(target), Path(target_user), Json(input)).await });
     tokio::time::timeout(std::time::Duration::from_secs(2),async {
         loop {
-            let waiting:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE query LIKE 'SELECT n.id FROM nodes n JOIN node_assignments%' AND wait_event_type='Lock')").fetch_one(&state.pool).await.unwrap();
+            let waiting:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE application_name=current_setting('application_name') AND query LIKE 'SELECT n.id FROM nodes n JOIN node_assignments%' AND wait_event_type='Lock')").fetch_one(&state.pool).await.unwrap();
             if waiting {break;}
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }

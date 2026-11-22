@@ -38,7 +38,7 @@ pub(super) async fn connection(
 pub(super) async fn waiting(state: &AppState, prefix: &str) {
     tokio::time::timeout(std::time::Duration::from_secs(2),async {
         loop {
-            if sqlx::query_scalar::<_,bool>("SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND query LIKE $1 AND wait_event_type='Lock')").bind(format!("{prefix}%")).fetch_one(&state.pool).await.unwrap() {break;}
+            if sqlx::query_scalar::<_,bool>("SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE application_name=current_setting('application_name') AND query LIKE $1 AND wait_event_type='Lock')").bind(format!("{prefix}%")).fetch_one(&state.pool).await.unwrap() {break;}
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
     }).await.unwrap();
