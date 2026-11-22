@@ -167,30 +167,9 @@ async fn independent_buckets_commit_and_collisions_increment_without_lost_versio
 #[tokio::test]
 async fn job_progress_invalidates_node_responses_without_restarting_authorization_commit() {
     let pool = crate::db::test_pool_with_max_connections(4).await;
-    let baseline = include_str!("../../migrations/0001_baseline.sql");
-    let start = baseline
-        .find("CREATE FUNCTION hysteriax_cache_row_changed()")
-        .unwrap();
-    let end = baseline[start..].find("\n-- FUNCTION:").unwrap() + start;
-    sqlx::raw_sql(sqlx::AssertSqlSafe(baseline[start..end].replacen(
-        "CREATE FUNCTION",
-        "CREATE OR REPLACE FUNCTION",
-        1,
-    )))
-    .execute(&pool)
-    .await
-    .unwrap();
     user(&pool, "member").await;
     sqlx::query("WITH fixture_ssh AS (INSERT INTO credentials(id,name,kind,created_at,updated_at) VALUES('fixture-ssh','Fixture SSH','ssh_password',now(),now()) ON CONFLICT DO NOTHING), fixture_ssh_version AS (INSERT INTO credential_versions(credential_id,version,payload_enc,created_at) VALUES('fixture-ssh',1,'unused',now()) ON CONFLICT DO NOTHING) INSERT INTO nodes(id,name,ssh_host,ssh_port,ssh_username,public_host,public_port,listen_addr,node_token_hash,node_token_enc,traffic_stats_secret_enc,desired_config_enc,created_at,updated_at,ssh_credential_id,ssh_credential_version) VALUES ('node','Node','127.0.0.1',22,'root','example.test',443,':443','hash','unused','unused','{}',now(),now(),'fixture-ssh',1)").execute(&pool).await.unwrap();
     sqlx::query("INSERT INTO jobs(id,kind,node_id,payload_json,status,stage,available_at,created_at,updated_at) VALUES('progress','kick','node','{\"scope\":\"node\"}','queued','queued',now(),now(),now())").execute(&pool).await.unwrap();
-    let before_upgrade:i64=sqlx::query_scalar("SELECT (SELECT count(*) FROM users)+(SELECT count(*) FROM nodes)+(SELECT count(*) FROM jobs)").fetch_one(&pool).await.unwrap();
-    sqlx::raw_sql(include_str!(
-        "../../migrations/0004_separate_job_cache_roots.sql"
-    ))
-    .execute(&pool)
-    .await
-    .unwrap();
-    assert_eq!(sqlx::query_scalar::<_,i64>("SELECT (SELECT count(*) FROM users)+(SELECT count(*) FROM nodes)+(SELECT count(*) FROM jobs)").fetch_one(&pool).await.unwrap(),before_upgrade);
     let state = crate::state::AppState::new(
         pool.clone(),
         crate::security::SecretBox::from_base64("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")

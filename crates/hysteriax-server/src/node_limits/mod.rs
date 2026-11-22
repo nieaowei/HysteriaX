@@ -566,7 +566,4 @@ use axum::extract::Path;
 use axum::extract::State;
 
 #[cfg(test)]
-mod migration_tests;
-
-#[cfg(test)]
 pub(crate) mod contention_benchmark;

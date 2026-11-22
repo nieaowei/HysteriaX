@@ -375,7 +375,13 @@ pub async fn test_pool_with_max_connections(max_connections: u32) -> PgPool {
                 Ok(())
             })
         })
-        .connect(&database_url)
+        // Lock-wait helpers match pg_stat_activity.application_name so they
+        // only observe this test's sessions; relays inherit it via connect_options().
+        .connect_with(
+            connect_options(&database_url)
+                .expect("valid TEST_DATABASE_URL")
+                .application_name(&schema),
+        )
         .await
         .expect("connect to isolated PostgreSQL test schema");
     run_migrations(&pool)

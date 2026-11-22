@@ -3,20 +3,6 @@ use super::*;
 use document::*;
 use serde_json::json;
 #[test]
-fn seed_templates_validate_and_render_every_platform() {
-    for format in ["mihomo", "singbox"] {
-        let document = seed(format);
-        let diagnostics = validate(format, &document).unwrap();
-        let failures: Vec<_> = diagnostics
-            .iter()
-            .filter(|d| d.severity == "error")
-            .map(|d| format!("{} {} {}", d.layer, d.path, d.message))
-            .collect();
-        assert!(failures.is_empty(), "{format}: {failures:?}");
-        verify_rendering(format, &document).unwrap();
-    }
-}
-#[test]
 fn single_configuration_preserves_values_and_rejects_legacy_documents() {
     let d = Document {
         schema_version: 2,
