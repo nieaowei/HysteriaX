@@ -83,6 +83,7 @@ pub(super) struct Work {
     leases: Vec<Execution>,
     created: DateTime<Utc>,
 }
+#[allow(clippy::large_enum_variant)]
 pub(super) enum Prepared {
     Applied(Value),
     Ready(Work),

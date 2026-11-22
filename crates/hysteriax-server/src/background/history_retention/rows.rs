@@ -240,6 +240,7 @@ pub(super) async fn page(
     if let Some(batch_cutoff) = batch_cutoff {
         query = query.bind(batch_cutoff);
     }
+    #[allow(clippy::type_complexity)]
     let candidates: Vec<(DateTime<Utc>, String, Option<String>, bool, bool)> =
         query.fetch_all(&mut *connection).await?;
     cursor.done = candidates.len() < page_size as usize;

@@ -12,6 +12,7 @@ pub(super) struct Source {
     connection_source: Value,
     zone: Option<(String, Value)>,
 }
+#[allow(clippy::large_enum_variant)]
 pub(super) enum Prepared {
     Applied(Value),
     Ready(Source),

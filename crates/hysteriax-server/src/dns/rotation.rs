@@ -51,6 +51,7 @@ struct Source {
     leases: Vec<crate::execution::Execution>,
     data: Value,
 }
+#[allow(clippy::large_enum_variant)]
 enum Prepared {
     Applied(Value),
     Ready(Source),

@@ -939,6 +939,7 @@ async fn fail(
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn fail_after(
     pool: &PgPool,
     job: &JobInput,
@@ -971,6 +972,7 @@ async fn fail_after(
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn fail_on(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     job: &JobInput,
