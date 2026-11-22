@@ -599,6 +599,7 @@ impl SshSession {
         .await
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn loopback_http_remote_with_budget(
         &self,
         method: &str,

@@ -238,6 +238,7 @@ struct Candidate {
     desired_snapshot: Option<(String, String)>,
     changes: Option<Changes>,
 }
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone)]
 enum Preparation {
     NoSource,

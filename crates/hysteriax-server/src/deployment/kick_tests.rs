@@ -47,6 +47,7 @@ async fn fixture(size: usize) -> (crate::state::AppState, JobInput, FakeNode) {
     (state, job, node)
 }
 
+#[allow(clippy::await_holding_lock)]
 #[tokio::test]
 async fn ten_thousand_users_have_one_job_and_fifty_bounded_remote_batches() {
     let (state, job, node) = fixture(10_000).await;

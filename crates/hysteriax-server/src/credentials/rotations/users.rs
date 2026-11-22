@@ -307,6 +307,7 @@ async fn source_on(tx: &mut Transaction<'_, Postgres>, t: &Target) -> Result<Opt
     Ok(sqlx::query_as(sqlx::AssertSqlSafe(format!("SELECT i.revision,i.authorization_revision authorization,u.revision user_revision,a.policy_revision,i.credential_id,({ELIGIBLE} AND NOT i.archived AND NOT c.archived AND g.state='preparing' AND g.expires_at>$3 AND r.phase IN ('identities','publish')) eligible,{LEAF} has_leaf FROM mtls_user_identities i JOIN users u ON u.id=i.user_id JOIN mtls_authorities a ON a.credential_id=i.ca_id JOIN credentials c ON c.id=i.ca_id JOIN mtls_ca_generations g ON g.ca_id=i.ca_id AND g.ca_version=$2 JOIN mtls_rotations r ON r.id=$4 AND r.ca_id=i.ca_id AND r.ca_version=$2 WHERE i.ca_id=$1 AND i.id=$5 AND i.user_id=$6")))
         .bind(&t.ca).bind(t.version).bind(now).bind(&t.rotation).bind(&t.identity).bind(&t.user).fetch_optional(&mut **tx).await?)
 }
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone)]
 enum Preparation {
     Skipped,

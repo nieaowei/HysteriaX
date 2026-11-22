@@ -14,6 +14,7 @@ pub(super) struct Source {
     pub remote: Option<String>,
     pub operation_source: Value,
 }
+#[allow(clippy::large_enum_variant)]
 pub(super) enum Prepared {
     Applied(Value),
     Ready(Source),

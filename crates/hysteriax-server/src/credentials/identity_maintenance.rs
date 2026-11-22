@@ -111,6 +111,7 @@ struct Source {
     eligible: bool,
 }
 const SOURCE: &str = "SELECT i.revision,a.published_version,i.credential_id,i.archived,(i.next_action_at IS NULL OR i.next_action_at<=$4) due,coalesce(u.enabled AND (u.expires_at IS NULL OR u.expires_at>$4) AND (u.quota_bytes IS NULL OR u.usage_bytes<u.quota_bytes),false) eligible FROM mtls_user_identities i JOIN mtls_authorities a ON a.credential_id=i.ca_id LEFT JOIN users u ON u.id=i.user_id WHERE i.id=$1 AND i.user_id=$2 AND i.ca_id=$3";
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone)]
 enum Preparation {
     Skipped,
