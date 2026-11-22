@@ -336,6 +336,10 @@ async fn public_download_selects_platform_uses_latest_publication_and_revokes_li
             .to_vec(),
     )
     .unwrap();
+    assert!(page.contains("<style>"));
+    assert!(page.contains("-apple-system"));
+    assert!(page.contains("class=\"formats\""));
+    assert!(page.contains("兼容性说明"));
     assert!(page.contains("template=default-mihomo&amp;format=mihomo&amp;platform=windows"));
     let response = download(&state, "").await;
     let page = String::from_utf8(
@@ -345,7 +349,37 @@ async fn public_download_selects_platform_uses_latest_publication_and_revokes_li
             .to_vec(),
     )
     .unwrap();
+    assert!(page.contains("class=\"formats node-formats\""));
+    assert!(page.contains("Base64 节点订阅"));
+    assert!(page.contains("纯文本节点链接"));
     assert!(page.contains("?format=uri") && page.contains("?format=base64"));
+    let mut browser_headers = HeaderMap::new();
+    browser_headers.insert(
+        header::USER_AGENT,
+        HeaderValue::from_static("Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0)"),
+    );
+    let browser_page = super::super::download_auto(
+        State(state.clone()),
+        Path("token".into()),
+        RawQuery(Some(String::new())),
+        browser_headers,
+    )
+    .await;
+    let browser_page = String::from_utf8(
+        axum::body::to_bytes(browser_page.into_body(), 1_000_000)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    assert!(browser_page.contains("Linux/OpenWrt"));
+    assert!(browser_page.contains("windows"));
+    assert!(browser_page.contains("platform-badge"));
+    assert!(browser_page.contains("推荐"));
+    assert!(browser_page.contains("platform-tabs"));
+    assert!(browser_page.contains("data-platform-tab"));
+    assert!(browser_page.contains("data-copy-address"));
+    assert!(browser_page.contains("dataset.platformTab"));
     for query in [
         "template=default-mihomo&format=singbox&platform=linux",
         "template=default-mihomo&format=uri",

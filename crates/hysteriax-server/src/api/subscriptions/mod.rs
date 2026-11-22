@@ -126,7 +126,8 @@ pub async fn download_auto(
                 .and_then(|v| v.to_str().ok())
                 .unwrap_or(""),
         );
-        if let Some(platform) = formats::Platform::requested(query.as_deref())? {
+        let requested_platform = formats::Platform::requested(query.as_deref())?;
+        if let Some(platform) = requested_platform {
             client.platform = platform;
         }
         let templates: Vec<_> =
@@ -157,7 +158,16 @@ pub async fn download_auto(
             return cached_template(&state, &user_id, format.unwrap(), &client, None).await;
         }
         if id.is_none() && format.is_none() {
-            return template_selection(&state, &token, None, client.platform).await;
+            // The browser's platform identifies the eventual client target, but the
+            // selection page must still expose every platform unless the URL filters it.
+            return template_selection(
+                &state,
+                &token,
+                None,
+                requested_platform.unwrap_or_default(),
+                client.platform,
+            )
+            .await;
         }
         let format_name = match format {
             Some(SubscriptionFormat::Mihomo) => Some("mihomo"),
@@ -174,7 +184,14 @@ pub async fn download_auto(
             return Err(ApiError::bad_request("format conflicts with template"));
         }
         if templates::platform_name(client.platform).is_none() {
-            return template_selection(&state, &token, Some(&published.0), client.platform).await;
+            return template_selection(
+                &state,
+                &token,
+                Some(&published.0),
+                client.platform,
+                client.platform,
+            )
+            .await;
         }
         cached_template(&state, &user_id, selected, &client, Some(&published)).await
     })
@@ -185,7 +202,8 @@ async fn template_selection(
     state: &AppState,
     token: &str,
     id: Option<&str>,
-    platform: formats::Platform,
+    filter_platform: formats::Platform,
+    default_platform: formats::Platform,
 ) -> Result<Response, ApiError> {
     fn escape(s: &str) -> String {
         s.replace('&', "&amp;")
@@ -195,17 +213,77 @@ async fn template_selection(
             .replace('\'', "&#39;")
     }
     let rows=sqlx::query("SELECT id,name,format FROM subscription_templates WHERE NOT archived AND published_version IS NOT NULL AND ($1::text IS NULL OR id=$1) ORDER BY name,id").bind(id).fetch_all(&mut *crate::read_snapshot::begin(&state.pool).await?).await?;
-    let mut html = String::from(
-        "<!doctype html><html lang=\"zh-CN\"><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width\"><title>HysteriaX 订阅</title><h1>选择模板与目标平台</h1><p>复制下面对应设备的明确平台地址。</p>",
+    let mut cards = String::new();
+    let default_target = templates::platform_name(default_platform);
+    let mut targets = Vec::new();
+    if let Some(target) = default_target {
+        targets.push(target);
+    }
+    targets.extend(
+        templates::document::PLATFORMS
+            .into_iter()
+            .filter(|target| Some(*target) != default_target),
     );
-    for row in rows {
-        html.push_str(&format!(
-            "<h2>{} ({})</h2><ul>",
-            escape(&row.get::<String, _>("name")),
-            escape(&row.get::<String, _>("format"))
+    let initial_target = templates::platform_name(filter_platform)
+        .or(default_target)
+        .or_else(|| targets.first().copied());
+    let mut platform_tabs = String::new();
+    for target in &targets {
+        if templates::platform_name(filter_platform).is_some_and(|p| p != *target) {
+            continue;
+        }
+        let platform_name = if *target == "linux" {
+            "Linux/OpenWrt"
+        } else {
+            *target
+        };
+        let recommended = default_target == Some(*target);
+        let active = initial_target == Some(*target);
+        let badge = if recommended {
+            "<span class=\"platform-badge\">推荐</span>"
+        } else {
+            ""
+        };
+        platform_tabs.push_str(&format!(
+            "<button type=\"button\" class=\"platform-tab{}\" data-platform-tab=\"{}\" aria-selected=\"{}\">{} {}</button>",
+            if active { " active" } else { "" },
+            escape(target),
+            active,
+            escape(platform_name),
+            badge,
         ));
-        for target in templates::document::PLATFORMS {
-            if templates::platform_name(platform).is_some_and(|p| p != target) {
+    }
+    for row in rows {
+        let name: String = row.get("name");
+        let format: String = row.get("format");
+        let file_kind = match format.as_str() {
+            "mihomo" => ".yaml",
+            "singbox" => ".json",
+            other => other,
+        };
+        let description = match format.as_str() {
+            "mihomo" => "适用于 Mihomo / Clash.Meta 内核客户端。",
+            "singbox" => "适用于 sing-box 客户端。",
+            _ => "适用于对应模板客户端。",
+        };
+        let compatibility = match format.as_str() {
+            "mihomo" => {
+                "<p>高级功能请使用项目验证版本 v1.19.31 或更新版本。普通 Clash 不支持全部功能。</p>"
+            }
+            "singbox" => {
+                "<p>mTLS 需要 1.13+，Gecko / Realm 需要 1.14+，ECH 使用验证版本 1.14.2+。版本未知时提供全部可表示节点，并保留完整高级配置。</p><p>已识别的旧版内核仍按兼容性过滤。请确认实际内核满足所用功能的最低版本要求。</p>"
+            }
+            _ => "<p>请使用对应格式的客户端，并确认客户端支持模板中的功能。</p>",
+        };
+        cards.push_str(&format!(
+            "<article><div class=\"card-top\"><span class=\"file-kind\">{}</span><span class=\"category\">完整配置</span></div><h2>{} <span class=\"category\">({})</span></h2><p class=\"description\">{}<br>复制对应目标平台的订阅地址。</p><div class=\"addresses\">",
+            escape(file_kind),
+            escape(&name),
+            escape(&format),
+            escape(description),
+        ));
+        for target in &targets {
+            if templates::platform_name(filter_platform).is_some_and(|p| p != *target) {
                 continue;
             }
             let url = url::form_urlencoded::Serializer::new(String::new())
@@ -214,22 +292,86 @@ async fn template_selection(
                 .append_pair("platform", target)
                 .finish();
             let url = format!("{}?{url}", auto_subscription_url(token));
-            html.push_str(&format!("<li><a href=\"{}\">{}</a><br><input aria-label=\"订阅地址\" readonly size=\"90\" value=\"{}\"></li>",escape(&url),if target=="linux"{"Linux/OpenWrt"}else{target},escape(&url)));
-        }
-        html.push_str("</ul>");
-    }
-    if id.is_none() {
-        html.push_str("<h2>节点链接</h2><ul>");
-        for format in ["uri", "base64"] {
-            let url = format!("{}?format={format}", auto_subscription_url(token));
-            html.push_str(&format!(
-                "<li><a href=\"{}\">{format}</a></li>",
-                escape(&url)
+            let platform_name = if *target == "linux" {
+                "Linux/OpenWrt"
+            } else {
+                *target
+            };
+            let recommended = default_target == Some(*target);
+            let platform_class = if recommended {
+                "platform recommended"
+            } else {
+                "platform"
+            };
+            let badge = if recommended {
+                "<span class=\"platform-badge\">推荐</span>"
+            } else {
+                ""
+            };
+            let hidden = if initial_target == Some(*target) {
+                ""
+            } else {
+                " hidden"
+            };
+            cards.push_str(&format!(
+                "<div class=\"address\" data-platform=\"{}\"{}><div class=\"{}\">{} {}</div><label class=\"address-label\">订阅地址</label><input aria-label=\"{} 订阅地址\" readonly spellcheck=\"false\" value=\"{}\"><div class=\"links\"><button type=\"button\" data-copy-address aria-label=\"复制 {} 订阅地址\">复制地址</button><a href=\"{}\">查看订阅<span class=\"arrow\" aria-hidden=\"true\">↗</span></a></div></div>",
+                escape(target),
+                hidden,
+                platform_class,
+                escape(platform_name),
+                badge,
+                escape(platform_name),
+                escape(&url),
+                escape(platform_name),
+                escape(&url),
             ));
         }
-        html.push_str("</ul>");
+        cards.push_str(&format!(
+            "</div><details><summary>兼容性说明</summary>{}</details></article>",
+            compatibility,
+        ));
     }
-    html.push_str("</html>");
+    let mut node_section = String::new();
+    if id.is_none() {
+        node_section
+            .push_str("<section class=\"formats node-formats\" aria-label=\"节点订阅格式\">");
+        for (kind, category, title, description, compatibility) in [
+            (
+                "Base64",
+                "通用订阅",
+                "Base64 节点订阅",
+                "适用于支持 Hysteria2 的 Shadowrocket、<br>v2rayN、v2rayNG 等客户端。",
+                "仅包含节点链接，不包含完整路由配置。mTLS、ECH、端口跳跃、Gecko 和 Realm 节点会被过滤。",
+            ),
+            (
+                "URI",
+                "手动导入",
+                "纯文本节点链接",
+                "每行一个 hysteria2:// 链接。<br>适合手动导入或与其他工具配合使用。",
+                "链接列表采用基础兼容配置。mTLS、ECH、端口跳跃、Gecko 和 Realm 节点会被过滤。",
+            ),
+        ] {
+            let format = kind.to_ascii_lowercase();
+            let url = format!("{}?format={format}", auto_subscription_url(token));
+            node_section.push_str(&format!(
+                "<article><div class=\"card-top\"><span class=\"file-kind\">{}</span><span class=\"category\">{}</span></div><h2>{}</h2><p class=\"description\">{}</p><div class=\"address\"><label class=\"address-label\">订阅地址</label><input aria-label=\"{} 订阅地址\" readonly spellcheck=\"false\" value=\"{}\"><div class=\"links\"><button type=\"button\" data-copy-address aria-label=\"复制 {} 订阅地址\">复制地址</button><a href=\"{}\">查看订阅<span class=\"arrow\" aria-hidden=\"true\">↗</span></a></div></div><details><summary>兼容性说明</summary><p>{}</p></details></article>",
+                escape(kind),
+                escape(category),
+                escape(title),
+                description,
+                escape(kind),
+                escape(&url),
+                escape(kind),
+                escape(&url),
+                escape(compatibility),
+            ));
+        }
+        node_section.push_str("</section>");
+    }
+    let html = include_str!("selection.html")
+        .replace("{{PLATFORM_TABS}}", &platform_tabs)
+        .replace("{{TEMPLATE_CARDS}}", &cards)
+        .replace("{{NODE_SECTION}}", &node_section);
     Ok(([(header::CONTENT_TYPE, "text/html; charset=utf-8")], html).into_response())
 }
 
