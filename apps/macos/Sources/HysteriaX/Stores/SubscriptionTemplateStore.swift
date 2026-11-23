@@ -150,6 +150,13 @@ final class SubscriptionTemplateStore {
         }
         edit { $0.set(["common"] + path, value) }
     }
+    func setString(_ path: [String], _ text: String, definition: JSONValue) {
+        if text.isEmpty, TemplateEditorGuidance.isSingbox(schema) {
+            setState("inherit", path: path, schema: definition)
+        } else {
+            set(path, .string(text))
+        }
+    }
     func supportedPlatforms(_ path: [String], value: JSONValue? = nil) -> [String] {
         var platforms = TemplatePlatform.all
         let rules = catalog["platform_rules"].arrayValue ?? []

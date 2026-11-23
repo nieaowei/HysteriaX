@@ -117,7 +117,7 @@ struct SubscriptionTemplateFields: View {
             }, set: { text in
                 if fixed { integerDraft = text }
                 if let number = TemplateSchema.integerValue(text) { store.set(path, number) }
-                else if !fixed { store.set(path, .string(text)) }
+                else if !fixed { store.setString(path, text, definition: definition) }
             })).textFieldStyle(.roundedBorder)
             if fixed, let draft = integerDraft, TemplateSchema.integerValue(draft) == nil {
                 Text(L10n.text("请输入整数。")).font(.caption).foregroundStyle(.orange)
@@ -132,7 +132,7 @@ struct SubscriptionTemplateFields: View {
         let prompt = isMark ? "0x1234" : (TemplateEditorGuidance.isSingbox(store.schema) ? TemplateEditorGuidance.prompt(definition, path: path) : nil)
         return TextField(label, text: Binding(get: {
             value.stringValue ?? (isMark && value != .null ? value.pretty : "")
-        }, set: { store.set(path, .string($0)) }), prompt: prompt.map { Text(verbatim: $0) }, axis: .vertical)
+        }, set: { store.setString(path, $0, definition: definition) }), prompt: prompt.map { Text(verbatim: $0) }, axis: .vertical)
             .textFieldStyle(.roundedBorder)
             .frame(minWidth: 0, idealWidth: 200, maxWidth: .infinity)
     }
@@ -186,8 +186,9 @@ struct SubscriptionTemplateFields: View {
     }
     private func setOptimistic(_ key: String, _ next: JSONValue) {
         var object = value.objectValue ?? ["enabled": .bool(optimisticEnabled)]
-        if object["timeout"] == nil { object["timeout"] = .string("3d") }
-        object[key] = next
+        if key != "timeout", object["timeout"] == nil { object["timeout"] = .string("3d") }
+        if key == "timeout", next.stringValue?.isEmpty == true { object[key] = nil }
+        else { object[key] = next }
         store.set(path, .object(object))
     }
     @ViewBuilder private var optimisticFields: some View {
@@ -311,13 +312,13 @@ struct SubscriptionTemplateFields: View {
                 let reference = TemplateSchema.referenceKind(schema, path: path)
                 if reference == "network_namespace" {
                     HStack {
-                        TextField(title, text: Binding(get: { value.stringValue ?? "" }, set: { store.set(path, .string($0)) })).textFieldStyle(.roundedBorder)
+                        TextField(title, text: Binding(get: { value.stringValue ?? "" }, set: { store.setString(path, $0, definition: definition) })).textFieldStyle(.roundedBorder)
                         Menu(L10n.text("选择命名空间引用")) { ForEach(store.referenceNames("network_namespace"), id: \.self) { name in Button(name) { store.set(path, .string(name)) } } }
                     }
                 } else if let reference {
                     referencePicker(title, kind: reference)
                 } else {
-                    TextField(title, text: Binding(get: { value.stringValue ?? "" }, set: { store.set(path, .string($0)) }), prompt: (TemplateEditorGuidance.isSingbox(store.schema) ? TemplateEditorGuidance.prompt(definition, path: path) : nil).map { Text(verbatim: $0) }, axis: .vertical)
+                    TextField(title, text: Binding(get: { value.stringValue ?? "" }, set: { store.setString(path, $0, definition: definition) }), prompt: (TemplateEditorGuidance.isSingbox(store.schema) ? TemplateEditorGuidance.prompt(definition, path: path) : nil).map { Text(verbatim: $0) }, axis: .vertical)
                         .textFieldStyle(.roundedBorder)
                 }
             }
