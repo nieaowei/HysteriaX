@@ -11,6 +11,28 @@ extension ManagementStore {
         return result.jobId
     }
 
+    func pendingAuthorizationJob(forResourceID id: String) async -> JobSummary? {
+        let matches: (JobSummary) -> Bool = { job in
+            job.kind == "authorization-change"
+                && job.resourceId == id
+                && (["queued", "running"].contains(job.status)
+                    || (job.status == "failed" && job.retryJobId == nil))
+        }
+        if isConnected,
+           let page = try? await jobsPage(
+               page: 1,
+               pageSize: 25,
+               query: id,
+               sort: "created_at",
+               order: "desc",
+               revalidate: true
+           ),
+           let found = page.items.first(where: matches) {
+            return found
+        }
+        return jobs.first(where: matches)
+    }
+
     @discardableResult
     func refreshAuthorizationGroups() async -> Bool {
         guard let client = try? requireConnectedAPI() else { return false }

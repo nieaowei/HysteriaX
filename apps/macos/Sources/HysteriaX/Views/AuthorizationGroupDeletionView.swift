@@ -9,6 +9,7 @@ struct AuthorizationGroupDeletionView: View {
     @State private var isDeleting = false
     @State private var result: AuthorizationChangeReceipt?
     @State private var errorMessage: String?
+    @State private var hasAuthorizationConflict = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -23,7 +24,14 @@ struct AuthorizationGroupDeletionView: View {
             } else if isDeleting {
                 ProgressView(L10n.text("正在删除…"))
             }
-            if let errorMessage { Text(errorMessage).foregroundStyle(.red).textSelection(.enabled) }
+            if let errorMessage {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(errorMessage).foregroundStyle(.red).textSelection(.enabled)
+                    if hasAuthorizationConflict {
+                        AuthorizationPendingConflictActions(store: store, resourceID: group.id)
+                    }
+                }
+            }
             Spacer()
             HStack {
                 Button(L10n.text("关闭"), role: .cancel) { dismiss() }
@@ -46,12 +54,14 @@ struct AuthorizationGroupDeletionView: View {
         guard !isDeleting, result == nil else { return }
         isDeleting = true
         errorMessage = nil
+        hasAuthorizationConflict = false
         defer { isDeleting = false }
         do {
             result = try await store.deleteAuthorizationGroup(group)
             onDeleted()
         } catch {
-            errorMessage = error.localizedDescription
+            hasAuthorizationConflict = AuthorizationConflictHelper.isPendingError(error)
+            errorMessage = JobDisplayText.errorMessage(error.localizedDescription)
         }
     }
 }

@@ -16,6 +16,8 @@ struct AuthorizationGroupsView: View {
     @State private var loadedKey: String?
     @State private var error: String?
     @State private var detailError: String?
+    @State private var pendingJob: JobSummary?
+    @State private var isRetryingPendingJob = false
     @State private var loading = false
     @State private var retry = UUID()
 
@@ -60,14 +62,25 @@ struct AuthorizationGroupsView: View {
     private func loadDetail() async {
         let request = detailKey
         detailError = nil
-        guard store.isConnected, let id = pageState.selectedGroupID else { detail = nil; return }
+        guard store.isConnected, let id = pageState.selectedGroupID else {
+            detail = nil
+            pendingJob = nil
+            return
+        }
+        if pendingJob?.resourceId != id { pendingJob = nil }
         do {
-            let value = try await store.authorizationGroupDetail(id)
+            async let loadedDetail = store.authorizationGroupDetail(id)
+            async let loadedPending = store.pendingAuthorizationJob(forResourceID: id)
+            let value = try await loadedDetail
+            let pending = await loadedPending
             guard !Task.isCancelled, request == detailKey else { return }
             detail = value
+            pendingJob = pending
         } catch {
             guard !Task.isCancelled, !isRequestCancellation(error), request == detailKey else { return }
-            detail = nil; detailError = error.localizedDescription
+            detail = nil
+            pendingJob = nil
+            detailError = error.localizedDescription
         }
     }
 
@@ -198,19 +211,22 @@ struct AuthorizationGroupsView: View {
     @ViewBuilder
     private func groupDetail(_ group: AuthorizationGroupSummary) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            VStack(alignment: .leading, spacing: 14) {
-                DetailHeaderLayout {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(group.name).font(.headline).lineLimit(2).textSelection(.enabled)
-                        Text(L10n.text("{0} 位用户 · {1} 个节点", String(group.userCount), String(group.nodeCount)))
-                            .font(.caption).foregroundStyle(.secondary)
-                            .accessibilityIdentifier("authorizationGroups.selected.summary")
+            DetailHeaderBar {
+                VStack(alignment: .leading, spacing: 14) {
+                    DetailHeaderLayout {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(group.name).font(.headline).lineLimit(2).textSelection(.enabled)
+                            Text(L10n.text("{0} 位用户 · {1} 个节点", String(group.userCount), String(group.nodeCount)))
+                                .font(.caption).foregroundStyle(.secondary)
+                                .accessibilityIdentifier("authorizationGroups.selected.summary")
+                        }
+                        groupActions(group).fixedSize(horizontal: true, vertical: false)
                     }
-                    groupActions(group).fixedSize(horizontal: true, vertical: false)
                 }
             }
-            .padding(16)
-            Divider()
+            if let job = pendingJob, job.resourceId == group.id {
+                pendingAuthorizationBanner(job)
+            }
             Picker(L10n.text("授权组详情"), selection: $detailTab) {
                 Text(L10n.text("成员")).tag("members")
                 Text(L10n.text("节点")).tag("nodes")
@@ -263,6 +279,65 @@ struct AuthorizationGroupsView: View {
     private func nodes(_ group: AuthorizationGroupSummary) -> some View {
         AuthorizationGroupNodesView(store: store, group: group, onOpen: onOpenNode)
             .frame(minHeight: 360)
+    }
+
+    private func pendingAuthorizationBanner(_ job: JobSummary) -> some View {
+        let isFailed = job.status == "failed"
+        let tone: StatusTone = isFailed ? .warning : .active
+        return HStack(alignment: .center, spacing: 12) {
+            Image(systemName: isFailed ? "exclamationmark.triangle.fill" : "hourglass")
+                .foregroundStyle(tone.color)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(isFailed ? L10n.text("存在失败的授权变更任务") : L10n.text("存在处理中的授权变更任务"))
+                    .font(.callout.weight(.medium))
+                Text(job.errorMessage.map(JobDisplayText.errorMessage) ?? JobDisplayText.stage(job.stage))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+            Spacer(minLength: 8)
+            Button(L10n.text("查看任务")) {
+                store.requestedJobID = job.id
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .accessibilityIdentifier("authorizationGroups.pendingJob.open")
+            if isFailed && job.retryJobId == nil {
+                Button(isRetryingPendingJob ? L10n.text("正在重试…") : L10n.text("重试授权任务")) {
+                    retryPendingJob(job)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .disabled(isRetryingPendingJob || !store.isConnected)
+                .accessibilityIdentifier("authorizationGroups.pendingJob.retry")
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(tone.color.opacity(0.08))
+        .overlay(alignment: .bottom) { Divider() }
+        .accessibilityIdentifier("authorizationGroups.pendingJob.banner")
+    }
+
+    private func retryPendingJob(_ job: JobSummary) {
+        guard !isRetryingPendingJob else { return }
+        isRetryingPendingJob = true
+        Task {
+            defer { isRetryingPendingJob = false }
+            do {
+                _ = try await store.retryAuthorizationJob(job)
+                store.toast.show(L10n.text("已提交重试任务"), tone: .active)
+                retry = UUID()
+                await store.refresh()
+            } catch {
+                store.toast.show(
+                    L10n.text("任务操作失败"),
+                    detail: JobDisplayText.errorMessage(error.localizedDescription),
+                    tone: .danger
+                )
+            }
+        }
     }
 
     private func groupMetric(_ title: String, value: String) -> some View {

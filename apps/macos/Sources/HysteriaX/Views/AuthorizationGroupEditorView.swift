@@ -12,6 +12,7 @@ struct AuthorizationGroupEditorView: View {
     @State private var draft: AuthorizationRelationDraft
     @State private var isSaving = false
     @State private var errorMessage: String?
+    @State private var hasAuthorizationConflict = false
     @State private var receipt: AuthorizationChangeReceipt?
 
     init(store: ManagementStore, group: AuthorizationGroupSummary?, intent: AuthorizationGroupEditorIntent,
@@ -50,7 +51,14 @@ struct AuthorizationGroupEditorView: View {
                         .accessibilityIdentifier("authorizationGroups.editor.name")
                 }.disabled(isSaving)
             }
-            if let errorMessage { Text(errorMessage).foregroundStyle(.red).textSelection(.enabled) }
+            if let errorMessage {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(errorMessage).foregroundStyle(.red).textSelection(.enabled)
+                    if hasAuthorizationConflict {
+                        AuthorizationPendingConflictActions(store: store, resourceID: group?.id)
+                    }
+                }
+            }
             Spacer(minLength: 0)
             HStack {
                 Button(receipt == nil ? L10n.text("取消") : L10n.text("完成"), role: .cancel) { dismiss() }
@@ -58,6 +66,7 @@ struct AuthorizationGroupEditorView: View {
                 Spacer()
                 if receipt == nil {
                     Button(isSaving ? L10n.text("正在保存…") : L10n.text("保存授权组")) { save() }
+                        .buttonStyle(.borderedProminent)
                         .disabled(!isReadyToSave || !store.isConnected).keyboardShortcut(.defaultAction)
                         .accessibilityIdentifier("authorizationGroups.editor.save")
                 }
@@ -79,7 +88,7 @@ struct AuthorizationGroupEditorView: View {
 
     private func save() {
         guard isReadyToSave else { return }
-        isSaving = true; errorMessage = nil
+        isSaving = true; errorMessage = nil; hasAuthorizationConflict = false
         Task {
             defer { isSaving = false }
             do {
@@ -96,7 +105,8 @@ struct AuthorizationGroupEditorView: View {
                     if let receipt { onSaved(receipt.resourceId) }
                 }
             } catch {
-                errorMessage = L10n.text("保存失败，草稿已保留。请检查错误后重试；如有版本冲突，请重新打开编辑。\n{0}", error.localizedDescription)
+                hasAuthorizationConflict = AuthorizationConflictHelper.isPendingError(error)
+                errorMessage = L10n.text("保存失败，草稿已保留。请检查错误后重试；如有版本冲突，请重新打开编辑。\n{0}", JobDisplayText.errorMessage(error.localizedDescription))
             }
         }
     }

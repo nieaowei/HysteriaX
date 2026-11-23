@@ -69,3 +69,49 @@ struct AuthorizationMutationReceiptView: View {
         }
     }
 }
+
+enum AuthorizationConflictHelper {
+    static func isPendingError(_ error: Error) -> Bool {
+        let message = error.localizedDescription.lowercased()
+        return message.contains("authorization change is pending")
+            || message.contains("related membership change is pending")
+    }
+}
+
+struct AuthorizationPendingConflictActions: View {
+    @Environment(\.dismiss) private var dismiss
+    @Bindable var store: ManagementStore
+    let resourceID: String?
+    @State private var blockingJob: JobSummary?
+    @State private var resolved = false
+
+    var body: some View {
+        HStack(spacing: 8) {
+            if let job = blockingJob {
+                Button(L10n.text("查看挂起任务")) {
+                    store.requestedJobID = job.id
+                    dismiss()
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .accessibilityIdentifier("authorization.conflict.openJob")
+            } else if resolved {
+                Button(L10n.text("前往任务")) {
+                    store.requestedSection = "jobs"
+                    dismiss()
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .accessibilityIdentifier("authorization.conflict.openJobs")
+            }
+        }
+        .task(id: resourceID) {
+            resolved = false
+            blockingJob = nil
+            if let resourceID {
+                blockingJob = await store.pendingAuthorizationJob(forResourceID: resourceID)
+            }
+            resolved = true
+        }
+    }
+}

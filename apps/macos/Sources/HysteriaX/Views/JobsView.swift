@@ -57,7 +57,7 @@ struct JobsView: View {
 
     private var snapshotJobs: [JobSummary] {
         store.jobs.filter { job in
-            query.isEmpty || [job.id, job.kind, job.stage, job.status, job.nodeName, job.nodeID, job.resourceName, job.resourceId, job.errorMessage]
+            query.isEmpty || [job.id, job.kind, job.stage, job.status, job.localizedKind, job.localizedStage, job.localizedStatus, job.nodeName, job.nodeID, job.resourceName, job.resourceId, job.errorMessage]
                 .compactMap { $0 }.contains { $0.localizedCaseInsensitiveContains(query) }
         }.sorted(using: sortOrder)
     }
@@ -169,7 +169,8 @@ struct JobsView: View {
         defer { if requestKey == pageRequestKey { isLoadingPage = false } }
         do {
             if !query.isEmpty { try await Task.sleep(for: .milliseconds(250)) }
-            let response = try await store.jobsPage(page: page, pageSize: pageSize, query: query, sort: sortField, order: sortDirection, cacheKey: pageKey, revalidate: loadedPageKey != pageKey)
+            let apiQuery = JobDisplayText.apiSearchQuery(for: query)
+            let response = try await store.jobsPage(page: page, pageSize: pageSize, query: apiQuery, sort: sortField, order: sortDirection, cacheKey: pageKey, revalidate: loadedPageKey != pageKey)
             guard !Task.isCancelled, requestKey == pageRequestKey else { return }
             page = response.page
             pageResponse = response

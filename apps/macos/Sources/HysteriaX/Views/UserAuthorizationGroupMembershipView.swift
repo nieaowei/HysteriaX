@@ -11,6 +11,7 @@ struct UserAuthorizationGroupMembershipView: View {
     @State private var selectingGroups = false
     @State private var isSaving = false
     @State private var errorMessage: String?
+    @State private var hasAuthorizationConflict = false
 
     init(store: ManagementStore, user: UserSummary) {
         self.store = store
@@ -63,7 +64,14 @@ struct UserAuthorizationGroupMembershipView: View {
             }
             .frame(maxHeight: .infinity)
 
-            if let errorMessage { Text(errorMessage).foregroundStyle(.red).textSelection(.enabled) }
+            if let errorMessage {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(errorMessage).foregroundStyle(.red).textSelection(.enabled)
+                    if hasAuthorizationConflict {
+                        AuthorizationPendingConflictActions(store: store, resourceID: user.id)
+                    }
+                }
+            }
 
             HStack {
                 Button(receipt == nil ? L10n.text("取消") : L10n.text("完成"), role: .cancel) { dismiss() }
@@ -72,6 +80,7 @@ struct UserAuthorizationGroupMembershipView: View {
                 Spacer()
                 if receipt == nil {
                     Button(isSaving ? L10n.text("正在保存…") : L10n.text("保存所属组")) { save() }
+                        .buttonStyle(.borderedProminent)
                         .disabled(isSaving || !store.isConnected)
                         .keyboardShortcut(.defaultAction)
                         .accessibilityIdentifier("users.groups.save")
@@ -92,6 +101,7 @@ struct UserAuthorizationGroupMembershipView: View {
         }
         .onChange(of: groupIDs) { _, _ in
             errorMessage = nil
+            hasAuthorizationConflict = false
         }
     }
 
@@ -106,12 +116,14 @@ struct UserAuthorizationGroupMembershipView: View {
         guard !isSaving else { return }
         isSaving = true
         errorMessage = nil
+        hasAuthorizationConflict = false
         Task {
             defer { isSaving = false }
             do {
                 receipt = try await store.updateUserAuthorizationGroups(user, groupIDs: groupIDs.sorted())
             } catch {
-                errorMessage = L10n.text("保存失败，草稿已保留。请检查错误后重试；如有版本冲突，请重新打开编辑。\n{0}", String(describing: (error.localizedDescription)))
+                hasAuthorizationConflict = AuthorizationConflictHelper.isPendingError(error)
+                errorMessage = L10n.text("保存失败，草稿已保留。请检查错误后重试；如有版本冲突，请重新打开编辑。\n{0}", String(describing: (JobDisplayText.errorMessage(error.localizedDescription))))
             }
         }
     }

@@ -46,6 +46,30 @@ enum JobDisplayText {
         }
     }
 
+    static func apiSearchQuery(for query: String) -> String {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return trimmed }
+        let lower = trimmed.lowercased()
+        let kinds = [
+            "dns-verify", "dns-connection-refresh", "dns-zone-refresh",
+            "dns-record-create", "dns-record-update", "dns-record-delete",
+            "dns-record-check", "dns-credential-apply", "authorization-change",
+            "ssh-test", "credential-apply", "deploy", "sync", "rollback",
+            "kick", "uninstall", "record-remove",
+        ]
+        for raw in kinds where kind(raw).lowercased() == lower {
+            return raw
+        }
+        let statuses = [
+            "queued", "running", "waiting_confirmation",
+            "succeeded", "failed", "rolled_back", "cancelled",
+        ]
+        for raw in statuses where status(raw).lowercased() == lower {
+            return raw
+        }
+        return trimmed
+    }
+
     static func stage(_ value: String) -> String {
         let labels = [
             "authorization_applying": L10n.text("正在应用授权"),
@@ -302,6 +326,9 @@ enum JobDisplayText {
         "ECH client probe could not find the uploaded key resource": "ECH 客户端探测找不到已上传的密钥资源",
         "ECH resource is not valid UTF-8": "ECH 资源不是有效的 UTF-8 文本",
         "HysteriaX ownership marker is missing; refusing to remove remote files": "缺少 HysteriaX 所有权标记，已拒绝删除远端文件",
+        "an authorization change is pending; open its job before editing again": "当前存在未完成的授权变更任务，请先打开对应任务处理后再编辑",
+        "a related membership change is pending; wait for its authorization job": "相关成员的授权变更任务尚未完成，请等待该任务结束后再编辑",
+        "concurrent database changes; retry the request": "数据库发生并发修改，请重试操作",
     ]
 
 }
