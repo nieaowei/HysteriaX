@@ -96,9 +96,9 @@ struct NodesView: View {
                     }
                     .width(min: 110, ideal: 150)
                     TableColumn(L10n.text("状态"), value: \.localizedState) { node in
-                        Text(node.localizedState).foregroundStyle(node.stateColor)
+                        StatusBadge(node.localizedState, tone: node.stateTone, size: .compact)
                     }
-                    .width(min: 90, ideal: 110)
+                    .width(min: 95, ideal: 115)
                     TableColumn(L10n.text("套餐")) { node in
                         VStack(alignment: .leading, spacing: 3) {
                             QuotaProgressView(usageBytes: node.packageUsage?.usageBytes, quotaBytes: node.package?.quotaBytes)
@@ -141,8 +141,21 @@ struct NodesView: View {
                         }
                     }
                 }
-                Divider()
-                paginationControls
+                ListPaginationBar(
+                    summary: (currentPageResponse != nil || !store.isConnected)
+                        ? L10n.text("共 {0} 个节点 · 第 {1} / {2} 页", String(totalNodes), String(currentPage), String(pageCount))
+                        : nil,
+                    page: currentPage,
+                    pageCount: pageCount,
+                    pageSize: $pageSize,
+                    isLoading: isLoadingPage,
+                    isOffline: !store.isConnected,
+                    error: pageError,
+                    onRetry: { loadedPageKey = nil; retryPageToken = UUID() },
+                    canNavigate: !store.isConnected || currentPageResponse != nil,
+                    identifierPrefix: "nodes",
+                    onSelectPage: { changePage($0) }
+                )
             }
         } detail: {
             if let node = selectedNode {
@@ -193,8 +206,11 @@ struct NodesView: View {
             Button(L10n.text("卸载并删除"), role: .destructive) {
                 guard let node = deletionNode else { return }
                 Task {
-                    do { try await store.deleteNode(node); selection = nil }
-                    catch { actionError = error.localizedDescription }
+                    do {
+                        try await store.deleteNode(node)
+                        selection = nil
+                        store.toast.show(L10n.text("已卸载并删除节点"), detail: node.name, tone: .positive)
+                    } catch { actionError = error.localizedDescription }
                 }
             }
             Button(L10n.text("仅移除管理记录"), role: .destructive) { showingRecordRemovalConfirmation = true }
@@ -207,45 +223,17 @@ struct NodesView: View {
             Button(L10n.text("移除记录"), role: .destructive) {
                 guard let node = deletionNode else { return }
                 Task {
-                    do { try await store.removeNodeRecord(node); selection = nil }
-                    catch { actionError = error.localizedDescription }
+                    do {
+                        try await store.removeNodeRecord(node)
+                        selection = nil
+                        store.toast.show(L10n.text("已移除节点记录"), detail: node.name, tone: .neutral)
+                    } catch { actionError = error.localizedDescription }
                 }
             }
             .accessibilityIdentifier("nodes.confirm-remove-record")
         } message: {
             Text(L10n.text("将从管理服务中移除「{0}」及其用户分配和待办，保留任务历史。此操作不会卸载远端服务；失联服务器上的服务可能仍在运行。", String(describing: (deletionNode?.name ?? ""))))
         }
-    }
-
-    private var paginationControls: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            if let pageError {
-                HStack {
-                    Text(pageError).foregroundStyle(.red).textSelection(.enabled)
-                    Button(L10n.text("重试")) { loadedPageKey = nil; retryPageToken = UUID() }
-                }.font(.caption)
-            }
-            HStack(spacing: 12) {
-                if !store.isConnected { Label(L10n.text("离线快照"), systemImage: "wifi.slash").foregroundStyle(.secondary) }
-                if currentPageResponse != nil || !store.isConnected {
-                    Text(L10n.text("共 {0} 个节点 · 第 {1} / {2} 页", String(totalNodes), String(currentPage), String(pageCount)))
-                        .foregroundStyle(.secondary).monospacedDigit()
-                }
-                if isLoadingPage { ProgressView().controlSize(.small) }
-                Spacer(minLength: 0)
-                Picker(L10n.text("每页条数"), selection: $pageSize) {
-                    ForEach([25, 50, 100], id: \.self) { Text(String($0)).tag($0) }
-                }.fixedSize().accessibilityIdentifier("nodes.pageSize")
-                Button(L10n.text("上一页")) { changePage(currentPage - 1) }
-                    .disabled(currentPage <= 1 || isLoadingPage || (store.isConnected && currentPageResponse == nil))
-                    .accessibilityIdentifier("nodes.previousPage")
-                Button(L10n.text("下一页")) { changePage(currentPage + 1) }
-                    .disabled(currentPage >= pageCount || isLoadingPage || (store.isConnected && currentPageResponse == nil))
-                    .accessibilityIdentifier("nodes.nextPage")
-            }.font(.callout)
-        }
-        .padding(.horizontal, 12).padding(.vertical, 8)
-        .accessibilityIdentifier("nodes.pagination")
     }
 
     private func changePage(_ page: Int) { self.page = page; selection = nil; detail = nil; detailError = nil }
@@ -291,33 +279,33 @@ struct NodesView: View {
 
     private func nodeDetailPane(_ node: NodeSummary) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            VStack(alignment: .leading, spacing: 14) {
-                DetailHeaderLayout {
-                    nodeTitle(node)
-                    nodeActions(node)
-                }
-                LazyVGrid(columns: Array(repeating: GridItem(.flexible(minimum: 0), spacing: 12, alignment: .leading), count: node.dnsBinding == nil ? 3 : 4), alignment: .leading, spacing: 8) {
-                    nodeHeaderMetric(L10n.text("目标配置"), value: "v\(node.revision)")
-                    nodeHeaderMetric(L10n.text("已部署配置"), value: node.deployedRevision.map { "v\($0)" } ?? L10n.text("尚未部署"))
-                    nodeHeaderMetric(L10n.text("套餐有效期"), value: PackageDisplay.expiry(node.package))
-                    if let binding = node.dnsBinding {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(L10n.text("节点域名")).font(.caption).foregroundStyle(.secondary)
-                            Button {
-                                store.showDNSRecord(binding.recordIds.first)
-                            } label: {
-                                Text(binding.hostname).lineLimit(1).truncationMode(.middle)
+            DetailHeaderBar {
+                VStack(alignment: .leading, spacing: 14) {
+                    DetailHeaderLayout {
+                        nodeTitle(node)
+                        nodeActions(node)
+                    }
+                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(minimum: 0), spacing: 12, alignment: .leading), count: node.dnsBinding == nil ? 3 : 4), alignment: .leading, spacing: 8) {
+                        nodeHeaderMetric(L10n.text("目标配置"), value: "v\(node.revision)")
+                        nodeHeaderMetric(L10n.text("已部署配置"), value: node.deployedRevision.map { "v\($0)" } ?? L10n.text("尚未部署"))
+                        nodeHeaderMetric(L10n.text("套餐有效期"), value: PackageDisplay.expiry(node.package))
+                        if let binding = node.dnsBinding {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(L10n.text("节点域名")).font(.caption).foregroundStyle(.secondary)
+                                Button {
+                                    store.showDNSRecord(binding.recordIds.first)
+                                } label: {
+                                    Text(binding.hostname).lineLimit(1).truncationMode(.middle)
+                                }
+                                .buttonStyle(.link)
+                                .font(.callout)
+                                .help(L10n.text("{0} · 查看 DNS 记录", String(describing: (binding.hostname))))
                             }
-                            .buttonStyle(.link)
-                            .font(.callout)
-                            .help(L10n.text("{0} · 查看 DNS 记录", String(describing: (binding.hostname))))
+                            .frame(maxWidth: .infinity, alignment: .leading)
                         }
-                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
             }
-            .padding(16)
-            Divider()
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     if let detail, detail.id == node.id, detail.mtlsState != nil && detail.mtlsState != "ready" { NodeMTLSStatusView(detail: detail) }
@@ -338,7 +326,7 @@ struct NodesView: View {
                     } label: { Label(L10n.text("采样与待办"), systemImage: "waveform.path") }
                     DisclosureGroup(L10n.text("节点记录")) {
                         VStack(alignment: .leading, spacing: 10) {
-                            nodeMetric(L10n.text("节点 ID"), value: node.id)
+                            nodeMetric(L10n.text("节点 ID"), value: node.id, copyable: true)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                             if let detail, detail.id == node.id {
                                 LazyVGrid(columns: Array(repeating: GridItem(.flexible(minimum: 0), alignment: .leading), count: 2), alignment: .leading, spacing: 10) {
@@ -359,43 +347,45 @@ struct NodesView: View {
     private func nodeTitle(_ node: NodeSummary) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
             Text(node.name).font(.headline).lineLimit(2).textSelection(.enabled)
-            Text(node.localizedState).font(.caption.weight(.medium))
-                .foregroundStyle(node.stateColor)
-                .padding(.horizontal, 8).padding(.vertical, 3)
-                .background(node.stateColor.opacity(0.1), in: Capsule())
+            StatusBadge(node.localizedState, tone: node.stateTone)
         }
     }
 
     private func nodeActions(_ node: NodeSummary) -> some View {
         HStack(spacing: 8) {
-            Button(L10n.text("SSH 测试")) { run(node, action: "ssh-test") }
-                .disabled(operationInProgress(node) || !NodeTaskFeedback.allowsAction("ssh-test", node: node))
-            Menu(L10n.text("配置")) {
-                Button(L10n.text("服务器配置")) { serverConfigurationNode = node }
-                Button(L10n.text("代理配置")) { configurationNode = node }
-            }.accessibilityIdentifier("node.configure.\(node.id)")
-            Button(node.mtlsState == "recovery_required" ? L10n.text("恢复同步") : node.deployedRevision == nil ? L10n.text("部署") : L10n.text("同步")) {
-                run(node, action: node.mtlsState == "recovery_required" || node.deployedRevision != nil ? "sync" : "deploy")
+            HStack(spacing: 8) {
+                Button(L10n.text("SSH 测试")) { run(node, action: "ssh-test") }
+                    .disabled(operationInProgress(node) || !NodeTaskFeedback.allowsAction("ssh-test", node: node))
+                Menu(L10n.text("配置")) {
+                    Button(L10n.text("服务器配置")) { serverConfigurationNode = node }
+                    Button(L10n.text("代理配置")) { configurationNode = node }
+                }.accessibilityIdentifier("node.configure.\(node.id)")
+                Button(node.mtlsState == "recovery_required" ? L10n.text("恢复同步") : node.deployedRevision == nil ? L10n.text("部署") : L10n.text("同步")) {
+                    run(node, action: node.mtlsState == "recovery_required" || node.deployedRevision != nil ? "sync" : "deploy")
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(operationInProgress(node) || !NodeTaskFeedback.allowsAction("deploy", node: node))
+                Menu(L10n.text("更多")) {
+                    Button(L10n.text("部署")) { run(node, action: "deploy") }.disabled(operationInProgress(node) || !NodeTaskFeedback.allowsAction("deploy", node: node))
+                    Button(L10n.text("回滚")) { run(node, action: "rollback") }.disabled(node.deployedRevision == nil || operationInProgress(node) || !NodeTaskFeedback.allowsAction("rollback", node: node))
+                    Divider()
+                    Button(L10n.text("删除节点"), role: .destructive) { deletionNode = node; showingDeleteConfirmation = true }
+                        .foregroundStyle(.red)
+                        .disabled(operationInProgress(node))
+                }
             }
-            .disabled(operationInProgress(node) || !NodeTaskFeedback.allowsAction("deploy", node: node))
-            Menu(L10n.text("更多")) {
-                Button(L10n.text("部署")) { run(node, action: "deploy") }.disabled(operationInProgress(node) || !NodeTaskFeedback.allowsAction("deploy", node: node))
-                Button(L10n.text("回滚")) { run(node, action: "rollback") }.disabled(node.deployedRevision == nil || operationInProgress(node) || !NodeTaskFeedback.allowsAction("rollback", node: node))
-                Divider()
-                Button(L10n.text("删除节点"), role: .destructive) { deletionNode = node; showingDeleteConfirmation = true }
-                    .foregroundStyle(.red)
-                    .disabled(operationInProgress(node))
-            }
+            .disabled(!store.isConnected)
+            Divider().frame(height: 16)
+            DetailCloseButton { selection = nil; detail = nil; detailError = nil }
         }
         .fixedSize()
-        .disabled(!store.isConnected)
     }
 
     private func nodeConnections(_ node: NodeSummary) -> some View {
         GroupBox {
             VStack(alignment: .leading, spacing: 12) {
                 if let ssh = node.ssh {
-                    nodeMetric(L10n.text("SSH 连接"), value: "\(ssh.username)@\(ssh.host):\(ssh.port)")
+                    nodeMetric(L10n.text("SSH 连接"), value: "\(ssh.username)@\(ssh.host):\(ssh.port)", copyable: true)
                     let credential = store.credentials.first { $0.id == ssh.credentialId }
                     nodeMetric(L10n.text("SSH 凭据"), value: "\(credential?.name ?? CredentialDisplay.kind(ssh.authType)) · v\(ssh.credentialVersion)")
                     DisclosureGroup(L10n.text("主机指纹")) {
@@ -448,10 +438,15 @@ struct NodesView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func nodeMetric(_ title: String, value: String) -> some View {
+    private func nodeMetric(_ title: String, value: String, copyable: Bool = false) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title).font(.caption).foregroundStyle(.secondary)
-            Text(value).font(.callout).textSelection(.enabled)
+            HStack(spacing: 4) {
+                Text(value).font(.callout).textSelection(.enabled)
+                if copyable {
+                    CopyActionButton(value: value, toast: store.toast)
+                }
+            }
         }
     }
 
@@ -513,8 +508,7 @@ struct NodesView: View {
                                     .lineLimit(1).help(JobDisplayText.kind(job.kind))
                                     .accessibilityLabel(L10n.text("查看{0}任务详情", String(describing: (JobDisplayText.kind(job.kind)))))
                                     .accessibilityIdentifier("nodes.job.\(job.id)")
-                                Text(JobDisplayText.status(job.status)).foregroundStyle(taskColor(job))
-                                    .fixedSize()
+                                StatusBadge(JobDisplayText.status(job.status), tone: JobStatusTone.tone(for: job.status), size: .compact)
                                 Spacer(minLength: 8)
                                 nodeTaskTime(DateDisplayText.parse(job.createdAt))
                             }
@@ -550,15 +544,6 @@ struct NodesView: View {
             .help(date.map { L10n.text("提交时间：{0}", String(describing: (L10n.date($0, date: .complete, time: .standard)))) } ?? L10n.text("提交时间未知"))
     }
 
-    private func taskColor(_ job: JobSummary) -> Color {
-        switch job.status {
-        case "succeeded": .green
-        case "queued", "running": .blue
-        case "failed", "rolled_back", "waiting_confirmation": .orange
-        default: .secondary
-        }
-    }
-
     private func run(_ node: NodeSummary, action: String) {
         guard store.isConnected, !operationInProgress(node), NodeTaskFeedback.allowsAction(action, node: node) else { return }
         let service = store.serviceAddress
@@ -571,6 +556,7 @@ struct NodesView: View {
                 guard store.serviceAddress == service else { return }
                 submittedActions[node.id] = SubmittedNodeAction(action: action, jobID: receipt.jobId, status: receipt.status, submittedAt: submittedAt)
                 submittingActions[node.id] = nil
+                store.toast.show(L10n.text("任务已提交"), detail: "\(node.name) · \(JobDisplayText.kind(action))", tone: .active)
                 await store.refresh()
             } catch {
                 guard store.serviceAddress == service else { return }
@@ -590,14 +576,16 @@ struct NodesView: View {
 }
 
 private extension NodeSummary {
-    var stateColor: Color {
+    var stateTone: StatusTone {
         switch state {
-        case "deployed": .green
-        case "syncing", "deleting": .blue
-        case "sync_failed", "rollback_failed", "delete_failed", "unreachable", "fingerprint_changed": .orange
-        default: .secondary
+        case "deployed": .positive
+        case "syncing", "deleting": .active
+        case "sync_failed", "rollback_failed", "delete_failed", "unreachable", "fingerprint_changed": .warning
+        default: .neutral
         }
     }
+
+    var stateColor: Color { stateTone.color }
 
     var displayHost: String {
         guard let host = ssh?.host, !host.isEmpty else { return "—" }
@@ -694,6 +682,7 @@ private struct NodeFormView: View {
                     Button(L10n.text("取消")) { dismiss() }.keyboardShortcut(.cancelAction)
                     Spacer()
                     Button(isSaving ? L10n.text("正在保存…") : L10n.text("创建节点")) { save() }
+                        .buttonStyle(.borderedProminent)
                         .disabled(isSaving)
                         .keyboardShortcut(.defaultAction)
                 }

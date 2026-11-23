@@ -132,7 +132,17 @@ struct CredentialsView: View {
         .sheet(item: $editing) { CredentialMetadataEditor(store: store, detail: $0) }
         .task(id: detailRequestKey) { await load() }
         .confirmationDialog(L10n.text("删除未被引用的凭据？"), isPresented: $deleting) {
-            Button(L10n.text("删除"), role: .destructive) { if let detail { Task { do { try await store.deleteCredential(detail); selection = nil } catch { self.error = error.localizedDescription } } } }
+            Button(L10n.text("删除"), role: .destructive) {
+                if let detail {
+                    Task {
+                        do {
+                            try await store.deleteCredential(detail)
+                            selection = nil
+                            store.toast.show(L10n.text("凭据已删除"), detail: detail.name, tone: .neutral)
+                        } catch { self.error = error.localizedDescription }
+                    }
+                }
+            }
         }
     }
 
@@ -143,12 +153,18 @@ struct CredentialsView: View {
                     Table(entries, selection: $selection, sortOrder: $sortOrder) {
                         TableColumn(L10n.text("名称"), value: \.name)
                         TableColumn(L10n.text("类型"), value: \.typeTitle)
-                        TableColumn(L10n.text("状态"), value: \.statusTitle)
+                        TableColumn(L10n.text("状态"), value: \.statusTitle) { entry in
+                            StatusBadge(entry.statusTitle, tone: credentialStatusTone(entry.status), size: .compact)
+                        }
                         TableColumn(L10n.text("当前引用对象数")) { entry in
                             Text(entry.isManaged || entry.kind == "user_credential" ? String(entry.referenceCount ?? 0) : "—")
+                                .monospacedDigit()
                                 .help(L10n.text("统计当前引用对象，同一节点只计一次；不含历史配置和待执行更新批次。"))
                         }
-                        TableColumn(L10n.text("到期")) { entry in Text(entry.expiresAt.map { DateDisplayText.local($0) } ?? L10n.text("未知")) }
+                        TableColumn(L10n.text("到期")) { entry in
+                            Text(entry.expiresAt.map { DateDisplayText.local($0) } ?? L10n.text("未知"))
+                                .monospacedDigit()
+                        }
                     }
                     .frame(minHeight: 180)
                     .accessibilityIdentifier("credentials.table")
@@ -167,8 +183,21 @@ struct CredentialsView: View {
                             }
                         }
                     }
-                    Divider()
-                    paginationControls
+                    ListPaginationBar(
+                        summary: (currentPageResponse != nil || !store.isConnected)
+                            ? L10n.text("共 {0} 项凭据 · 第 {1} / {2} 页", String(totalEntries), String(currentPage), String(pageCount))
+                            : nil,
+                        page: currentPage,
+                        pageCount: pageCount,
+                        pageSize: $pageSize,
+                        isLoading: isLoadingPage,
+                        isOffline: !store.isConnected,
+                        error: pageError,
+                        onRetry: { loadedPageKey = nil; retryPageToken = UUID() },
+                        canNavigate: !store.isConnected || currentPageResponse != nil,
+                        identifierPrefix: "credentials",
+                        onSelectPage: { changePage($0) }
+                    )
                 }
             } detail: {
                 if let selected {
@@ -179,37 +208,6 @@ struct CredentialsView: View {
             }
             if let error { Text(error).foregroundStyle(.red).padding(12) }
         }
-    }
-
-    private var paginationControls: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            if let pageError {
-                HStack {
-                    Text(pageError).foregroundStyle(.red).textSelection(.enabled)
-                    Button(L10n.text("重试")) { loadedPageKey = nil; retryPageToken = UUID() }
-                }.font(.caption)
-            }
-            HStack(spacing: 12) {
-                if !store.isConnected { Label(L10n.text("离线快照"), systemImage: "wifi.slash").foregroundStyle(.secondary) }
-                if currentPageResponse != nil || !store.isConnected {
-                    Text(L10n.text("共 {0} 项凭据 · 第 {1} / {2} 页", String(totalEntries), String(currentPage), String(pageCount)))
-                        .foregroundStyle(.secondary).monospacedDigit()
-                }
-                if isLoadingPage { ProgressView().controlSize(.small) }
-                Spacer(minLength: 0)
-                Picker(L10n.text("每页条数"), selection: $pageSize) {
-                    ForEach([25, 50, 100], id: \.self) { Text(String($0)).tag($0) }
-                }.fixedSize().accessibilityIdentifier("credentials.pageSize")
-                Button(L10n.text("上一页")) { changePage(currentPage - 1) }
-                    .disabled(currentPage <= 1 || isLoadingPage || (store.isConnected && currentPageResponse == nil))
-                    .accessibilityIdentifier("credentials.previousPage")
-                Button(L10n.text("下一页")) { changePage(currentPage + 1) }
-                    .disabled(currentPage >= pageCount || isLoadingPage || (store.isConnected && currentPageResponse == nil))
-                    .accessibilityIdentifier("credentials.nextPage")
-            }.font(.callout)
-        }
-        .padding(.horizontal, 12).padding(.vertical, 8)
-        .accessibilityIdentifier("credentials.pagination")
     }
 
     private func changePage(_ page: Int) { self.page = page; clearSelection() }
@@ -252,41 +250,44 @@ struct CredentialsView: View {
 
     private func credentialDetailPane(_ entry: CredentialSummary) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            VStack(alignment: .leading, spacing: 14) {
-                DetailHeaderLayout {
-                    detailTitle(entry)
-                    detailActions
-                }
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), alignment: .leading)], alignment: .leading, spacing: 12) {
-                    detailMetric(L10n.text("类型"), value: entry.typeTitle)
-                    if entry.isManaged {
-                        detailMetric(L10n.text("最新版本"), value: "v\(detail?.latestVersion ?? entry.latestVersion)")
-                        detailMetric(L10n.text("引用明细条数"), value: detail.map { String($0.references.count) } ?? "—")
-                            .help(L10n.text("包含当前引用、历史配置和待执行更新批次；同一对象的不同引用位置分别计数。"))
+            DetailHeaderBar {
+                VStack(alignment: .leading, spacing: 14) {
+                    DetailHeaderLayout {
+                        detailTitle(entry)
+                        detailActions
                     }
-                    detailMetric(entry.kind == "ca_identity" ? L10n.text("当前发布 CA 到期") : L10n.text("到期时间"), value: entry.expiresAt.map { DateDisplayText.local($0) } ?? L10n.text("未知"))
-                    if entry.kind == "user_credential" {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(L10n.text("已分配节点数")).font(.caption).foregroundStyle(.secondary)
-                            Text(entry.referenceCount.map(String.init) ?? "—").font(.callout).textSelection(.enabled)
-                                .accessibilityIdentifier("credentials.user.nodeCount")
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), alignment: .leading)], alignment: .leading, spacing: 12) {
+                        detailMetric(L10n.text("类型"), value: entry.typeTitle)
+                        if entry.isManaged {
+                            detailMetric(L10n.text("最新版本"), value: "v\(detail?.latestVersion ?? entry.latestVersion)")
+                            detailMetric(L10n.text("引用明细条数"), value: detail.map { String($0.references.count) } ?? "—")
+                                .help(L10n.text("包含当前引用、历史配置和待执行更新批次；同一对象的不同引用位置分别计数。"))
                         }
-                    }
-                    if let userID = entry.ownerUserId {
-                        detailMetric(L10n.text("所属用户"), value: store.users.first { $0.id == userID }?.name ?? userID)
+                        detailMetric(entry.kind == "ca_identity" ? L10n.text("当前发布 CA 到期") : L10n.text("到期时间"), value: entry.expiresAt.map { DateDisplayText.local($0) } ?? L10n.text("未知"))
+                        if entry.kind == "user_credential" {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(L10n.text("已分配节点数")).font(.caption).foregroundStyle(.secondary)
+                                Text(entry.referenceCount.map(String.init) ?? "—").font(.callout).textSelection(.enabled)
+                                    .accessibilityIdentifier("credentials.user.nodeCount")
+                            }
+                        }
+                        if let userID = entry.ownerUserId {
+                            detailMetric(L10n.text("所属用户"), value: store.users.first { $0.id == userID }?.name ?? userID)
+                        }
                     }
                 }
             }
-            .padding(16)
-            Divider()
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     if entry.isManaged {
                         if let detail, detail.id == entry.id {
                             CredentialManagedDetailView(detail: detail, isConnected: store.isConnected, onJump: onJump, onRetry: { id in
                                 Task {
-                                    do { try await store.retryCredentialBatch(id); await load() }
-                                    catch { self.error = error.localizedDescription }
+                                    do {
+                                        try await store.retryCredentialBatch(id)
+                                        await load()
+                                        store.toast.show(L10n.text("已提交重试任务"), tone: .active)
+                                    } catch { self.error = error.localizedDescription }
                                 }
                             })
                         } else {
@@ -309,44 +310,44 @@ struct CredentialsView: View {
     private func detailTitle(_ entry: CredentialSummary) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
             Text(entry.name).font(.headline).lineLimit(2).textSelection(.enabled)
-            Text(entry.statusTitle)
-                .font(.caption.weight(.medium))
-                .foregroundStyle(credentialStatusColor(entry.status))
-                .padding(.horizontal, 8).padding(.vertical, 3)
-                .background(credentialStatusColor(entry.status).opacity(0.12), in: Capsule())
+            StatusBadge(entry.statusTitle, tone: credentialStatusTone(entry.status))
         }
     }
 
-    private func credentialStatusColor(_ status: String) -> Color {
+    private func credentialStatusTone(_ status: String) -> StatusTone {
         switch status {
-        case "active": .green
-        case "expiring": .orange
-        case "expired", "quota_exhausted": .red
-        default: .secondary
+        case "active": .positive
+        case "expiring": .warning
+        case "expired", "quota_exhausted": .danger
+        default: .neutral
         }
     }
 
-    @ViewBuilder private var detailActions: some View {
-        if let detail, detail.id == selected?.id {
-            HStack(spacing: 8) {
-                Button(L10n.text("发布新版本")) {
-                    if detail.kind == "ca_identity" { publishingCA = detail } else { replacing = detail }
+    private var detailActions: some View {
+        HStack(spacing: 8) {
+            if let detail, detail.id == selected?.id {
+                HStack(spacing: 8) {
+                    Button(L10n.text("发布新版本")) {
+                        if detail.kind == "ca_identity" { publishingCA = detail } else { replacing = detail }
+                    }
+                        .disabled(detail.archived || detail.metadata["managed"]?.boolValue == true || detail.ownerUserId != nil)
+                    if detail.ca != nil {
+                        Button(L10n.text("客户端证书策略")) { editingCAPolicy = detail }
+                            .disabled(detail.archived).accessibilityIdentifier("ca.policy")
+                    }
+                    Button(L10n.text("编辑信息")) { editing = detail }
+                        .disabled(detail.metadata["managed"]?.boolValue == true || detail.ownerUserId != nil)
+                    Button(L10n.text("删除凭据"), role: .destructive) { deleting = true }
+                        .foregroundStyle(.red)
+                        .disabled(!detail.references.isEmpty)
+                        .accessibilityIdentifier("credential.delete")
                 }
-                    .disabled(detail.archived || detail.metadata["managed"]?.boolValue == true || detail.ownerUserId != nil)
-                if detail.ca != nil {
-                    Button(L10n.text("客户端证书策略")) { editingCAPolicy = detail }
-                        .disabled(detail.archived).accessibilityIdentifier("ca.policy")
-                }
-                Button(L10n.text("编辑信息")) { editing = detail }
-                    .disabled(detail.metadata["managed"]?.boolValue == true || detail.ownerUserId != nil)
-                Button(L10n.text("删除凭据"), role: .destructive) { deleting = true }
-                    .foregroundStyle(.red)
-                    .disabled(!detail.references.isEmpty)
-                    .accessibilityIdentifier("credential.delete")
+                .disabled(!store.isConnected)
+                Divider().frame(height: 16)
             }
-            .fixedSize()
-            .disabled(!store.isConnected)
+            DetailCloseButton { clearSelection() }
         }
+        .fixedSize()
     }
 
     private func detailMetric(_ title: String, value: String) -> some View {
@@ -383,7 +384,14 @@ struct CredentialsView: View {
                         if let lastUsed = token.lastUsedAt { detailMetric(L10n.text("最近使用"), value: DateDisplayText.local(lastUsed)) }
                     }
                     Spacer()
-                    Button(L10n.text("撤销 Token"), role: .destructive) { Task { do { try await store.revokeAdminToken(token) } catch { self.error = error.localizedDescription } } }
+                    Button(L10n.text("撤销 Token"), role: .destructive) {
+                        Task {
+                            do {
+                                try await store.revokeAdminToken(token)
+                                store.toast.show(L10n.text("已撤销管理员 Token"), detail: token.label, tone: .warning)
+                            } catch { self.error = error.localizedDescription }
+                        }
+                    }
                         .disabled(!store.isConnected || token.revokedAt != nil || id == store.currentAdminTokenID)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -446,12 +454,16 @@ private struct CredentialMetadataEditor: View {
             if hasReminder { DatePicker(L10n.text("提醒时间"), selection: $reminder) }
             if let error { Text(error).foregroundStyle(.red) }
             HStack {
-                Button(L10n.text("取消")) { dismiss() }; Spacer()
+                Button(L10n.text("取消")) { dismiss() }.keyboardShortcut(.cancelAction)
+                Spacer()
                 Button(L10n.text("保存")) { Task {
                     saving = true; defer { saving = false }
                     do { try await store.updateCredential(detail, name: name, archived: archived, reminderAt: hasReminder ? ISO8601DateFormatter().string(from: reminder) : nil); dismiss() }
                     catch { self.error = error.localizedDescription }
-                } }.disabled(saving || !store.isConnected)
+                } }
+                .buttonStyle(.borderedProminent)
+                .keyboardShortcut(.defaultAction)
+                .disabled(saving || !store.isConnected)
             }
         }.padding(24).frame(width: 500)
         .onAppear { name = detail.name; archived = detail.archived; hasReminder = detail.reminderAt != nil; reminder = detail.reminderAt.flatMap(DateDisplayText.parse) ?? Date() }

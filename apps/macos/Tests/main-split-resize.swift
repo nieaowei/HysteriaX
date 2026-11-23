@@ -73,14 +73,14 @@ import SwiftUI
         let stamp = "2026-10-07T00:00:00Z"
         let credential = CredentialDetail(referenceCount: 8, id: "resize-credential", name: "缩放测试凭据", kind: "dns", ownerUserId: nil,
             revision: 2, latestVersion: 2, archived: false, reminderAt: nil, expiresAt: nil, daysRemaining: nil,
-            status: "active", metadata: ["fingerprint": .string("fixture-fingerprint")], createdAt: stamp, updatedAt: stamp,
+            status: "active", metadata: ["fingerprint": .string("fixture-fingerprint")], createdAt: stamp, updatedAt: stamp, ca: nil,
             versions: [CredentialVersion(version: 2, metadata: [:], createdAt: stamp)],
-            references: (0..<8).map { CredentialReference(entityType: "node", entityID: "node-\($0)", source: "node_config", name: "测试节点 \($0)", version: 2, field: nil, nodeID: "node-\($0)", configRevision: 2) },
-            batches: (0..<2).map { batch in CredentialBatch(dnsItems: nil, id: "batch-\(batch)", credentialId: "resize-credential", version: 2, createdAt: stamp,
+            references: (0..<8).map { CredentialReference(identityId: nil, caId: nil, caVersion: nil, desired: nil, deployed: nil, phase: nil, entityType: "node", entityID: "node-\($0)", source: "node_config", name: "测试节点 \($0)", version: 2, field: nil, nodeID: "node-\($0)", configRevision: 2) },
+            batches: (0..<2).map { batch in CredentialBatch(caRotation: nil, dnsItems: nil, id: "batch-\(batch)", credentialId: "resize-credential", version: 2, createdAt: stamp,
                 items: (0..<4).map { index in CredentialBatchItem(nodeID: "node-\(index)", userId: "user-\(index)", jobId: "job-\(index)", status: index == 0 ? "failed" : "succeeded", stage: "finished", errorMessage: index == 0 ? "测试错误：连接超时" : nil, name: "测试节点 \(index)") }) })
         let emptyCredential = CredentialDetail(referenceCount: 0, id: "empty-credential", name: "空凭据", kind: "dns", ownerUserId: nil,
             revision: 1, latestVersion: 1, archived: false, reminderAt: nil, expiresAt: nil, daysRemaining: nil,
-            status: "active", metadata: [:], createdAt: stamp, updatedAt: stamp, versions: [], references: [], batches: [])
+            status: "active", metadata: [:], createdAt: stamp, updatedAt: stamp, ca: nil, versions: [], references: [], batches: [])
         func credentialRoot(_ detail: CredentialDetail) -> AnyView {
             AnyView(MainVerticalSplitView(hasDetail: true) {
                 Text("凭据列表").frame(maxWidth: .infinity, maxHeight: .infinity)

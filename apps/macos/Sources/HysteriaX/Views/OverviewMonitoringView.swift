@@ -65,11 +65,18 @@ struct OverviewMonitoringView: View {
                                 Text(L10n.text("部署：{0} · 在线统计：{1}", OverviewDisplay.status(node.deploymentState), OverviewDisplay.status(node.onlineStatus))).font(.caption).foregroundStyle(.secondary)
                             }
                             Spacer()
-                            Text(OverviewDisplay.status(node.probeStatus)).foregroundStyle(node.probeStatus == "failed" ? Color.red : node.probeStatus == "healthy" ? Color.green : Color.secondary)
+                            StatusBadge(
+                                OverviewDisplay.status(node.probeStatus),
+                                tone: node.probeStatus == "failed" ? .danger : node.probeStatus == "healthy" ? .positive : .neutral,
+                                size: .compact
+                            )
                             Text(OverviewDisplay.milliseconds(node.latencyMs)).monospacedDigit().frame(width: 76, alignment: .trailing)
                             Image(systemName: "chevron.right").foregroundStyle(.secondary)
-                        }.padding(.vertical, 4).contentShape(Rectangle())
-                    }.buttonStyle(.plain).accessibilityIdentifier("overview.node.\(node.nodeID)")
+                        }.padding(.horizontal, 6).padding(.vertical, 5).contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .interactiveRowHover()
+                    .accessibilityIdentifier("overview.node.\(node.nodeID)")
                 }
                 if let error = state.nodePageError {
                     HStack {
@@ -130,25 +137,83 @@ struct OverviewMonitoringView: View {
 
     private func metricCards(_ overview: OverviewResponse) -> some View {
         Group {
-                    metric(L10n.text("节点健康"), value: "\(overview.healthyNodes) / \(overview.nodeCount)", detail: L10n.text("公网探测健康 / 全部节点"), symbol: "server.rack")
-                    metric(L10n.text("需处理节点"), value: "\(overview.attentionNodes)", detail: L10n.text("{0} 项当前提醒", String(describing: (overview.issues.count))), symbol: "exclamationmark.triangle")
-                    Button(action: showQuota) { metric(L10n.text("套餐风险"), value: "\(overview.riskNodes)", detail: L10n.text("到期、额度预警或受限节点"), symbol: "gauge.with.dots.needle.67percent") }.buttonStyle(.plain).accessibilityIdentifier("overview.quotaShortcut")
-                    metric(L10n.text("任务"), value: "\(overview.queuedJobs + overview.runningJobs)", detail: L10n.text("排队 {0} · 执行 {1} · 24h 失败 {2}", String(describing: (overview.queuedJobs)), String(describing: (overview.runningJobs)), String(describing: (overview.failedJobs24h))), symbol: "hourglass")
+            Button { navigate(OverviewDestination(section: "nodes", entityID: "")) } label: {
+                metric(
+                    L10n.text("节点健康"),
+                    value: "\(overview.healthyNodes) / \(overview.nodeCount)",
+                    detail: L10n.text("公网探测健康 / 全部节点"),
+                    symbol: "server.rack",
+                    tone: overview.nodeCount > 0 && overview.healthyNodes == overview.nodeCount ? .positive : .neutral
+                )
+            }
+            .buttonStyle(.plain)
+            .interactiveRowHover(cornerRadius: 8)
+            .accessibilityIdentifier("overview.nodesShortcut")
+
+            Button { navigate(OverviewDestination(section: "nodes", entityID: "")) } label: {
+                metric(
+                    L10n.text("需处理节点"),
+                    value: "\(overview.attentionNodes)",
+                    detail: L10n.text("{0} 项当前提醒", String(describing: (overview.issues.count))),
+                    symbol: "exclamationmark.triangle",
+                    tone: overview.attentionNodes > 0 ? .warning : .neutral
+                )
+            }
+            .buttonStyle(.plain)
+            .interactiveRowHover(cornerRadius: 8)
+            .accessibilityIdentifier("overview.attentionShortcut")
+
+            Button(action: showQuota) {
+                metric(
+                    L10n.text("套餐风险"),
+                    value: "\(overview.riskNodes)",
+                    detail: L10n.text("到期、额度预警或受限节点"),
+                    symbol: "gauge.with.dots.needle.67percent",
+                    tone: overview.riskNodes > 0 ? .warning : .neutral
+                )
+            }
+            .buttonStyle(.plain)
+            .interactiveRowHover(cornerRadius: 8)
+            .accessibilityIdentifier("overview.quotaShortcut")
+
+            Button { navigate(OverviewDestination(section: "jobs", entityID: "")) } label: {
+                metric(
+                    L10n.text("任务"),
+                    value: "\(overview.queuedJobs + overview.runningJobs)",
+                    detail: L10n.text("排队 {0} · 执行 {1} · 24h 失败 {2}", String(describing: (overview.queuedJobs)), String(describing: (overview.runningJobs)), String(describing: (overview.failedJobs24h))),
+                    symbol: "hourglass",
+                    tone: overview.failedJobs24h > 0 ? .warning : (overview.queuedJobs + overview.runningJobs > 0 ? .active : .neutral)
+                )
+            }
+            .buttonStyle(.plain)
+            .interactiveRowHover(cornerRadius: 8)
+            .accessibilityIdentifier("overview.jobsShortcut")
         }
     }
 
-    private func metric(_ title: String, value: String, detail: String, symbol: String) -> some View {
+    private func metric(_ title: String, value: String, detail: String, symbol: String, tone: StatusTone = .neutral) -> some View {
         GroupBox {
             VStack(alignment: .leading, spacing: 8) {
-                Label(title, systemImage: symbol).foregroundStyle(.secondary)
-                Text(value).font(.system(size: 28, weight: .semibold, design: .rounded)).monospacedDigit()
+                HStack {
+                    Label(title, systemImage: symbol)
+                        .foregroundStyle(tone == .neutral ? AnyShapeStyle(.secondary) : AnyShapeStyle(tone.color))
+                    Spacer(minLength: 4)
+                    Image(systemName: "chevron.right")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .accessibilityHidden(true)
+                }
+                Text(value)
+                    .font(.system(size: 28, weight: .semibold, design: .rounded))
+                    .monospacedDigit()
+                    .foregroundStyle(tone == .warning || tone == .danger ? AnyShapeStyle(tone.color) : AnyShapeStyle(.primary))
                 Text(detail).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }.frame(maxWidth: .infinity, minHeight: 96, alignment: .leading)
         }
     }
     private func issues(_ overview: OverviewResponse) -> some View {
         OverviewCard(L10n.text("需处理事项"), systemImage: "checklist") {
-            VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 6) {
                 if overview.issues.isEmpty { Label(L10n.text("暂无需处理事项"), systemImage: "checkmark.circle").foregroundStyle(.secondary).padding(.vertical, 12) }
                 ForEach(viewState.showAllIssues ? overview.issues : Array(overview.issues.prefix(8))) { issue in
                     Button { navigate(OverviewDestination(section: issue.entityType == "job" ? "jobs" : issue.entityType == "user" ? "users" : "nodes", entityID: issue.entityID)) } label: {
@@ -158,8 +223,11 @@ struct OverviewMonitoringView: View {
                             Spacer(minLength: 8)
                             if let at = issue.occurredAt { Text(DateDisplayText.local(at)).font(.caption).foregroundStyle(.tertiary).lineLimit(1) }
                             Image(systemName: "chevron.right").foregroundStyle(.secondary)
-                        }.padding(.vertical, 4).contentShape(Rectangle())
-                    }.buttonStyle(.plain).accessibilityIdentifier("overview.issue.\(issue.id)")
+                        }.padding(.horizontal, 6).padding(.vertical, 5).contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .interactiveRowHover()
+                    .accessibilityIdentifier("overview.issue.\(issue.id)")
                 }
                 if overview.issues.count > 8 { Button(viewState.showAllIssues ? L10n.text("收起") : L10n.text("显示全部 {0} 项", String(describing: (overview.issues.count)))) { viewState.showAllIssues.toggle() } }
             }.frame(maxWidth: .infinity, alignment: .leading)

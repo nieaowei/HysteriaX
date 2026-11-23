@@ -59,17 +59,31 @@ struct DNSRecordsView: View {
                     VStack(spacing: 0) {
                         filters.padding(12)
                         recordsTable
-                        Divider()
-                        paginationControls
+                        ListPaginationBar(
+                            summary: (currentPageResponse != nil || !store.isConnected)
+                                ? L10n.text("共 {0} 条 DNS 记录 · 第 {1} / {2} 页", String(totalRecords), String(currentPage), String(pageCount))
+                                : nil,
+                            page: currentPage,
+                            pageCount: pageCount,
+                            pageSize: $pageSize,
+                            isLoading: isLoadingPage,
+                            isOffline: !store.isConnected,
+                            offlineText: L10n.text("离线快照 · {0}", String(describing: (store.dnsUpdatedAt.map { L10n.date($0) } ?? L10n.text("尚未读取")))),
+                            error: pageError ?? store.dnsError,
+                            onRetry: {
+                                loadedPageKey = nil
+                                retryPageToken = UUID()
+                                Task { await store.refreshDNS(bypassCache: true) }
+                            },
+                            canNavigate: !store.isConnected || currentPageResponse != nil,
+                            identifierPrefix: "dns",
+                            onSelectPage: { changePage($0) }
+                        )
                     }
                 } detail: {
                     if let selected {
                         detail(selected)
                     }
-                }
-                if let message = store.dnsError { Text(message).font(.callout).foregroundStyle(.orange).padding(8) }
-                if !store.isConnected {
-                    Text(L10n.text("离线快照 · {0}", String(describing: (store.dnsUpdatedAt.map { L10n.date($0) } ?? L10n.text("尚未读取"))))).font(.caption).foregroundStyle(.secondary).padding(8)
                 }
             }
             .searchable(text: $search, prompt: L10n.text("搜索域名或目标"))
@@ -89,7 +103,16 @@ struct DNSRecordsView: View {
             .sheet(isPresented: $creating) { DNSRecordEditorView(store: store, record: nil, initialZoneID: zoneID) }
             .sheet(item: $editing) { DNSRecordEditorView(store: store, record: $0, initialZoneID: $0.zoneId) }
             .confirmationDialog(L10n.text("删除 {0} 的 DNS 记录？", String(describing: (deleting?.name ?? ""))), isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } })) {
-                Button(L10n.text("删除远端记录"), role: .destructive) { if let record = deleting { run { try await store.deleteDNSRecord(record) } }; deleting = nil }
+                Button(L10n.text("删除远端记录"), role: .destructive) {
+                    if let record = deleting {
+                        run {
+                            try await store.deleteDNSRecord(record)
+                            selection = nil
+                            store.toast.show(L10n.text("已提交删除记录"), detail: record.name, tone: .neutral)
+                        }
+                    }
+                    deleting = nil
+                }
             }
             .alert(L10n.text("DNS 操作失败"), isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) { Button(L10n.text("好"), role: .cancel) { error = nil } } message: { Text(error ?? "") }
             .task { await store.refreshDNSIfNeeded(); openRequestedRecord() }
@@ -140,15 +163,12 @@ struct DNSRecordsView: View {
             }.width(min: 60, ideal: 76)
             TableColumn(L10n.text("状态")) { record in
                 VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: 5) {
-                        Circle().fill(record.syncColor).frame(width: 5, height: 5)
-                        Text(record.stateLabel).foregroundStyle(record.syncColor)
-                    }
+                    StatusBadge(record.stateLabel, tone: record.syncTone, size: .compact)
                     Text(record.resolutionLabel).font(.caption).foregroundStyle(record.resolutionColor)
                 }
                 .lineLimit(1)
                 .help("\(record.stateLabel) · \(record.resolutionLabel)")
-            }.width(min: 80, ideal: 88)
+            }.width(min: 86, ideal: 98)
             TableColumn(L10n.text("来源")) { record in
                 Text(record.origin == "hysteriax" ? "HysteriaX" : L10n.text("已有记录"))
                     .font(.caption2.weight(.medium)).lineLimit(1)
@@ -172,36 +192,6 @@ struct DNSRecordsView: View {
                 }
             }
         }
-    }
-
-    private var paginationControls: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            if let pageError {
-                HStack {
-                    Text(pageError).foregroundStyle(.red).textSelection(.enabled)
-                    Button(L10n.text("重试")) { loadedPageKey = nil; retryPageToken = UUID() }
-                }.font(.caption)
-            }
-            HStack(spacing: 12) {
-                if currentPageResponse != nil || !store.isConnected {
-                    Text(L10n.text("共 {0} 条 DNS 记录 · 第 {1} / {2} 页", String(totalRecords), String(currentPage), String(pageCount)))
-                        .foregroundStyle(.secondary).monospacedDigit()
-                }
-                if isLoadingPage { ProgressView().controlSize(.small) }
-                Spacer(minLength: 0)
-                Picker(L10n.text("每页条数"), selection: $pageSize) {
-                    ForEach([25, 50, 100], id: \.self) { Text(String($0)).tag($0) }
-                }.fixedSize().accessibilityIdentifier("dns.pageSize")
-                Button(L10n.text("上一页")) { changePage(currentPage - 1) }
-                    .disabled(currentPage <= 1 || isLoadingPage || (store.isConnected && currentPageResponse == nil))
-                    .accessibilityIdentifier("dns.previousPage")
-                Button(L10n.text("下一页")) { changePage(currentPage + 1) }
-                    .disabled(currentPage >= pageCount || isLoadingPage || (store.isConnected && currentPageResponse == nil))
-                    .accessibilityIdentifier("dns.nextPage")
-            }.font(.callout)
-        }
-        .padding(.horizontal, 12).padding(.vertical, 8)
-        .accessibilityIdentifier("dns.pagination")
     }
 
     private func changePage(_ page: Int) { self.page = page; selection = nil }
@@ -237,7 +227,12 @@ struct DNSRecordsView: View {
                 ForEach(store.dnsZones.filter { connectionID.isEmpty || $0.connectionId == connectionID }) { Text($0.name).tag($0.id) }
             }
             if let zone = store.dnsZones.first(where: { $0.id == zoneID }) {
-                Button(L10n.text("刷新远端记录")) { run { try await store.refreshDNSZone(zone) } }.disabled(!store.isConnected || !zone.enabled || busy)
+                Button(L10n.text("刷新远端记录")) {
+                    run {
+                        try await store.refreshDNSZone(zone)
+                        store.toast.show(L10n.text("已提交刷新远端记录"), detail: zone.name, tone: .active)
+                    }
+                }.disabled(!store.isConnected || !zone.enabled || busy)
             }
             Spacer()
             if store.dnsIsLoading || busy { ProgressView().controlSize(.small) }
@@ -252,11 +247,24 @@ struct DNSRecordsView: View {
             node: store.nodes.first { $0.id == record.boundNodeId }, failedJob: failedJob,
             isConnected: store.isConnected, busy: busy,
             onEdit: { editing = record },
-            onCheck: { run { try await store.checkDNSRecord(record) } },
+            onCheck: {
+                run {
+                    try await store.checkDNSRecord(record)
+                    store.toast.show(L10n.text("已提交解析检查"), detail: record.name, tone: .active)
+                }
+            },
             onDelete: { deleting = record },
             onBind: { bindingRecord = record },
-            onRetry: { if let failedJob { run { try await store.retryDNSJob(failedJob) } } },
-            onOpenNode: onOpenNode
+            onRetry: {
+                if let failedJob {
+                    run {
+                        try await store.retryDNSJob(failedJob)
+                        store.toast.show(L10n.text("已提交重试任务"), tone: .active)
+                    }
+                }
+            },
+            onOpenNode: onOpenNode,
+            onClose: { selection = nil }
         )
         .sheet(item: $bindingRecord) { DNSRecordBindingPicker(store: store, record: $0) }
     }

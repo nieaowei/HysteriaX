@@ -86,8 +86,13 @@ struct JobsView: View {
                     TableColumn(L10n.text("节点"), value: \.displayNodeName)
                     TableColumn(L10n.text("类型"), value: \.localizedKind)
                     TableColumn(L10n.text("阶段"), value: \.localizedStage)
-                    TableColumn(L10n.text("状态"), value: \.localizedStatus)
-                    TableColumn(L10n.text("创建时间"), value: \.createdAt) { job in Text(DateDisplayText.local(job.createdAt)) }
+                    TableColumn(L10n.text("状态"), value: \.localizedStatus) { job in
+                        StatusBadge(job.localizedStatus, tone: JobStatusTone.tone(for: job.status), size: .compact)
+                    }
+                    TableColumn(L10n.text("创建时间"), value: \.createdAt) { job in
+                        Text(DateDisplayText.local(job.createdAt))
+                            .monospacedDigit()
+                    }
                 }
                 .frame(minHeight: 140)
                 .overlay {
@@ -103,8 +108,21 @@ struct JobsView: View {
                         }
                     }
                 }
-                Divider()
-                paginationControls
+                ListPaginationBar(
+                    summary: (currentPageResponse != nil || !store.isConnected)
+                        ? L10n.text("共 {0} 项任务 · 第 {1} / {2} 页", String(totalJobs), String(currentPage), String(pageCount))
+                        : nil,
+                    page: currentPage,
+                    pageCount: pageCount,
+                    pageSize: $pageSize,
+                    isLoading: isLoadingPage,
+                    isOffline: !store.isConnected,
+                    error: pageError,
+                    onRetry: { loadedPageKey = nil; retryPageToken = UUID() },
+                    canNavigate: !store.isConnected || currentPageResponse != nil,
+                    identifierPrefix: "jobs",
+                    onSelectPage: { page = $0 }
+                )
             }
             .task(id: initialSelection) {
                 guard let initialSelection else { return }
@@ -137,39 +155,6 @@ struct JobsView: View {
         } message: { Text(JobDisplayText.errorMessage(actionError ?? "")) }
     }
 
-    private var paginationControls: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            if let pageError {
-                HStack {
-                    Text(pageError).foregroundStyle(.red).textSelection(.enabled)
-                    Button(L10n.text("重试")) { loadedPageKey = nil; retryPageToken = UUID() }
-                }.font(.caption)
-            }
-            HStack(spacing: 12) {
-                if !store.isConnected {
-                    Label(L10n.text("离线快照"), systemImage: "wifi.slash").foregroundStyle(.secondary)
-                }
-                if currentPageResponse != nil || !store.isConnected {
-                    Text(L10n.text("共 {0} 项任务 · 第 {1} / {2} 页", String(totalJobs), String(currentPage), String(pageCount)))
-                        .foregroundStyle(.secondary).monospacedDigit()
-                }
-                if isLoadingPage { ProgressView().controlSize(.small) }
-                Spacer(minLength: 0)
-                Picker(L10n.text("每页条数"), selection: $pageSize) {
-                    ForEach([25, 50, 100], id: \.self) { Text(String($0)).tag($0) }
-                }.fixedSize()
-                Button(L10n.text("上一页")) { page = currentPage - 1 }
-                    .disabled(currentPage <= 1 || isLoadingPage || (store.isConnected && currentPageResponse == nil))
-                    .accessibilityIdentifier("jobs.previousPage")
-                Button(L10n.text("下一页")) { page = currentPage + 1 }
-                    .disabled(currentPage >= pageCount || isLoadingPage || (store.isConnected && currentPageResponse == nil))
-                    .accessibilityIdentifier("jobs.nextPage")
-            }.font(.callout)
-        }
-        .padding(.horizontal, 12).padding(.vertical, 8)
-        .accessibilityIdentifier("jobs.pagination")
-    }
-
     private func resetPage() {
         page = 1
         selectedJobID = nil
@@ -197,20 +182,20 @@ struct JobsView: View {
 
     private func jobDetailPane(_ job: JobSummary) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            VStack(alignment: .leading, spacing: 14) {
-                DetailHeaderLayout {
-                    jobTitle(job)
-                    jobActions(job)
-                }
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), alignment: .leading)], alignment: .leading, spacing: 12) {
-                    jobMetric(L10n.text("当前阶段"), value: JobDisplayText.stage(job.result?.stage ?? job.stage))
-                    jobMetric(L10n.text("尝试次数"), value: String(job.attempts))
-                    jobMetric(L10n.text("创建时间"), value: DateDisplayText.local(job.createdAt))
-                    jobMetric(L10n.text("开始时间"), value: DateDisplayText.local(currentDetail(job)?.startedAt))
+            DetailHeaderBar {
+                VStack(alignment: .leading, spacing: 14) {
+                    DetailHeaderLayout {
+                        jobTitle(job)
+                        jobActions(job)
+                    }
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), alignment: .leading)], alignment: .leading, spacing: 12) {
+                        jobMetric(L10n.text("当前阶段"), value: JobDisplayText.stage(job.result?.stage ?? job.stage))
+                        jobMetric(L10n.text("尝试次数"), value: String(job.attempts))
+                        jobMetric(L10n.text("创建时间"), value: DateDisplayText.local(job.createdAt))
+                        jobMetric(L10n.text("开始时间"), value: DateDisplayText.local(currentDetail(job)?.startedAt))
+                    }
                 }
             }
-            .padding(16)
-            Divider()
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     if let error = job.errorMessage {
@@ -241,8 +226,8 @@ struct JobsView: View {
                     executionRecords(job)
                     DisclosureGroup(L10n.text("任务标识")) {
                         VStack(alignment: .leading, spacing: 10) {
-                            jobMetric(L10n.text("任务 ID"), value: job.id)
-                            if let nodeID = job.nodeID { jobMetric(L10n.text("节点 ID"), value: nodeID) }
+                            jobMetric(L10n.text("任务 ID"), value: job.id, copyable: true)
+                            if let nodeID = job.nodeID { jobMetric(L10n.text("节点 ID"), value: nodeID, copyable: true) }
                         }
                         .padding(.top, 8)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -261,15 +246,19 @@ struct JobsView: View {
                 Text(job.resourceName ?? job.nodeName ?? job.nodeID ?? L10n.text("未关联节点"))
                     .font(.callout).foregroundStyle(.secondary).lineLimit(2).textSelection(.enabled)
             }
-            Text(JobDisplayText.status(job.status))
-                .font(.caption.weight(.medium))
-                .foregroundStyle(jobStatusColor(job.status))
-                .padding(.horizontal, 8).padding(.vertical, 3)
-                .background(jobStatusColor(job.status).opacity(0.1), in: Capsule())
+            StatusBadge(JobDisplayText.status(job.status), tone: JobStatusTone.tone(for: job.status))
         }
     }
 
-    @ViewBuilder private func jobActions(_ job: JobSummary) -> some View {
+    private func hasJobActions(_ job: JobSummary) -> Bool {
+        if job.retryJobId != nil { return true }
+        if job.kind.hasPrefix("dns-"), job.kind != "dns-credential-apply", job.status == "failed", job.retryJobId == nil { return true }
+        if job.kind == "authorization-change", job.status == "failed", job.retryJobId == nil { return true }
+        if retryAction(for: job) != nil, store.nodes.contains(where: { $0.id == job.nodeID }) { return true }
+        return false
+    }
+
+    private func jobActions(_ job: JobSummary) -> some View {
         HStack(spacing: 8) {
             if let retryID = job.retryJobId {
                 Button(L10n.text("查看重试任务")) { selectedJobID = retryID }
@@ -277,21 +266,36 @@ struct JobsView: View {
             }
             if job.kind.hasPrefix("dns-"), job.kind != "dns-credential-apply", job.status == "failed", job.retryJobId == nil {
                 Button(L10n.text("重试 DNS 操作")) {
-                    Task { do { try await store.retryDNSJob(job) } catch { actionError = error.localizedDescription } }
+                    Task {
+                        do {
+                            try await store.retryDNSJob(job)
+                            store.toast.show(L10n.text("已提交重试任务"), tone: .active)
+                        } catch { actionError = error.localizedDescription }
+                    }
                 }.disabled(!store.isConnected)
             }
             if job.kind == "authorization-change", job.status == "failed", job.retryJobId == nil {
                 Button(L10n.text("重试授权任务")) {
-                    Task { do { selectedJobID = try await store.retryAuthorizationJob(job) } catch { actionError = error.localizedDescription } }
+                    Task {
+                        do {
+                            selectedJobID = try await store.retryAuthorizationJob(job)
+                            store.toast.show(L10n.text("已提交重试任务"), tone: .active)
+                        } catch { actionError = error.localizedDescription }
+                    }
                 }.disabled(!store.isConnected)
             }
             if let action = retryAction(for: job),
                let node = store.nodes.first(where: { $0.id == job.nodeID }) {
                 Button(L10n.text("重试：{0}", String(describing: (retryLabel(action))))) { retry(job, on: node, action: action) }
+                    .buttonStyle(.borderedProminent)
                     .accessibilityIdentifier("jobs.retry.\(job.id)")
                     .disabled(!store.isConnected || !NodeTaskFeedback.allowsAction(action, node: node) || (action != "ssh-test" && ["needs_fingerprint", "fingerprint_changed"].contains(node.state)))
                     .help(L10n.text("创建关联重试，成功后自动移除失败提醒"))
             }
+            if hasJobActions(job) {
+                Divider().frame(height: 16)
+            }
+            DetailCloseButton { selectedJobID = nil; selectedJobDetail = nil }
         }
         .fixedSize()
         .task(id: "\(store.dataRefreshToken):\(job.nodeID ?? "")") { await store.prepareNode(job.nodeID) }
@@ -385,20 +389,15 @@ struct JobsView: View {
         selectedJobDetail?.job.id == job.id ? selectedJobDetail : nil
     }
 
-    private func jobMetric(_ title: String, value: String) -> some View {
+    private func jobMetric(_ title: String, value: String, copyable: Bool = false) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title).font(.caption).foregroundStyle(.secondary)
-            Text(value).font(.callout).textSelection(.enabled)
-        }
-    }
-
-    private func jobStatusColor(_ status: String) -> Color {
-        switch status {
-        case "succeeded": .green
-        case "failed": .orange
-        case "running": .blue
-        case "waiting_confirmation": .orange
-        default: .secondary
+            HStack(spacing: 4) {
+                Text(value).font(.callout).textSelection(.enabled)
+                if copyable {
+                    CopyActionButton(value: value, toast: store.toast)
+                }
+            }
         }
     }
 
@@ -446,6 +445,7 @@ struct JobsView: View {
             do {
                 try await store.retryJob(job, on: node)
                 selectedJobID = nil
+                store.toast.show(L10n.text("已提交重试任务"), detail: node.name, tone: .active)
             } catch { actionError = error.localizedDescription }
         }
     }

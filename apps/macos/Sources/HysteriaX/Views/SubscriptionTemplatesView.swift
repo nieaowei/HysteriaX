@@ -32,8 +32,21 @@ struct SubscriptionTemplatesView: View {
     var body: some View {
         VStack(spacing: 0) {
             templateTable
-            Divider()
-            paginationControls
+            ListPaginationBar(
+                summary: L10n.text("共 {0} 个模板 · 第 {1} / {2} 页", String(rows.count), String(currentPage), String(pageCount)),
+                page: currentPage,
+                pageCount: pageCount,
+                pageSize: $pageSize,
+                isLoading: model.busy,
+                isOffline: !store.isConnected,
+                offlineText: L10n.text("服务未连接"),
+                error: model.error,
+                onRetry: { refresh() },
+                canRetry: !model.busy && store.isConnected,
+                canNavigate: !model.busy,
+                identifierPrefix: "templates",
+                onSelectPage: { page = $0; selection = nil }
+            )
         }
         .searchable(text: $search, placement: .toolbar, prompt: L10n.text("搜索模板名称"))
         .toolbar {
@@ -73,9 +86,17 @@ struct SubscriptionTemplatesView: View {
                 Text(L10n.text("新建模板")).font(.title2)
                 TextField(L10n.text("模板名称"), text: $name)
                 Picker(L10n.text("配置格式"), selection: $newFormat) { Text("Mihomo").tag("mihomo"); Text("sing-box").tag("singbox") }
-                HStack { Button(L10n.text("取消")) { creating = false }; Spacer(); Button(L10n.text("创建")) {
-                    model.run { let item = try await model.create(store.requireConnectedAPI(), name: name, format: newFormat); creating = false; open(item) }
-                }.disabled(model.busy || !store.isConnected || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) }
+                HStack {
+                    Button(L10n.text("取消")) { creating = false }
+                        .keyboardShortcut(.cancelAction)
+                    Spacer()
+                    Button(L10n.text("创建")) {
+                        model.run { let item = try await model.create(store.requireConnectedAPI(), name: name, format: newFormat); creating = false; open(item) }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(model.busy || !store.isConnected || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
             }.padding(24).frame(width: 400)
         }
     }
@@ -83,10 +104,25 @@ struct SubscriptionTemplatesView: View {
         Table(visibleRows, selection: $selection, sortOrder: $sort) {
             TableColumn(L10n.text("名称"), value: \SubscriptionTemplate.name) { (item: SubscriptionTemplate) in Text(item.name).accessibilityIdentifier("templates.row.\(item.id)") }
             TableColumn(L10n.text("格式"), value: \.format) { item in Text(item.format == "singbox" ? "sing-box" : "Mihomo") }
-            TableColumn(L10n.text("发布版本"), value: \.sortPublishedVersion) { item in Text(item.publishedVersion.map { "v\($0)" } ?? L10n.text("未发布")) }
-            TableColumn(L10n.text("编辑状态")) { item in Text(store.templateWindows.status(service: store.serviceAddress, template: item.id)) }
-            TableColumn(L10n.text("默认"), value: \.sortDefault) { item in Text(item.isDefault ? L10n.text("默认") : "") }
-            TableColumn(L10n.text("更新时间"), value: \.updatedAt) { item in Text(DateDisplayText.local(item.updatedAt)) }
+            TableColumn(L10n.text("发布版本"), value: \.sortPublishedVersion) { item in
+                StatusBadge(
+                    item.publishedVersion.map { "v\($0)" } ?? L10n.text("未发布"),
+                    tone: item.publishedVersion != nil ? .positive : .neutral,
+                    size: .compact,
+                    showDot: false
+                )
+                .monospacedDigit()
+            }
+            TableColumn(L10n.text("编辑状态")) { item in templateEditorStatusView(for: item) }
+            TableColumn(L10n.text("默认"), value: \.sortDefault) { item in
+                if item.isDefault {
+                    StatusBadge(L10n.text("默认"), tone: .accent, size: .compact, showDot: false)
+                }
+            }
+            TableColumn(L10n.text("更新时间"), value: \.updatedAt) { item in
+                Text(DateDisplayText.local(item.updatedAt))
+                    .monospacedDigit()
+            }
         }
         .frame(minHeight: 180)
         .accessibilityIdentifier("templates.table")
@@ -115,32 +151,26 @@ struct SubscriptionTemplatesView: View {
             }
         }
     }
-    private var paginationControls: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            if let error = model.error {
-                HStack {
-                    Text(error).foregroundStyle(.red).textSelection(.enabled)
-                    Button(L10n.text("重试")) { refresh() }.disabled(model.busy || !store.isConnected)
-                }.font(.caption)
+    @ViewBuilder
+    private func templateEditorStatusView(for item: SubscriptionTemplate) -> some View {
+        let status = store.templateWindows.status(service: store.serviceAddress, template: item.id)
+        if let session = store.templateWindows.sessions[TemplateEditorID(service: store.serviceAddress, template: item.id)] {
+            if session.saving {
+                StatusBadge(status, tone: .active, size: .compact)
+            } else if session.error != nil {
+                StatusBadge(status, tone: .danger, size: .compact)
+            } else if session.dirty {
+                StatusBadge(status, tone: .warning, size: .compact)
+            } else {
+                StatusBadge(status, tone: .positive, size: .compact)
             }
-            HStack(spacing: 12) {
-                if !store.isConnected { Label(L10n.text("服务未连接"), systemImage: "wifi.slash").foregroundStyle(.secondary) }
-                Text(L10n.text("共 {0} 个模板 · 第 {1} / {2} 页", String(rows.count), String(currentPage), String(pageCount)))
-                    .foregroundStyle(.secondary).monospacedDigit()
-                if model.busy { ProgressView().controlSize(.small) }
-                Spacer(minLength: 0)
-                Picker(L10n.text("每页条数"), selection: $pageSize) {
-                    ForEach([25, 50, 100], id: \.self) { Text(String($0)).tag($0) }
-                }.fixedSize().accessibilityIdentifier("templates.pageSize")
-                Button(L10n.text("上一页")) { page = currentPage - 1; selection = nil }
-                    .disabled(currentPage <= 1 || model.busy).accessibilityIdentifier("templates.previousPage")
-                Button(L10n.text("下一页")) { page = currentPage + 1; selection = nil }
-                    .disabled(currentPage >= pageCount || model.busy).accessibilityIdentifier("templates.nextPage")
-            }.font(.callout)
+        } else {
+            Text(status)
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
-        .padding(.horizontal, 12).padding(.vertical, 8)
-        .accessibilityIdentifier("templates.pagination")
     }
+
     private func resetPage() { page = 1; selection = nil }
     private func refresh() {
         guard store.isConnected else { return }

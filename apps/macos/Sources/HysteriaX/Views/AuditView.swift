@@ -47,9 +47,18 @@ struct AuditView: View {
             Table(visibleRecords, sortOrder: $sortOrder) {
                 TableColumn(L10n.text("操作"), value: \.localizedAction)
                 TableColumn(L10n.text("对象"), value: \.localizedEntityType)
-                TableColumn(L10n.text("对象 ID"), value: \.entityID)
+                TableColumn(L10n.text("对象 ID"), value: \.entityID) { record in
+                    Text(record.entityID)
+                        .font(.callout.monospaced())
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .textSelection(.enabled)
+                }
                 TableColumn(L10n.text("操作者"), value: \.localizedActor)
-                TableColumn(L10n.text("时间"), value: \.createdAt) { record in Text(DateDisplayText.local(record.createdAt)) }
+                TableColumn(L10n.text("时间"), value: \.createdAt) { record in
+                    Text(DateDisplayText.local(record.createdAt))
+                        .monospacedDigit()
+                }
             }
             .accessibilityIdentifier("audit.table")
             .overlay {
@@ -65,8 +74,21 @@ struct AuditView: View {
                     }
                 }
             }
-            Divider()
-            paginationControls
+            ListPaginationBar(
+                summary: (currentPageResponse != nil || !store.isConnected)
+                    ? L10n.text("共 {0} 条审计记录 · 第 {1} / {2} 页", String(totalRecords), String(currentPage), String(pageCount))
+                    : nil,
+                page: currentPage,
+                pageCount: pageCount,
+                pageSize: $pageSize,
+                isLoading: isLoadingPage,
+                isOffline: !store.isConnected,
+                error: pageError,
+                onRetry: { loadedPageKey = nil; retryPageToken = UUID() },
+                canNavigate: !store.isConnected || currentPageResponse != nil,
+                identifierPrefix: "audit",
+                onSelectPage: { page = $0 }
+            )
         }
         .searchable(text: $searchText, prompt: L10n.text("搜索审计"))
         .onChange(of: searchText) { _, _ in page = 1 }
@@ -80,39 +102,6 @@ struct AuditView: View {
         }
         .task(id: pageRequestKey) { await loadPage() }
         .onDisappear { loadedPageKey = nil }
-    }
-
-    private var paginationControls: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            if let pageError {
-                HStack {
-                    Text(pageError).foregroundStyle(.red).textSelection(.enabled)
-                    Button(L10n.text("重试")) { loadedPageKey = nil; retryPageToken = UUID() }
-                }.font(.caption)
-            }
-            HStack(spacing: 12) {
-                if !store.isConnected {
-                    Label(L10n.text("离线快照"), systemImage: "wifi.slash").foregroundStyle(.secondary)
-                }
-                if currentPageResponse != nil || !store.isConnected {
-                    Text(L10n.text("共 {0} 条审计记录 · 第 {1} / {2} 页", String(totalRecords), String(currentPage), String(pageCount)))
-                        .foregroundStyle(.secondary).monospacedDigit()
-                }
-                if isLoadingPage { ProgressView().controlSize(.small) }
-                Spacer(minLength: 0)
-                Picker(L10n.text("每页条数"), selection: $pageSize) {
-                    ForEach([25, 50, 100], id: \.self) { Text(String($0)).tag($0) }
-                }.fixedSize().accessibilityIdentifier("audit.pageSize")
-                Button(L10n.text("上一页")) { page = currentPage - 1 }
-                    .disabled(currentPage <= 1 || isLoadingPage || (store.isConnected && currentPageResponse == nil))
-                    .accessibilityIdentifier("audit.previousPage")
-                Button(L10n.text("下一页")) { page = currentPage + 1 }
-                    .disabled(currentPage >= pageCount || isLoadingPage || (store.isConnected && currentPageResponse == nil))
-                    .accessibilityIdentifier("audit.nextPage")
-            }.font(.callout)
-        }
-        .padding(.horizontal, 12).padding(.vertical, 8)
-        .accessibilityIdentifier("audit.pagination")
     }
 
     private func loadPage() async {

@@ -13,14 +13,16 @@ extension DNSRecord {
         }
     }
 
-    var syncColor: Color {
+    var syncTone: StatusTone {
         switch state {
-        case "synced": .green
-        case "pending": .blue
-        case "failed", "remote_missing": .orange
-        default: .secondary
+        case "synced": .positive
+        case "pending": .active
+        case "failed", "remote_missing": .warning
+        default: .neutral
         }
     }
+
+    var syncColor: Color { syncTone.color }
 
     var resolutionColor: Color {
         switch resolutionStatus {

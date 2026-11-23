@@ -2201,3 +2201,28 @@
 "管理服务版本过旧，请更新服务端后重试。" = "The management service is outdated. Update the server and try again.";
 
 "此模板文档格式不受支持，仅支持 schema 2。" = "This template document format is unsupported. Only schema 2 is supported.";
+
+"导航" = "Navigation";
+"监控" = "Monitoring";
+"基础设施" = "Infrastructure";
+"访问与运维" = "Access & Operations";
+"正在连接…" = "Connecting…";
+"重新连接" = "Reconnect";
+"打开设置以连接管理服务" = "Open Settings to connect to the management service";
+"关闭提示" = "Dismiss notice";
+"关闭详情" = "Close detail";
+"复制" = "Copy";
+"跳转到指定页" = "Jump to page";
+"页码" = "Page";
+"跳转" = "Go";
+"末页" = "Last";
+"任务已提交" = "Job submitted";
+"已卸载并删除节点" = "Node uninstalled and deleted";
+"已移除节点记录" = "Node record removed";
+"用户已删除" = "User deleted";
+"凭据已删除" = "Credential deleted";
+"已撤销管理员 Token" = "Admin token revoked";
+"已提交重试任务" = "Retry job submitted";
+"已提交删除记录" = "Record deletion submitted";
+"已提交解析检查" = "Resolution check submitted";
+"已提交刷新远端记录" = "Remote record refresh submitted";

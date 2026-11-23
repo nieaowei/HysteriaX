@@ -78,8 +78,10 @@ final class ManagementStore {
     var jobsRefreshToken = UUID()
     var listCacheSession = UUID()
     let listPageCache = ListPageCache()
+    let toast = ToastCenter()
     private var directoryVersion: String?
     var errorMessage: String?
+    var hasConfiguredService: Bool { api != nil }
 
     private var api: APIClient?
     private var eventTask: Task<Void, Never>?

@@ -14,12 +14,12 @@ struct DNSRecordDetailView: View {
     var onBind: () -> Void
     var onRetry: () -> Void
     var onOpenNode: (String) -> Void
+    var onClose: (() -> Void)? = nil
 
     private var canAct: Bool { isConnected && !busy }
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            header.padding(16)
-            Divider()
+            DetailHeaderBar { header }
             GeometryReader { geometry in
                 ScrollView {
                     VStack(alignment: .leading, spacing: 16) {
@@ -123,27 +123,32 @@ struct DNSRecordDetailView: View {
                     .fixedSize(horizontal: false, vertical: true)
                 HStack(spacing: 10) {
                     DNSRecordTypeBadge(record: record)
-                    Label(record.stateLabel, systemImage: record.state == "synced" ? "checkmark.circle.fill" : "circle.fill")
-                        .foregroundStyle(record.syncColor)
+                    StatusBadge(record.stateLabel, tone: record.syncTone, size: .compact)
                     if !isConnected { Label(L10n.text("离线快照"), systemImage: "wifi.slash").foregroundStyle(.secondary) }
                 }
                 .font(.caption)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             HStack(spacing: 8) {
-                Button(L10n.text("编辑"), action: onEdit)
-                    .disabled(!canAct || !record.supportsEditing || record.desired != nil)
-                Button(L10n.text("检查解析"), action: onCheck)
-                    .disabled(!canAct || !record.supportsEditing || record.state != "synced")
-                Button(L10n.text("绑定节点"), action: onBind)
-                    .disabled(!canAct || !record.supportsEditing || record.proxied || record.state != "synced" || record.boundNodeId != nil)
-                if busy { ProgressView().controlSize(.small) }
-                Button(L10n.text("删除记录"), role: .destructive, action: onDelete)
-                    .foregroundStyle(.red)
-                    .disabled(!canAct || !record.supportsEditing || record.boundNodeId != nil || record.desired != nil)
-                    .accessibilityIdentifier("dns.record.delete")
+                HStack(spacing: 8) {
+                    Button(L10n.text("编辑"), action: onEdit)
+                        .disabled(!canAct || !record.supportsEditing || record.desired != nil)
+                    Button(L10n.text("检查解析"), action: onCheck)
+                        .disabled(!canAct || !record.supportsEditing || record.state != "synced")
+                    Button(L10n.text("绑定节点"), action: onBind)
+                        .disabled(!canAct || !record.supportsEditing || record.proxied || record.state != "synced" || record.boundNodeId != nil)
+                    if busy { ProgressView().controlSize(.small) }
+                    Button(L10n.text("删除记录"), role: .destructive, action: onDelete)
+                        .foregroundStyle(.red)
+                        .disabled(!canAct || !record.supportsEditing || record.boundNodeId != nil || record.desired != nil)
+                        .accessibilityIdentifier("dns.record.delete")
+                }
+                .controlSize(.small)
+                if let onClose {
+                    Divider().frame(height: 16)
+                    DetailCloseButton(action: onClose)
+                }
             }
-            .controlSize(.small)
             .fixedSize()
         }
     }

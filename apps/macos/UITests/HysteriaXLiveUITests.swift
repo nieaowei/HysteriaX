@@ -219,7 +219,7 @@ final class HysteriaXLiveUITests: XCTestCase {
         XCTAssertEqual(subscriptionBeforeRotation.components(separatedBy: "type: hysteria2").count - 1, 2)
 
         chooseMenuAction(app, menu: "用户", action: "轮换连接与订阅凭据")
-        acknowledgeNotice(app)
+        waitForActionFeedback(app)
         let (oldSubscriptionStatus, _) = try await request(base: credentials.serviceAddress, path: "/sub/\(subscriptionToken)?format=uri")
         XCTAssertEqual(oldSubscriptionStatus, 404)
         subscriptionToken = try await activeSubscriptionToken(userID, credentials: credentials)
@@ -227,7 +227,7 @@ final class HysteriaXLiveUITests: XCTestCase {
         XCTAssertNotEqual(subscriptionAfterRotation, subscriptionBeforeRotation)
 
         chooseMenuAction(app, menu: "用户", action: "停用")
-        acknowledgeNotice(app)
+        waitForActionFeedback(app)
         let disabledUser = try await userSummary(userID, credentials: credentials)
         XCTAssertEqual(disabledUser["enabled"] as? Bool, false)
         let (disabledSubscriptionStatus, _) = try await request(
@@ -323,9 +323,28 @@ final class HysteriaXLiveUITests: XCTestCase {
 
     private func acknowledgeNotice(_ app: XCUIApplication) {
         let ok = button(app, "好")
-        if ok.waitForExistence(timeout: 10) {
+        if ok.waitForExistence(timeout: 1) {
             ok.click()
         }
+    }
+
+    private func waitForActionFeedback(_ app: XCUIApplication) {
+        let toast = identified(app, "app.toast")
+        let ok = button(app, "好")
+        let deadline = Date().addingTimeInterval(15)
+        while Date() < deadline {
+            if toast.exists {
+                let dismiss = identified(app, "app.toast.dismiss")
+                if dismiss.exists && dismiss.isHittable { dismiss.click() }
+                return
+            }
+            if ok.exists {
+                ok.click()
+                return
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.15))
+        }
+        XCTFail("Expected toast or alert feedback after action.")
     }
 
     private func button(_ app: XCUIApplication, _ title: String) -> XCUIElement {

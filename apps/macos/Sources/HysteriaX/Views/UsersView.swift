@@ -105,16 +105,23 @@ private struct UserDirectoryView: View {
                             .accessibilityIdentifier("users.row.\(user.id)")
                     }
                     TableColumn(L10n.text("状态")) { user in
-                        Text(user.enabled ? L10n.text("启用") : L10n.text("已停用"))
-                            .accessibilityLabel(user.enabled ? L10n.text("启用") : L10n.text("已停用"))
-                            .accessibilityIdentifier("users.status.\(user.id)")
+                        StatusBadge(
+                            user.enabled ? L10n.text("启用") : L10n.text("已停用"),
+                            tone: user.enabled ? .positive : .neutral,
+                            size: .compact
+                        )
+                        .accessibilityLabel(user.enabled ? L10n.text("启用") : L10n.text("已停用"))
+                        .accessibilityIdentifier("users.status.\(user.id)")
                     }
                     TableColumn(L10n.text("用量 / 额度")) { user in
                         QuotaProgressView(usageBytes: user.usageBytes, quotaBytes: user.quotaBytes)
                     }
                     .width(min: 180, ideal: 220)
-                    TableColumn(L10n.text("节点")) { user in Text("\(user.assignments.count)") }
-                    TableColumn(L10n.text("到期")) { user in Text(user.expiresAt.map { DateDisplayText.local($0) } ?? L10n.text("不限")) }
+                    TableColumn(L10n.text("节点")) { user in Text("\(user.assignments.count)").monospacedDigit() }
+                    TableColumn(L10n.text("到期")) { user in
+                        Text(user.expiresAt.map { DateDisplayText.local($0) } ?? L10n.text("不限"))
+                            .monospacedDigit()
+                    }
                 }
                 .frame(minHeight: 180)
                 .overlay {
@@ -130,8 +137,21 @@ private struct UserDirectoryView: View {
                         }
                     }
                 }
-                Divider()
-                paginationControls
+                ListPaginationBar(
+                    summary: (currentPageResponse != nil || !store.isConnected)
+                        ? L10n.text("共 {0} 个用户 · 第 {1} / {2} 页", String(totalUsers), String(currentPage), String(pageCount))
+                        : nil,
+                    page: currentPage,
+                    pageCount: pageCount,
+                    pageSize: $pageState.userPageSize,
+                    isLoading: isLoadingPage,
+                    isOffline: !store.isConnected,
+                    error: pageError,
+                    onRetry: { loadedPageKey = nil; retryPageToken = UUID() },
+                    canNavigate: !store.isConnected || currentPageResponse != nil,
+                    identifierPrefix: "users",
+                    onSelectPage: { changePage($0) }
+                )
             }
         } detail: {
             if let user = selectedUser {
@@ -208,39 +228,6 @@ private struct UserDirectoryView: View {
         } message: { Text(alertMessage ?? "") }
     }
 
-    private var paginationControls: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            if let pageError {
-                HStack {
-                    Text(pageError).foregroundStyle(.red).textSelection(.enabled)
-                    Button(L10n.text("重试")) { loadedPageKey = nil; retryPageToken = UUID() }
-                }.font(.caption)
-            }
-            HStack(spacing: 12) {
-                if !store.isConnected {
-                    Label(L10n.text("离线快照"), systemImage: "wifi.slash").foregroundStyle(.secondary)
-                }
-                if currentPageResponse != nil || !store.isConnected {
-                    Text(L10n.text("共 {0} 个用户 · 第 {1} / {2} 页", String(totalUsers), String(currentPage), String(pageCount)))
-                        .foregroundStyle(.secondary).monospacedDigit()
-                }
-                if isLoadingPage { ProgressView().controlSize(.small) }
-                Spacer(minLength: 0)
-                Picker(L10n.text("每页条数"), selection: $pageState.userPageSize) {
-                    ForEach([25, 50, 100], id: \.self) { Text(String($0)).tag($0) }
-                }.fixedSize().accessibilityIdentifier("users.pageSize")
-                Button(L10n.text("上一页")) { changePage(currentPage - 1) }
-                    .disabled(currentPage <= 1 || isLoadingPage || (store.isConnected && currentPageResponse == nil))
-                    .accessibilityIdentifier("users.previousPage")
-                Button(L10n.text("下一页")) { changePage(currentPage + 1) }
-                    .disabled(currentPage >= pageCount || isLoadingPage || (store.isConnected && currentPageResponse == nil))
-                    .accessibilityIdentifier("users.nextPage")
-            }.font(.callout)
-        }
-        .padding(.horizontal, 12).padding(.vertical, 8)
-        .accessibilityIdentifier("users.pagination")
-    }
-
     private func changePage(_ page: Int) {
         pageState.userPage = page
         pageState.selectedUserID = nil
@@ -280,20 +267,20 @@ private struct UserDirectoryView: View {
 
     private func userDetailPane(_ user: UserSummary) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            VStack(alignment: .leading, spacing: 14) {
-                DetailHeaderLayout {
-                    userDetailTitle(user)
-                    userDetailActions(user)
-                }
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), alignment: .leading)], alignment: .leading, spacing: 12) {
-                    userMetric(L10n.text("已用流量"), value: formatBytes(user.usageBytes))
-                    userMetric(L10n.text("流量额度"), value: user.quotaBytes.map(formatBytes) ?? L10n.text("不限"))
-                    userMetric(L10n.text("到期时间"), value: user.expiresAt.map { DateDisplayText.local($0) } ?? L10n.text("不限"))
-                    userMetric(L10n.text("有效节点"), value: L10n.text("{0} 个", String(describing: (user.assignments.count))))
+            DetailHeaderBar {
+                VStack(alignment: .leading, spacing: 14) {
+                    DetailHeaderLayout {
+                        userDetailTitle(user)
+                        userDetailActions(user)
+                    }
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), alignment: .leading)], alignment: .leading, spacing: 12) {
+                        userMetric(L10n.text("已用流量"), value: formatBytes(user.usageBytes))
+                        userMetric(L10n.text("流量额度"), value: user.quotaBytes.map(formatBytes) ?? L10n.text("不限"))
+                        userMetric(L10n.text("到期时间"), value: user.expiresAt.map { DateDisplayText.local($0) } ?? L10n.text("不限"))
+                        userMetric(L10n.text("有效节点"), value: L10n.text("{0} 个", String(describing: (user.assignments.count))))
+                    }
                 }
             }
-            .padding(16)
-            Divider()
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     OverviewColumnsLayout(wideColumns: 2, wideMinimum: 576, narrowColumns: 1) {
@@ -328,7 +315,7 @@ private struct UserDirectoryView: View {
                     }
                     DisclosureGroup(L10n.text("用户记录")) {
                         LazyVGrid(columns: [GridItem(.adaptive(minimum: 200), alignment: .leading)], alignment: .leading, spacing: 12) {
-                            userMetric(L10n.text("用户 ID"), value: user.id)
+                            userMetric(L10n.text("用户 ID"), value: user.id, copyable: true)
                             userMetric(L10n.text("创建时间"), value: DateDisplayText.local(user.createdAt))
                             userMetric(L10n.text("更新时间"), value: DateDisplayText.local(user.updatedAt))
                         }
@@ -348,11 +335,10 @@ private struct UserDirectoryView: View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(alignment: .firstTextBaseline, spacing: 10) {
                 Text(user.name).font(.headline).lineLimit(2).textSelection(.enabled)
-                Text(user.enabled ? L10n.text("启用") : L10n.text("已停用"))
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(user.enabled ? Color.green : Color.secondary)
-                    .padding(.horizontal, 8).padding(.vertical, 3)
-                    .background(.quaternary, in: Capsule())
+                StatusBadge(
+                    user.enabled ? L10n.text("启用") : L10n.text("已停用"),
+                    tone: user.enabled ? .positive : .neutral
+                )
             }
             Text(L10n.text("{0} 个节点", String(describing: (user.assignments.count))))
                 .font(.caption).foregroundStyle(.secondary)
@@ -363,45 +349,48 @@ private struct UserDirectoryView: View {
 
     private func userDetailActions(_ user: UserSummary) -> some View {
         HStack(spacing: 8) {
-
+            HStack(spacing: 8) {
                 Button(L10n.text("管理授权组…"), systemImage: "person.3") { membershipUser = user }
                     .accessibilityIdentifier("users.manageAuthorizationGroups")
 
-            Button(L10n.text("托管证书…"), systemImage: "checkmark.shield") { certificateUser = user }
-                .accessibilityIdentifier("users.managedCertificates")
-            Menu(L10n.text("订阅")) {
-                Button(L10n.text("选择模板与目标平台…")) { subscriptionUser = user }
-                    .accessibilityIdentifier("users.subscription.copy")
-                ForEach([SubscriptionFileFormat.uri, .base64], id: \.rawValue) { format in
-                    Button(format.title) { copyCurrentSubscription(user, format: format) }
+                Button(L10n.text("托管证书…"), systemImage: "checkmark.shield") { certificateUser = user }
+                    .accessibilityIdentifier("users.managedCertificates")
+                Menu(L10n.text("订阅")) {
+                    Button(L10n.text("选择模板与目标平台…")) { subscriptionUser = user }
+                        .accessibilityIdentifier("users.subscription.copy")
+                    ForEach([SubscriptionFileFormat.uri, .base64], id: \.rawValue) { format in
+                        Button(format.title) { copyCurrentSubscription(user, format: format) }
+                    }
                 }
+                .accessibilityLabel(L10n.text("订阅"))
+                .accessibilityIdentifier("users.subscriptionMenu")
+                Menu(L10n.text("用户")) {
+                    Button(L10n.text("编辑用户…")) { showingEditUser = true }
+                        .accessibilityLabel(L10n.text("编辑用户"))
+                        .accessibilityIdentifier("users.actions.edit")
+                    Button(L10n.text("轮换连接与订阅凭据")) { rotateCredentials(user) }
+                        .accessibilityLabel(L10n.text("轮换连接与订阅凭据"))
+                        .accessibilityIdentifier("users.actions.rotateCredentials")
+                    Button(L10n.text("重置额度")) { resetQuota(user) }
+                        .accessibilityLabel(L10n.text("重置额度"))
+                        .accessibilityIdentifier("users.actions.resetQuota")
+                    Button(user.enabled ? L10n.text("停用") : L10n.text("启用")) { setEnabled(!user.enabled, for: user) }
+                        .accessibilityLabel(user.enabled ? L10n.text("停用") : L10n.text("启用"))
+                        .accessibilityIdentifier("users.actions.toggleEnabled")
+                    Divider()
+                    Button(L10n.text("删除用户…"), role: .destructive) { showingDeleteConfirmation = true }
+                        .foregroundStyle(.red)
+                        .accessibilityLabel(L10n.text("删除用户"))
+                        .accessibilityIdentifier("users.actions.delete")
+                }
+                .accessibilityLabel(L10n.text("用户操作"))
+                .accessibilityIdentifier("users.actionsMenu")
             }
-            .accessibilityLabel(L10n.text("订阅"))
-            .accessibilityIdentifier("users.subscriptionMenu")
-            Menu(L10n.text("用户")) {
-                Button(L10n.text("编辑用户…")) { showingEditUser = true }
-                    .accessibilityLabel(L10n.text("编辑用户"))
-                    .accessibilityIdentifier("users.actions.edit")
-                Button(L10n.text("轮换连接与订阅凭据")) { rotateCredentials(user) }
-                    .accessibilityLabel(L10n.text("轮换连接与订阅凭据"))
-                    .accessibilityIdentifier("users.actions.rotateCredentials")
-                Button(L10n.text("重置额度")) { resetQuota(user) }
-                    .accessibilityLabel(L10n.text("重置额度"))
-                    .accessibilityIdentifier("users.actions.resetQuota")
-                Button(user.enabled ? L10n.text("停用") : L10n.text("启用")) { setEnabled(!user.enabled, for: user) }
-                    .accessibilityLabel(user.enabled ? L10n.text("停用") : L10n.text("启用"))
-                    .accessibilityIdentifier("users.actions.toggleEnabled")
-                Divider()
-                Button(L10n.text("删除用户…"), role: .destructive) { showingDeleteConfirmation = true }
-                    .foregroundStyle(.red)
-                    .accessibilityLabel(L10n.text("删除用户"))
-                    .accessibilityIdentifier("users.actions.delete")
-            }
-            .accessibilityLabel(L10n.text("用户操作"))
-            .accessibilityIdentifier("users.actionsMenu")
+            .disabled(!store.isConnected)
+            Divider().frame(height: 16)
+            DetailCloseButton { pageState.selectedUserID = nil }
         }
         .fixedSize()
-        .disabled(!store.isConnected)
     }
 
     private func userQuota(_ user: UserSummary) -> some View {
@@ -492,10 +481,15 @@ private struct UserDirectoryView: View {
         }
     }
 
-    private func userMetric(_ title: String, value: String) -> some View {
+    private func userMetric(_ title: String, value: String, copyable: Bool = false) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title).font(.caption).foregroundStyle(.secondary)
-            Text(value).font(.callout).textSelection(.enabled)
+            HStack(spacing: 4) {
+                Text(value).font(.callout).textSelection(.enabled)
+                if copyable {
+                    CopyActionButton(value: value, toast: store.toast)
+                }
+            }
         }
     }
 
@@ -524,8 +518,12 @@ private struct UserDirectoryView: View {
                 panel.allowedContentTypes = [UTType(filenameExtension: format.fileExtension) ?? .plainText]
                 guard panel.runModal() == .OK, let destination = panel.url else { return }
                 try data.write(to: destination, options: .atomic)
-                alertTitle = L10n.text("配置已导出")
-                alertMessage = L10n.text("{0} 已保存到所选位置。该文件包含连接凭据，请妥善保管。", String(describing: (format.title)))
+                store.toast.show(
+                    L10n.text("配置已导出"),
+                    detail: L10n.text("{0} 已保存到所选位置。该文件包含连接凭据，请妥善保管。", String(describing: (format.title))),
+                    tone: .positive,
+                    duration: .seconds(5)
+                )
             } catch { showError(error) }
         }
     }
@@ -534,7 +532,12 @@ private struct UserDirectoryView: View {
         Task {
             do {
                 let credentials = try await store.rotateCredentials(for: user)
-                copy(credentials, message: L10n.text("新连接密码已复制；旧连接密码和旧订阅地址均已撤销，请重新复制订阅地址并更新客户端。"))
+                copy(
+                    credentials,
+                    message: L10n.text("新连接密码已复制；旧连接密码和旧订阅地址均已撤销，请重新复制订阅地址并更新客户端。"),
+                    tone: .warning,
+                    duration: .seconds(6)
+                )
             } catch { showError(error) }
         }
     }
@@ -543,8 +546,11 @@ private struct UserDirectoryView: View {
         Task {
             do {
                 try await store.resetQuota(for: user)
-                alertTitle = L10n.text("额度已重置")
-                alertMessage = L10n.text("新的额度周期已从零开始。")
+                store.toast.show(
+                    L10n.text("额度已重置"),
+                    detail: L10n.text("新的额度周期已从零开始。"),
+                    tone: .positive
+                )
             } catch { showError(error) }
         }
     }
@@ -553,8 +559,11 @@ private struct UserDirectoryView: View {
         Task {
             do {
                 try await store.setEnabled(enabled, for: user)
-                alertTitle = enabled ? L10n.text("用户已启用") : L10n.text("用户已停用")
-                alertMessage = enabled ? L10n.text("用户可以重新连接。") : L10n.text("已拒绝新认证，并排队踢下线。")
+                store.toast.show(
+                    enabled ? L10n.text("用户已启用") : L10n.text("用户已停用"),
+                    detail: enabled ? L10n.text("用户可以重新连接。") : L10n.text("已拒绝新认证，并排队踢下线。"),
+                    tone: enabled ? .positive : .warning
+                )
             } catch { showError(error) }
         }
     }
@@ -564,6 +573,7 @@ private struct UserDirectoryView: View {
             do {
                 try await store.delete(user)
                 pageState.selectedUserID = nil
+                store.toast.show(L10n.text("用户已删除"), detail: user.name, tone: .neutral)
             } catch { showError(error) }
         }
     }
@@ -665,11 +675,16 @@ private struct UserDirectoryView: View {
         store.nodes.first(where: { $0.id == nodeID })?.name ?? String(nodeID.prefix(8))
     }
 
-    private func copy(_ value: String, message: String) {
+    private func copy(_ value: String, message: String, tone: StatusTone = .positive, duration: Duration = .seconds(3.5)) {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(value, forType: .string)
-        alertTitle = L10n.text("已复制到剪贴板")
-        alertMessage = message
+        store.toast.show(
+            L10n.text("已复制到剪贴板"),
+            detail: message,
+            tone: tone,
+            symbol: "doc.on.doc",
+            duration: duration
+        )
     }
 
     private func showError(_ error: Error) {
@@ -718,7 +733,10 @@ private struct UserFormView: View {
             HStack {
                 Button(L10n.text("取消")) { dismiss() }.keyboardShortcut(.cancelAction)
                 Spacer()
-                Button(isSaving ? L10n.text("正在保存…") : L10n.text("创建用户")) { save() }.disabled(isSaving).keyboardShortcut(.defaultAction)
+                Button(isSaving ? L10n.text("正在保存…") : L10n.text("创建用户")) { save() }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(isSaving)
+                    .keyboardShortcut(.defaultAction)
             }
         }
         .padding(24)
@@ -807,6 +825,7 @@ private struct UserEditFormView: View {
                 Button(L10n.text("取消")) { dismiss() }.keyboardShortcut(.cancelAction)
                 Spacer()
                 Button(isSaving ? L10n.text("正在保存…") : L10n.text("保存用户")) { save() }
+                    .buttonStyle(.borderedProminent)
                     .disabled(isSaving || !store.isConnected)
                     .keyboardShortcut(.defaultAction)
             }

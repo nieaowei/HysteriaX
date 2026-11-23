@@ -41,6 +41,10 @@
 		000000000000000000002C00 /* Localization.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001C00; };
 		000000000000000000002C01 /* Localizable.strings in Resources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001C01; };
 		000000000000000000002B03 /* Views/DetailHeaderLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001B03 /* Views/DetailHeaderLayout.swift */; };
+		F12000000000000000000002 /* Views/StatusBadge.swift in Sources */ = {isa = PBXBuildFile; fileRef = F12000000000000000000001 /* Views/StatusBadge.swift */; };
+		F12000000000000000000004 /* Views/ToastFeedback.swift in Sources */ = {isa = PBXBuildFile; fileRef = F12000000000000000000003 /* Views/ToastFeedback.swift */; };
+		F12000000000000000000006 /* Views/ListPaginationBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = F12000000000000000000005 /* Views/ListPaginationBar.swift */; };
+		F12000000000000000000008 /* Views/DetailPaneChrome.swift in Sources */ = {isa = PBXBuildFile; fileRef = F12000000000000000000007 /* Views/DetailPaneChrome.swift */; };
 		000000000000000000002B02 /* Models/NodeTaskFeedback.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001B02 /* Models/NodeTaskFeedback.swift */; };
 		000000000000000000002B01 /* Views/DNSRecordDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001B01 /* Views/DNSRecordDetailView.swift */; };
 		7C78671F3CC4403BA2F4EB65 /* Views/DNSRecordAppearance.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63A415D8C64E4A67A79D058C /* Views/DNSRecordAppearance.swift */; };
@@ -157,6 +161,10 @@
 		000000000000000000001C02 = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = en; path = Resources/en.lproj/Localizable.strings; sourceTree = "<group>"; };
 		000000000000000000001C03 = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = "zh-Hans"; path = "Resources/zh-Hans.lproj/Localizable.strings"; sourceTree = "<group>"; };
 		000000000000000000001B03 /* Views/DetailHeaderLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/DetailHeaderLayout.swift; sourceTree = "<group>"; };
+		F12000000000000000000001 /* Views/StatusBadge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/StatusBadge.swift; sourceTree = "<group>"; };
+		F12000000000000000000003 /* Views/ToastFeedback.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/ToastFeedback.swift; sourceTree = "<group>"; };
+		F12000000000000000000005 /* Views/ListPaginationBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/ListPaginationBar.swift; sourceTree = "<group>"; };
+		F12000000000000000000007 /* Views/DetailPaneChrome.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/DetailPaneChrome.swift; sourceTree = "<group>"; };
 		000000000000000000001B02 /* Models/NodeTaskFeedback.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models/NodeTaskFeedback.swift; sourceTree = "<group>"; };
 		000000000000000000001B01 /* Views/DNSRecordDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/DNSRecordDetailView.swift; sourceTree = "<group>"; };
 		63A415D8C64E4A67A79D058C /* Views/DNSRecordAppearance.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/DNSRecordAppearance.swift; sourceTree = "<group>"; };
@@ -348,6 +356,10 @@
 				63A415D8C64E4A67A79D058C /* Views/DNSRecordAppearance.swift */,
 				000000000000000000001B02 /* Models/NodeTaskFeedback.swift */,
 				000000000000000000001B03 /* Views/DetailHeaderLayout.swift */,
+				F12000000000000000000001 /* Views/StatusBadge.swift */,
+				F12000000000000000000003 /* Views/ToastFeedback.swift */,
+				F12000000000000000000005 /* Views/ListPaginationBar.swift */,
+				F12000000000000000000007 /* Views/DetailPaneChrome.swift */,
 				000000000000000000001B00 /* Views/MainVerticalSplitView.swift */,
 				000000000000000000001007 /* Views/JobsView.swift */,
 				F03400000000000000000005 /* Services/ManagementEvent.swift */,
@@ -548,6 +560,10 @@
 				7C78671F3CC4403BA2F4EB65 /* Views/DNSRecordAppearance.swift in Sources */,
 				000000000000000000002B02 /* Models/NodeTaskFeedback.swift in Sources */,
 				000000000000000000002B03 /* Views/DetailHeaderLayout.swift in Sources */,
+				F12000000000000000000002 /* Views/StatusBadge.swift in Sources */,
+				F12000000000000000000004 /* Views/ToastFeedback.swift in Sources */,
+				F12000000000000000000006 /* Views/ListPaginationBar.swift in Sources */,
+				F12000000000000000000008 /* Views/DetailPaneChrome.swift in Sources */,
 				000000000000000000002B00 /* Views/MainVerticalSplitView.swift in Sources */,
 				000000000000000000002007 /* Views/JobsView.swift in Sources */,
 				F03400000000000000000006 /* Services/ManagementEvent.swift in Sources */,

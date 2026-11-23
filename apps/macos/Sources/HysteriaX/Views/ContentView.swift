@@ -1,7 +1,11 @@
 import SwiftUI
 
 private enum MainSection: String, CaseIterable, Identifiable {
-    case overview, nodes, dns, users, credentials, templates, jobs, audit
+    case overview, nodes, dns, credentials, users, templates, jobs, audit
+
+    static let monitoringSections: [MainSection] = [.overview]
+    static let infrastructureSections: [MainSection] = [.nodes, .dns, .credentials]
+    static let operationsSections: [MainSection] = [.users, .templates, .jobs, .audit]
 
     var id: String { rawValue }
     var title: String {
@@ -99,37 +103,136 @@ struct ContentView: View {
         }
     }
 
+    private var serviceHost: String? {
+        guard !store.serviceAddress.isEmpty else { return nil }
+        return URL(string: store.serviceAddress)?.host ?? store.serviceAddress
+    }
+
+    private var connectionStatusText: String {
+        if store.isConnected { return L10n.text("服务已连接") }
+        if store.isLoading && store.hasConfiguredService { return L10n.text("正在连接…") }
+        return L10n.text("服务未连接")
+    }
+
+    private func sidebarBadge(for section: MainSection) -> (count: Int, tone: StatusTone)? {
+        switch section {
+        case .overview:
+            let count = store.overview?.issues.count ?? 0
+            return count > 0 ? (count, .warning) : nil
+        case .nodes:
+            let count = Int(store.overview?.attentionNodes ?? 0)
+            return count > 0 ? (count, .warning) : nil
+        case .credentials:
+            let count = store.clientSummary?.notificationCredentials.count ?? 0
+            return count > 0 ? (count, .warning) : nil
+        case .jobs:
+            guard let overview = store.overview else { return nil }
+            let active = Int(overview.queuedJobs + overview.runningJobs)
+            if active > 0 { return (active, .active) }
+            let failed = Int(overview.failedJobs24h)
+            return failed > 0 ? (failed, .warning) : nil
+        case .dns, .users, .templates, .audit:
+            return nil
+        }
+    }
+
+    @ViewBuilder
+    private func sidebarRow(_ section: MainSection) -> some View {
+        HStack(spacing: 8) {
+            Label {
+                Text(section.title)
+            } icon: {
+                Image(systemName: section.symbol)
+                    .foregroundStyle(section.iconColor)
+            }
+            Spacer(minLength: 4)
+            if let badge = sidebarBadge(for: section) {
+                SidebarCountBadge(count: badge.count, tone: badge.tone)
+            }
+        }
+        .contentShape(Rectangle())
+        .tag(section.rawValue)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(section.title)
+        .accessibilityIdentifier("sidebar.\(section.rawValue)")
+    }
+
     var body: some View {
         NavigationSplitView {
             List(selection: selection) {
-                ForEach(MainSection.allCases) { section in
-                    Label {
-                        Text(section.title)
-                    } icon: {
-                        Image(systemName: section.symbol)
-                            .foregroundStyle(section.iconColor)
-                    }
-                        .tag(section.rawValue)
-                        .accessibilityLabel(section.title)
-                        .accessibilityIdentifier("sidebar.\(section.rawValue)")
+                Section(L10n.text("监控")) {
+                    ForEach(MainSection.monitoringSections) { sidebarRow($0) }
+                }
+                Section(L10n.text("基础设施")) {
+                    ForEach(MainSection.infrastructureSections) { sidebarRow($0) }
+                }
+                Section(L10n.text("访问与运维")) {
+                    ForEach(MainSection.operationsSections) { sidebarRow($0) }
                 }
             }
             .listStyle(.sidebar)
-            .navigationSplitViewColumnWidth(min: 180, ideal: 210)
+            .navigationSplitViewColumnWidth(min: 185, ideal: 215)
             .safeAreaInset(edge: .bottom) {
-                HStack(spacing: 8) {
-                    Circle().fill(store.isConnected ? Color.green : Color.secondary).frame(width: 8, height: 8)
-                    Text(store.isConnected ? L10n.text("服务已连接") : L10n.text("服务未连接"))
-                        .font(.caption).foregroundStyle(.secondary)
-                    Spacer()
-                    Button { openSettings() } label: { Image(systemName: "gearshape") }
-                        .buttonStyle(.plain).help(L10n.text("管理服务设置"))
+                VStack(spacing: 0) {
+                    Divider()
+                    HStack(spacing: 8) {
+                        Group {
+                            if store.isLoading && !store.isConnected && store.hasConfiguredService {
+                                ProgressView()
+                                    .controlSize(.mini)
+                            } else {
+                                Circle()
+                                    .fill(store.isConnected ? Color.green : (store.hasConfiguredService ? Color.orange : Color.secondary))
+                                    .frame(width: 8, height: 8)
+                            }
+                        }
+                        .frame(width: 12, height: 12)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(connectionStatusText)
+                                .font(.caption.weight(.medium))
+                                .foregroundStyle(store.isConnected ? .primary : .secondary)
+                                .lineLimit(1)
+                            if let host = serviceHost {
+                                Text(host)
+                                    .font(.caption2)
+                                    .foregroundStyle(.tertiary)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                            }
+                        }
+                        Spacer(minLength: 4)
+                        if !store.isConnected && store.hasConfiguredService && !store.isLoading {
+                            Button {
+                                Task { await store.refresh(); store.requestOverviewHistoryRefresh() }
+                            } label: {
+                                Image(systemName: "arrow.clockwise")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .buttonStyle(.plain)
+                            .help(L10n.text("重新连接"))
+                            .accessibilityLabel(L10n.text("重新连接"))
+                            .accessibilityIdentifier("sidebar.reconnect")
+                        }
+                        Button { openSettings() } label: {
+                            Image(systemName: "gearshape")
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                        .help(L10n.text("管理服务设置"))
+                        .accessibilityLabel(L10n.text("管理服务设置"))
+                        .accessibilityIdentifier("sidebar.settings")
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .help(store.serviceAddress.isEmpty ? L10n.text("打开设置以连接管理服务") : store.serviceAddress)
                 }
-                .padding(.horizontal, 14).padding(.vertical, 10)
+                .background(.bar)
             }
         } detail: {
             detail
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .toastOverlay(store.toast)
                 .accessibilityElement(children: .contain)
                 .accessibilityIdentifier(currentSection.pageAccessibilityIdentifier)
                 .navigationTitle(currentSection.pageTitle)
@@ -139,6 +242,8 @@ struct ContentView: View {
                         Button { Task { await store.refresh(); store.requestOverviewHistoryRefresh() } } label: {
                             Label(L10n.text("刷新"), systemImage: "arrow.clockwise")
                         }
+                        .keyboardShortcut("r", modifiers: .command)
+                        .help(L10n.text("刷新"))
                         .disabled(store.isLoading)
                     }
                 }
@@ -169,7 +274,7 @@ struct ContentView: View {
     private var detail: some View {
         switch currentSection {
         case .overview: OverviewView(store: store) { destination in
-            overviewDestination = destination
+            overviewDestination = destination.entityID.isEmpty ? nil : destination
             selectedSection = destination.section
         }
         case .nodes: NodesView(store: store, initialSelection: overviewDestination?.section == "nodes" ? overviewDestination?.entityID : nil, onInitialSelectionHandled: { overviewDestination = nil }, onOpenJob: { jobID in

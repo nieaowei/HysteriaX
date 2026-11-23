@@ -57,7 +57,7 @@ struct OverviewView: View {
 
     private func tabLabel(_ title: String, symbol: String, id: String) -> some View {
         Label(title, systemImage: symbol)
-            .labelStyle(.iconOnly)
+            .labelStyle(.titleAndIcon)
             .help(title)
             .accessibilityLabel(title)
             .accessibilityIdentifier("overview.tab.\(id)")
@@ -99,16 +99,31 @@ struct OverviewView: View {
             if store.jobs.isEmpty {
                 Text(L10n.text("暂无任务")).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 8)
             } else {
-                VStack(spacing: 0) {
+                VStack(spacing: 2) {
                     ForEach(store.jobs.prefix(5)) { job in
-                        HStack {
-                            Image(systemName: job.status == "failed" ? "exclamationmark.circle" : "checkmark.circle")
-                                .foregroundStyle(job.status == "failed" ? .orange : .secondary)
-                            Button(JobDisplayText.kind(job.kind)) { navigate(OverviewDestination(section: "jobs", entityID: job.id)) }.buttonStyle(.plain).fontWeight(.medium).accessibilityIdentifier("overview.job.\(job.id)")
-                            Spacer()
-                            Text(JobDisplayText.stage(job.stage)).foregroundStyle(.secondary).lineLimit(1)
-                            Text(JobDisplayText.status(job.status)).foregroundStyle(.secondary).frame(width: 60, alignment: .trailing)
-                        }.padding(.vertical, 8)
+                        Button {
+                            navigate(OverviewDestination(section: "jobs", entityID: job.id))
+                        } label: {
+                            HStack(spacing: 8) {
+                                Image(systemName: job.status == "failed" ? "exclamationmark.circle" : "checkmark.circle")
+                                    .foregroundStyle(job.status == "failed" ? .orange : .secondary)
+                                Text(JobDisplayText.kind(job.kind))
+                                    .fontWeight(.medium)
+                                    .lineLimit(1)
+                                Spacer(minLength: 4)
+                                Text(JobDisplayText.stage(job.stage))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                                StatusBadge(JobDisplayText.status(job.status), tone: JobStatusTone.tone(for: job.status), size: .compact)
+                            }
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 6)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .interactiveRowHover()
+                        .accessibilityIdentifier("overview.job.\(job.id)")
                         if job.id != store.jobs.prefix(5).last?.id { Divider() }
                     }
                 }
