@@ -31,4 +31,4 @@ ruby scripts/generate/generate-swift-api-models.rb --check
 
 诊断测试使用独立 `CARGO_TARGET_DIR`，或先对冻结上下文执行 `cargo clean -p sqlx-core`；不要在多个补丁版本之间直接相信共享目标目录中的旧产物。生成的诊断 Dockerfile 会在构建前清理 sqlx-core 的 release 产物，确保重新编译已核验的补丁源码。
 
-`ops/compare-production-pool.py` 是当前生产拓扑的有界 32/48/64 交叉对照入口，锁定既有已验证诊断镜像、六节点和 16 并发配置，不是通用部署工具。在 API 宿主机使用 `--root`、`--output` 指定现有部署与不存在的证据目录；完成在线快照后，控制端须下载并核验 `backup.json` 所记 SHA256，再把该摘要写入证据目录的 `backup-local-verified` 才开始切换。默认每档预热至少 180 秒、观察三个完整分钟；按正反顺序各执行一次，逐次排空 API，最终恢复原镜像与实际配置。可先用 `--prepare-only` 保存准备结果，再用 `--resume-prepared` 在原 API 与配置仍保持时继续；已开始的对照不能续跑。创建证据目录的 `STOP` 文件可结束观察并进入恢复。具体限制、结果和人工恢复时所需的原配置见 [0035](../docs/plans/0035-pool-size-comparison.md)。
+`ops/compare-production-pool.py` 是当前生产拓扑的有界 32/48/64 交叉对照入口，锁定既有已验证诊断镜像、六节点和 16 并发配置，不是通用部署工具。在 API 宿主机使用 `--root`、`--output` 指定现有部署与不存在的证据目录；完成在线快照后，控制端须下载并核验 `backup.json` 所记 SHA256，再把该摘要写入证据目录的 `backup-local-verified` 才开始切换。默认每档预热至少 180 秒、观察三个完整分钟；按正反顺序各执行一次，逐次排空 API，最终恢复原镜像与实际配置。可先用 `--prepare-only` 保存准备结果，再用 `--resume-prepared` 在原 API 与配置仍保持时继续；已开始的对照不能续跑。创建证据目录的 `STOP` 文件可结束观察并进入恢复。

@@ -35,7 +35,7 @@ go -C tests/integration/traffic-clear test -count=1 ./...
 
 Rust 数据库测试需要可丢弃 PostgreSQL 的 `TEST_DATABASE_URL`；Redis 专项另需 `TEST_REDIS_URL`。全量调试构建沿用 16 MiB 测试线程栈，既有 mTLS 深层异步调用测试可能在默认栈下溢出；此设置仅作用于测试进程，不修改发布服务的线程栈。保留测试输出中的忽略项和失败，不把部分完成记为全量通过。上述是运行入口，不代表本次已经执行或通过。
 
-调度器或后台任务 future 结构改动还需验证完整发布镜像的默认线程栈：`python3 tests/integration/verify-maintenance-startup.py --image <本地 linux/amd64 镜像> --output <新证据目录>`。该入口在带专属标签的内部 Docker 网络中创建 PostgreSQL/Redis，显式初始化测试库后启动完整服务；不设置 `RUST_MIN_STACK`，默认运行 330 秒以覆盖 300 秒维护兜底，随后验证三类采样排空、零重启和退出码 0。仅删除本次夹具并保留日志、inspect 和结果。大栈下的模块测试不能替代这个检查；空节点夹具及本机架构模拟也不能替代生产稳定观察。栈修复和发布记录见 [0039](plans/0039-deploy-maintenance-scheduler.md)。
+调度器或后台任务 future 结构改动还需验证完整发布镜像的默认线程栈：`python3 tests/integration/verify-maintenance-startup.py --image <本地 linux/amd64 镜像> --output <新证据目录>`。该入口在带专属标签的内部 Docker 网络中创建 PostgreSQL/Redis，显式初始化测试库后启动完整服务；不设置 `RUST_MIN_STACK`，默认运行 330 秒以覆盖 300 秒维护兜底，随后验证三类采样排空、零重启和退出码 0。仅删除本次夹具并保留日志、inspect 和结果。大栈下的模块测试不能替代这个检查；空节点夹具及本机架构模拟也不能替代生产稳定观察。
 
 执行计划性能专项单独运行：
 
@@ -44,8 +44,6 @@ TEST_DATABASE_URL=postgresql://... bash tests/performance/verify-query-plans.sh
 ```
 
 该入口串行执行 3 个显式忽略的重型测试，检查搜索/分页索引、在线历史扫描路径和聚合脏区间扫描规模。常规 `cargo test --workspace` 保留业务结果和事务正确性回归，不默认运行这 3 项。脚本只选择这些性能用例，不会执行需要 SSH 或真实快照的其他忽略项。
-
-后台维护事务、空预检合并、受控归因和采集并发等一次性 A/B 对照已随实施完成移除，结论与当时入口见 [0026](plans/0026-maintenance-transaction-optimization.md)、[0030](plans/0030-sampling-concurrency-benchmark.md)、[0031](plans/0031-production-sampling-parallelism-16.md) 和 [0038](plans/0038-maintenance-poll-coalescing.md) 等实施记录。
 
 ## 全进程与部署专项
 

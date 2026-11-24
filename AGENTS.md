@@ -30,7 +30,7 @@ tests/
   requirements.txt             Python 测试依赖
 openapi/                       管理 API 契约源文件
 deploy/                        部署配置、节点脚本及许可资源
-production/                    本地生产维护、发布与诊断记录
+production/                    本地生产部署与维护说明
 docs/                          当前开发、业务及运维指南
   plans/                       按编号保存的实施记录
 .github/workflows/             CI 与发布工作流

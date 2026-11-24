@@ -33,8 +33,8 @@ bash apps/macos/Tests/runners/verify-localization.sh
 
 性能与功能验证分别调用。正式锁争用验收、快照容量和查询计划有独立规模、时长和环境要求，冒烟模式不能替代正式结果。环境要求及完整矩阵见 [部署与回归验证](../docs/deployment-testing.md)。构建、生成、运维和实际迁移工具见 [操作脚本索引](../scripts/README.md)。
 
-`python3 tests/performance/summarize-pool-comparison.py <本地证据目录>` 仅汇总已取回的生产池大小交叉观察，不连接生产。结果分开列出启动与稳定窗口、慢获取分段、就绪探测延迟、采集终态和资源消耗；阈值日志不构成全量 acquire 分布，三个完整周期的生产观察也不替代容量验收。执行与边界见 [0035](../docs/plans/0035-pool-size-comparison.md)。相关配置保存/失败恢复和时间边界测试可用 `python3 -m unittest discover -s tests/unit -p 'test_pool_comparison*.py'` 执行。
+`python3 tests/performance/summarize-pool-comparison.py <本地证据目录>` 仅汇总已取回的生产池大小交叉观察，不连接生产。结果分开列出启动与稳定窗口、慢获取分段、就绪探测延迟、采集终态和资源消耗；阈值日志不构成全量 acquire 分布，三个完整周期的生产观察也不替代容量验收。相关配置保存/失败恢复和时间边界测试可用 `python3 -m unittest discover -s tests/unit -p 'test_pool_comparison*.py'` 执行。执行条件与恢复流程见 [运维脚本索引](../scripts/README.md)。
 
-`TEST_DATABASE_URL=<可丢弃本地 PostgreSQL> RUST_MIN_STACK=16777216 cargo test --locked -p hysteriax-server node_limits::tests::background_idle_probes_at_target_cardinality_are_bounded -- --ignored --exact --nocapture --test-threads=1` 显式创建 10 万用户、1 万节点，验证采样周期成员冻结、空闲节点扫描使用到期索引，以及管理任务/采样过期/统计队列在该基数下的空闲路径。只做数据库与分页检查，不运行 SSH，也不证明采集容量。后台优化说明与同池对照见 [0042](../docs/plans/0042-background-idle-work-reduction.md)。
+`TEST_DATABASE_URL=<可丢弃本地 PostgreSQL> RUST_MIN_STACK=16777216 cargo test --locked -p hysteriax-server node_limits::tests::background_idle_probes_at_target_cardinality_are_bounded -- --ignored --exact --nocapture --test-threads=1` 显式创建 10 万用户、1 万节点，验证采样周期成员冻结、空闲节点扫描使用到期索引，以及管理任务/采样过期/统计队列在该基数下的空闲路径。只做数据库与分页检查，不运行 SSH，也不证明采集容量。
 
-`python3 tests/integration/verify-maintenance-startup.py --image <本地发布镜像> --output <新证据目录>` 在自管内部 Docker 网络与 PostgreSQL/Redis 上验证完整 linux/amd64 服务默认线程栈启动。默认运行 330 秒以覆盖 300 秒维护兜底，检查持续就绪、零重启和 SIGTERM 后三类采样排空、正常退出；只清理带本次专属标签的夹具，保留日志和 inspect 证据。测试验证 0048 自动删除一条到期采样工作，0049 启动 9 个 worker 并删除一条过期审计记录。该场景用于启动与功能验证。发布栈回归见 [0039](../docs/plans/0039-deploy-maintenance-scheduler.md)。
+`python3 tests/integration/verify-maintenance-startup.py --image <本地发布镜像> --output <新证据目录>` 在自管内部 Docker 网络与 PostgreSQL/Redis 上验证完整 linux/amd64 服务默认线程栈启动。默认运行 330 秒以覆盖 300 秒维护兜底，检查持续就绪、零重启和 SIGTERM 后三类采样排空、正常退出；只清理带本次专属标签的夹具，保留日志和 inspect 证据。测试验证 0048 自动删除一条到期采样工作，0049 启动 9 个 worker 并删除一条过期审计记录。该场景用于启动与功能验证。
