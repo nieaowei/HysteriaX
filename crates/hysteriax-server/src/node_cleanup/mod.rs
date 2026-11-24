@@ -77,6 +77,7 @@ struct History {
     id: &'static str,
     id_type: &'static str,
     source: Option<&'static str>,
+    nulls_last: bool,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -100,6 +101,7 @@ const HISTORY: &[History] = &[
         id: "id",
         id_type: "text",
         source: None,
+        nulls_last: false,
     },
     History {
         table: "traffic_sample_items",
@@ -107,6 +109,7 @@ const HISTORY: &[History] = &[
         id: "id",
         id_type: "text",
         source: None,
+        nulls_last: false,
     },
     History {
         table: "traffic_sample_batches",
@@ -114,6 +117,7 @@ const HISTORY: &[History] = &[
         id: "sample_id",
         id_type: "text",
         source: None,
+        nulls_last: false,
     },
     History {
         table: "node_network_samples",
@@ -121,6 +125,7 @@ const HISTORY: &[History] = &[
         id: "id",
         id_type: "bigint",
         source: None,
+        nulls_last: false,
     },
     History {
         table: "proxy_probe_samples",
@@ -128,6 +133,7 @@ const HISTORY: &[History] = &[
         id: "id",
         id_type: "bigint",
         source: None,
+        nulls_last: true,
     },
     History {
         table: "online_samples",
@@ -135,6 +141,7 @@ const HISTORY: &[History] = &[
         id: "id",
         id_type: "bigint",
         source: None,
+        nulls_last: true,
     },
     History {
         table: "traffic_minute_totals",
@@ -142,6 +149,7 @@ const HISTORY: &[History] = &[
         id: "source",
         id_type: "text",
         source: Some("users"),
+        nulls_last: false,
     },
     History {
         table: "traffic_minute_totals",
@@ -149,6 +157,7 @@ const HISTORY: &[History] = &[
         id: "source",
         id_type: "text",
         source: Some("network"),
+        nulls_last: false,
     },
     History {
         table: "traffic_hour_totals",
@@ -156,6 +165,7 @@ const HISTORY: &[History] = &[
         id: "source",
         id_type: "text",
         source: Some("users"),
+        nulls_last: false,
     },
     History {
         table: "traffic_hour_totals",
@@ -163,6 +173,7 @@ const HISTORY: &[History] = &[
         id: "source",
         id_type: "text",
         source: Some("network"),
+        nulls_last: false,
     },
     History {
         table: "probe_minute_totals",
@@ -170,6 +181,7 @@ const HISTORY: &[History] = &[
         id: "node_id",
         id_type: "text",
         source: None,
+        nulls_last: false,
     },
     History {
         table: "user_node_usage",
@@ -177,6 +189,7 @@ const HISTORY: &[History] = &[
         id: "user_id",
         id_type: "text",
         source: None,
+        nulls_last: false,
     },
 ];
 
@@ -454,8 +467,13 @@ async fn purge_batch_on(
         String::new()
     };
     let limit_parameter = if cursor.is_some() { "$4" } else { "$2" };
+    let nulls = if history.nulls_last {
+        " NULLS LAST"
+    } else {
+        ""
+    };
     let statement = format!(
-        "SELECT ctid::text AS location,{time} AS at_time,{id}::text AS cursor_id FROM {table} WHERE node_id=$1{source}{seek} ORDER BY {time} DESC,{id} DESC LIMIT {limit_parameter} FOR UPDATE",
+        "SELECT ctid::text AS location,{time} AS at_time,{id}::text AS cursor_id FROM {table} WHERE node_id=$1{source}{seek} ORDER BY {time} DESC{nulls},{id} DESC LIMIT {limit_parameter} FOR UPDATE",
         time = history.time,
         id = history.id,
         table = history.table

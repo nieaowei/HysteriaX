@@ -125,10 +125,12 @@ def main():
         assert 'maintenance poll summary' in raw and 'coalesced_empty=' in raw, 'Missing maintenance counters'
         assert raw.count('sampling retention worker started') == 1
         workers = [line for line in raw.splitlines() if 'history retention started' in line]
-        assert len(workers) == 9
+        assert len(workers) == 14
         for group, count in (('traffic-detail-retention', 4),
                              ('traffic-history-retention', 4),
-                             ('operations-history-retention', 1)):
+                             ('monitoring-history-retention', 4),
+                             ('operations-history-retention', 1),
+                             ('metadata-history-retention', 1)):
             assert sum(f'kind="{group}"' in line for line in workers) == count
         claims = [line for line in raw.splitlines() if 'sampling retention claim finished' in line]
         assert claims and all('failed=false' in line for line in claims), 'Retention worker did not complete'

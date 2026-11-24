@@ -209,10 +209,10 @@ async fn history_retention_restarts_legacy_observation_and_updates_audit_totals(
     .execute(&state.pool)
     .await
     .unwrap();
-    let group = GROUPS[2];
+    let group = GROUPS[3];
     let now = Utc::now();
     let mut cursors: Vec<_> = group.tasks.iter().map(|_| Cursor::default()).collect();
-    cursors[5].after = Some((now - TimeDelta::days(90), "old".into()));
+    cursors[10].after = Some((now - TimeDelta::days(90), "old".into()));
     maintenance::ensure(
         &state.pool,
         group.key,

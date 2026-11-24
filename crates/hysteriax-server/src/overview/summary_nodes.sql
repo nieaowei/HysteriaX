@@ -46,7 +46,7 @@ LEFT JOIN LATERAL (
 ) o ON true
 LEFT JOIN LATERAL (
     SELECT sampled_at, revision, status, external_status, connection_ms, latency_ms, reason
-    FROM proxy_probe_samples WHERE node_id = n.id ORDER BY sampled_at DESC NULLS LAST LIMIT 1
+    FROM proxy_probe_samples WHERE node_id = n.id ORDER BY sampled_at DESC NULLS LAST, id DESC LIMIT 1
 ) probe ON true
 LEFT JOIN monitoring_probe_state health ON health.node_id = n.id AND health.revision = probe.revision
 WHERE ($1::text[] IS NULL OR n.id=ANY($1))

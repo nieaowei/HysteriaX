@@ -14,6 +14,7 @@ use crate::{db, execution, state::AppState};
 
 use super::{maintenance, retention::RetentionCheckpoint};
 
+mod operational;
 mod operations;
 mod rows;
 
@@ -29,21 +30,39 @@ struct Group {
     key: &'static str,
     tasks: &'static [Task],
     sharded: bool,
+    traffic_gate: bool,
     schedule: &'static [usize],
 }
 
 #[derive(Clone, Copy)]
 enum Task {
     Rows(rows::Rule),
+    OnlineSamples,
+    TrafficBaselines,
     Publications,
     JobChains,
+    KickRequests,
+    ExecutionOperations,
+    ExecutionRecheckRequests,
+    NonSamplingWork,
+    ManagementReceipts,
+    MtlsOperations,
+    CacheTombstones,
+    OrphanResourceLeases,
+    OrphanJobNodeKickTotals,
+    CredentialBatches,
+    MtlsTrustCleanup,
+    MtlsDeploymentSnapshots,
+    MtlsActivations,
+    ConfigVersions,
 }
 
-const GROUPS: [Group; 3] = [
+const GROUPS: [Group; 5] = [
     Group {
         key: "traffic-detail-retention",
         tasks: &[Task::Rows(rows::ITEMS)],
         sharded: true,
+        traffic_gate: true,
         schedule: &[0],
     },
     Group {
@@ -52,24 +71,64 @@ const GROUPS: [Group; 3] = [
             Task::Rows(rows::RECORDS),
             Task::Rows(rows::NETWORK),
             Task::Rows(rows::BATCHES),
+            Task::Rows(rows::BATCHES_DISCARDED),
             Task::Rows(rows::GAPS),
+            Task::TrafficBaselines,
         ],
         sharded: true,
+        traffic_gate: true,
         // Ledger pages are larger. Give network history two turns per sweep.
-        schedule: &[0, 0, 1, 0, 0, 1, 0, 0, 2, 3],
+        schedule: &[0, 0, 1, 0, 0, 1, 0, 0, 2, 3, 4, 5],
+    },
+    Group {
+        key: "monitoring-history-retention",
+        tasks: &[Task::OnlineSamples, Task::Rows(rows::PROXY_PROBES)],
+        sharded: true,
+        traffic_gate: false,
+        schedule: &[0, 1],
     },
     Group {
         key: "operations-history-retention",
         tasks: &[
             Task::Rows(rows::INSTANCES),
             Task::Rows(rows::DEPLOYMENT_TOKENS),
+            Task::Rows(rows::MONITORING_TOKENS),
             Task::Publications,
             Task::Rows(rows::JOB_EVENTS),
+            Task::KickRequests,
+            Task::ExecutionOperations,
+            Task::ExecutionRecheckRequests,
             Task::JobChains,
+            Task::NonSamplingWork,
             Task::Rows(rows::AUDIT),
         ],
         sharded: false,
-        schedule: &[0, 1, 2, 3, 4, 5],
+        traffic_gate: false,
+        schedule: &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+    },
+    Group {
+        key: "metadata-history-retention",
+        tasks: &[
+            Task::ManagementReceipts,
+            Task::MtlsOperations,
+            Task::CacheTombstones,
+            Task::OrphanResourceLeases,
+            Task::OrphanJobNodeKickTotals,
+            Task::Rows(rows::USER_CREDENTIALS_REVOKED),
+            Task::Rows(rows::CREDENTIAL_APP_RECEIPTS),
+            Task::CredentialBatches,
+            Task::Rows(rows::DNS_OPERATIONS),
+            Task::Rows(rows::DNS_RECORDS_DELETED),
+            Task::Rows(rows::MTLS_NODE_OPERATIONS),
+            Task::Rows(rows::MTLS_ROTATIONS),
+            Task::MtlsTrustCleanup,
+            Task::MtlsDeploymentSnapshots,
+            Task::MtlsActivations,
+            Task::ConfigVersions,
+        ],
+        sharded: false,
+        traffic_gate: false,
+        schedule: &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
     },
 ];
 
@@ -77,16 +136,47 @@ impl Task {
     fn table(self) -> &'static str {
         match self {
             Self::Rows(rule) => rule.table,
+            Self::OnlineSamples => "online_samples",
+            Self::TrafficBaselines => "traffic_baselines",
             Self::Publications => "event_publications",
             Self::JobChains => "jobs",
+            Self::KickRequests => "kick_requests",
+            Self::ExecutionOperations => "execution_operations",
+            Self::ExecutionRecheckRequests => "execution_recheck_requests",
+            Self::NonSamplingWork => "background_work",
+            Self::ManagementReceipts => "management_receipts",
+            Self::MtlsOperations => "mtls_operations",
+            Self::CacheTombstones => "cache_entity_versions",
+            Self::OrphanResourceLeases => "resource_leases",
+            Self::OrphanJobNodeKickTotals => "job_node_kick_totals",
+            Self::CredentialBatches => "credential_batches",
+            Self::MtlsTrustCleanup => "mtls_trust_cleanup",
+            Self::MtlsDeploymentSnapshots => "mtls_deployment_snapshots",
+            Self::MtlsActivations => "mtls_activations",
+            Self::ConfigVersions => "config_versions",
         }
     }
 
     fn days(self) -> i64 {
         match self {
             Self::Rows(rule) => rule.days,
-            Self::Publications => 30,
-            Self::JobChains => 90,
+            Self::OnlineSamples => 31,
+            Self::TrafficBaselines => 60,
+            Self::Publications
+            | Self::KickRequests
+            | Self::NonSamplingWork
+            | Self::ManagementReceipts
+            | Self::MtlsOperations
+            | Self::CacheTombstones => 30,
+            Self::OrphanResourceLeases | Self::OrphanJobNodeKickTotals => 0,
+            Self::JobChains
+            | Self::ExecutionOperations
+            | Self::ExecutionRecheckRequests
+            | Self::CredentialBatches
+            | Self::MtlsTrustCleanup
+            | Self::MtlsDeploymentSnapshots
+            | Self::MtlsActivations
+            | Self::ConfigVersions => 90,
         }
     }
 
@@ -103,8 +193,50 @@ impl Task {
             Self::Rows(rule) => {
                 rows::page(connection, rule, cursor, cutoff, shard, batch_cutoff).await
             }
+            Self::OnlineSamples => {
+                operations::online_samples(connection, cursor, cutoff, shard).await
+            }
+            Self::TrafficBaselines => {
+                operational::traffic_baselines(connection, cursor, cutoff, shard).await
+            }
             Self::Publications => operations::publications(connection, cursor, cutoff).await,
             Self::JobChains => operations::job_chain(connection, cursor, cutoff).await,
+            Self::KickRequests => operational::kick_requests(connection, cursor, cutoff).await,
+            Self::ExecutionOperations => {
+                operational::execution_operations(connection, cursor, cutoff).await
+            }
+            Self::ExecutionRecheckRequests => {
+                operational::execution_recheck_requests(connection, cursor, cutoff).await
+            }
+            Self::NonSamplingWork => {
+                operational::non_sampling_work(connection, cursor, cutoff).await
+            }
+            Self::ManagementReceipts => {
+                operational::management_receipts(connection, cursor, cutoff).await
+            }
+            Self::MtlsOperations => operational::mtls_operations(connection, cursor, cutoff).await,
+            Self::CacheTombstones => {
+                operational::cache_tombstones(connection, cursor, cutoff).await
+            }
+            Self::OrphanResourceLeases => {
+                operational::orphan_resource_leases(connection, cursor, now).await
+            }
+            Self::OrphanJobNodeKickTotals => {
+                operational::orphan_job_node_kick_totals(connection, cursor, now).await
+            }
+            Self::CredentialBatches => {
+                operational::credential_batches(connection, cursor, cutoff).await
+            }
+            Self::MtlsTrustCleanup => {
+                operational::mtls_trust_cleanup(connection, cursor, cutoff).await
+            }
+            Self::MtlsDeploymentSnapshots => {
+                operational::mtls_deployment_snapshots(connection, cursor, cutoff).await
+            }
+            Self::MtlsActivations => {
+                operational::mtls_activations(connection, cursor, cutoff).await
+            }
+            Self::ConfigVersions => operational::config_versions(connection, cursor, cutoff).await,
         }
     }
 }
@@ -114,6 +246,8 @@ struct Cursor {
     after: Option<(DateTime<Utc>, String)>,
     #[serde(default)]
     sample: Option<String>,
+    #[serde(default)]
+    extra: Vec<String>,
     done: bool,
 }
 
@@ -130,14 +264,6 @@ struct Counts {
 }
 
 impl Counts {
-    fn for_page(page: &[Candidate]) -> Self {
-        Self {
-            scanned: page.len(),
-            oldest: page.first().map(|row| row.0),
-            ..Self::default()
-        }
-    }
-
     fn skip(&mut self, reason: &str, count: usize) {
         if count > 0 {
             *self.skipped.entry(reason.to_owned()).or_default() += count;
@@ -167,7 +293,9 @@ pub(crate) async fn run(state: AppState) {
             let shard = group.sharded.then_some(lane);
             let page_gates = page_gates.clone();
             workers.spawn(async move {
-                let page_gate = shard.map(|shard| &page_gates[usize::from(shard)]);
+                let page_gate = shard
+                    .filter(|_| group.traffic_gate)
+                    .map(|shard| &page_gates[usize::from(shard)]);
                 run_group(&state, group, shard, page_gate).await
             });
         }
@@ -421,5 +549,7 @@ async fn run_claim(
     Ok(())
 }
 
+#[cfg(test)]
+mod operational_tests;
 #[cfg(test)]
 mod tests;

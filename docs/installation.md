@@ -93,15 +93,17 @@ The worker checks every five minutes when idle and resumes a partial sweep after
 
 ## Database history retention
 
-The API starts all three database history cleanup groups automatically.
+The API starts five database history cleanup groups (14 worker lanes total) automatically.
 
-| Cleanup group | Data handled |
-| --- | --- |
-| Traffic detail | Fully settled capture details after 14 days. |
-| Traffic history | Traffic ledger, eligible network samples, settled batch headers and resolved gaps after 60 days. |
-| Operations history | Event replay after 30 days, eligible terminal jobs, job events and audit after 90 days, and expired instance or probe metadata. |
+| Cleanup group | Workers | Data handled |
+| --- | --- | --- |
+| Traffic detail | 4 (node-sharded, shared traffic gate) | Fully settled `traffic_sample_items` capture details after 14 days. |
+| Traffic history | 4 (node-sharded, shared traffic gate) | `traffic_records`, eligible `node_network_samples`, settled `traffic_sample_batches` (`complete` and `discarded`), resolved `data_gaps`, and unassigned `traffic_baselines` after 60 days. |
+| Monitoring history | 4 (sharded, independent gate) | `online_samples` (cycle-grouped by `cycle_id`) and `proxy_probe_samples` (by `node_id`) after 31 days. |
+| Operations history | 1 (unsharded) | Expired `deployment_probe_tokens` and `monitoring_probe_tokens` (0 days); inactive `service_instances`, `event_publications`, terminal `kick_requests`, and whitelisted terminal non-sampling `background_work` (30 days); eligible `execution_operations`, `execution_recheck_requests`, `jobs` retry chains, `job_events`, and `audit_records` (90 days). |
+| Metadata history | 1 (unsharded) | Released orphan `resource_leases` and zeroed orphan `job_node_kick_totals` (0 days); `management_receipts`, `mtls_operations`, and non-`quota_rank` `cache_entity_versions` tombstones (30 days); revoked `user_credentials`, `credential_application_receipts`, `credential_batches`, `dns_operations`, deleted `dns_records`, `mtls_node_operations`, terminal `mtls_rotations`, completed `mtls_trust_cleanup`, unreferenced `mtls_deployment_snapshots`, obsolete `mtls_activations`, and excess `config_versions` (90 days). |
 
-Logs under `history retention page committed` record the table, counts, oldest inspected timestamp and skip reasons. Each traffic group uses four node-based lanes with independent cursors. Database rules and exceptions are listed in [Database tables](database-tables.md).
+Logs under `history retention page committed` record the table, counts, oldest inspected timestamp and skip reasons. Sharded traffic groups share four per-shard page gates with independent cursors, while `monitoring-history-retention` runs its four sharded lanes independently without serializing against traffic cleanup. Database rules and exceptions are listed in [Database tables](database-tables.md).
 
 Before upgrading from an older database schema, stop the old API, verify a recoverable backup and apply pending migrations with `--migrate-only`. Index builds need additional PostgreSQL storage during maintenance. Investigate data recovery in an isolated restored database. Compare live rows, dead rows and reusable space separately from filesystem allocation.
 

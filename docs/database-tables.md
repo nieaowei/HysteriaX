@@ -198,7 +198,7 @@ DNS 连接凭据轮换还使用前述 [`dns_credential_batch_items`](#凭据分�
 | `monitoring_probe_tokens` | `node_id` | 短期监控探测鉴权摘要和到期时间，绑定 work、owner、节点/work 代次及执行 epoch。 | 不能仅凭未到期就放行；必须验证有效执行归属。过期记录由监控保留任务清理。 |
 | `deployment_probe_tokens` | `node_id` | 部署验证的短期鉴权摘要，绑定任务、owner、节点/任务代次和执行 epoch。 | 与常规监控令牌用途不同；历史未绑定执行身份的记录不构成有效执行证明。 |
 
-`online_samples` 和 `proxy_probe_samples` 当前由监控保留任务按 **31 天**阈值分批删除，令牌按到期时间清理；每次最多 256 行并跳过已锁行。此规则不覆盖 `traffic_records`、`traffic_baselines` 或 `node_network_samples`。这些观测表均随节点删除。
+`online_samples` 和 `proxy_probe_samples` 由 `monitoring-history-retention` 4 分片保留任务按 **31 天**阈值清理（分别按 `cycle_id` 与 `node_id` 哈希分片），`monitoring_probe_tokens` 由 `operations-history-retention` 按到期时间清理；`online_samples` 按周期聚合批量最多删除 4096 行并跳过已锁行，`proxy_probe_samples` 在节点无活跃执行租约时按 2048 行分批删除。上述清理均不覆盖 `traffic_records`、`traffic_baselines`（60 天无分配/无活跃批次清理）或 `node_network_samples`。这些观测表仍随节点级联删除。
 
 ## 统计读模型与刷新队列
 
@@ -269,7 +269,7 @@ DNS 连接凭据轮换还使用前述 [`dns_credential_batch_items`](#凭据分�
 | --- | --- | --- | --- |
 | `cache_version_epoch` | `id=true` | 数据库缓存快照身份；维护初始化轮换的 epoch 也用作执行 epoch 来源。 | 不能视为普通可清缓存；恢复后的旧租约凭证需要由新 epoch 隔离。 |
 | `cache_bucket_versions` | `(domain, bucket)` | 每个缓存域 64 个桶的提交版本向量，用于列表/汇总等缓存有效性判断。 | 业务写事务提交时触发更新，避免所有写入争用单行全局版本。 |
-| `cache_entity_versions` | `(kind, entity_id)` | 实体级缓存版本、删除墓碑、桶及桶版本；也驱动 Redis 配额排行增量更新。 | 删除墓碑和单调版本阻止旧数据回填，不能随实体删除一起简单抹掉。 |
+| `cache_entity_versions` | `(kind, entity_id)` | 实体级缓存版本、删除墓碑、`updated_at`、桶及桶版本；也驱动 Redis 配额排行增量更新。 | `quota_rank` 墓碑与未删除实体永久保留；其他 `kind` 的已删除墓碑超过 30 天后由 `metadata-history-retention` 回收。 |
 | `cache_bucket_pending` | `(transaction_id, domain, bucket)` | 写事务内收集待增加的缓存桶，按键去重。 | 虽为普通持久表，记录只应存于未提交事务，提交前由延迟触发器刷新并删除。 |
 | `cache_entity_pending` | `(transaction_id, kind, entity_id)` | 写事务内收集待增加版本的实体键。 | 与桶队列一并按固定顺序刷新，避免重复版本写入和锁序倒置。 |
 | `cache_flush_pending` | `transaction_id` | 每个事务一次的刷新触发记录。 | 延迟约束触发器在提交时更新版本并删除三个 pending 表内该事务的行。 |
@@ -329,18 +329,22 @@ DNS 连接凭据轮换还使用前述 [`dns_credential_batch_items`](#凭据分�
 
 备份应以完整数据库为单位，并独立保存对应主密钥。执行意图、DNS 操作、断连义务、mTLS 激活、应用回执、复核证据、租约版本与墓碑均不应按“缓存”处理。数据库恢复还须核对备份之后的外部副作用时间线，详见 [备份与恢复](backup-restore.md)。
 
-普通监控历史由监控保留任务清理，节点删除使用有界历史清理及持久游标。源表删除通过触发器更新统计与缓存版本。历史清理运行规则见[安装指南](installation.md#database-history-retention)。
+监控、运维与元数据历史由五组自动留存任务（共 14 条后台清理通道）分级回收，节点删除使用有界历史清理及持久游标。`traffic_records`、`online_samples` 与 `proxy_probe_samples` 删除通过语句级触发器批量更新统计与缓存版本。历史清理运行规则见[安装指南](installation.md#database-history-retention)。
 
 | 表 | 自动清理窗口与依赖 |
 | --- | --- |
 | `traffic_sample_items` | 批次完成 14 天后回收已结算明细。 |
-| `traffic_records`、`node_network_samples` | 60 天。月度套餐的当前周期保留，固定套餐按 60 天清理。用户当前配额、整机累计用量和采集基线由各自业务表管理。 |
+| `online_samples`、`proxy_probe_samples` | 31 天。`online_samples` 仅清理非 `pending` 行；`proxy_probe_samples` 在无活跃节点租约时清理，并由语句级触发器批量更新 `probe_minute_totals`、`analytics_dirty_cycles` 与缓存版本。 |
+| `traffic_records`、`node_network_samples`、`traffic_baselines` | 60 天。月度套餐当前周期保留；`traffic_baselines` 仅在无对应 `node_assignments` 且节点无活跃采集批次时清理；固定套餐及用户当前配额、整机累计用量由各自业务表管理。 |
 | `traffic_minute_totals`、`traffic_hour_totals`、`user_node_usage` | 随源数据清理收敛。 |
-| `traffic_sample_batches`、`data_gaps` | 已完整结算的批次与已解决缺口保留 60 天。批次仍须通过实例检查点、明细、账本和恢复依赖检查。 |
-| `service_instances`、`deployment_probe_tokens` | 停止心跳 30 天且无活跃执行依赖，或部署探测令牌已过期。 |
-| `event_publications` | 回收超过 30 天的连续发布前缀。 |
-| `jobs`、`job_events`、`audit_records` | 90 天。待发或可回放的事件，以及仍有业务或恢复引用的任务链延迟清理。 |
-| `management_receipts` | 保留幂等响应。回执引用的任务历史到期后，按任务 ID 查询可能返回 HTTP 404。 |
+| `traffic_sample_batches`、`data_gaps` | 已完整结算或已丢弃（含已发起清零且无剩余账本/明细/执行引用）的批次与已解决缺口保留 60 天。 |
+| `deployment_probe_tokens`、`monitoring_probe_tokens` | 过期后立即清理（0 天）。 |
+| `resource_leases`、`job_node_kick_totals` | 孤立元数据清理（0 天）：无持有者、未阻塞、无执行操作且对应实体已不存在的租约；各项计数全 0 且无对应节点或 `kick` 任务的累计行。 |
+| `service_instances`、`event_publications`、`background_work`、`kick_requests` | 30 天。停心跳实例无活跃租约/执行依赖时清理；发布按连续前缀清理；非采样 `background_work` 按终态白名单（含撤销、限额下发与已终结轮换工作）同步清理 `work:*` 租约；`kick_requests` 仅清理终态且无未决任务的记录。 |
+| `management_receipts`、`mtls_operations`、`cache_entity_versions` | 30 天。回执清理后按原 `job_id` 查询可能返回 404；`cache_entity_versions` 仅回收 `deleted AND kind <> 'quota_rank'` 的旧墓碑。 |
+| `jobs`、`job_events`、`audit_records`、`execution_operations`、`execution_rechecks`、`execution_recheck_requests` | 90 天。`execution_operations`（`verified`）级联删除其 `execution_rechecks` 及孤立 `execution_recheck_requests`，从而解除 `jobs` 外键阻塞；`jobs` 按多根链批量回收并同步删除已释放 `job:*` 租约及已完成无排除项的 `authorization_changes`。 |
+| `user_credentials`、`credential_application_receipts`、`credential_batches`、`dns_operations`、`dns_records` | 90 天。仅清理已撤销 `user_credentials`、已完成作业回执、无活跃轮换/任务引用的凭据批次（同步清理 `dns_credential_batch_items`）、已生效/无未决关联的 DNS 操作与软删 DNS 记录。 |
+| `mtls_node_operations`、`mtls_rotations`、`mtls_trust_cleanup`、`mtls_deployment_snapshots`、`mtls_activations`、`config_versions` | 90 天。按 `config_versions`（保留期望/已部署版本、最近一次 `deployed_success`、当前已部署版本的直接回滚目标、每节点最新 20 个版本、快照外未决引用及脏引用）→ `mtls_deployment_snapshots` → `mtls_activations`（断开已提交/回滚后继的 `previous_activation_id` 链表并保护实时信任与节点当前激活）顺序解除引用，进而允许 `credentials::retention` 回收已过期旧版本材料。 |
 
 ## 核对实际数据库与维护本文
 
@@ -374,3 +378,12 @@ WHERE id;
 `0010_lock_contention.sql` 为节点套餐增加 `next_evaluation_at` 及到期部分索引。配置修改使调度失效，配置保存、用量修正和采样事务立即评估；周期维护只处理到期节点。旧全节点扫描任务被移除，已有限制和恢复任务保留。
 
 统计汇总按队列分别提交，用事务 advisory 锁协调相同派生键和重试链根；计算期间不占用 dirty 行锁，最后按 generation 有条件确认，被源写入占用的键留待重算。`dirty_key_versions` 保持递增，历史查询继续覆盖未确认的派生结果。旧 `analytics_retry_guards` 表已删除，应用表数量为 104。
+
+## 数据库膨胀治理与留存扩展（schema 15）
+
+`0015_database_bloat_retention.sql` 在不引入分表的前提下治理 10 万用户与 1 万节点规模的死元组、索引膨胀与历史表增长：
+
+- **裁剪热表冗余索引并统一节点最新/清理索引：** 删除 `online_samples_node_cleanup_idx`、`online_samples_node_time_idx`、`online_samples_retention_idx`、`proxy_probe_samples_node_cleanup_idx`、`proxy_probe_samples_node_time_idx`、`proxy_probe_samples_retention_idx`、`traffic_records_node_time_idx`、`node_network_samples_node_idx`；将 `proxy_probe_samples_node_latest_idx` 重建为 `(node_id, sampled_at DESC NULLS LAST, id DESC)`，与 `online_samples_node_latest_idx` 共同服务总览最新样本查询及 `node_cleanup` 游标分页，避免单节点数据偏斜时规划器回落到全局 `*_time_idx`。
+- **表级 autovacuum 与 fillfactor 调优：** 为 13 张高频追加/清理表设置 `autovacuum_vacuum_scale_factor = 0.01`、`vacuum_cost_limit = 2000`、`vacuum_cost_delay = 2`；为 9 张高周转 pending/dirty 队列表设置 `scale_factor = 0.0`、`threshold = 500`、`cost_delay = 0`；为 `cache_bucket_versions`、`node_packages`、`users`、`nodes`、`monitoring_probe_state` 设置 `fillfactor = 80` 提高 HOT 更新率。
+- **监控删除触发器语句级化：** 将 `proxy_probe_samples` 的 `probe_totals` 与 `online_samples` 的 `cycle_dirty` 改为仅响应 `INSERT OR UPDATE`，并新增语句级 `AFTER DELETE` 触发器 `probe_deleted` / `online_deleted`（基于 `REFERENCING OLD TABLE` 按批次更新分钟汇总、脏周期与缓存版本）。
+- **全面留存覆盖：** 新增 `cache_entity_versions.updated_at` 并更新 `hysteriax_cache_flush()`；下线原单线程 `monitoring-retention` 调度行；为全量历史/运维/元数据留存与 DNS 引用检查（`dns_operations_resource_idx`、`dns_bindings_record_ids_idx`）创建 27 个局部/游标/GIN 索引，并将 `history_retention` 扩展为 5 组 14 个后台通道。

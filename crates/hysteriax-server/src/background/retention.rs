@@ -203,7 +203,7 @@ pub(crate) async fn run(state: AppState) {
     }
 }
 
-async fn pass(state: &AppState) -> Result<()> {
+pub(in crate::background) async fn pass(state: &AppState) -> Result<()> {
     if *state.shutdown.borrow() {
         return Ok(());
     }

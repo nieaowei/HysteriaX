@@ -121,3 +121,7 @@ python3 scripts/migrations/migrate-lock-contention-test-db.py \
 ## 0013 流量账本批量删除
 
 `0013_history_retention_throughput.sql` 为 `traffic_records` 的 DELETE 增加语句级触发器，按删除集合更新分钟汇总、用户节点汇总和缓存版本。提交时按集合刷新桶版本和普通实体版本。迁移也创建采样领取的活动队列索引，支持同一到期时间内按采样类型分散节点。迁移不删历史行。对已停止的 schema 12 测试库，用 [测试库演练工具](../../../scripts/migrations/migrate-history-retention-test-db.py) 的 `--target-schema 13` 参数核对源表计数、触发器及索引。
+
+## 0015 数据库膨胀治理与留存扩展
+
+`0015_database_bloat_retention.sql` 删除 8 个热表冗余索引并重建支持 `(node_id, sampled_at DESC NULLS LAST, id DESC)` 的共享 `proxy_probe_samples_node_latest_idx`，调整高频历史表/队列表的 `autovacuum` 参数与高更新表 `fillfactor = 80`，将 `proxy_probe_samples` 与 `online_samples` 的 DELETE 级触发器替换为语句级 `REFERENCING OLD TABLE` 触发器，增加 `cache_entity_versions.updated_at` 墓碑时间戳并更新 `hysteriax_cache_flush()`，清除旧单线程 `monitoring-retention` 调度记录，并创建 27 个针对 `history_retention` 五组 14 通道与 DNS 引用检查（含 `dns_operations_resource_idx` 与 GIN 索引 `dns_bindings_record_ids_idx`）的留存索引。迁移不删除历史业务行。对已停止的 schema 14 测试库，用 [数据库膨胀治理测试库迁移工具](../../../scripts/migrations/migrate-database-bloat-retention-test-db.py) 核对 schema 版本、索引裁剪与新建、语句级触发器、`reloptions` 及历史行计数。运行规则见[安装指南](../../../docs/installation.md#database-history-retention)。

@@ -24,7 +24,10 @@ SELECT CASE
       OR EXISTS (SELECT 1 FROM mtls_cleanup_nodes c WHERE c.job_id=ANY($1))
       OR EXISTS (SELECT 1 FROM mtls_node_operations o WHERE o.job_id=ANY($1))
       OR EXISTS (SELECT 1 FROM mtls_rotation_nodes r WHERE r.job_id=ANY($1))
-      OR EXISTS (SELECT 1 FROM authorization_changes a WHERE a.job_id=ANY($1))
+      OR EXISTS (
+          SELECT 1 FROM authorization_changes a WHERE a.job_id=ANY($1)
+            AND (NOT a.complete OR EXISTS (SELECT 1 FROM authorization_exclusions x WHERE x.job_id=a.job_id))
+      )
       THEN 'business_reference'
     WHEN EXISTS (
         SELECT 1 FROM unnest($1::text[]) j(id)

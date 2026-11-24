@@ -108,6 +108,46 @@ pub(super) const BATCHES: Rule = Rule {
     ) THEN 'execution_evidence'",
 };
 
+pub(super) const BATCHES_DISCARDED: Rule = Rule {
+    table: "traffic_sample_batches",
+    days: 60,
+    time: "completed_at",
+    key: "sample_id",
+    key_type: "text",
+    page_filter: "state='discarded' AND completed_at IS NOT NULL",
+    node_lock: true,
+    sample_order: false,
+    protected: "WHEN t.state<>'discarded' THEN 'batch_not_discarded'
+    WHEN EXISTS (
+        SELECT 1 FROM traffic_sample_items i WHERE i.sample_id=t.sample_id
+    ) OR EXISTS (
+        SELECT 1 FROM traffic_records r WHERE r.sample_id=t.sample_id AND r.sample_id IS NOT NULL
+    ) THEN 'billing_reference'
+    WHEN EXISTS (
+        SELECT 1 FROM background_work w WHERE w.id=t.sample_id AND w.state IN ('queued','running')
+    ) OR EXISTS (
+        SELECT 1 FROM online_samples s WHERE s.node_id=t.node_id AND s.cycle_id=t.cycle_id AND s.pending
+    ) THEN 'work_active'
+    WHEN EXISTS (
+        SELECT 1 FROM execution_operations o WHERE o.work_id=t.sample_id OR o.resource_key='work:'||t.sample_id
+    ) OR EXISTS (
+        SELECT 1 FROM resource_leases l WHERE l.work_id=t.sample_id
+        OR (l.resource_key='work:'||t.sample_id AND (l.owner IS NOT NULL OR l.blocked))
+    ) THEN 'execution_evidence'",
+};
+
+pub(super) const PROXY_PROBES: Rule = Rule {
+    table: "proxy_probe_samples",
+    days: 31,
+    time: "sampled_at",
+    key: "id",
+    key_type: "bigint",
+    page_filter: "true",
+    node_lock: true,
+    sample_order: false,
+    protected: "",
+};
+
 pub(super) const GAPS: Rule = Rule {
     table: "data_gaps",
     days: 60,
@@ -150,6 +190,18 @@ pub(super) const DEPLOYMENT_TOKENS: Rule = Rule {
     protected: "",
 };
 
+pub(super) const MONITORING_TOKENS: Rule = Rule {
+    table: "monitoring_probe_tokens",
+    days: 0,
+    time: "expires_at",
+    key: "node_id",
+    key_type: "text",
+    page_filter: "true",
+    node_lock: false,
+    sample_order: false,
+    protected: "",
+};
+
 pub(super) const JOB_EVENTS: Rule = Rule {
     table: "job_events",
     days: 90,
@@ -177,6 +229,126 @@ pub(super) const AUDIT: Rule = Rule {
     protected: "",
 };
 
+pub(super) const USER_CREDENTIALS_REVOKED: Rule = Rule {
+    table: "user_credentials",
+    days: 90,
+    time: "revoked_at",
+    key: "id",
+    key_type: "text",
+    page_filter: "revoked_at IS NOT NULL",
+    node_lock: false,
+    sample_order: false,
+    protected: "",
+};
+
+pub(super) const CREDENTIAL_APP_RECEIPTS: Rule = Rule {
+    table: "credential_application_receipts",
+    days: 90,
+    time: "created_at",
+    key: "job_id",
+    key_type: "text",
+    page_filter: "true",
+    node_lock: false,
+    sample_order: false,
+    protected: "WHEN EXISTS (
+        SELECT 1 FROM jobs j WHERE j.id=t.job_id AND (
+            j.status NOT IN ('succeeded','failed','rolled_back','cancelled')
+            OR j.finished_at IS NULL OR j.finished_at>=$2
+            OR j.stage IN ('needs_attention','reconciliation_required')
+        )
+    ) THEN 'job_active_recent_or_unresolved'",
+};
+
+pub(super) const DNS_OPERATIONS: Rule = Rule {
+    table: "dns_operations",
+    days: 90,
+    time: "created_at",
+    key: "id",
+    key_type: "text",
+    page_filter: "true",
+    node_lock: false,
+    sample_order: false,
+    protected: "WHEN t.applied_at IS NULL AND EXISTS (
+        SELECT 1 FROM dns_records r WHERE r.id=t.resource_id
+        AND r.desired IS NOT NULL AND r.deleted_at IS NULL
+    ) THEN 'dns_record_pending'
+    WHEN t.job_id IS NOT NULL AND EXISTS (
+        SELECT 1 FROM jobs j WHERE j.id=t.job_id AND (
+            j.status NOT IN ('succeeded','failed','rolled_back','cancelled')
+            OR j.finished_at IS NULL OR j.finished_at>=$2
+            OR j.stage IN ('needs_attention','reconciliation_required')
+        )
+    ) THEN 'job_active_recent_or_unresolved'
+    WHEN t.job_id IS NOT NULL AND EXISTS (
+        SELECT 1 FROM execution_operations o WHERE o.work_id=t.job_id
+        AND o.state IN ('dispatching','reconciling','needs_attention')
+    ) THEN 'execution_pending'",
+};
+
+pub(super) const DNS_RECORDS_DELETED: Rule = Rule {
+    table: "dns_records",
+    days: 90,
+    time: "deleted_at",
+    key: "id",
+    key_type: "text",
+    page_filter: "deleted_at IS NOT NULL",
+    node_lock: false,
+    sample_order: false,
+    protected: "WHEN t.desired IS NOT NULL THEN 'dns_desired_pending'
+    WHEN EXISTS (
+        SELECT 1 FROM dns_bindings b WHERE b.record_ids ? t.id
+    ) THEN 'dns_binding_reference'
+    WHEN EXISTS (
+        SELECT 1 FROM dns_operations o WHERE o.resource_id=t.id
+    ) THEN 'dns_operation_reference'",
+};
+
+pub(super) const MTLS_NODE_OPERATIONS: Rule = Rule {
+    table: "mtls_node_operations",
+    days: 90,
+    time: "created_at",
+    key: "job_id",
+    key_type: "text",
+    page_filter: "true",
+    node_lock: false,
+    sample_order: false,
+    protected: "WHEN t.pending_job THEN 'pending_job'
+    WHEN EXISTS (
+        SELECT 1 FROM jobs j WHERE j.id=t.job_id AND (
+            j.status NOT IN ('succeeded','failed','rolled_back','cancelled')
+            OR j.finished_at IS NULL OR j.finished_at>=$2
+            OR j.stage IN ('needs_attention','reconciliation_required')
+        )
+    ) THEN 'job_active_recent_or_unresolved'
+    WHEN t.rotation_id IS NOT NULL AND EXISTS (
+        SELECT 1 FROM mtls_rotations r WHERE r.id=t.rotation_id
+        AND (r.phase NOT IN ('complete','failed') OR r.updated_at>=$2)
+    ) THEN 'rotation_active_or_recent'",
+};
+
+pub(super) const MTLS_ROTATIONS: Rule = Rule {
+    table: "mtls_rotations",
+    days: 90,
+    time: "updated_at",
+    key: "id",
+    key_type: "text",
+    page_filter: "phase IN ('complete','failed')",
+    node_lock: false,
+    sample_order: false,
+    protected: "WHEN t.phase NOT IN ('complete','failed') THEN 'rotation_active'
+    WHEN EXISTS (
+        SELECT 1 FROM mtls_node_operations o WHERE o.rotation_id=t.id
+    ) THEN 'node_operation_reference'
+    WHEN EXISTS (
+        SELECT 1 FROM mtls_rotation_nodes n JOIN jobs j ON j.id=n.job_id
+        WHERE n.rotation_id=t.id AND (
+            j.status NOT IN ('succeeded','failed','rolled_back','cancelled')
+            OR j.finished_at IS NULL OR j.finished_at>=$2
+            OR j.stage IN ('needs_attention','reconciliation_required')
+        )
+    ) THEN 'job_active_recent_or_unresolved'",
+};
+
 pub(super) async fn page(
     connection: &mut PgConnection,
     rule: Rule,
@@ -197,7 +369,7 @@ pub(super) async fn page(
     } = rule;
     let page_size = match table {
         "node_network_samples" => 2 * PAGE,
-        "traffic_sample_items" => 4 * PAGE,
+        "traffic_sample_items" | "proxy_probe_samples" => 4 * PAGE,
         "traffic_records" => 6 * PAGE,
         _ => PAGE,
     };
