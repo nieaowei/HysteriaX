@@ -14,11 +14,11 @@ The command requires a ready API, stops all API replicas to make a consistent sn
 
 Backup and restore allow 150 seconds for API stops, matching the supplied Compose `stop_grace_period` so in-flight traffic capture can persist before process exit. Keep that configuration current and inspect sampling drain errors or forced kills before treating a stop as clean; see [upgrade shutdown behavior](installation.md#database-baseline).
 
-The archive is a database snapshot. Caddy's named certificate volumes are separate and require their own protected backup when their state matters. Retain the key needed to decrypt the records in each database archive.
+The archive captures the rows present at backup time. To recover details beyond the live [retention windows](installation.md#database-history-retention), keep a backup from when those details were still present and inspect it in an isolated database. Back up Caddy's certificate volumes separately and retain the key for each database archive.
 
 ## Restore
 
-Only backups from the new `0001_baseline.sql` history and its compatible successors are supported by this release. Former 0001–0074 databases require their matching old image and master key; they cannot be migrated or restored into this baseline. Version numbers alone do not establish compatibility: ordinary startup verifies checksums too.
+Use a backup from the `0001_baseline.sql` migration chain and the matching master key. The server verifies the migration history and checksums. Backups from the former 0001–0074 chain require their matching old image.
 
 Restore with the matching encryption key already set in `.env`:
 
@@ -31,8 +31,6 @@ The command verifies archive paths, checksums, format, and key fingerprint, then
 If those journals differ or cannot be checked, automatic restore is refused and the current database is retained. This includes confirmed and uncertain external changes after the backup: rotating an epoch cannot recreate their missing intent records or undo their remote effects. The script resumes the retained current database only after maintenance succeeds; existing uncertainty barriers remain in place. There is no bypass flag. Reconcile the external resources and prepare a coordinated recovery before retrying; do not delete journal rows or clear blocked leases to make the check pass. Database-only updates that do not alter those journals can still be restored.
 
 When the check passes, the command renames the current database aside, promotes the restored database, clears Redis, runs `--migrate-only` with all replicas stopped, and only then starts the API and waits for `/readyz`. Maintenance rotates execution, cache and event epochs without deleting historical events. If maintenance or readiness fails, it moves the failed database aside and restores the previous database, which must also pass maintenance before restart. If both maintenance attempts fail, the API stays stopped. The previous database is retained after a successful restore and its name is printed.
-
-SQLite archive format version 1 is not accepted. This release does not include an SQLite importer.
 
 Run the archive unit tests and isolated Compose integration with:
 
@@ -53,4 +51,6 @@ Backups include encrypted credential versions, batch items, application completi
 
 恢复后先检查目录所有权与有效期，再执行显式同步。不要将私钥、DNS 秘密或 EAB 附在诊断日志中。仅恢复管理数据库不会自动修改既有节点，也不会自动迁移内置 ACME。
 
-Subscription templates, encrypted drafts, immutable publication history, default pointers, and the initialization marker are included in the whole-database backup (the current baseline). Preserve the same master key when restoring. A restart must restore existing publication state rather than re-seed or publish drafts. See [subscription upgrade](subscriptions.md).
+## Subscription template recovery
+
+Whole-database backups include encrypted drafts, immutable publications, default pointers and the initialization marker. Restore with the same master key and verify the current default and published version for each format after startup. See [subscription templates](subscriptions.md#draft-publication-and-rollback).

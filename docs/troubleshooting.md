@@ -14,15 +14,25 @@ Verify public DNS and allow inbound TCP 80 and 443 to Caddy. Check `docker compo
 
 ## A token no longer works
 
-Administrator, node, assignment, and subscription tokens are independent. A revoked administrator token cannot call management APIs; a revoked subscription token returns 404; a disabled, expired, or over quota user receives a denied Hysteria auth result and a 403 subscription response. Rotate only the credential type that needs replacement.
+Check which token failed. A revoked administrator token is rejected by management APIs. A revoked subscription URL returns 404. A disabled, expired or over-quota user receives a denied proxy authentication result and a 403 subscription response. User connection passwords and subscription tokens rotate together. After rotation, copy the new address and update the client's saved configuration. See [credentials](credentials.md#user-connection-and-subscription-credentials).
 
 ## A configuration write returns 409
 
 A stale revision requires fetching the entity again, merging the intended edit, and submitting the current `revision` as `expected_revision`. Read the error code: an idempotency key reused for different content or conflicting resource work can also return 409. After a transport failure, retry the same intended request with its original key; do not mint a new key to force an uncertain operation through. Transient transaction retries exhausted with 503 can be retried with the same key.
 
+For an authorization conflict, use the link in the Mac client to open the pending task. Wait for it to finish or review its failure and use the linked retry action. See [authorization task recovery](authorization-groups.md#处理挂起的授权任务).
+
+## A subscription opens a web page in the proxy client
+
+Open the canonical address in a browser, select the destination platform, and copy the address from the desired template card. For a client that imports node links, copy the URL from the Base64 or URI card. See [subscription addresses](subscriptions.md#addresses-and-qualification).
+
 ## A node does not appear in a subscription
 
 Check the user's enabled state, expiry, quota and authorization-group membership, then confirm the node has a successful deployed revision. Native template exports also apply the selected platform's compatibility and injection rules. Inspect queued, failed or uncertain deployment jobs and any mTLS configuration barrier. The SSH workers execute deployment independently of the Mac client. See [subscriptions](subscriptions.md) and [managed mTLS](managed-mtls.md).
+
+## Older history is missing or database storage keeps growing
+
+Check the retention window for the affected table and inspect API logs for `sampling retention claim finished` and `history retention page committed`. Review skipped rows for active references or unsettled work. Check recent autovacuum and table and index sizes in PostgreSQL. Current quota counters use business state independently of the retained detail rows. For investigations that need older rows, restore a matching backup in isolation. See [retention windows](installation.md#database-history-retention) and [recovery](backup-restore.md).
 
 ## macOS client times out while curl succeeds
 

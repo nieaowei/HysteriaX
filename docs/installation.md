@@ -6,7 +6,7 @@
 2. Install Docker Engine and the Docker Compose plugin.
 3. From the project directory, run `scripts/ops/init-secrets.sh manage.example.com`. This creates a private `.env` with the administrator token, encryption key, and separate PostgreSQL administrator and application passwords.
 4. Save the administrator token and make a separate protected backup of `HYSTERIAX_MASTER_KEY`.
-5. Build the image on your development machine for the server's architecture and transfer it to the server using the commands below. Start dependencies with `docker compose up -d postgres redis`, then initialize the database with `docker compose --profile maintenance run --pull never --rm --no-deps migrate`. Start the service with `docker compose up -d --no-build api caddy`.
+5. Build the image on your development machine for the server's architecture and transfer it to the server using the commands below. Start dependencies with `docker compose up -d --wait postgres redis`, then initialize the database with `docker compose --profile maintenance run --pull never --rm --no-deps migrate`. Start the service with `docker compose up -d --no-build api caddy`.
 6. Confirm `https://manage.example.com/readyz` returns `{"status":"ready","database":"ok","management_protocol":2}`.
 
 Build locally, using a fixed release tag in place of `dev` for a release:
@@ -31,17 +31,20 @@ For local Docker acceptance with a PostgreSQL dump from this baseline, use `pyth
 
 ## Database baseline
 
-This release replaces the former 0001–0074 migration chain with `0001_baseline.sql`. New installations initialize an empty PostgreSQL database. There is no automatic upgrade or import from the former chain; an old version-1 record also has a different checksum and fails startup validation. Do not clear migration history or replay the baseline against an existing database.
+The current PostgreSQL migration chain starts at `0001_baseline.sql` and reaches schema 15. New installations apply the full chain to an empty database. Compatible installations apply pending migrations. Use the matching old image and master key to open databases or backups from the former 0001–0074 chain. Ordinary API startup checks every migration checksum, the management protocol and the master-key fingerprint. Preserve the recorded migration history.
 
-Existing installations must retain a matching image, metadata backup, configuration and master key. On 2026-10-28, the current production database was explicitly normalized after logical schema verification and a tested metadata rollback: its 74 migration records were replaced with the baseline record, and `runtime_contract.schema_version` became 1. No baseline SQL or business-data migration ran. This controlled registration applies only to that verified database; this was a verified production maintenance operation. Other legacy databases require separate validation or a fresh installation.
+Run `--migrate-only` before starting the API on a new database. It initializes administrator credentials, templates, reference indexes and work queues with workers stopped and no node access. See [migration maintenance](../crates/hysteriax-server/migrations/README.md).
 
-For a new empty database, run `--migrate-only` before the first API startup. It applies the baseline and completes administrator, credential, template, reference-index and work-queue initialization without starting workers or contacting nodes. Ordinary startup checks the exact migration history, protocol and master key. Management API requests use `/api/v2`, and administrative writes require a stable `Idempotency-Key` for retries.
+### Upgrade an existing installation
 
-For compatible upgrades, stop every API replica, retain a recoverable backup and matching old image, run maintenance once, then start the corresponding server and macOS client. Follow the complete current migration chain and its checksum requirements in [migration maintenance](../crates/hysteriax-server/migrations/README.md); historical deployment records do not describe the current schema requirement.
+1. Verify a recoverable [backup](backup-restore.md) and retain the matching old image, deployment configuration and master key. Build and transfer the new image locally, then prepare its corresponding Compose configuration.
+2. Stop every API replica that uses the database, including replicas on other hosts. For the bundled configuration use `docker compose stop api` and check the drain result. Keep PostgreSQL and Redis available.
+3. Select the loaded image in `.env` and run `docker compose --profile maintenance run --pull never --rm --no-deps migrate` once. Schema 15 rebuilds and adds indexes, so verify PostgreSQL storage headroom and allow time for maintenance.
+4. Start the API and Caddy, then check `/readyz`, restart counts and the API logs. Open the matching Mac client and confirm it connects. Restore with matching database and image versions if a rollback requires reversing a schema change.
 
 Use `docker compose stop api` so the API's configured 150-second stop grace applies. On SIGTERM, sampling stops admitting work and drains in-flight collections while their leases continue renewing; HTTP requests have an 8-second drain budget, followed by up to 120 seconds for sampling. A sampling drain timeout exits with an error and requires inspection of uncaptured clear requests. For a direct Docker stop, use `docker stop --time 150 <api-container>`; a shorter override can kill the process before it saves a destructive traffic response. The grace period applies when the container is created, so recreate existing API containers with the current Compose configuration.
 
-This protection requires the draining implementation to be running before the stop. The first upgrade from an older image still uses that image's shutdown behavior. Retain and inspect its in-flight capture records; existing `traffic_clear_uncertain` gaps cannot be reconstructed by deploying the fix. SIGKILL, crashes, network response loss and database outages can still leave uncertain clear requests. Never resend a destructive request to guess the missing interval.
+Check the running version's shutdown behavior before stopping it. Forced stops, crashes, response loss or a database outage can leave a `traffic_clear_uncertain` gap. Preserve captured batches and inspect the sampling log before continuing an upgrade with a failed drain.
 
 ## Local development and tests
 
@@ -83,7 +86,7 @@ Use the initial token from `.env` as the Bearer token. In macOS Settings, create
 
 `HYSTERIAX_BACKGROUND_WORKER_PARALLELISM` defaults to **16** and accepts 1–16. It limits each sampling queue (`traffic`, `network`, and `proxy`) separately in each API instance. Missing or invalid values use 16; explicit lower values are respected. Management jobs retain their separate ceiling of four. A node's resource lease serializes its sampling and management work across queues and instances.
 
-Compose also defaults to 16. Existing environment files with an explicit value such as 4 continue to use that value; set it to 16 and recreate the API container to adopt the new setting. Sampling cadence, operation timeouts, and the database connection pool have their own settings. The local 16-worker comparison used a 32-connection pool; concurrency alone does not establish a production node-capacity guarantee. See the [sampling comparison scope](deployment-testing.md#采集并发对照).
+Sampling cadence defaults to 10 seconds and is set by `HYSTERIAX_SAMPLING_INTERVAL_SECONDS`. Budget `HYSTERIAX_DB_POOL_MAX_CONNECTIONS` per API replica and leave connections for maintenance and other database clients. Recreate containers after changing environment settings. Use the [verification guide](deployment-testing.md) to choose capacity checks for the intended workload.
 
 ## Sampling history retention
 
@@ -105,18 +108,10 @@ The API starts five database history cleanup groups (14 worker lanes total) auto
 
 Logs under `history retention page committed` record the table, counts, oldest inspected timestamp and skip reasons. Sharded traffic groups share four per-shard page gates with independent cursors, while `monitoring-history-retention` runs its four sharded lanes independently without serializing against traffic cleanup. Database rules and exceptions are listed in [Database tables](database-tables.md).
 
-Before upgrading from an older database schema, stop the old API, verify a recoverable backup and apply pending migrations with `--migrate-only`. Index builds need additional PostgreSQL storage during maintenance. Investigate data recovery in an isolated restored database. Compare live rows, dead rows and reusable space separately from filesystem allocation.
+Retention windows are eligibility cutoffs. Workers may defer rows with unresolved references, active leases, unfinished billing or pending samples. Cleanup keeps current user quota accounting and the protected node package period. When reviewing disk usage, compare live rows, dead rows, table and index sizes and the last autovacuum. Normal vacuum makes space reusable inside PostgreSQL.
 
-## File upload timeout
+## File uploads and traffic capture
 
 `HYSTERIAX_SSH_UPLOAD_TIMEOUT_SECONDS` controls each SSH file upload independently of `HYSTERIAX_OPERATION_TIMEOUT_SECONDS`. It defaults to **180 seconds (3 minutes)** and accepts 1–3600 seconds. Missing or invalid values use 180 seconds. For a bandwidth-limited management server, increase only this setting; ordinary SSH commands, probes and sampling retain their existing operation budgets. The client reserves another five seconds after the receiver deadline to collect its completion receipt.
 
-`HYSTERIAX_TRAFFIC_CAPTURE_ENABLED` defaults to `true`. Set it to `false` and restart the API to pause new remote traffic captures during maintenance; previously captured batches continue billing. All nodes, including newly created nodes, use destructive interval reads (`/traffic?clear=1`). Complete responses are persisted before follow-up instance verification; a lost response or unverified instance is reported as a statistics gap. The collector never replays a destructive read for the same batch.
-
-The baseline creates interval capture defaults and constraints directly. It does not include the removed traffic cutover command, one-time cleanup tools or historical cleanup progress tables. Completed legacy capture modes remain representable in the accounting schema, but no old-database upgrade path is provided.
-
-The current macOS client requires the current protocol-2 function contract
-(client summary, overview monitoring, linked retries, record removal, node
-packages, DNS management and SSH/DNS synchronization). Servers missing those
-functions are rejected before a new connection is saved. Directory reads remain
-paged; unsupported servers no longer trigger whole-directory fallback downloads.
+`HYSTERIAX_TRAFFIC_CAPTURE_ENABLED` defaults to `true`. To pause new captures, set it to `false` in the API process environment and recreate the API container. With Compose, pass the variable through the API service's `environment` mapping. Previously captured batches continue billing. Node sampling uses interval reads (`/traffic?clear=1`). The server persists complete responses before verifying the node instance and records a statistics gap when capture or verification is uncertain. Each batch issues at most one clear request.

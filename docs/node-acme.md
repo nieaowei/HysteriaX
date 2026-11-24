@@ -1,6 +1,6 @@
 # 节点 ACME 维护
 
-`hysteriax-acme` 固定使用 CertMagic v0.25.4，DNS 服务商及版本与 Hy2 v2.12.3 一致。组件源码、锁文件和依赖许可在 `components/hysteriax-acme/`。本地运行 `scripts/build/build-node-acme.sh` 生成 Linux amd64 / arm64 二进制、许可包和 SHA256SUMS；管理服务镜像在本地构建时也会包含两种架构的产物，通过现有 SFTP 下发，节点无需安装 Go。部署管理服务时仍须本地构建镜像后推送服务器。
+`hysteriax-acme` 固定使用 CertMagic v0.25.4，DNS 服务商及版本与 Hy2 v2.12.3 一致。运行 `scripts/build/build-node-acme.sh` 可生成 Linux amd64 和 arm64 二进制、许可包和 SHA256SUMS。管理服务镜像包含这两种架构的产物，并在节点部署时通过 SSH 下发。组件源码和依赖清单位于 [组件目录](../components/hysteriax-acme/)。
 
 ## 文件与权限
 
@@ -27,7 +27,7 @@ sudo systemctl status hysteriax-acme.service
 
 管理服务的 SSH 采集将状态绑定实际部署修订、配置摘要和策略；旧采样不会覆盖新部署。证书状态采集失败不阻止流量统计。macOS 可显示签发、续期、失败、到期、停止和陈旧状态；启用既有节点通知后，提供续期失败及 30 / 14 / 7 天到期提醒，并跨应用重启去重。
 
-回滚恢复目标策略并重新检查证书有效性，不强制切回过期叶证书。发生结果不明的 SSH 中断时，先检查部署任务与节点状态，再使用显式恢复同步。组件账户、状态和证书应独立备份，详见 `backup-restore.md`。外部自定义 `acme.dir` 不在自动卸载清理范围，需管理员确认独立备份及目录所有权后处理。
+回滚恢复目标策略并检查证书有效性。发生结果不明的 SSH 中断时，先检查部署任务与节点状态，再使用显式恢复同步。按 [恢复指南](backup-restore.md#节点-acme-账户与私钥)独立备份组件账户、状态、证书和自定义 `acme.dir`。
 
 ## 可重复验证
 

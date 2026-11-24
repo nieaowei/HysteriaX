@@ -37,4 +37,4 @@ bash apps/macos/Tests/runners/verify-localization.sh
 
 `TEST_DATABASE_URL=<可丢弃本地 PostgreSQL> RUST_MIN_STACK=16777216 cargo test --locked -p hysteriax-server node_limits::tests::background_idle_probes_at_target_cardinality_are_bounded -- --ignored --exact --nocapture --test-threads=1` 显式创建 10 万用户、1 万节点，验证采样周期成员冻结、空闲节点扫描使用到期索引，以及管理任务/采样过期/统计队列在该基数下的空闲路径。只做数据库与分页检查，不运行 SSH，也不证明采集容量。
 
-`python3 tests/integration/verify-maintenance-startup.py --image <本地发布镜像> --output <新证据目录>` 在自管内部 Docker 网络与 PostgreSQL/Redis 上验证完整 linux/amd64 服务默认线程栈启动。默认运行 330 秒以覆盖 300 秒维护兜底，检查持续就绪、零重启和 SIGTERM 后三类采样排空、正常退出；只清理带本次专属标签的夹具，保留日志和 inspect 证据。测试验证 0048 自动删除一条到期采样工作，0049 启动 9 个 worker 并删除一条过期审计记录。该场景用于启动与功能验证。
+`python3 tests/integration/verify-maintenance-startup.py --image <本地发布镜像> --output <新证据目录>` 在隔离 PostgreSQL 和 Redis 上验证完整 linux/amd64 服务的默认线程栈、采样排空以及历史留存。脚本检查 5 组留存的 14 条工作通道启动，并核实到期采样任务和过期审计记录已删除。详见 [运行环境与验证范围](../docs/deployment-testing.md#常用检查)。

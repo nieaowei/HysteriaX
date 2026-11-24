@@ -10,11 +10,8 @@ token continues to live in Keychain.
 - SSH private keys and optional passphrases, or SSH passwords.
 - TLS certificate pairs (certificate chain and matching private key), independent
   CA certificates with the CA basic constraint, and ECH key files.
-- Standalone TLS private-key and leaf-certificate types are removed.
-- Complete ACME DNS provider credentials, and general API tokens. The first
-  provider integration is the existing ACME DNS configuration; general API
-  tokens can be stored and versioned without adding new provider integrations.
-- CA identities with a signing key, from generation or strict chain import. User mTLS identities and node probes are system-issued; manual user certificate import is removed.
+- Complete ACME DNS provider credentials and versioned API tokens.
+- CA identities with a signing key, generated or imported with the required chain. The service issues managed mTLS user identities and node probes.
 
 Operations use encrypted immutable versions. References have the form
 `credential://<id>/<version>/<field>`. Certificates and keys in a TLS identity
@@ -99,31 +96,14 @@ credential test covers shared TLS updates, pinned rollback, partial failure and
 retry, consecutive publication, unauthorized SSH keys, encrypted SSH-key
 passphrases, and manually prepared shared-password changes.
 
-## Database baseline
+## Certificate maintenance
 
-The current release supports a fresh PostgreSQL database initialized from `0001_baseline.sql`. It does not upgrade the former migration chain or import legacy credential stores. Existing backups require their matching old image and master key. See [installation](installation.md#database-baseline) for the compatibility boundary and [managed mTLS](managed-mtls.md) for current signing and recovery behavior.
+On ACME nodes, the independent `hysteriax-acme` process maintains one SAN certificate covering the configured domains. DNS secrets used during deployment go into the certificate account's private configuration. That renewal runs independently of [managed mTLS](managed-mtls.md). Back up node ACME accounts and keys as described in [recovery](backup-restore.md#节点-acme-账户与私钥).
 
-ACME 节点现在由独立 `hysteriax-acme` 进程读取 DNS 凭据并维护一张覆盖全部域名的 SAN 证书，可同时选择托管 mTLS。公共配置及凭据目录继续保留原有引用方式；部署时解析的秘密只写入证书账号的私有配置，不会进入 Hy2 YAML 预览。节点续期与用户/CA 身份续期相互独立。节点账户与私钥的独立备份要求见 [备份恢复](backup-restore.md)，维护及验证命令见 [节点 ACME](node-acme.md)。
-
-## Historical upgrades
-
-The current server no longer contains old inline-secret conversion, legacy mTLS
-reset, or standalone-certificate/key consolidation. Migration 0007 finalizes the
-schema in SQL and removes the old conversion marker table. Legacy test databases
-have been retired, so the standalone legacy upgrade tool and its historical
-verification script have been removed. New environments initialize an empty
-database; current environments use `--migrate-only` during maintenance. See
-[migration instructions](../crates/hysteriax-server/migrations/README.md).
-Current maintenance still initializes reference indexes and validates readiness.
-
-CA publication scheduling updates user maintenance deadlines only. It no longer
-backfills per-certificate `released` flags for old-image rollback. Current readers
-continue to use `mtls_user_version_publication`, so generation publication makes
-all its staged material visible atomically without rewriting each leaf. Existing
-explicit release facts and unpublished-generation discard protection are retained.
+CA generation publication makes prepared user certificates available atomically through `mtls_user_version_publication`. The maintenance scheduler then updates renewal deadlines.
 
 ## User connection and subscription credentials
 
 Both secret types live in `user_credentials`, distinguished by `kind`. New users receive an independent connection password and subscription token in one transaction. `POST /api/v2/users/{id}/credentials/rotate` revokes both old values, issues both replacements, increments the user revision once, and queues disconnection of existing sessions. Its encrypted idempotency receipt replays the committed pair. `GET /api/v2/users/{id}/subscription` reads the current subscription; independent subscription rotation is removed. The Mac user menu exposes one joint rotation action. After rotation, copy the new subscription URL and update clients.
 
-Schema 9 preserves existing encrypted secrets and revoked subscription history, and removes the old user password columns and subscription table. Existing users without a subscription receive one on their first joint rotation. The credential directory remains a read-only summary; no extra generic credential versions or node distribution batches are created. The one-off test upgrade script was removed after production rollout. Published SQL migrations and the preservation regression remain; fresh environments initialize the full migration chain, and normal maintenance uses `--migrate-only` with the original master key.
+The credential directory shows one connection entry per user and a history of subscription tokens. Eligible revoked values are pruned after 90 days. Active credentials remain available. See [database history retention](installation.md#database-history-retention).

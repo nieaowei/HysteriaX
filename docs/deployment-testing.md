@@ -33,9 +33,9 @@ python3 -m unittest discover -s tests/unit -p 'test_*.py'
 go -C tests/integration/traffic-clear test -count=1 ./...
 ```
 
-Rust 数据库测试需要可丢弃 PostgreSQL 的 `TEST_DATABASE_URL`；Redis 专项另需 `TEST_REDIS_URL`。全量调试构建沿用 16 MiB 测试线程栈，既有 mTLS 深层异步调用测试可能在默认栈下溢出；此设置仅作用于测试进程，不修改发布服务的线程栈。保留测试输出中的忽略项和失败，不把部分完成记为全量通过。上述是运行入口，不代表本次已经执行或通过。
+Rust 数据库测试使用独立 PostgreSQL 的 `TEST_DATABASE_URL`，Redis 专项另需 `TEST_REDIS_URL`。本地全量调试构建可使用 16 MiB 测试线程栈运行 mTLS 等深层异步测试。发布容器使用其默认线程栈单独验证。
 
-调度器或后台任务 future 结构改动还需验证完整发布镜像的默认线程栈：`python3 tests/integration/verify-maintenance-startup.py --image <本地 linux/amd64 镜像> --output <新证据目录>`。该入口在带专属标签的内部 Docker 网络中创建 PostgreSQL/Redis，显式初始化测试库后启动完整服务；不设置 `RUST_MIN_STACK`，默认运行 330 秒以覆盖 300 秒维护兜底，随后验证三类采样排空、零重启和退出码 0。仅删除本次夹具并保留日志、inspect 和结果。大栈下的模块测试不能替代这个检查；空节点夹具及本机架构模拟也不能替代生产稳定观察。
+调度器或后台任务 future 结构改动时，使用 `python3 tests/integration/verify-maintenance-startup.py --image <本地 linux/amd64 镜像> --output <新证据目录>` 验证完整发布镜像。脚本在隔离的 PostgreSQL 和 Redis 上初始化并启动 API，以默认线程栈运行 330 秒，覆盖 300 秒维护兜底。它检查持续就绪、零重启、SIGTERM 后三类采样排空、正常退出以及 5 组历史留存的 14 条工作通道。过期采样工作和审计行各有一条清理夹具，运行日志、容器状态及结果保存在输出目录。
 
 执行计划性能专项单独运行：
 
@@ -58,7 +58,7 @@ TEST_DATABASE_URL=postgresql://... bash tests/performance/verify-query-plans.sh
 | `tests/performance/verify-snapshot-capacity.py` | 最终 Linux 镜像、Caddy 三副本及 Redis 停止／空重启；快照需属于当前基线。 |
 | `tests/integration/verify-backup-restore-compose.py` | 备份恢复及外部操作时间线不一致时的拒绝行为。 |
 
-先查看各脚本的参数和环境要求；提供命令行参数解析的 Python 专项可用 `--help` 查阅。当前脚本使用 v2。原迁移链的升级、旧版 mTLS 转换和旧版恢复专项已移除；当前快照测试仅接受新基线及其后续兼容迁移。镜像、内核下载、Docker 权限和 fixture 参数以各脚本为准；不将旧脚本的历史通过当作本次重新执行。
+快照测试使用当前基线和后续兼容迁移生成的备份。镜像、内核、Docker 权限和夹具参数见各入口的 `--help` 或源码。
 
 容量记录只描述具体数据、并发和限制下的实验。本机 Docker 可完成多实例功能验收，不要求额外原生 x86_64 服务器。生产 PostgreSQL、Redis 与 API 可分机部署，按实际主机角色核算资源。详见 [当前架构](architecture.md)。
 

@@ -2,9 +2,9 @@
 
 本文按业务模块说明每张表存什么、由谁使用，以及关联和维护边界，供开发、排障和备份恢复时查阅。
 
-核对日期：2026-11-04。范围为当前迁移链（0001～0010）和维护初始化代码，包含 **104 张应用持久表、1 张 SQLx 管理表、6 个普通视图**。
+范围为当前迁移链（0001～0015）和维护初始化代码，包含 **103 张应用持久表、1 张 SQLx 管理表、6 个普通视图**。
 
-**版本边界：**基线合并原 0001～0074 SQL 迁移的最终结构，仅支持新建空库；原迁移链数据库不兼容，不支持原地升级。2026-11-05 已部署生产 schema 10，详细状态见 production 发布记录。SQL 基线与 Rust 维护初始化分开执行，正常 API 启动继续只校验就绪状态。
+空库由 `--migrate-only` 应用完整迁移链并完成运行时初始化。正式启动校验迁移记录及初始化状态。兼容边界见 [安装指南](installation.md#database-baseline)。
 
 ## 阅读约定与目录
 
@@ -26,9 +26,9 @@
 | 监控采样 | 5 | [监控采样](#监控采样) |
 | 统计读模型与刷新队列 | 15 | [统计读模型与刷新队列](#统计读模型与刷新队列) |
 | 任务、事件与审计 | 8 | [任务、事件与审计](#任务事件与审计) |
-| 后台调度、执行与维护 | 11 | [后台调度、执行与维护](#后台调度执行与维护) |
+| 后台调度、执行与维护 | 10 | [后台调度、执行与维护](#后台调度执行与维护) |
 | 缓存版本 | 6 | [缓存版本](#缓存版本) |
-| 合计 | **104** | 另见 [SQLx 管理表](#sqlx-管理表)、[视图](#视图) 和 [已移除表与临时表](#已移除表与临时表) |
+| 合计 | **103** | 另见 [SQLx 管理表](#sqlx-管理表)和 [视图](#视图) |
 
 ## 主要数据关系
 
@@ -76,10 +76,10 @@ flowchart LR
 | --- | --- | --- | --- |
 | `nodes` | `id` | 节点主档；SSH 端点及固定凭据版本、节点鉴权令牌、期望/已部署配置和修订、发布连接参数、部署与 mTLS 状态、流量捕获模式。 | 核心业务来源；期望配置不等于远端已部署配置。SSH 秘密保存在凭据版本中，nodes 只保存版本引用。 |
 | `config_versions` | `id` | 节点配置历史；`(node_id, revision)` 唯一，保存加密快照、内容摘要和部署成功标记，供历史查看与回滚。 | 随节点级联删除；历史快照固定资源和凭据版本，删除需遵守引用约束。 |
-| `config_resources` | `id` | 节点配置附件，保存名称、类型、加密内容、摘要和大小；`(node_id, name)` 唯一。ACL、GeoIP、GeoSite 等由此提供。 | 随节点级联删除；当前 API 只接受普通配置资源；旧证书/私钥资源需要先通过独立升级工具转换，不能把初始 DDL 类型列表当成当前使用规则。 |
+| `config_resources` | `id` | 节点配置附件，保存名称、类型、加密内容、摘要和大小；`(node_id, name)` 唯一。ACL、GeoIP、GeoSite 等由此提供。 | 随节点级联删除。TLS 证书及私钥通过凭据中心版本引用。 |
 | `config_resource_references` | `(kind, source_id, source, resource_id)` | 从节点期望/已部署配置及历史快照提取的资源引用；外键约束资源与来源属于同一节点。 | 与凭据引用共用来源刷新机制；来源事务必须完成引用索引，防止仍被快照使用的资源被删。 |
 | `node_packages` | `node_id` | 节点整机套餐配置和计量状态：周期、累计用量、下次重置、下次评估时间、网卡计数基线、启动标识、限制状态。 | 一节点一行，随节点删除；这是整机配额计量，不能用用户流量总和替换。 |
-| `node_network_samples` | `id` | 整机网卡的历史增量，含套餐周期、收发字节、缺口原因和基线标记；也是 `source='network'` 统计的来源。 | 随节点删除；普通监控的 31 天清理不清此表，涉及套餐计量和统计。 |
+| `node_network_samples` | `id` | 整机网卡的历史增量，含套餐周期、收发字节、缺口原因和基线标记；也是 `source='network'` 统计的来源。 | 随节点删除；按 60 天窗口清理符合条件的历史，保留当前月度套餐周期的样本。 |
 | `node_alerts` | `id` | 节点告警记录；`(node_id, kind, scope)` 唯一，以 `active` 表示告警是否仍有效。 | 随节点级联删除；由节点套餐/限额业务维护。 |
 | `node_acme_observations` | `node_id` | 节点 ACME 组件状态观测，绑定配置修订、部署摘要、策略和采样时间。 | 观测不修改配置修订或 mTLS 激活状态；不保存节点本地 ACME 账户及证书私钥。 |
 
@@ -90,8 +90,8 @@ flowchart LR
 | 表 | 键 | 用途与关键关联 | 维护边界 |
 | --- | --- | --- | --- |
 | `users` | `id` | 用户主档、启用状态、到期时间、配额、已计费用量、重置时间及访问撤销标记。 | `usage_bytes` 是配额鉴权所用的计费状态；不能从当前保留的历史明细随意覆盖。 |
-| `node_assignments` | `(user_id, node_id)` | 用户实际获权节点关系；由授权异步任务生成，供节点认证和订阅使用。 | 随用户/节点删除；有效授权还需检查来源与即时排除。连接密码和订阅 Token 统一在 user_credentials；旧内嵌证书和逐节点证书绑定字段均已移除。 |
-| `user_credentials` | `id` | 用户连接密码和订阅 Token 的摘要、密文、类型、签发及撤销时间。 | 每用户每类型最多一份有效值；有效摘要按类型唯一；两种凭据联合轮换，随用户删除。 |
+| `node_assignments` | `(user_id, node_id)` | 用户实际获权节点关系；由授权异步任务生成，供节点认证和订阅使用。 | 随用户/节点删除；有效授权还需检查来源与即时排除。连接密码和订阅令牌保存在 `user_credentials`，托管 mTLS 身份按用户和 CA 管理。 |
+| `user_credentials` | `id` | 用户连接密码和订阅 Token 的摘要、密文、类型、签发及撤销时间。 | 每用户每类型最多一份有效值，有效摘要按类型唯一。联合轮换保留撤销历史，符合条件的已撤销记录在 90 天后清理。 |
 | `authorization_groups` | `id` | 授权组名称和修订，是批量管理用户与节点可见性的主实体。 | 删除会级联组成员关系；需通过业务流程协调有效授权及撤销。 |
 | `authorization_group_users` | `(group_id, user_id)` | 授权组的用户成员。 | 两端均有级联外键；与组节点集合共同决定授权结果。 |
 | `authorization_group_nodes` | `(group_id, node_id)` | 授权组的节点成员。 | 两端均有级联外键；多个组授予同一节点时不能只凭一组移除就撤销实际授权。 |
@@ -119,7 +119,6 @@ flowchart LR
 | `credential_reference_edges` | `(kind, source_id, source, field, credential_id, version)` | 配置引用具体凭据版本的索引，区分节点期望/已部署配置和历史快照，供引用展示与删除保护。 | 配置源是权威内容；外键与形状约束确保版本和历史来源有效。 |
 | `credential_reference_dirty` | `(kind, source_id)` | 配置来源待重建引用的队列，带单调 `generation`；同时驱动资源引用重建。 | 普通业务事务提交前必须刷新对应来源；维护初始化可分批处理，完成后才允许运行。不是可任意丢弃的异步提示。 |
 
-0007 在 SQL 中移除 `nodes` 旧 SSH 秘密字段及 `node_assignments` 旧客户端证书字段与逐节点证书绑定字段，收紧 SSH 引用与凭据类型约束，并删除历史转换标记表。服务不再运行历史 Rust 转换；测试库独立升级流程见 [迁移说明](../crates/hysteriax-server/migrations/README.md)。
 
 ## 托管 mTLS
 
@@ -178,7 +177,7 @@ DNS 连接凭据轮换还使用前述 [`dns_credential_batch_items`](#凭据分�
 
 | 表 | 键 | 用途与关键关联 | 维护边界 |
 | --- | --- | --- | --- |
-| `traffic_sample_batches` | `sample_id` | 一次持久捕获的主记录，预分配唯一 `sample_order`，保存节点/周期/实例、捕获状态、载荷摘要、项目数、处理进度和期限。保存历史捕获模式、清零请求执行身份和实例确认状态；0073 起只允许新建区间批次，切换检查字段已移除。 | 已捕获载荷在周期过期后仍须恢复结算；清零请求可能已改变远端计数，不能在接管时盲目重发。 |
+| `traffic_sample_batches` | `sample_id` | 一次持久捕获的主记录，预分配唯一 `sample_order`，保存节点/周期/实例、捕获状态、载荷摘要、项目数、处理进度和期限。保存捕获模式、清零请求执行身份和实例确认状态。新批次均为区间捕获。 | 已捕获载荷在周期过期后仍须恢复结算；清零请求可能已改变远端计数，不能在接管时盲目重发。 |
 | `traffic_sample_items` | `id` | 批次内逐用户捕获的收发计数与处理时间；`(sample_id, user_id)` 唯一，复合外键绑定批次及节点。 | 先持久化再分页结算；历史模式仅供解释旧记录；新批次的计数直接作为区间增量结算。`user_id` 无用户外键，允许保留未知/已删用户及探测条目。 |
 | `traffic_baselines` | `(node_id, user_id)` | 用户在节点的上次计数基线、远端实例、采样时间与顺序。 | 保留历史计数和实例信息；当前结算仅使用顺序检查点防止迟到或重复写入，不再计算累计差额。随节点/用户删除。 |
 | `traffic_records` | `id` | 已结算的逐用户流量增量账本，保存基线、增量、实例、缺口/基线标记、时间及样本 ID。 | 非空 `(sample_id, user_id)` 唯一以防重复入账；与用量、基线和批次进度原子更新。随节点/用户删除，不等于永久累计账单。 |
@@ -222,7 +221,7 @@ DNS 连接凭据轮换还使用前述 [`dns_credential_batch_items`](#凭据分�
 | `job_retry_chain_members` | `job_id` | 任务到重试链根的映射。 | 支持快速定位受影响的整条重试链。 |
 | `job_retry_state_dirty` | `job_id` | 待刷新重试链的任务 ID 及 generation。 | 任务或重试关系变化时标记；不能用旧刷新结果确认较新变更。 |
 
-刷新使用各队列独立的版本序列，确认时只比较版本令牌是否相等。
+五个脏队列各使用一个 bigint 序列分配版本令牌。刷新确认时比较令牌是否相等。相同汇总键及重试链根通过事务 advisory 锁协调，源写入期间更新的键留待后续刷新。
 
 ## 任务、事件与审计
 
@@ -237,7 +236,7 @@ DNS 连接凭据轮换还使用前述 [`dns_credential_batch_items`](#凭据分�
 | `event_publication_pending` | `event_id` | 已提交事件等待发布的队列，避免扫描全部事件历史。 | 事件插入同事务入队，发布器分批发布并确认；不应人工清空。 |
 | `audit_records` | `id` | 管理和系统业务操作审计：操作者、动作、实体类型/ID、详情及时间。 | 用于追溯业务变化；与任务事件、远端执行证据承担不同职责。 |
 | `audit_totals` | `id=true` | 审计总行数的单行读模型。 | insert/delete/truncate 语句触发器维护，供列表总数读取。 |
-| `kick_requests` | `(node_id, user_id)` | 跨任务保留的断连义务，记录原因集合、generation、execution_generation、当前状态及最新节点任务。 | 用户删除后仍保留用户 ID；节点删除时级联删除。同一节点仅有一个排队或运行中的 kick 任务，执行器每批读取最多 200 人，按代次确认进度；失败任务不会自动消除新模型的撤销义务。0002 迁移会按要求清空旧撤权需求和任务历史。 |
+| `kick_requests` | `(node_id, user_id)` | 跨任务保留的断连义务，记录原因集合、generation、execution_generation、当前状态及最新节点任务。 | 用户删除后仍保留用户 ID；节点删除时级联删除。同一节点仅有一个排队或运行中的 kick 任务，执行器每批读取最多 200 人，按代次确认进度；断连失败时保留未完成的撤权义务。 |
 
 ## 后台调度、执行与维护
 
@@ -247,15 +246,14 @@ DNS 连接凭据轮换还使用前述 [`dns_credential_batch_items`](#凭据分�
 | --- | --- | --- | --- |
 | `sampling_cycles` | `id` | 数据库时间对齐的采样周期、截止时间及冻结的期望节点数；`(kind, period_start)` 唯一。 | 周期创建时冻结节点成员工作，防止多实例重复创建及在线统计分母漂移。 |
 | `background_work` | `id` | 周期采样及非周期维护的持久工作，含载荷/游标、状态、执行者、代次、可执行/截止时间。 | 采样通常引用周期并关联节点；维护工作可无周期/节点。只有运行态有 owner，接管受资源租约保护。 |
-| `background_initialization` | `key` | 后台数据初始化完成标记，当前用于用户访问检查初始化。 | 旧流量接管标记已移除；流量就绪直接校验未完成批次是否具有对应执行任务。用户访问检查标记仍由维护入口写入和校验。 |
+| `background_initialization` | `key` | 后台数据初始化完成标记，当前用于用户访问检查初始化。 | 维护入口写入并校验用户访问检查标记。流量就绪检查要求未完成批次具备对应执行任务。 |
 | `service_instances` | `instance_id` | 服务进程实例登记、启动时间与数据库心跳。 | 描述存活情况，不能单凭心跳或实例消失就重放外部副作用。 |
 | `resource_leases` | `resource_key` | 节点、任务、后台工作等资源的排他租约，含 owner、单调 generation、到期、work、blocked 和 epoch。 | 释放后保留行以保持 fencing 代次。blocked 或未确认外部操作会阻止重新执行；不能当缓存删除。 |
-| `execution_operations` | `operation_id` | 外部副作用的持久意图及证据，固定资源、执行者、代次、epoch、工作和步骤，跟踪 dispatching/verified/reconciling/needs_attention。 | `(work_id, step)` 唯一；普通操作不可因响应丢失盲目重放，需按证据复核。 |
+| `execution_operations` | `operation_id` | 外部副作用的持久意图及证据，固定资源、执行者、代次、epoch、工作和步骤，跟踪 dispatching/verified/reconciling/needs_attention。 | `(work_id, step)` 唯一。未决操作按创建时间及操作 ID 倒序分页，支持按所属工作筛选。复核需要持久执行证据。 |
 | `execution_recheck_requests` | `namespace` | 远端执行复核请求命名空间和请求摘要的幂等预留。 | 保证同一复核请求不会被换成另一份输入；与实际复核过程分开保存。 |
 | `execution_rechecks` | `id` | 可恢复的远端 fencing 复核过程，保存唯一请求命名空间、目标操作、准备数据、状态及证明。 | 同一 operation 最多一个 prepared/dispatching 复核；这是受类型约束的复核，不是重发原业务命令。 |
 | `runtime_contract` | `id=true` | 已初始化 schema 版本、管理协议和共享主密钥指纹。 | 仅显式维护写入；正常启动校验一致性。指纹不包含主密钥。 |
 | `node_authorization_versions` | `node_id` | 节点有效授权成员的单调版本，支持分页部署身份准备时判断来源是否变化。 | 由 `node_assignments` 成员变更触发更新；独立于缓存/监控版本，随节点删除及 ID 更新。 |
-| 五个脏队列的版本序列 | 每队列一个 `bigint` 序列 | `hysteriax_mark_dirty` 分配不复用的版本令牌。 | 0012 替换了永久版本目录。确认必须匹配令牌，令牌数值顺序不表示提交顺序。 |
 
 基线不包含全局业务写锁：没有 `hysteriax_serialize_writes` 触发器及函数。SQLx 维护迁移互斥、资源租约、行锁、约束和事务重试继续生效。流程见 [架构](architecture.md)。
 
@@ -280,7 +278,7 @@ DNS 连接凭据轮换还使用前述 [`dns_credential_batch_items`](#凭据分�
 
 | 表 | 键 | 用途与关键关联 | 维护边界 |
 | --- | --- | --- | --- |
-| `_sqlx_migrations` | `version` | SQLx 自动建立的迁移历史，记录版本、描述、执行时间、成功状态和 checksum。 | 不在项目 `CREATE TABLE` 清单内。`bootstrap::check_schema` 将完整版本及 checksum 与镜像内嵌迁移逐项校验；不能伪造记录跳过尚未完成的迁移。当前生产经结构核验完成了[单基线元数据登记](installation.md#database-baseline)，没有重跑基线 SQL。 |
+| `_sqlx_migrations` | `version` | SQLx 自动建立的迁移历史，记录版本、描述、执行时间、成功状态和 checksum。 | 不在项目 `CREATE TABLE` 清单内。`bootstrap::check_schema` 将完整版本及 checksum 与镜像内嵌迁移逐项校验。 |
 
 运行入口见 [db.rs](../crates/hysteriax-server/src/db/mod.rs) 和 [bootstrap.rs](../crates/hysteriax-server/src/bootstrap/mod.rs)。SQLx 历史记录和 `runtime_contract`、各初始化标记共同说明数据库是否可被当前服务安全使用。
 
@@ -297,22 +295,6 @@ DNS 连接凭据轮换还使用前述 [`dns_credential_batch_items`](#凭据分�
 | `mtls_user_version_publication` | 在物理标记之上合成 CA 发布后的可见 released，以及从未发布即退役代的 discarded 状态。 | [基线](../crates/hysteriax-server/migrations/0001_baseline.sql)。 |
 | `mtls_superseded_node_jobs` | 已有轮换 outcome 的节点任务；分页物化取消状态前，先用已提交替代事实阻止执行。 | [基线](../crates/hysteriax-server/migrations/0001_baseline.sql)。 |
 
-## 已移除表与临时表
-
-| 对象 | 历史用途 | 当前情况 |
-| --- | --- | --- |
-| `authorization_group_previews` | 授权变更的预览令牌、摘要和过期记录。 | 0003 删除表、全部记录、索引与约束；授权变更统一直接执行。 |
-| `monitoring_leases` | 每节点监控 owner 与到期租约。 | 2026-10-22 代理采样重构后由 `background_work`、`resource_leases` 和 `monitoring_probe_tokens` 取代；0008 删除表、过期残留行、索引与约束。 |
-| `cache_generation` | 单行全局/配置缓存版本。 | 0045 删除，改用 epoch、桶版本和实体版本。 |
-| `cache_domain_versions` | 单行每域缓存版本。 | 0045 删除，改用每域 64 桶版本。 |
-| `job_cache_versions`（旧表） | 每任务缓存版本。 | 0045 删除实体表后，同名创建兼容视图。 |
-| `batch_cache_versions`（旧表） | 每凭据批次缓存版本。 | 0045 删除实体表后，同名创建兼容视图。 |
-| `traffic_history_cleanup_nodes` | 一次性历史清理的节点高水位、游标和删除进度。 | 原 0074 删除；当前基线不创建。 |
-| `traffic_history_cleanup_runs` | 一次性历史清理的运行记录与候选计数。 | 原 0074 删除；当前基线不创建。 |
-| `cache_source_domains`（临时表） | 原迁移链曾暂存旧触发器的缓存域映射，当前基线不创建。 | `CREATE TEMP TABLE ... ON COMMIT DROP`，基线不创建此临时表。 |
-
-测试中的 `retry_counter`、`guarded_progress` 等仅在隔离测试 schema 内创建，不属于应用正式表。
-
 ## 常见排查与维护边界
 
 | 现象/问题 | 优先检查 |
@@ -320,7 +302,7 @@ DNS 连接凭据轮换还使用前述 [`dns_credential_batch_items`](#凭据分�
 | 用户无法认证或没有订阅节点 | `users` → 授权组成员 → `node_assignments` → 节点部署/mTLS 状态；订阅 URL 另检查 `user_credentials`。 |
 | 用户流量疑似重复、缺失或迟到 | `traffic_sample_batches/items` → `traffic_records` 的样本唯一键 → `traffic_baselines.sample_order` → `users.usage_bytes` 和 `data_gaps`；注意捕获模式。 |
 | 整机套餐超额 | `node_packages`、`node_network_samples`、`node_limit_epochs`、`kick_requests`，不要用用户采样代替网卡计量。 |
-| 图表与原始行暂时不一致 | 对应分钟/小时读模型、脏队列及 `dirty_key_versions`；在线图表还要区分覆盖不足与测得零值。 |
+| 图表与原始行暂时不一致 | 对应分钟/小时读模型、脏队列及其版本令牌。在线图表还要区分覆盖不足与测得零值。 |
 | 工作一直无法接管 | `jobs/background_work` → `resource_leases` → `execution_operations`；不确定副作用需要证据复核，不能直接删租约。 |
 | 凭据或资源无法删除 | 当前/历史引用索引、固定版本外键、mTLS 代及仍有效/不确定信任引用。 |
 | DNS 本地状态与远端不一致 | `dns_records` 的 desired/remote_snapshot、`dns_operations`、关联任务及执行证据。 |
@@ -338,7 +320,7 @@ DNS 连接凭据轮换还使用前述 [`dns_credential_batch_items`](#凭据分�
 | `traffic_records`、`node_network_samples`、`traffic_baselines` | 60 天。月度套餐当前周期保留；`traffic_baselines` 仅在无对应 `node_assignments` 且节点无活跃采集批次时清理；固定套餐及用户当前配额、整机累计用量由各自业务表管理。 |
 | `traffic_minute_totals`、`traffic_hour_totals`、`user_node_usage` | 随源数据清理收敛。 |
 | `traffic_sample_batches`、`data_gaps` | 已完整结算或已丢弃（含已发起清零且无剩余账本/明细/执行引用）的批次与已解决缺口保留 60 天。 |
-| `deployment_probe_tokens`、`monitoring_probe_tokens` | 过期后立即清理（0 天）。 |
+| `deployment_probe_tokens`、`monitoring_probe_tokens` | 过期后进入后台清理范围（额外保留 0 天）。 |
 | `resource_leases`、`job_node_kick_totals` | 孤立元数据清理（0 天）：无持有者、未阻塞、无执行操作且对应实体已不存在的租约；各项计数全 0 且无对应节点或 `kick` 任务的累计行。 |
 | `service_instances`、`event_publications`、`background_work`、`kick_requests` | 30 天。停心跳实例无活跃租约/执行依赖时清理；发布按连续前缀清理；非采样 `background_work` 按终态白名单（含撤销、限额下发与已终结轮换工作）同步清理 `work:*` 租约；`kick_requests` 仅清理终态且无未决任务的记录。 |
 | `management_receipts`、`mtls_operations`、`cache_entity_versions` | 30 天。回执清理后按原 `job_id` 查询可能返回 404；`cache_entity_versions` 仅回收 `deleted AND kind <> 'quota_rank'` 的旧墓碑。 |
@@ -348,7 +330,7 @@ DNS 连接凭据轮换还使用前述 [`dns_credential_batch_items`](#凭据分�
 
 ## 核对实际数据库与维护本文
 
-上述清单以仓库迁移定义为准，生产已按 0010 维护迁移升级。可在目标库使用以下只读查询核对实际结构及迁移版本；请使用目标实例正确的 schema。
+以下只读查询使用当前会话的 schema 核对表、迁移历史及运行时版本。
 
 ```sql
 SELECT table_name, table_type
@@ -367,21 +349,9 @@ WHERE id;
 
 新增/移除表或将表改为视图时，应同步更新目录计数和对应用途；用途变更还需检查维护初始化中的 Rust 数据转换。只修改索引的迁移通常不新增表，不能以迁移文件数量推算表数。对部署库的实际结论，须结合上述查询、对应镜像版本及维护初始化是否成功。
 
-## 用户凭据联合轮换（schema 9）
-
-`users` 不再保存连接密码摘要或密文；`user_credentials.kind` 区分 `connection` 和 `subscription`，秘密值各自独立。用户创建时签发两种凭据；唯一轮换入口为 `POST /api/v2/users/{id}/credentials/rotate`，同一事务撤销两种旧值、插入新值、递增一次用户 revision、提交断连需求、审计及加密幂等回执。旧订阅 POST 入口删除。迁移保留现有秘密及订阅撤销历史，已有无订阅用户首次联合轮换时生成订阅。
-
-有效值通过 `(user_id,kind)` 和 `(kind,secret_hash)` 部分唯一索引查询，历史通过 `(user_id,kind,created_at,id)` 索引定位；认证和订阅读取均限定类型与 `revoked_at IS NULL`。凭据目录连接项仍每用户一条，订阅项保留签发历史；不按用户乘以节点展开。历史凭据随用户删除，当前不设置自动清理期限。
-
-## 锁争用修复（schema 10）
-
-`0010_lock_contention.sql` 为节点套餐增加 `next_evaluation_at` 及到期部分索引。配置修改使调度失效，配置保存、用量修正和采样事务立即评估；周期维护只处理到期节点。旧全节点扫描任务被移除，已有限制和恢复任务保留。
-
-统计汇总按队列分别提交，用事务 advisory 锁协调相同派生键和重试链根；计算期间不占用 dirty 行锁，最后按 generation 有条件确认，被源写入占用的键留待重算。`dirty_key_versions` 保持递增，历史查询继续覆盖未确认的派生结果。旧 `analytics_retry_guards` 表已删除，应用表数量为 104。
-
 ## 数据库膨胀治理与留存扩展（schema 15）
 
-`0015_database_bloat_retention.sql` 在不引入分表的前提下治理 10 万用户与 1 万节点规模的死元组、索引膨胀与历史表增长：
+[0015 迁移](../crates/hysteriax-server/migrations/0015_database_bloat_retention.sql)调整了高频历史表和队列的索引、清理触发器与 autovacuum 配置。
 
 - **裁剪热表冗余索引并统一节点最新/清理索引：** 删除 `online_samples_node_cleanup_idx`、`online_samples_node_time_idx`、`online_samples_retention_idx`、`proxy_probe_samples_node_cleanup_idx`、`proxy_probe_samples_node_time_idx`、`proxy_probe_samples_retention_idx`、`traffic_records_node_time_idx`、`node_network_samples_node_idx`；将 `proxy_probe_samples_node_latest_idx` 重建为 `(node_id, sampled_at DESC NULLS LAST, id DESC)`，与 `online_samples_node_latest_idx` 共同服务总览最新样本查询及 `node_cleanup` 游标分页，避免单节点数据偏斜时规划器回落到全局 `*_time_idx`。
 - **表级 autovacuum 与 fillfactor 调优：** 为 13 张高频追加/清理表设置 `autovacuum_vacuum_scale_factor = 0.01`、`vacuum_cost_limit = 2000`、`vacuum_cost_delay = 2`；为 9 张高周转 pending/dirty 队列表设置 `scale_factor = 0.0`、`threshold = 500`、`cost_delay = 0`；为 `cache_bucket_versions`、`node_packages`、`users`、`nodes`、`monitoring_probe_state` 设置 `fillfactor = 80` 提高 HOT 更新率。

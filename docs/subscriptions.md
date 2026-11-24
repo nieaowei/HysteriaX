@@ -2,11 +2,11 @@
 
 ## Initialization and compatibility
 
-Server and Mac client must use compatible versions. The current SQL baseline creates encrypted drafts and immutable published versions; explicit maintenance initialization creates one published default template per native format using the master key. Former migration-chain databases are not supported by this baseline; see [installation](installation.md#database-baseline).
+Use matching server and Mac client versions. Database maintenance initializes one published default template per native format. The master key encrypts both drafts and immutable published versions.
 
-The only public subscription route is `GET /sub/{token}`. The old `/sub/{token}/clash.yaml` route returns **404**. Management responses return one canonical `url`; `auto_url` and Mac legacy fallbacks are removed. Replace saved legacy links with a template/platform link from the upgraded Mac app or selection page. This feature does not deploy a server or change deployed nodes.
+The public subscription route is `GET /sub/{token}`. Copy the canonical address from the Mac app or request it from `GET /api/v2/users/{id}/subscription`. For a saved address ending in `/clash.yaml`, copy a fresh Mihomo link with the intended template and platform.
 
-Connection passwords and subscription tokens are stored together and rotated together through `POST /api/v2/users/{id}/credentials/rotate`. Rotation revokes the old subscription URL and connection password and queues session disconnection. The two values remain independent. New users receive both; `GET /api/v2/users/{id}/subscription` reads the current URL. The former subscription POST is removed.
+New users receive separate connection passwords and subscription tokens. Rotating through `POST /api/v2/users/{id}/credentials/rotate` revokes both old values and queues session disconnection. Copy the new subscription address after rotation.
 
 ## Addresses and qualification
 
@@ -14,8 +14,9 @@ Example: `/sub/{token}?template=default-mihomo&platform=windows`.
 
 - `template` selects a global published template. Every new request reads its current published version. A draft save never changes subscribers. Archived or unpublished explicit templates return 404.
 - Explicit `format=mihomo|singbox` must match a selected template. Without a template, explicit format or recognized UA selects that format's current default.
-- `platform=linux|openwrt|macos|windows|android|ios` selects a platform projection; OpenWrt aliases Linux. Explicit platform wins over UA. Omitted or `auto` uses OS detection; unknown OS shows the platform selection page. It never silently assumes Linux.
-- Unknown client families show all active published templates and explicit platform URLs. Links retain the selected template and determine the format from that template.
+- `platform=linux|openwrt|macos|windows|android|ios` selects a platform projection. OpenWrt aliases Linux. An explicit platform takes precedence over the user agent. For a selected native template or format, an unresolved platform opens a selection page scoped to that template.
+- Opening the canonical address in a browser shows all active published templates. The Linux/OpenWrt, macOS, Windows, Android and iOS tabs switch the displayed addresses. The detected platform is selected and marked as recommended. An explicit platform filter limits the page to that target.
+- Each template card provides copy and open actions for an address with explicit template, format and platform, plus collapsible compatibility notes. The unscoped page also has separate Base64 and URI cards.
 - `format=uri|base64` produces authorized node links directly and needs no platform. Combining these formats with `template` returns 400.
 - Invalid/repeated template, format, or platform parameters return 400.
 
@@ -25,7 +26,7 @@ Public responses use `Cache-Control: private, no-store`, `Vary: User-Agent`, `Re
 
 ## Configuration document
 
-Only schema 2 is supported. A document contains `schema_version: 2`, `common` (one native configuration object), and independent `injections`. Platform overlays, set/remove patches, and schema 1 conversion are removed. Existing schema 2 documents may contain empty `platforms: {}` metadata; it has no behavior and is omitted from exports.
+Use schema 2. A document contains `schema_version: 2`, `common` (one native configuration object), and independent `injections`. A complete template package carries that same document together with the format.
 
 The editor changes the single configuration directly. `false`, `0`, `null`, and empty arrays remain ordinary values. Generation projects this configuration onto the selected platform, excluding unsupported fields and reporting the omissions. Validation covers the common configuration and all five platform projections. Schema 1 input is rejected; no automatic data migration is performed.
 
@@ -35,13 +36,17 @@ The shared `platform-capabilities.json` records explicit upstream documentation 
 
 ## Draft, publication, and rollback
 
-The Mac editor offers format filtering, create/duplicate/rename/default/archive, common/platform selection, field search, typed controls, inheritance/set/removal, ordered arrays, source editing, undo/redo, and independent dynamic node selection rules. sing-box fields with contextual guidance expose an information button for their explanation or documented default, plus a configuration-documentation link. Links follow protocol, shared-field, and rule-action ownership; nested OpenVPN/TUN headings are located when available. The form follows the pinned 1.14.2 catalog; the linked online documentation may describe newer versions. Reading guidance or previewing defaults never changes the draft. Source parsing/serialization runs on the server. Invalid source stays in the local buffer and blocks replacing parsed form state. Navigation retains each service's editor in memory; quitting prompts to save or discard unsaved drafts.
+Open a template in the Mac workbench. Use the sidebar to switch modules or search for a field and jump directly to it. The form marks explicitly configured values and shows field diagnostics. The collapsible diagnostics pane opens on errors. Collections, Mihomo rules and node injections support filtered lists and item editing.
 
-Every persistent write uses `expected_revision`; stale requests return 409. The editor retains local changes, fetches a comparison copy, and offers an explicit choice to adopt the latest revision. It never silently retries an overwrite.
+Use the source editor for native YAML or JSON. It provides line numbers, Find and undo/redo. The server parses and serializes the source. Invalid source remains in the local buffer until corrected. sing-box fields with contextual guidance provide the documented default where available and a link to the upstream configuration reference. The form follows the pinned 1.14.2 catalog. Navigation retains each service's editor in memory. Quitting prompts to save or discard unsaved drafts.
+
+Every persistent write uses `expected_revision`. On a 409 conflict the editor retains local changes and shows a comparison with the latest revision. Diff cards are also available when reviewing publication and comparing published versions.
 
 Publication validates all five projected target configurations and exercises the production renderer with empty and representative node sets. Publication atomically inserts a new encrypted version and changes the active pointer. Rollback revalidates historical content and publishes it as a **new** version. History is not rewritten. Default template archive requires an active published replacement of the same format and its revision. Archive retains drafts/history.
 
-Preview selects a real user, explicit platform, and optional stable kernel version. It shares the download renderer, is `no-store`, and redacts credentials by default; an administrator may explicitly reveal them. Results include origins, platform omissions, filtered-node reasons, selection results, and layer/path diagnostics. Final native exports use the same pipeline. Redacted preview exports retain their redaction; choose full credentials explicitly when an operational file is required.
+To export a usable configuration in the Mac app, open the user's subscription menu, choose a published template and target platform, then export the final YAML or JSON. Keep the file private because it contains connection material.
+
+For API integrations, the template preview selects a real user, explicit platform and optional stable kernel version. It uses the download renderer, sends `no-store`, and redacts credentials by default. Results include origins, platform omissions, filtered-node reasons, selections and diagnostics.
 
 ## Dynamic nodes and import/export
 
@@ -59,13 +64,10 @@ mTLS sing-box nodes retain `disable_chrome_parrot: true`. Realm retains its inde
 
 ## API and validation
 
-Fixed native schemas are checked against their meta-schemas during every relevant Cargo build, including container builds. The independent `hysteriax-template-validator` crate checks original files and actual prepared rules, then uses jsonschema 0.59.0's compile-time macro to generate validators. Ordinary server-code changes reuse that crate's compiled artifact; Schema, preparation, compiler, feature or dependency changes can correctly invalidate it. The server passes borrowed JSON values and receives field paths without constructing a runtime Schema validator. All user-configuration, reference, platform and final-render checks remain active. No endpoint accepts a replacement Schema. The former 0.33.0 patch has been removed; there is no active production patch.
+The independent `hysteriax-template-validator` crate checks the fixed native schemas and prepared rules against their meta-schemas at build time and compiles validators with jsonschema 0.59.0. Ordinary server-code changes reuse that artifact. The server passes borrowed JSON values and receives field paths, then applies reference, platform and final-render checks.
 
 `python3 tests/contracts/verify-subscription-schema-build-gate.py` proves corrupted raw and prepared rules fail the build without modifying repository sources, application-only edits reuse the same rlib, and valid Schema changes rebuild and change verdicts. `python3 tests/contracts/verify-subscription-validator-compatibility.py` compares the actual internal crate with the frozen 1,046-case verdict/path baseline in `tests/fixtures/template-validator`. `python3 tests/contracts/verify-subscription-schema-runtime.py --image <locally-built-image>` checks fresh Linux processes, both formats and five platforms, invalid configurations, repeated validation and four-worker concurrency. It enforces a 96 MiB process peak and at most 16 MiB growth after warming the same workload. The offline `hysteriax-server --check-template-runtime` diagnostic needs no database or secrets; it reports Linux RSS/peak/Swap without starting service workers.
 
 Under `/api/v2/subscription-templates`: paginated list/create; `/{id}` metadata/patch; `/{id}/draft` read/save; `/{id}/validate`, `/preview`, `/publish`, `/rollback`; `/{id}/versions` and `/versions/{version}`; `/fields`, `/source`, `/import`, `/{id}/export`, and `/{id}/refactor` (cross-layer group/rule-set rename of a local document). See the OpenAPI specification for request/response DTOs. Body-bearing reads/previews are not cached. Audit events include successful and failed operation results, revisions, publication/source versions, and error codes; they never include document bodies or error messages containing configuration text.
 
-Runtime and publication do not spawn real kernels or fetch remote rule files. CI retains digest-pinned Mihomo/sing-box checks and a real local SOCKS forwarding fixture in `tests/integration/verify-subscription.py`. These checks validate supported-platform examples and transport behavior; they do not prove every target's runtime compatibility. Rust tests exercise storage/publication/authorization/cache behavior; `apps/macos/Tests/runners/verify-subscription-client.sh` checks explicit URL selection, HTML-export rejection, single-configuration editing and schema 1 rejection, and typed catalog coverage.
-
-
-The Mac regression script `apps/macos/Tests/runners/verify-subscription-template-ui.py` runs a uniquely identified temporary app against an isolated local service/database schema. It verifies native JSON/YAML file saves, complete-package reimport, explicit copy/download addresses, editing, platform overrides, publication and rollback. `tests/integration/verify-subscription-template-lifecycle.py --container <disposable-postgres-container>` verifies actual process restart and full pg_dump/pg_restore in dedicated temporary databases; it is also run in Linux CI.
+Runtime validation operates on the configuration. Digest-pinned Mihomo and sing-box checks and the local SOCKS forwarding fixture run through `tests/integration/verify-subscription.py`. The [Mac regression index](../apps/macos/Tests/README.md) covers explicit subscription links, typed editing, import/export and publication workflows. `tests/integration/verify-subscription-template-lifecycle.py --container <disposable-postgres-container>` verifies process restart and whole-database restore in temporary databases.

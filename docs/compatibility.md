@@ -4,7 +4,7 @@
 
 The Xcode release project builds a Universal app with `arm64` and `x86_64` slices and a macOS 26.0 deployment target. The separate [SwiftPM manifest](../apps/macos/Package.swift) declares Swift tools 6.4 and macOS 27; use the Xcode release workflow for the Universal distribution. [Release verification](release.md) checks executable slices and deployment versions.
 
-The current server and client use management protocol 2 and API 2.0.0 at `/api/v2`. Use the matching protocol 2 client. Existing subscription and node-authentication URLs retain their contracts. New installations apply the SQL baseline to an empty database. Former 0001–0074 migration records are rejected; the verified production database has completed explicit metadata normalization to baseline 1, without replaying its SQL. See [database compatibility](installation.md#database-baseline).
+The server and Mac client use management protocol 2 and API 2.0.0 at `/api/v2`. Use matching releases. The client verifies the server's protocol and required management endpoints before saving a connection. See the [database compatibility requirements](installation.md#database-baseline).
 
 ## Pinned node and subscription runtimes
 

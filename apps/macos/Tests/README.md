@@ -14,4 +14,13 @@ bash apps/macos/Tests/runners/verify-node-task-feedback.sh
 bash apps/macos/Tests/runners/verify-subscription-client.sh
 ```
 
+| 场景 | 入口 |
+| --- | --- |
+| 授权组分页、编辑及任务交互 | [客户端回归](runners/verify-authorization-groups-client.sh)、[UI 回归](runners/verify-authorization-groups-ui.py) |
+| 任务状态、反馈和筛选文字 | [任务反馈](runners/verify-node-task-feedback.sh)、[显示文字](runners/verify-management-display-text.sh) |
+| 订阅地址与模板编辑 | [订阅客户端回归](runners/verify-subscription-client.sh)、[模板工作台 UI](runners/verify-subscription-template-ui.py) |
+| 模板集合与选择器交互 | [集合编辑](runners/verify-template-collection-ui.sh)、[选择器](runners/verify-template-picker-ui.sh) |
+
+需要联网服务的 UI runner 使用隔离 API 与数据库，具体参数见相应入口的 `--help`。
+
 更多仓库级入口及隔离服务要求见 [测试索引](../../../tests/README.md) 和 [部署与回归验证](../../../docs/deployment-testing.md)。构建及运维工具见 [操作脚本索引](../../../scripts/README.md)。

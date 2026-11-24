@@ -1,7 +1,5 @@
 # 文档索引
 
-本目录保留当前使用、开发与运维指南。已提交的历史计划、审计和验收记录可从 Git 历史查阅。
-
 构建、生成、运维及迁移工具见 [操作脚本索引](../scripts/README.md)；仓库级验证与性能入口见 [测试索引](../tests/README.md)。
 
 ## 安装与运维
@@ -10,6 +8,7 @@
 | --- | --- |
 | [项目入门](../README.md) | 功能、首次连接和常用操作。 |
 | [安装与升级](installation.md) | 本机构建并传输镜像、维护迁移、多实例及开发环境。 |
+| [采样与历史留存](installation.md#sampling-concurrency) | 采样并发、运行参数、自动留存窗口与清理日志。 |
 | [备份与恢复](backup-restore.md) | 数据库、主密钥、外部操作时间线及节点 ACME 私钥。 |
 | [故障排查](troubleshooting.md) | 就绪、协议、并发写、订阅和 HTTPS 故障。 |
 | [发布](release.md) | Universal DMG、容器发布及版本切换。 |
@@ -23,11 +22,11 @@
 | [目录与测试归属](code-layout.md) | 组件源码、操作工具、仓库级测试、客户端测试及共享资源的放置规则。 |
 | [数据库表用途](database-tables.md) | 全部数据库表、视图、关键关联、数据来源及维护边界。 |
 | [凭据](credentials.md) · [托管 mTLS](managed-mtls.md) | 凭据版本、CA 轮换和身份迁移。 |
-| [授权组](authorization-groups.md) · [节点套餐](node-packages.md) | 用户授权及整机配额。 |
-| [订阅](subscriptions.md) · [字段覆盖](field-coverage.md) | 模板发布、平台选择及配置支持。 |
+| [授权组](authorization-groups.md) · [节点套餐](node-packages.md) | 用户授权、挂起任务恢复及整机配额。 |
+| [订阅](subscriptions.md) · [字段覆盖](field-coverage.md) | 浏览器平台标签、模板工作台、发布及配置支持。 |
 | [DNS](dns.md) · [节点 ACME](node-acme.md) | 域名管理及节点独立证书维护。 |
 | [验证指南](deployment-testing.md) | 验证入口、隔离要求及发布边界。 |
 
 ## 版本与维护
 
-当前管理协议为 2，管理 API 使用 `/api/v2`。所有普通 API 停止后，单独运行 `--migrate-only`，校验完成再启动。数据库、主密钥及节点 ACME 私钥的保存与恢复方式见 [备份与恢复](backup-restore.md)。
+当前管理协议为 2，管理 API 使用 `/api/v2`。数据库初始化和升级使用独立的 `--migrate-only`，迁移定义和测试库演练工具见 [数据库迁移](../crates/hysteriax-server/migrations/README.md)。
