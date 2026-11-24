@@ -10,7 +10,7 @@ extension Notification.Name {
 final class TemplateEditorWindows {
     private(set) var sessions: [TemplateEditorID: SubscriptionTemplateStore] = [:]
     @ObservationIgnored private var controllers: [TemplateEditorID: TemplateEditorWindowController] = [:]
-    func connectionChanged() { for model in sessions.values { model.invalidatePreview() } }
+    func connectionChanged() {}
     func reconcile(store: ManagementStore) async {
         guard let api = try? store.requireConnectedAPI() else { return }
         for (id, model) in sessions where id.service == TemplateEditorID(service: store.serviceAddress, template: id.template).service {
@@ -34,7 +34,7 @@ final class TemplateEditorWindows {
         }
         sessions[id] = model
         let controller = TemplateEditorWindowController(id: id, model: model, store: store) { [weak self] in
-            model.closed = true; model.invalidatePreview()
+            model.closed = true
             self?.sessions[id] = nil; self?.controllers[id] = nil
         }
         controllers[id] = controller
@@ -52,13 +52,13 @@ final class TemplateEditorWindowController: NSWindowController, NSWindowDelegate
     private let onClose: () -> Void
     init(id: TemplateEditorID, model: SubscriptionTemplateStore, store: ManagementStore, onClose: @escaping () -> Void) {
         self.id = id; self.model = model; self.store = store; self.onClose = onClose
-        var initialWidth: CGFloat = 1200
+        var initialWidth: CGFloat = 1060
         #if HYSTERIAX_UI_TESTING
         let args = ProcessInfo.processInfo.arguments
         if let index = args.firstIndex(of: "-layoutWidth"), args.indices.contains(index + 1), let width = Double(args[index + 1]) { initialWidth = width }
-        else { initialWidth = 1350 }
+        else { initialWidth = 1160 }
         #endif
-        let available = NSScreen.main?.visibleFrame.size ?? NSSize(width: 1200, height: 800)
+        let available = NSScreen.main?.visibleFrame.size ?? NSSize(width: 1060, height: 800)
         // Let NavigationSplitView own the sidebar material and toolbar safe area
         // across the full window, including the titlebar.
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: min(initialWidth, available.width), height: min(800, available.height)), styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
@@ -67,7 +67,7 @@ final class TemplateEditorWindowController: NSWindowController, NSWindowDelegate
         window.titleVisibility = .visible
         window.titlebarAppearsTransparent = true
         window.toolbarStyle = .unified
-        window.contentMinSize = NSSize(width: 920, height: 640)
+        window.contentMinSize = NSSize(width: 780, height: 580)
         window.contentViewController = NSHostingController(rootView: SubscriptionTemplateWorkbench(store: store, model: model).environment(\.locale, L10n.locale))
         window.setContentSize(NSSize(width: min(initialWidth, available.width), height: min(800, available.height - 52)))
         window.delegate = self; window.isReleasedWhenClosed = false; window.center()

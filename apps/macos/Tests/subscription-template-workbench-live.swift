@@ -32,9 +32,8 @@ private struct WorkbenchFixture: Decodable {
         precondition(model.document["schema_version"] == .integer(2))
         model.set(["mixed-port"], .integer(0))
         try await model.save(api)
-        model.previewUserID = fixture.userId; model.previewPlatform = "windows"
-        try await model.render(api, user: fixture.userId, platform: "windows", version: "", reveal: false)
-        precondition(!model.previewStale && model.preview["source"]?.stringValue?.contains("mixed-port: 0") == true)
+        try await model.validate(api)
+        precondition(model.hasValidated && model.errorCount == 0)
         try await model.preparePublish(api)
         precondition(!(model.publishDiff.arrayValue ?? []).isEmpty)
         try await model.publish(api)
@@ -43,7 +42,7 @@ private struct WorkbenchFixture: Decodable {
         precondition(published.contains("mixed-port: 0"))
 
         model.set(["mixed-port"], .integer(9001))
-        precondition(model.previewStale)
+        precondition(model.dirty && !model.hasValidated)
         try await model.save(api)
         let unchanged = try await download(fixture)
         precondition(unchanged.contains("mixed-port: 0"), "Saving a draft must preserve the published subscription")
@@ -89,7 +88,7 @@ private struct WorkbenchFixture: Decodable {
         precondition(stillPublished.contains("mixed-port: 0") && model.selected?.publishedVersion == 3)
         let package = try await api.get(APIEndpoints.exportSubscriptionTemplate(id: fixture.templateId))
         precondition(package["document"] == model.document && package["package_version"]?.integerValue == 1)
-        print("Real-service workbench source, preview, save/publish isolation, history/rollback, and import/export passed.")
+        print("Real-service workbench source, validation, save/publish isolation, history/rollback, and import/export passed.")
     }
 
     private static func download(_ fixture: WorkbenchFixture) async throws -> String {

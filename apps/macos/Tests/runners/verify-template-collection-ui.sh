@@ -22,6 +22,10 @@ swiftc -swift-version 6 -parse-as-library \
   "$root/apps/macos/Sources/HysteriaX/Services/APIClient.swift" \
   "$root/apps/macos/Sources/HysteriaX/Services/ManagementEvent.swift" \
   "$root/apps/macos/Sources/HysteriaX/Services/ManagementWriteJournal.swift" \
+  "$root/apps/macos/Sources/HysteriaX/Views/StatusBadge.swift" \
+  "$root/apps/macos/Sources/HysteriaX/Views/ToastFeedback.swift" \
+  "$root/apps/macos/Sources/HysteriaX/Views/DetailPaneChrome.swift" \
+  "$root/apps/macos/Sources/HysteriaX/Views/TemplateDiffView.swift" \
   "$root/apps/macos/Sources/HysteriaX/Views/TemplateCollectionFields.swift" \
   "$root/apps/macos/Tests/template-collection-deletion.swift" -o "$tmp_dir/template-collection-deletion-tests"
 "$tmp_dir/template-collection-deletion-tests" "$root/crates/hysteriax-server/src/api/subscriptions/templates/singbox.schema.json"

@@ -10,6 +10,20 @@ enum TemplateModule {
         if ["mode", "log-level", "log", "ipv6", "profile", "ntp", "secret", "certificate", "certificate_providers", "http_clients"].contains(key) || key.hasPrefix("external-controller") || key.hasPrefix("external-ui") || key == "external-doh-server" { return "基础配置" }
         return "高级配置"
     }
+    static func symbol(_ module: String) -> String {
+        switch module {
+        case "基础配置": "slider.horizontal.3"
+        case "DNS": "network"
+        case "入站与服务": "arrow.down.circle"
+        case "代理组／出站": "arrow.up.right.circle"
+        case "分流规则": "arrow.triangle.branch"
+        case "节点注入": "bolt.horizontal.circle"
+        case "实验性配置": "flask"
+        case "高级配置": "gearshape.2"
+        case "版本历史": "clock.arrow.circlepath"
+        default: "doc.text"
+        }
+    }
 }
 
 enum TemplateFieldLayout {

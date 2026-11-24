@@ -38,21 +38,34 @@ struct TemplateStructuredFieldEditor: View {
         let variants = self.variants
         let dialerKeys = TemplateFieldLayout.dialerFields(in: visibleKeys)
         VStack(spacing: 0) {
-            HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(title).font(.title2.bold())
-                    Text(SubscriptionTemplateStore.pointer(path)).font(.caption.monospaced()).foregroundStyle(.secondary).textSelection(.enabled)
+            DetailHeaderBar {
+                HStack {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(title).font(.title2.bold())
+                        HStack(spacing: 4) {
+                            Text(SubscriptionTemplateStore.pointer(path))
+                                .font(.caption.monospaced())
+                                .foregroundStyle(.secondary)
+                                .textSelection(.enabled)
+                            CopyActionButton(value: SubscriptionTemplateStore.pointer(path), title: L10n.text("已复制字段路径"))
+                        }
+                    }
+                    Spacer()
+                    if let url = TemplateEditorGuidance.documentURL(path, schema: store.schema, value: store.effective) {
+                        Link(L10n.text("配置文档"), destination: url)
+                    }
+                    Button(L10n.text("撤销"), systemImage: "arrow.uturn.backward") { store.undo() }
+                        .labelStyle(.iconOnly)
+                        .help(L10n.text("撤销"))
+                        .keyboardShortcut("z", modifiers: .command)
+                        .disabled(store.undoStack.isEmpty)
+                    Button(L10n.text("重做"), systemImage: "arrow.uturn.forward") { store.redo() }
+                        .labelStyle(.iconOnly)
+                        .help(L10n.text("重做"))
+                        .keyboardShortcut("z", modifiers: [.command, .shift])
+                        .disabled(store.redoStack.isEmpty)
                 }
-                Spacer()
-                if let url = TemplateEditorGuidance.documentURL(path, schema: store.schema, value: store.effective) {
-                    Link(L10n.text("配置文档"), destination: url)
-                }
-                Button(L10n.text("撤销"), systemImage: "arrow.uturn.backward") { store.undo() }
-                    .labelStyle(.iconOnly).disabled(store.undoStack.isEmpty)
-                Button(L10n.text("重做"), systemImage: "arrow.uturn.forward") { store.redo() }
-                    .labelStyle(.iconOnly).disabled(store.redoStack.isEmpty)
-            }.padding(20)
-            Divider()
+            }
             if let error = store.error { Text(error).foregroundStyle(.red).textSelection(.enabled).padding(.horizontal, 20) }
             ScrollViewReader { reader in
             Form {
@@ -131,7 +144,7 @@ struct TemplateStructuredFieldEditor: View {
             Divider()
             TemplateEditorFooter(store: store) { dismiss() }
         }
-        .frame(width: 800, height: 640)
+        .frame(minWidth: 760, idealWidth: 820, minHeight: 560, idealHeight: 660)
         .accessibilityIdentifier("templates.complexEditor")
     }
     @ViewBuilder private func fields(_ keys: [String], properties: [String: JSONValue], group: String) -> some View {
@@ -195,6 +208,7 @@ struct TemplateEditorFooter: View {
             .keyboardShortcut(.cancelAction)
             .accessibilityIdentifier("templates.editor.cancel")
             Button(L10n.text("完成"), action: close)
+                .buttonStyle(.borderedProminent)
                 .keyboardShortcut(.defaultAction)
                 .accessibilityIdentifier("templates.editor.done")
         }
@@ -264,8 +278,14 @@ struct TemplateMapFields: View {
                                 .padding(10)
                                 .contentShape(Rectangle())
                                 .background(selectedKey == key ? Color.accentColor.opacity(0.12) : Color.clear, in: RoundedRectangle(cornerRadius: 8))
+                                .interactiveRowHover(cornerRadius: 8)
                                 .onTapGesture { selectedKey = key }
                                 .onTapGesture(count: 2) { open(key) }
+                                .contextMenu {
+                                    Button(L10n.text("编辑")) { open(key) }
+                                    Divider()
+                                    Button(L10n.text("删除项目"), role: .destructive) { store.deleteField(parent: path, key: key) }
+                                }
                             if key != keys.last { Divider().padding(.horizontal, 10) }
                         }
                     }

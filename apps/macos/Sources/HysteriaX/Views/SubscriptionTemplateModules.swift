@@ -3,79 +3,205 @@ import SwiftUI
 struct SubscriptionTemplateSidebar: View {
     @Bindable var store: ManagementStore
     @Bindable var model: SubscriptionTemplateStore
+    @State private var fieldSearch = ""
+
+    private var trimmedSearch: String {
+        fieldSearch.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var searchResults: [SubscriptionTemplateStore.TemplateSearchableField] {
+        guard !trimmedSearch.isEmpty else { return [] }
+        let query = trimmedSearch.lowercased()
+        return model.searchableFields.filter {
+            $0.keywords.contains(query) || $0.pointer.localizedCaseInsensitiveContains(trimmedSearch)
+        }
+    }
 
     var body: some View {
-        List(selection: Binding<String?>(get: { model.module }, set: { next in
-            guard let next else { return }
-            if model.sourceMode {
-                model.run { try await model.syncSource(store.requireConnectedAPI()); model.sourceMode = false; model.module = next }
-            } else { model.module = next }
-        })) {
-            ForEach(TemplateModule.all, id: \.self) {
-                Text(L10n.text($0)).tag($0).accessibilityIdentifier("templates.module.\($0)")
+        VStack(spacing: 0) {
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
+                TextField(L10n.text("搜索配置项…"), text: $fieldSearch)
+                    .textFieldStyle(.plain)
+                    .font(.callout)
+                    .accessibilityIdentifier("templates.fieldSearch")
+                if !fieldSearch.isEmpty {
+                    Button {
+                        fieldSearch = ""
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .help(L10n.text("清除搜索"))
+                    .accessibilityLabel(L10n.text("清除搜索"))
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(.quaternary.opacity(0.45), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .padding(.horizontal, 10)
+            .padding(.top, 8)
+            .padding(.bottom, 6)
+
+            if trimmedSearch.isEmpty {
+                List(selection: Binding<String?>(get: { model.module }, set: { next in
+                    guard let next else { return }
+                    if model.sourceMode {
+                        model.run {
+                            try await model.syncSource(store.requireConnectedAPI())
+                            model.sourceMode = false
+                            model.module = next
+                        }
+                    } else {
+                        model.module = next
+                    }
+                })) {
+                    ForEach(TemplateModule.all, id: \.self) { module in
+                        HStack(spacing: 8) {
+                            Image(systemName: TemplateModule.symbol(module))
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                                .frame(width: 16, alignment: .center)
+                                .accessibilityHidden(true)
+                            Text(L10n.text(module))
+                                .lineLimit(1)
+                            Spacer(minLength: 4)
+                            moduleBadge(for: module)
+                        }
+                        .tag(module)
+                        .accessibilityIdentifier("templates.module.\(module)")
+                    }
+                }
+                .listStyle(.sidebar)
+            } else if searchResults.isEmpty {
+                VStack(spacing: 6) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.title3)
+                        .foregroundStyle(.secondary)
+                    Text(L10n.text("未找到匹配的配置项"))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding()
+            } else {
+                List(searchResults) { field in
+                    Button {
+                        jumpToField(field)
+                    } label: {
+                        VStack(alignment: .leading, spacing: 3) {
+                            HStack(spacing: 6) {
+                                Text(field.title)
+                                    .font(.callout)
+                                    .lineLimit(1)
+                                if model.effective.at(field.path) != nil {
+                                    Circle()
+                                        .fill(Color.accentColor)
+                                        .frame(width: 5, height: 5)
+                                        .accessibilityHidden(true)
+                                }
+                                Spacer(minLength: 0)
+                            }
+                            HStack(spacing: 4) {
+                                Text("\(L10n.text(field.module)) · \(L10n.text(field.section))")
+                                    .lineLimit(1)
+                                Spacer(minLength: 4)
+                                Text(field.pointer)
+                                    .font(.caption2.monospaced())
+                                    .foregroundStyle(.tertiary)
+                                    .lineLimit(1)
+                            }
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.vertical, 2)
+                }
+                .listStyle(.sidebar)
+            }
+
+            if let selected = model.selected {
+                Divider()
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 6) {
+                        StatusBadge(
+                            selected.format == "singbox" ? "sing-box" : "Mihomo",
+                            tone: .neutral,
+                            size: .compact,
+                            showDot: false
+                        )
+                        StatusBadge(
+                            selected.publishedVersion.map { "v\($0)" } ?? L10n.text("未发布"),
+                            tone: selected.publishedVersion != nil ? .positive : .neutral,
+                            size: .compact,
+                            showDot: false
+                        )
+                        if selected.isDefault {
+                            StatusBadge(L10n.text("默认"), tone: .accent, size: .compact, showDot: false)
+                        }
+                    }
+                    if let kernel = model.catalog["kernel_version"].stringValue, !kernel.isEmpty {
+                        Text(L10n.text("内核版本：{0}", kernel))
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
             }
         }
-        .listStyle(.sidebar)
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("templates.modules")
+    }
+
+    @ViewBuilder
+    private func moduleBadge(for module: String) -> some View {
+        let diag = model.moduleDiagnostics[module]
+        if let errors = diag?.errors, errors > 0 {
+            SidebarCountBadge(count: errors, tone: .danger)
+        } else if let warnings = diag?.warnings, warnings > 0 {
+            SidebarCountBadge(count: warnings, tone: .warning)
+        } else if module == "节点注入" {
+            let count = (model.document["injections"].arrayValue ?? []).count
+            if count > 0 {
+                SidebarCountBadge(count: count, tone: .neutral)
+            }
+        } else if module == "版本历史", !model.history.isEmpty {
+            SidebarCountBadge(count: model.history.count, tone: .neutral)
+        }
+    }
+
+    private func jumpToField(_ field: SubscriptionTemplateStore.TemplateSearchableField) {
+        if model.sourceMode {
+            model.run {
+                try await model.syncSource(store.requireConnectedAPI())
+                model.sourceMode = false
+                model.focusedPath = field.pointer
+            }
+        } else {
+            model.focusedPath = field.pointer
+        }
     }
 }
 
 struct SubscriptionTemplateModules: View {
     @Bindable var store: ManagementStore
     @Bindable var model: SubscriptionTemplateStore
+    var toast: ToastCenter? = nil
     @State private var rollbackVersion: Int?
     @State private var confirmRollback = false
-    private var properties: [String: JSONValue] { model.schema.resolve(model.catalog["schema"], value: model.effective)["properties"].objectValue ?? [:] }
-    private struct Field: Identifiable {
-        let path: [String]
-        let definition: JSONValue
-        var id: String { SubscriptionTemplateStore.pointer(path) }
-    }
-    private func resolved(_ field: Field) -> JSONValue {
-        model.schema.resolve(model.schema.editorDefinition(field.definition, path: field.path), value: model.effective.at(field.path) ?? .null)
-    }
-    private func isComplex(_ field: Field) -> Bool {
-        let schema = resolved(field)
-        return ["object", "array"].contains(schema["type"].stringValue ?? (model.effective.at(field.path) ?? .null).schemaType)
-    }
-    private func showsRootDetails(_ root: String) -> Bool {
-        if root == "log" { return model.effective.at([root, "disabled"])?.boolValue != true }
-        if root == "ntp" {
-            let children = model.schema.resolve(properties[root] ?? .null, value: model.effective[root])["properties"].objectValue ?? [:]
-            let key = children["enabled"] != nil ? "enabled" : "enable"
-            let value = model.effective.at([root, key]) ?? model.initialValue(children[key] ?? .null, path: [root, key])
-            return value.boolValue == true
-        }
-        return true
-    }
-    private var moduleFields: [Field] {
-        properties.keys.sorted().filter { TemplateModule.destination($0) == model.module }.flatMap { key -> [Field] in
-            let field = Field(path: [key], definition: properties[key]!)
-            let schema = resolved(field)
-            // Fixed objects expose their fields directly without a parent state row.
-            guard TemplateFieldLayout.expandedObjects.contains(key), schema["type"].stringValue == "object",
-                  schema["x-unverified"].boolValue != true,
-                  let children = schema["properties"].objectValue, !children.isEmpty else { return [field] }
-            guard model.allowed([key], value: model.effective.at([key]) ?? .null) else { return [field] }
-            let documentedVisible = Set(TemplateEditorGuidance.visibleKeys(schema, path: [key], schema: model.schema, value: model.effective))
-            let documentedKeys = TemplateEditorGuidance.ordered(Array(children.keys), path: [key], schema: model.schema, value: model.effective)
-            let visibleKeys = documentedKeys.sorted {
-                if key == "dns", ($0 == "disable_cache") != ($1 == "disable_cache") {
-                    return $0 == "disable_cache"
-                }
-                if key == "ntp" {
-                    let leftSwitch = ["enabled", "enable"].contains($0)
-                    let rightSwitch = ["enabled", "enable"].contains($1)
-                    if leftSwitch != rightSwitch { return leftSwitch }
-                }
-                return documentedKeys.firstIndex(of: $0)! < documentedKeys.firstIndex(of: $1)!
-            }.filter {
-                documentedVisible.contains($0) && (showsRootDetails(key) || (key == "log" && $0 == "disabled") || (key == "ntp" && ["enabled", "enable"].contains($0)))
-            }
-            return visibleKeys.map { Field(path: [key, $0], definition: children[$0]!) }
-        }
-    }
-    @ViewBuilder private func fieldEditor(_ field: Field, showsHeader: Bool) -> some View {
+    private var properties: [String: JSONValue] { model.rootProperties }
+    @ViewBuilder private func fieldEditor(_ field: SubscriptionTemplateStore.TemplateModuleField, showsHeader: Bool) -> some View {
         if field.path == ["proxies"] { Text(L10n.text("动态节点连接参数只读")) }
         else {
             SubscriptionTemplateFields(
@@ -85,55 +211,9 @@ struct SubscriptionTemplateModules: View {
             )
         }
     }
-    private struct FieldSection: Identifiable {
-        let title: String
-        let fields: [Field]
-        var dialerPath: [String]? = nil
-        var id: String { dialerPath.map { "dialer:" + SubscriptionTemplateStore.pointer($0) } ?? title }
-    }
-    private var fieldSections: [FieldSection] {
-        let visibleFields = moduleFields.filter { field in
-            if field.path == ["route", "default_interface"], model.effective["route"]["auto_detect_interface"].boolValue == true { return false }
-            guard field.path.first == "dns" else { return true }
-            let key = field.path.last ?? ""
-            if model.effective.at(["dns", "disable_cache"])?.boolValue == true,
-               key != "disable_cache",
-               TemplateFieldLayout.section(path: field.path, complex: isComplex(field)) == "缓存设置" { return false }
-            if key == "optimistic", model.effective.at(["dns", "disable_expire"])?.boolValue == true { return false }
-            return true
-        }
-        let rootFields = Dictionary(grouping: visibleFields.filter { $0.path.count == 2 }) { $0.path[0] }
-        let dialerKeys = rootFields.mapValues { TemplateFieldLayout.dialerFields(in: $0.compactMap { $0.path.last }) }
-        let groups = Dictionary(grouping: visibleFields) { field in
-            if field.path.count == 2, let root = field.path.first, dialerKeys[root]?.contains(field.path[1]) == true { return "dialer:" + root }
-            return TemplateFieldLayout.section(path: field.path, complex: isComplex(field))
-        }
-        func orderingTitle(_ group: String) -> String {
-            if group.hasPrefix("dialer:") { return TemplateFieldLayout.section(path: [String(group.dropFirst(7)), "detour"], complex: false) }
-            return group
-        }
-        return groups.keys.sorted { TemplateFieldLayout.precedes(orderingTitle($0), orderingTitle($1), module: model.module) }.map { group in
-            if group.hasPrefix("dialer:") {
-                let root = String(group.dropFirst(7))
-                let keys = dialerKeys[root] ?? []
-                let fields = (groups[group] ?? []).sorted { keys.firstIndex(of: $0.path.last ?? "") ?? keys.count < keys.firstIndex(of: $1.path.last ?? "") ?? keys.count }
-                return FieldSection(title: TemplateFieldLayout.section(path: [root], complex: true), fields: fields, dialerPath: [root])
-            }
-            return FieldSection(title: group, fields: groups[group] ?? [])
-        }
-    }
-    private var unknownNestedFields: [String] {
-        let roots = Set(moduleFields.filter { $0.path.count > 1 }.compactMap { $0.path.first })
-        return roots.sorted().flatMap { root in
-            guard showsRootDetails(root) else { return [String]() }
-            let known = model.schema.resolve(properties[root]!, value: model.effective[root])["properties"].objectValue ?? [:]
-            return (model.effective[root].objectValue ?? [:]).keys.filter { known[$0] == nil }.sorted().map {
-                SubscriptionTemplateStore.pointer([root, $0])
-            }
-        }
-    }
     @ViewBuilder private var configurationSections: some View {
-        ForEach(fieldSections) { section in
+        let layout = model.moduleLayout(for: model.module)
+        ForEach(layout.sections) { section in
             if let path = section.dialerPath {
                 Section {
                     TemplateDialerSettings(store: model, path: path, title: L10n.text(section.title)) {
@@ -143,20 +223,26 @@ struct SubscriptionTemplateModules: View {
             } else {
             Section {
                 ForEach(section.fields) { field in
-                    fieldEditor(field, showsHeader: section.fields.count > 1 || !isComplex(field))
+                    fieldEditor(field, showsHeader: section.fields.count > 1 || !field.isComplex)
                 }
             } header: {
-                if section.fields.count == 1, let field = section.fields.first, isComplex(field) {
-                    TemplateFieldLabel(store: model, path: field.path, title: L10n.text(section.title), value: model.effective.at(field.path))
+                if section.fields.count == 1, let field = section.fields.first, field.isComplex {
+                    TemplateFieldLabel(
+                        store: model,
+                        path: field.path,
+                        title: L10n.text(section.title),
+                        value: model.effective.at(field.path),
+                        presentation: model.fieldPresentation(path: field.path, definition: field.definition)
+                    )
                 } else {
                     Text(L10n.text(section.title))
                 }
             }.id("section:" + section.id)
             }
         }
-        if !unknownNestedFields.isEmpty {
+        if !layout.unknownNestedFields.isEmpty {
             Section(L10n.text("未验证字段")) {
-                ForEach(unknownNestedFields, id: \.self) { Text($0).textSelection(.enabled).foregroundStyle(.secondary) }
+                ForEach(layout.unknownNestedFields, id: \.self) { Text($0).textSelection(.enabled).foregroundStyle(.secondary) }
                 Text(L10n.text("未验证字段：保留原值，可通过源码编辑。"))
             }
         }
@@ -164,31 +250,14 @@ struct SubscriptionTemplateModules: View {
     var body: some View {
         VStack(spacing: 0) {
             if model.sourceMode {
-                VStack(alignment: .leading, spacing: 12) {
-                    Text(L10n.text("源码编辑整份配置；节点注入规则在独立导航中管理。"))
-                        .font(.caption).foregroundStyle(.secondary)
-                    TextEditor(text: $model.source).font(.system(.body, design: .monospaced)).accessibilityIdentifier("templates.source")
-                }.padding(12)
+                TemplateSourceEditor(model: model, toast: toast)
             } else {
                 ScrollViewReader { reader in
                     Form {
                         if model.module == "节点注入" {
                             Section(L10n.text("节点注入")) { SubscriptionTemplateInjections(store: model) }
                         } else if model.module == "版本历史" {
-                            Section(L10n.text("发布历史")) {
-                                ForEach(model.history, id: \.pretty) { entry in
-                                    HStack {
-                                        Text("v\(entry["version"].integerValue ?? 0)")
-                                        Text(entry["created_at"].stringValue ?? "").foregroundStyle(.secondary)
-                                        Spacer()
-                                        Button(L10n.text("对比")) { model.run { try await model.compare(store.requireConnectedAPI(), version: entry["version"].integerValue ?? 0) } }
-                                        Button(L10n.text("回滚")) { rollbackVersion = entry["version"].integerValue; confirmRollback = true }.accessibilityIdentifier("templates.rollback.\(entry["version"].integerValue ?? 0)")
-                                    }
-                                }
-                            }
-                            if let historical = model.comparison {
-                                Section(L10n.text("结构化差异")) { Text(SubscriptionTemplateStore.difference(historical, model.document).pretty).font(.system(.caption, design: .monospaced)).textSelection(.enabled) }
-                            }
+                            historySections
                         } else {
                             configurationSections
                             if model.module == "高级配置" {
@@ -198,47 +267,245 @@ struct SubscriptionTemplateModules: View {
                                 }
                             }
                         }
-                    }.formStyle(.grouped).frame(minWidth: 260)
+                    }
+                    .formStyle(.grouped)
+                    .frame(minWidth: 260)
+                    .disabled(model.busy)
                     .onChange(of: model.focusGeneration) { _, _ in
                         let path = model.focusedPath
                         let root = SubscriptionTemplateStore.path(path).first ?? ""
-                        if root == "injections" { model.module = "节点注入" }
-                        else { model.module = TemplateModule.destination(root) }
-                        DispatchQueue.main.async { reader.scrollTo(path, anchor: .center) }
+                        let targetModule = root == "injections" ? "节点注入" : TemplateModule.destination(root)
+                        let switched = model.module != targetModule
+                        model.module = targetModule
+                        if switched {
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                                withAnimation(.easeInOut(duration: 0.2)) {
+                                    reader.scrollTo(path, anchor: .center)
+                                }
+                            }
+                        } else {
+                            DispatchQueue.main.async {
+                                withAnimation(.easeInOut(duration: 0.2)) {
+                                    reader.scrollTo(path, anchor: .center)
+                                }
+                            }
+                        }
                     }
                 }
             }
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("templates.editor")
-        .confirmationDialog("回滚将发布新版本并替换当前本地修改。", isPresented: $confirmRollback) {
-            Button(L10n.text("回滚并发布"), role: .destructive) { model.run { if let rollbackVersion { try await model.rollback(store.requireConnectedAPI(), version: rollbackVersion) } } }
+        .confirmationDialog(L10n.text("回滚将发布新版本并替换当前本地修改。"), isPresented: $confirmRollback) {
+            Button(L10n.text("回滚并发布"), role: .destructive) {
+                model.run {
+                    if let rollbackVersion {
+                        try await model.rollback(store.requireConnectedAPI(), version: rollbackVersion)
+                        toast?.show(L10n.text("已回滚至 v{0} 并发布新版本", String(rollbackVersion)), tone: .positive)
+                    }
+                }
+            }
             Button(L10n.text("取消"), role: .cancel) {}
+        }
+    }
+
+    @ViewBuilder
+    private var historySections: some View {
+        Section(L10n.text("发布历史")) {
+            if model.history.isEmpty {
+                ContentUnavailableView(
+                    L10n.text("暂无发布记录"),
+                    systemImage: "clock.arrow.circlepath",
+                    description: Text(L10n.text("点击工具栏中的发布按钮创建首个正式版本。"))
+                )
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 16)
+            } else {
+                ForEach(Array(model.history.enumerated()), id: \.offset) { _, entry in
+                    let version = entry["version"].integerValue ?? 0
+                    let createdAt = entry["created_at"].stringValue ?? ""
+                    let isCurrent = model.selected?.publishedVersion == version
+                    let isComparing = model.comparisonVersion == version && model.comparison != nil
+                    HStack(spacing: 10) {
+                        Text("v\(version)")
+                            .font(.body.weight(.semibold))
+                            .monospacedDigit()
+                        if isCurrent {
+                            StatusBadge(L10n.text("当前发布"), tone: .positive, size: .compact, showDot: false)
+                        }
+                        Text(DateDisplayText.local(createdAt))
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                        Spacer()
+                        Button(isComparing ? L10n.text("对比中") : L10n.text("对比")) {
+                            model.run { try await model.compare(store.requireConnectedAPI(), version: version) }
+                        }
+                        .disabled(model.busy)
+                        Button(L10n.text("回滚")) {
+                            rollbackVersion = version
+                            confirmRollback = true
+                        }
+                        .disabled(model.busy)
+                        .accessibilityIdentifier("templates.rollback.\(version)")
+                    }
+                    .padding(.vertical, 2)
+                    .interactiveRowHover()
+                }
+            }
+        }
+        if let historical = model.comparison {
+            Section {
+                TemplateDiffView(
+                    diff: SubscriptionTemplateStore.difference(historical, model.document),
+                    emptyMessage: L10n.text("当前草稿与 v{0} 完全一致。", String(model.comparisonVersion ?? 0)),
+                    toast: toast
+                )
+            } header: {
+                HStack {
+                    Text(L10n.text("版本对比：v{0} → 当前草稿", String(model.comparisonVersion ?? 0)))
+                    Spacer()
+                    Button(L10n.text("关闭对比")) {
+                        model.comparison = nil
+                        model.comparisonVersion = nil
+                    }
+                    .buttonStyle(.borderless)
+                    .font(.caption)
+                }
+            }
         }
     }
 }
 
-struct SubscriptionTemplateDiagnostics: View {
+struct SubscriptionTemplateDiagnosticsBar: View {
     @Bindable var store: ManagementStore
     @Bindable var model: SubscriptionTemplateStore
-    @State private var expanded = false
+    @Binding var isExpanded: Bool
+
+    private var sortedIssues: [(severity: String, issue: JSONValue)] {
+        let errors = model.diagnostics.filter { ($0["severity"].stringValue ?? "warning") == "error" }.map { ("error", $0) }
+        let warnings = model.diagnostics.filter { ($0["severity"].stringValue ?? "warning") != "error" }.map { ("warning", $0) }
+        return errors + warnings
+    }
+
     var body: some View {
-        DisclosureGroup(isExpanded: $expanded) {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 8) {
-                    ForEach(["error", "warning"], id: \.self) { severity in
-                        ForEach(Array(model.diagnostics.enumerated()).filter { $0.element["severity"].stringValue == severity }, id: \.offset) { _, issue in
-                            Button {
-                                model.run { try await model.focus(issue, api: store.requireConnectedAPI()) }
-                            } label: {
-                                Text("\(issue["layer"].stringValue ?? "common")\(issue["path"].stringValue ?? "") · \(issue["message"].stringValue ?? "")").frame(maxWidth: .infinity, alignment: .leading)
-                            }.buttonStyle(.link).foregroundStyle(severity == "error" ? .red : .orange)
+        VStack(spacing: 0) {
+            Divider()
+            HStack(spacing: 10) {
+                Button {
+                    withAnimation(.snappy(duration: 0.2)) {
+                        isExpanded.toggle()
+                    }
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 12)
+                        if model.errorCount > 0 {
+                            StatusBadge(L10n.text("{0} 错误", String(model.errorCount)), tone: .danger, size: .compact)
+                        }
+                        if model.warningCount > 0 {
+                            StatusBadge(L10n.text("{0} 警告", String(model.warningCount)), tone: .warning, size: .compact)
+                        }
+                        if model.errorCount == 0 && model.warningCount == 0 {
+                            StatusBadge(
+                                model.hasValidated ? L10n.text("校验通过") : L10n.text("未校验"),
+                                tone: model.hasValidated ? .positive : .neutral,
+                                size: .compact
+                            )
+                        }
+                        Text(L10n.text("诊断 · {0} 错误 · {1} 警告", String(model.errorCount), String(model.warningCount)))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+
+                Spacer()
+
+                if !model.hasValidated && !model.diagnostics.isEmpty {
+                    Text(L10n.text("草稿已修改，请重新校验"))
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+
+                Button(L10n.text("立即校验")) {
+                    model.run {
+                        try await model.validate(store.requireConnectedAPI())
+                        if model.errorCount > 0 || model.warningCount > 0 {
+                            isExpanded = true
                         }
                     }
                 }
-            }.frame(maxHeight: 140)
-        } label: {
-            Text(L10n.text("诊断 · {0} 错误 · {1} 警告", String(model.diagnostics.filter { $0["severity"].stringValue == "error" }.count), String(model.diagnostics.filter { $0["severity"].stringValue == "warning" }.count)))
-        }.font(.caption).accessibilityIdentifier("templates.diagnostics")
+                .buttonStyle(.borderless)
+                .font(.caption)
+                .disabled(model.suspended || model.busy)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+
+            if isExpanded {
+                Divider()
+                let issues = sortedIssues
+                if issues.isEmpty {
+                    HStack(spacing: 8) {
+                        Image(systemName: model.hasValidated ? "checkmark.circle.fill" : "info.circle")
+                            .foregroundStyle(model.hasValidated ? Color.green : Color.secondary)
+                        Text(model.hasValidated
+                             ? L10n.text("当前配置无诊断错误或警告。")
+                             : L10n.text("尚未运行校验；点击「立即校验」检查配置。"))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 12)
+                } else {
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 4) {
+                            ForEach(Array(issues.enumerated()), id: \.offset) { _, entry in
+                                let issue = entry.issue
+                                let isError = entry.severity == "error"
+                                let layer = issue["layer"].stringValue ?? "common"
+                                let layerTitle = layer == "common" ? L10n.text("通用") : TemplatePlatform.title(layer)
+                                let pathText = issue["path"].stringValue ?? ""
+                                let message = issue["message"].stringValue ?? ""
+                                Button {
+                                    model.run { try await model.focus(issue, api: store.requireConnectedAPI()) }
+                                } label: {
+                                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                                        Image(systemName: isError ? "xmark.circle.fill" : "exclamationmark.triangle.fill")
+                                            .font(.caption)
+                                            .foregroundStyle(isError ? Color.red : Color.orange)
+                                        StatusBadge(layerTitle, tone: .neutral, size: .compact, showDot: false)
+                                        Text(pathText.isEmpty ? "/" : pathText)
+                                            .font(.system(.caption, design: .monospaced))
+                                            .foregroundStyle(.secondary)
+                                        Text(message)
+                                            .font(.caption)
+                                            .foregroundStyle(.primary)
+                                            .multilineTextAlignment(.leading)
+                                            .frame(maxWidth: .infinity, alignment: .leading)
+                                    }
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 5)
+                                    .contentShape(Rectangle())
+                                }
+                                .buttonStyle(.plain)
+                                .interactiveRowHover(cornerRadius: 6)
+                            }
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 8)
+                    }
+                    .frame(minHeight: 110, maxHeight: 200)
+                }
+            }
+        }
+        .background(.bar)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("templates.diagnostics")
     }
 }

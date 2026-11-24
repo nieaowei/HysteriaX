@@ -21,6 +21,10 @@ swiftc -swift-version 6 -parse-as-library \
   "$root/apps/macos/Sources/HysteriaX/Services/APIClient.swift" \
   "$root/apps/macos/Sources/HysteriaX/Services/ManagementEvent.swift" \
   "$root/apps/macos/Sources/HysteriaX/Services/ManagementWriteJournal.swift" \
+  "$root/apps/macos/Sources/HysteriaX/Views/StatusBadge.swift" \
+  "$root/apps/macos/Sources/HysteriaX/Views/ToastFeedback.swift" \
+  "$root/apps/macos/Sources/HysteriaX/Views/DetailPaneChrome.swift" \
+  "$root/apps/macos/Sources/HysteriaX/Views/TemplateDiffView.swift" \
   "$root/apps/macos/Sources/HysteriaX/Views/TemplateCollectionFields.swift" \
   "$root/apps/macos/Sources/HysteriaX/Views/TemplateHTTPClientFields.swift" \
   "$root/apps/macos/Sources/HysteriaX/Models/TemplateFieldLayout.swift" \

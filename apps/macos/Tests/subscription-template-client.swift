@@ -42,22 +42,6 @@ private final class OfflineTemplateSession: URLProtocol, @unchecked Sendable {
     override func stopLoading() {}
 }
 
-private final class DelayedTemplatePreview: URLProtocol, @unchecked Sendable {
-    static let started = Mutex(0)
-    override class func canInit(with request: URLRequest) -> Bool { true }
-    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
-    override func startLoading() {
-        Self.started.withLock { $0 += 1 }
-        DispatchQueue.global().asyncAfter(deadline: .now() + 0.15) { [self] in
-            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type":"application/json"])!
-            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-            client?.urlProtocol(self, didLoad: Data(#"{"source":"old preview","diagnostics":[]}"#.utf8))
-            client?.urlProtocolDidFinishLoading(self)
-        }
-    }
-    override func stopLoading() {}
-}
-
 @main struct SubscriptionTemplateClientTests {
     @MainActor static func main() async throws {
         let rejectMethods: [JSONValue] = [.string(""), .string("default"), .string("drop"), .string("reply")]
@@ -886,24 +870,17 @@ private final class DelayedTemplatePreview: URLProtocol, @unchecked Sendable {
         precondition(sibling.document == siblingBaseline && !sibling.dirty && sibling.undoStack.isEmpty)
         let nullDiff = SubscriptionTemplateStore.difference(.object([:]), .object(["future":.null]))
         precondition(nullDiff.arrayValue?.first?["operation"] == .string("add"))
-        let previewConfiguration = URLSessionConfiguration.ephemeral; previewConfiguration.protocolClasses = [DelayedTemplatePreview.self]
-        let previewAPI = APIClient(baseURL: URL(string: "https://preview.invalid")!, token: "fixture", session: URLSession(configuration: previewConfiguration))
-        let previewModel = SubscriptionTemplateStore(); previewModel.connectedAPI = previewAPI; previewModel.selected = store.selected
-        previewModel.document = sibling.document; previewModel.baseline = previewModel.document
-        let oldPreview = Task { try await previewModel.render(previewAPI, user: "user", platform: "windows", version: "", reveal: false) }
-        while DelayedTemplatePreview.started.withLock({ $0 }) == 0 { try await Task.sleep(for: .milliseconds(5)) }
-        previewModel.set(["zero"], .integer(7))
-        try await oldPreview.value
-        precondition(previewModel.preview.isEmpty && previewModel.previewStale)
-        try await previewModel.render(previewAPI, user: "user", platform: "windows", version: "", reveal: false)
-        precondition(!previewModel.previewStale && previewModel.preview["source"] == .string("old preview"))
-        previewModel.undo(); precondition(previewModel.previewStale && previewModel.preview.isEmpty)
-        let suspendedDocument = previewModel.document
-        previewModel.sessionAvailable = { _ in false }
-        do { try await previewModel.save(previewAPI); preconditionFailure("suspended editor must not save") } catch is CancellationError { }
-        precondition(previewModel.document == suspendedDocument)
-        previewModel.sessionAvailable = nil; previewModel.closed = true
-        do { try await previewModel.render(previewAPI, user: "user", platform: "windows", version: "", reveal: false); preconditionFailure("closed editor must not render") } catch is CancellationError { }
+        let sessionConfiguration = URLSessionConfiguration.ephemeral; sessionConfiguration.protocolClasses = [TemplateSaveSession.self]
+        let sessionAPI = APIClient(baseURL: URL(string: "https://session.invalid")!, token: "fixture", session: URLSession(configuration: sessionConfiguration))
+        let sessionModel = SubscriptionTemplateStore(); sessionModel.connectedAPI = sessionAPI; sessionModel.selected = store.selected
+        sessionModel.document = sibling.document; sessionModel.baseline = sessionModel.document
+        let suspendedDocument = sessionModel.document
+        sessionModel.sessionAvailable = { _ in false }
+        do { try await sessionModel.save(sessionAPI); preconditionFailure("suspended editor must not save") } catch is CancellationError { }
+        precondition(sessionModel.document == suspendedDocument)
+        sessionModel.sessionAvailable = nil; sessionModel.closed = true
+        do { try await sessionModel.validate(sessionAPI); preconditionFailure("closed editor must not validate") } catch is CancellationError { }
+        try verifyWorkbenchOptimizations(directory: URL(fileURLWithPath: CommandLine.arguments[1]))
         let saveConfiguration = URLSessionConfiguration.ephemeral; saveConfiguration.protocolClasses = [TemplateSaveSession.self]
         let saveAPI = APIClient(baseURL: URL(string: "https://save.invalid")!, token: "fixture", session: URLSession(configuration: saveConfiguration))
         let savingModel = SubscriptionTemplateStore(); savingModel.connectedAPI = saveAPI; savingModel.selected = store.selected
@@ -938,8 +915,119 @@ private final class DelayedTemplatePreview: URLProtocol, @unchecked Sendable {
         withObservationTracking { _ = reconnectingModel.suspended } onChange: { observedConnection.value.withLock { $0 = true } }
         reconnectingModel.connectedAPI = switchedAPI
         precondition(observedConnection.value.withLock { $0 }, "reconnection must update the window's suspended state")
-        print("Workbench identity, session isolation, structured null diff, suspension, and stale preview guards passed.")
+        print("Workbench identity, session isolation, structured null diff, suspension, and optimization guards passed.")
         print("Template single-configuration editing, schema 1 rejection, undo/redo, unknown fields, and typed catalog coverage passed.")
+    }
+    @MainActor private static func verifyWorkbenchOptimizations(directory: URL) throws {
+        let mihomoRoot = try JSONDecoder().decode(JSONValue.self, from: Data(contentsOf: directory.appendingPathComponent("mihomo.schema.json")))
+        let singboxRoot = try JSONDecoder().decode(JSONValue.self, from: Data(contentsOf: directory.appendingPathComponent("singbox.schema.json")))
+        let capabilities = try JSONDecoder().decode(JSONValue.self, from: Data(contentsOf: directory.appendingPathComponent("platform-capabilities.json")))
+        let optStore = SubscriptionTemplateStore()
+        optStore.catalog = .object(["format": .string("mihomo"), "schema": mihomoRoot, "platform_rules": capabilities["mihomo"]])
+        precondition(optStore.searchableFields.contains { $0.pointer == "/mixed-port" && $0.module == "入站与服务" })
+        precondition(optStore.searchableFields.contains { $0.pointer == "/tproxy-port" && $0.module == "入站与服务" })
+        precondition(optStore.supportedPlatforms(["tproxy-port"]) == ["linux"])
+        precondition(optStore.supportedPlatforms(["mixed-port"]) == TemplatePlatform.all)
+
+        optStore.catalog = .object(["format": .string("singbox"), "schema": singboxRoot, "platform_rules": capabilities["singbox"]])
+        precondition(optStore.searchableFields.contains { $0.pointer == "/experimental/cache_file" && $0.module == "实验性配置" })
+        precondition(optStore.searchableFields.contains { $0.pointer == "/dns/disable_cache" && $0.module == "DNS" })
+        precondition(optStore.supportedPlatforms(["tproxy-port"]) == TemplatePlatform.all, "Catalog switch must invalidate platform support cache")
+        precondition(optStore.supportedPlatforms(["inbounds", "0", "type"], value: .string("tproxy")) == ["linux"])
+
+        let initialDoc: JSONValue = .object([
+            "schema_version": .integer(2),
+            "common": .object([
+                "outbounds": .array([.object(["tag": .string("select"), "type": .string("selector")])]),
+                "dns": .object(["disable_cache": .bool(true)])
+            ]),
+            "injections": .array([.object(["group": .string("select"), "contains": .string("hk")])])
+        ])
+        optStore.document = initialDoc
+        optStore.baseline = initialDoc
+        precondition(!optStore.isDocumentDirty && !optStore.dirty)
+        optStore.set(["dns", "disable_cache"], .bool(false))
+        precondition(optStore.isDocumentDirty && optStore.dirty)
+        optStore.undo()
+        precondition(!optStore.isDocumentDirty && !optStore.dirty)
+        optStore.sourceMode = true
+        optStore.sourceBaseline = "{}"
+        optStore.source = "{\"edited\":true}"
+        precondition(optStore.dirty && !optStore.isDocumentDirty)
+        optStore.source = "{}"
+        precondition(!optStore.dirty)
+        optStore.sourceMode = false
+
+        let dup1 = optStore.duplicateItem(path: ["outbounds"], index: 0)
+        precondition(dup1 == 1 && optStore.effective["outbounds"].arrayValue?.count == 2)
+        precondition(optStore.effective["outbounds"].arrayValue?[1]["tag"] == .string("select-copy"))
+        let dup2 = optStore.duplicateItem(path: ["outbounds"], index: 0)
+        precondition(dup2 == 1 && optStore.effective["outbounds"].arrayValue?[1]["tag"] == .string("select-copy-2"))
+        optStore.undo()
+        optStore.undo()
+        precondition(optStore.document == initialDoc)
+
+        let dupInj = optStore.duplicateInjection(at: 0)
+        precondition(dupInj == 1 && optStore.document["injections"].arrayValue?.count == 2)
+        optStore.undo()
+        precondition(optStore.document == initialDoc)
+
+        optStore.diagnostics = [
+            .object(["severity": .string("error"), "layer": .string("common"), "path": .string("/outbounds/0/tag"), "message": .string("bad tag")]),
+            .object(["severity": .string("warning"), "layer": .string("linux"), "path": .string("/dns/disable_cache"), "message": .string("warn dns")]),
+            .object(["severity": .string("warning"), "layer": .string("common"), "path": .string("/injections/0"), "message": .string("warn injection")])
+        ]
+        precondition(optStore.errorCount == 1 && optStore.warningCount == 2)
+        precondition(optStore.moduleDiagnostics["代理组／出站"] == .init(errors: 1, warnings: 0))
+        precondition(optStore.moduleDiagnostics["DNS"] == .init(errors: 0, warnings: 1))
+        precondition(optStore.moduleDiagnostics["节点注入"] == .init(errors: 0, warnings: 1))
+        precondition(optStore.diagnosticsByPointer["/outbounds/0/tag"]?.count == 1)
+        precondition(optStore.diagnosticsByPointer["/dns/disable_cache"]?.count == 1)
+
+        // Verify moduleLayout & fieldPresentation cache invalidation on edit/undo/catalog switch.
+        let basicBefore = optStore.moduleLayout(for: "基础配置")
+        let basicFieldCountBefore = basicBefore.sections.flatMap(\.fields).count
+        let ntpEnabledDef = optStore.rootProperties["ntp"]!
+        let ntpPresBefore = optStore.fieldPresentation(path: ["ntp", "enabled"], definition: optStore.schema.resolve(ntpEnabledDef)["properties"]["enabled"])
+        precondition(ntpPresBefore.value == .bool(false) && !ntpPresBefore.isExplicitlySet)
+        optStore.set(["ntp", "enabled"], .bool(true))
+        let basicAfter = optStore.moduleLayout(for: "基础配置")
+        let basicFieldCountAfter = basicAfter.sections.flatMap(\.fields).count
+        precondition(basicFieldCountAfter > basicFieldCountBefore, "Enabling NTP must invalidate moduleLayout cache")
+        let ntpPresAfter = optStore.fieldPresentation(path: ["ntp", "enabled"], definition: optStore.schema.resolve(ntpEnabledDef)["properties"]["enabled"])
+        precondition(ntpPresAfter.value == .bool(true) && ntpPresAfter.isExplicitlySet)
+        optStore.undo()
+        precondition(optStore.moduleLayout(for: "基础配置").sections.flatMap(\.fields).count == basicFieldCountBefore)
+
+        // Verify DNS cache invalidation when toggling disable_cache.
+        let dnsDisabled = optStore.moduleLayout(for: "DNS").sections.flatMap(\.fields).map(\.id)
+        precondition(!dnsDisabled.contains("/dns/disable_expire"))
+        optStore.set(["dns", "disable_cache"], .bool(false))
+        let dnsEnabled = optStore.moduleLayout(for: "DNS").sections.flatMap(\.fields).map(\.id)
+        precondition(dnsEnabled.contains("/dns/disable_expire"))
+        optStore.undo()
+
+        // Verify TemplateSchema $ref cache equivalence across repeated resolves.
+        let cachedSchema = optStore.schema
+        for (ref, sampleValue) in [
+            ("#/$defs/LogOptions", JSONValue.null),
+            ("#/$defs/Outbound", JSONValue.object(["type": .string("selector")])),
+            ("#/$defs/Outbound", JSONValue.object(["type": .string("direct")])),
+            ("#/$defs/Inbound", JSONValue.object(["type": .string("tun")])),
+            ("#/$defs/Inbound", JSONValue.object(["type": .string("shadowtls"), "version": .integer(3)])),
+            ("#/$defs/Rule", JSONValue.object(["action": .string("reject")])),
+            ("#/$defs/Rule", JSONValue.object(["type": .string("logical"), "mode": .string("and"), "action": .string("route")]))
+        ] {
+            let def = JSONValue.object(["$ref": .string(ref)])
+            let uncached = TemplateSchema(root: singboxRoot).resolve(def, value: sampleValue)
+            precondition(cachedSchema.resolve(def, value: sampleValue) == uncached)
+            precondition(cachedSchema.resolve(def, value: sampleValue) == uncached)
+        }
+
+        // Verify catalog switch invalidates moduleLayout and fieldPresentation caches.
+        optStore.catalog = .object(["format": .string("mihomo"), "schema": mihomoRoot, "platform_rules": capabilities["mihomo"]])
+        let mihomoBasic = optStore.moduleLayout(for: "基础配置").sections.flatMap(\.fields).map(\.id)
+        precondition(mihomoBasic.contains("/mode") && !mihomoBasic.contains("/certificate"))
     }
     @MainActor private static func verifyCascadeChanges(root: JSONValue, format: String) {
         let store = SubscriptionTemplateStore()

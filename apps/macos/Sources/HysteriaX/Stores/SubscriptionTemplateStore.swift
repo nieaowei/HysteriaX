@@ -15,26 +15,35 @@ final class SubscriptionTemplateStore {
     var requestedAction: String?
     var publishDiff: JSONValue = .object([:])
     var documentGeneration = UUID()
-    var previewGeneration = UUID()
-    var previewUserID = "" { didSet { if oldValue != previewUserID { invalidatePreview() } } }
-    var previewPlatform = "" { didSet { if oldValue != previewPlatform { invalidatePreview() } } }
-    var previewKernelVersion = "" { didSet { if oldValue != previewKernelVersion { invalidatePreview() } } }
-    var previewReveal = false { didSet { if oldValue != previewReveal { invalidatePreview() } } }
-    var previewTab = "最终配置"
     var saving = false
     var serviceName = ""
-    var previewStale = true
-    func invalidatePreview() { previewGeneration = UUID(); previewStale = true; preview = [:] }
     var templates: [SubscriptionTemplate] = []
     var selected: SubscriptionTemplate?
-    var document: JSONValue = .object([:]) { didSet { if document != oldValue { documentGeneration = UUID(); invalidatePreview() } } }
-    var baseline: JSONValue = .object([:])
-    var catalog: JSONValue = .object([:])
-    var source = "" { didSet { if source != oldValue { documentGeneration = UUID(); invalidatePreview() } } }
+    var document: JSONValue = .object([:]) {
+        didSet {
+            if document != oldValue {
+                documentGeneration = UUID()
+                isDocumentDirty = (document != baseline)
+                hasValidated = false
+            }
+        }
+    }
+    var baseline: JSONValue = .object([:]) {
+        didSet {
+            if baseline != oldValue {
+                isDocumentDirty = (document != baseline)
+            }
+        }
+    }
+    var catalog: JSONValue = .object([:]) {
+        didSet { rebuildCatalogCaches() }
+    }
+    var source = "" { didSet { if source != oldValue { documentGeneration = UUID() } } }
     var sourceBaseline = ""
     var sourceMode = false
-    var diagnostics: [JSONValue] = []
-    var preview: [String: JSONValue] = [:]
+    var diagnostics: [JSONValue] = [] {
+        didSet { rebuildDiagnosticSummaries() }
+    }
     var history: [JSONValue] = []
     var error: String?
     struct PendingDeletion {
@@ -48,18 +57,87 @@ final class SubscriptionTemplateStore {
     var remoteConflict: JSONValue?
     var conflictTemplate: SubscriptionTemplate?
     var comparison: JSONValue?
+    var comparisonVersion: Int?
     var busy = false
     var undoStack: [JSONValue] = []
     var redoStack: [JSONValue] = []
     var pendingImport: [String: JSONValue]?
     var focusGeneration = UUID()
     var focusedPath = "" { didSet { focusGeneration = UUID() } }
-    var dirty: Bool { document != baseline || (sourceMode && source != sourceBaseline) }
+    private(set) var isDocumentDirty = false
+    var dirty: Bool { isDocumentDirty || (sourceMode && source != sourceBaseline) }
     var editorWindowTitle: String {
         let status = dirty ? L10n.text("未保存") : L10n.text("草稿已保存")
         return "\(selected?.name ?? "") · \(status) · \(selected?.format ?? "") · \(serviceName)"
     }
-    var schema: TemplateSchema { TemplateSchema(root: catalog["schema"]) }
+    private(set) var cachedSchema = TemplateSchema(root: .null)
+    var schema: TemplateSchema { cachedSchema }
+    private(set) var rootProperties: [String: JSONValue] = [:]
+    private struct CompiledPlatformRule {
+        let pattern: [String]
+        let requiredValue: JSONValue?
+        let allowed: Set<String>
+    }
+    @ObservationIgnored private var compiledPlatformRules: [CompiledPlatformRule] = []
+    @ObservationIgnored private var pathRulesCache: [[String]: [CompiledPlatformRule]] = [:]
+    struct TemplateSearchableField: Identifiable, Hashable {
+        let path: [String]
+        let pointer: String
+        let title: String
+        let module: String
+        let section: String
+        let keywords: String
+        var id: String { pointer }
+    }
+    private(set) var searchableFields: [TemplateSearchableField] = []
+    struct ModuleDiagnosticSummary: Equatable {
+        var errors = 0
+        var warnings = 0
+    }
+    private(set) var errorCount = 0
+    private(set) var warningCount = 0
+    private(set) var moduleDiagnostics: [String: ModuleDiagnosticSummary] = [:]
+    private(set) var diagnosticsByPointer: [String: [JSONValue]] = [:]
+    var hasValidated = false
+    struct TemplateModuleField: Identifiable {
+        let path: [String]
+        let definition: JSONValue
+        let isComplex: Bool
+        var id: String { SubscriptionTemplateStore.pointer(path) }
+    }
+    struct TemplateModuleSection: Identifiable {
+        let title: String
+        let fields: [TemplateModuleField]
+        var dialerPath: [String]? = nil
+        var id: String { dialerPath.map { "dialer:" + SubscriptionTemplateStore.pointer($0) } ?? title }
+    }
+    struct TemplateModuleLayoutSnapshot {
+        let sections: [TemplateModuleSection]
+        let unknownNestedFields: [String]
+    }
+    struct TemplateFieldPresentation {
+        let sourceDefinition: JSONValue
+        let editingDefinition: JSONValue
+        let value: JSONValue
+        let schema: JSONValue
+        let variants: [JSONValue]
+        let scalarListItemDefinition: JSONValue?
+        let enumChoices: [JSONValue]?
+        let enumOptions: TemplateEnumPickerOptions?
+        let isRequired: Bool
+        let guidance: String?
+        let helpText: String
+        let hasPreviewValue: Bool
+        let platforms: [String]
+        let allowed: Bool
+        let isExplicitlySet: Bool
+        let referenceKind: String?
+        let isSingbox: Bool
+    }
+    @ObservationIgnored private var renderCacheGeneration = UUID()
+    @ObservationIgnored private var renderCacheLanguage = ""
+    @ObservationIgnored private var moduleLayoutCache: [String: TemplateModuleLayoutSnapshot] = [:]
+    @ObservationIgnored private var fieldPresentationCache: [[String]: TemplateFieldPresentation] = [:]
     var common: JSONValue { document["common"] }
     var effective: JSONValue { common }
     nonisolated static func path(_ pointer: String) -> [String] { pointer.dropFirst().components(separatedBy: "/").map { $0.replacingOccurrences(of: "~1", with: "/").replacingOccurrences(of: "~0", with: "~") } }
@@ -158,19 +236,25 @@ final class SubscriptionTemplateStore {
         }
     }
     func supportedPlatforms(_ path: [String], value: JSONValue? = nil) -> [String] {
-        var platforms = TemplatePlatform.all
-        let rules = catalog["platform_rules"].arrayValue ?? []
-        for rule in rules {
-            let pattern = Self.path(rule["path"].stringValue ?? "")
+        let matchingRules: [CompiledPlatformRule]
+        if let cached = pathRulesCache[path] {
+            matchingRules = cached
+        } else {
             func matches(_ pattern: ArraySlice<String>, _ path: ArraySlice<String>) -> Bool {
                 guard let first = pattern.first else { return path.isEmpty }
                 if first == "**" { return matches(pattern.dropFirst(), path) || (!path.isEmpty && matches(pattern, path.dropFirst())) }
                 return !path.isEmpty && (first == "*" || first == path.first) && matches(pattern.dropFirst(), path.dropFirst())
             }
-            guard matches(pattern[...], path[...]) else { continue }
-            if let required = rule.objectValue?["value"], value != required { continue }
-            let allowed = rule["platforms"].arrayValue?.compactMap(\.stringValue) ?? []
-            platforms = platforms.filter { allowed.contains($0) }
+            let filtered = compiledPlatformRules.filter { matches($0.pattern[...], path[...]) }
+            if pathRulesCache.count > 4096 { pathRulesCache.removeAll(keepingCapacity: true) }
+            pathRulesCache[path] = filtered
+            matchingRules = filtered
+        }
+        if matchingRules.isEmpty { return TemplatePlatform.all }
+        var platforms = TemplatePlatform.all
+        for rule in matchingRules {
+            if let required = rule.requiredValue, value != required { continue }
+            platforms = platforms.filter { rule.allowed.contains($0) }
         }
         return platforms
     }
@@ -218,7 +302,7 @@ final class SubscriptionTemplateStore {
         let nextDocument = JSONValue.object(draft.document)
         try Self.requireSchema2(nextDocument)
         selected = draft.template; document = nextDocument; baseline = document; catalog = .object(fields)
-        undoStack = []; redoStack = []; diagnostics = []; preview = [:]; remoteConflict = nil; sourceMode = false
+        undoStack = []; redoStack = []; diagnostics = []; hasValidated = false; comparison = nil; comparisonVersion = nil; remoteConflict = nil; sourceMode = false
         try await loadHistory(api); try await loadList(api)
     }
     func syncSource(_ api: APIClient) async throws {
@@ -273,13 +357,14 @@ final class SubscriptionTemplateStore {
         try requireSession(api)
         guard generation == documentGeneration else { throw CancellationError() }
         diagnostics = response["diagnostics"]?.arrayValue ?? []
+        hasValidated = true
     }
     func preparePublish(_ api: APIClient) async throws {
         try requireSession(api)
         guard remoteConflict == nil else { throw APIClientError.server("请先处理服务端修订冲突。") }
         try await validate(api)
         if diagnostics.contains(where: { $0["severity"].stringValue == "error" }) { throw APIClientError.server("配置未通过校验，请查看诊断。") }
-        if let version = selected?.publishedVersion { try await compare(api, version: version) } else { comparison = .object([:]) }
+        if let version = selected?.publishedVersion { try await compare(api, version: version) } else { comparison = .object([:]); comparisonVersion = nil }
         publishDiff = Self.difference(comparison ?? .object([:]), document)
     }
     func publish(_ api: APIClient) async throws {
@@ -324,16 +409,6 @@ final class SubscriptionTemplateStore {
         try await open(next, api: api); try await loadList(api)
         NotificationCenter.default.post(name: Notification.Name("templateListChanged"), object: nil)
     }
-    func render(_ api: APIClient, user: String, platform: String, version: String, reveal: Bool) async throws {
-        try requireSession(api)
-        try await syncSource(api); guard let selected else { return }
-        let request = UUID(); previewGeneration = request; let generation = documentGeneration
-        let rendered = try await api.post(APIEndpoints.previewSubscriptionTemplate(id: selected.id), body: PreviewSubscriptionTemplateRequest(userId: user, platform: platform, kernelVersion: version.isEmpty ? nil : version, revealSecrets: reveal, document: document.objectValue))
-        try requireSession(api)
-        guard previewGeneration == request, documentGeneration == generation else { return }
-        preview = rendered; previewStale = false
-        diagnostics = preview["diagnostics"]?.arrayValue ?? []
-    }
     func analyzeImport(_ api: APIClient, source: String) async throws {
         try requireSession(api)
         guard let selected else { return }
@@ -344,7 +419,7 @@ final class SubscriptionTemplateStore {
         guard let next = pendingImport?["document"] else { return }
         do {
             try Self.requireSchema2(next)
-            edit { $0 = next }; diagnostics = pendingImport?["diagnostics"]?.arrayValue ?? []
+            edit { $0 = next }; diagnostics = pendingImport?["diagnostics"]?.arrayValue ?? []; hasValidated = true
             pendingImport = nil; sourceMode = false
         } catch { self.error = error.localizedDescription }
     }
@@ -353,7 +428,7 @@ final class SubscriptionTemplateStore {
         try await syncSource(api); guard let selected else { return }
         let response = try await api.post(APIEndpoints.refactorSubscriptionTemplate(id: selected.id), body: RefactorSubscriptionTemplateRequest(expectedRevision: selected.revision, document: document.objectValue ?? [:], kind: kind, oldName: old, newName: new))
         try requireSession(api)
-        if let next = response["document"] { try Self.requireSchema2(next); edit { $0 = next }; diagnostics = response["diagnostics"]?.arrayValue ?? []; sourceMode = false }
+        if let next = response["document"] { try Self.requireSchema2(next); edit { $0 = next }; diagnostics = response["diagnostics"]?.arrayValue ?? []; hasValidated = true; sourceMode = false }
     }
     private func candidate(_ action: (SubscriptionTemplateStore) -> Void) -> JSONValue {
         let editor = SubscriptionTemplateStore(); editor.document = document
@@ -451,6 +526,348 @@ final class SubscriptionTemplateStore {
         try requireSession(api)
         try Self.requireSchema2(.object(historical.document))
         comparison = .object(historical.document)
+        comparisonVersion = version
+    }
+    @discardableResult
+    func duplicateItem(path: [String], index: Int) -> Int? {
+        var values = effective.at(path)?.arrayValue ?? []
+        guard values.indices.contains(index) else { return nil }
+        var clone = values[index]
+        if var object = clone.objectValue {
+            let nameKey: String? = object["name"]?.stringValue != nil ? "name" : (object["tag"]?.stringValue != nil ? "tag" : nil)
+            if let key = nameKey, let base = object[key]?.stringValue, !base.isEmpty {
+                let existing = Set(values.compactMap { $0[key].stringValue })
+                var candidate = "\(base)-copy"
+                var suffix = 2
+                while existing.contains(candidate) {
+                    candidate = "\(base)-copy-\(suffix)"
+                    suffix += 1
+                }
+                object[key] = .string(candidate)
+                clone = .object(object)
+            }
+        }
+        let nextIndex = index + 1
+        values.insert(clone, at: nextIndex)
+        set(path, .array(values))
+        return nextIndex
+    }
+    @discardableResult
+    func duplicateInjection(at index: Int) -> Int? {
+        var rules = document["injections"].arrayValue ?? []
+        guard rules.indices.contains(index) else { return nil }
+        let nextIndex = index + 1
+        rules.insert(rules[index], at: nextIndex)
+        edit { $0["injections"] = .array(rules) }
+        return nextIndex
+    }
+    func refactorCandidates(kind: String) -> [String] {
+        let format = selected?.format ?? catalog["format"].stringValue ?? "mihomo"
+        if kind == "rule_set" { return referenceNames("rule_set") }
+        if format == "mihomo" {
+            var seen: Set<String> = []
+            return (effective["proxy-groups"].arrayValue?.compactMap { $0["name"].stringValue } ?? [])
+                .filter { !$0.isEmpty && seen.insert($0).inserted }
+        }
+        return referenceNames("outbound")
+    }
+    private func ensureRenderCacheCurrent() {
+        let generation = documentGeneration
+        let language = L10n.language
+        let _ = AppLanguage.shared.selection
+        if renderCacheGeneration != generation || renderCacheLanguage != language {
+            moduleLayoutCache.removeAll(keepingCapacity: true)
+            fieldPresentationCache.removeAll(keepingCapacity: true)
+            renderCacheGeneration = generation
+            renderCacheLanguage = language
+        }
+    }
+
+    func moduleLayout(for module: String) -> TemplateModuleLayoutSnapshot {
+        ensureRenderCacheCurrent()
+        if let cached = moduleLayoutCache[module] {
+            return cached
+        }
+        let properties = rootProperties
+        let currentSchema = schema
+        let config = effective
+        var resolvedRoots: [String: JSONValue] = [:]
+
+        func resolveRoot(_ key: String) -> JSONValue {
+            if let existing = resolvedRoots[key] { return existing }
+            let val = config.at([key]) ?? .null
+            let def = properties[key] ?? .null
+            let resolved = currentSchema.resolve(currentSchema.editorDefinition(def, path: [key]), value: val)
+            resolvedRoots[key] = resolved
+            return resolved
+        }
+
+        func showsRootDetails(_ root: String) -> Bool {
+            if root == "log" { return config.at([root, "disabled"])?.boolValue != true }
+            if root == "ntp" {
+                let children = resolveRoot(root)["properties"].objectValue ?? [:]
+                let key = children["enabled"] != nil ? "enabled" : "enable"
+                let value = config.at([root, key]) ?? initialValue(children[key] ?? .null, path: [root, key])
+                return value.boolValue == true
+            }
+            return true
+        }
+
+        let moduleFields: [TemplateModuleField] = properties.keys.sorted()
+            .filter { TemplateModule.destination($0) == module }
+            .flatMap { key -> [TemplateModuleField] in
+                let rawDef = properties[key]!
+                let rootValue = config.at([key]) ?? .null
+                let rootSchema = resolveRoot(key)
+                let rootComplex = ["object", "array"].contains(rootSchema["type"].stringValue ?? rootValue.schemaType)
+                guard TemplateFieldLayout.expandedObjects.contains(key),
+                      rootSchema["type"].stringValue == "object",
+                      rootSchema["x-unverified"].boolValue != true,
+                      let children = rootSchema["properties"].objectValue, !children.isEmpty,
+                      allowed([key], value: rootValue) else {
+                    return [TemplateModuleField(path: [key], definition: rawDef, isComplex: rootComplex)]
+                }
+                let documentedVisible = Set(TemplateEditorGuidance.visibleKeys(rootSchema, path: [key], schema: currentSchema, value: config))
+                let documentedKeys = TemplateEditorGuidance.ordered(Array(children.keys), path: [key], schema: currentSchema, value: config)
+                var documentedOrder: [String: Int] = [:]
+                documentedOrder.reserveCapacity(documentedKeys.count)
+                for (idx, item) in documentedKeys.enumerated() where documentedOrder[item] == nil {
+                    documentedOrder[item] = idx
+                }
+                let showDetails = showsRootDetails(key)
+                let visibleKeys = documentedKeys.sorted {
+                    if key == "dns", ($0 == "disable_cache") != ($1 == "disable_cache") {
+                        return $0 == "disable_cache"
+                    }
+                    if key == "ntp" {
+                        let leftSwitch = ["enabled", "enable"].contains($0)
+                        let rightSwitch = ["enabled", "enable"].contains($1)
+                        if leftSwitch != rightSwitch { return leftSwitch }
+                    }
+                    return (documentedOrder[$0] ?? documentedKeys.count) < (documentedOrder[$1] ?? documentedKeys.count)
+                }.filter {
+                    documentedVisible.contains($0) && (showDetails || (key == "log" && $0 == "disabled") || (key == "ntp" && ["enabled", "enable"].contains($0)))
+                }
+                return visibleKeys.map { childKey in
+                    let childPath = [key, childKey]
+                    let childDef = children[childKey]!
+                    let childVal = config.at(childPath) ?? .null
+                    let childSchema = currentSchema.resolve(currentSchema.editorDefinition(childDef, path: childPath), value: childVal)
+                    let complex = ["object", "array"].contains(childSchema["type"].stringValue ?? childVal.schemaType)
+                    return TemplateModuleField(path: childPath, definition: childDef, isComplex: complex)
+                }
+            }
+
+        let visibleFields = moduleFields.filter { field in
+            if field.path == ["route", "default_interface"], config["route"]["auto_detect_interface"].boolValue == true { return false }
+            guard field.path.first == "dns" else { return true }
+            let key = field.path.last ?? ""
+            if config.at(["dns", "disable_cache"])?.boolValue == true,
+               key != "disable_cache",
+               TemplateFieldLayout.section(path: field.path, complex: field.isComplex) == "缓存设置" { return false }
+            if key == "optimistic", config.at(["dns", "disable_expire"])?.boolValue == true { return false }
+            return true
+        }
+
+        let rootFields = Dictionary(grouping: visibleFields.filter { $0.path.count == 2 }) { $0.path[0] }
+        let dialerKeys = rootFields.mapValues { TemplateFieldLayout.dialerFields(in: $0.compactMap { $0.path.last }) }
+        let groups = Dictionary(grouping: visibleFields) { field in
+            if field.path.count == 2, let root = field.path.first, dialerKeys[root]?.contains(field.path[1]) == true { return "dialer:" + root }
+            return TemplateFieldLayout.section(path: field.path, complex: field.isComplex)
+        }
+        func orderingTitle(_ group: String) -> String {
+            if group.hasPrefix("dialer:") { return TemplateFieldLayout.section(path: [String(group.dropFirst(7)), "detour"], complex: false) }
+            return group
+        }
+        let sections: [TemplateModuleSection] = groups.keys
+            .sorted { TemplateFieldLayout.precedes(orderingTitle($0), orderingTitle($1), module: module) }
+            .map { group in
+                if group.hasPrefix("dialer:") {
+                    let root = String(group.dropFirst(7))
+                    let keys = dialerKeys[root] ?? []
+                    var keyOrder: [String: Int] = [:]
+                    for (idx, item) in keys.enumerated() where keyOrder[item] == nil { keyOrder[item] = idx }
+                    let fields = (groups[group] ?? []).sorted {
+                        (keyOrder[$0.path.last ?? ""] ?? keys.count) < (keyOrder[$1.path.last ?? ""] ?? keys.count)
+                    }
+                    return TemplateModuleSection(title: TemplateFieldLayout.section(path: [root], complex: true), fields: fields, dialerPath: [root])
+                }
+                return TemplateModuleSection(title: group, fields: groups[group] ?? [])
+            }
+
+        let roots = Set(moduleFields.filter { $0.path.count > 1 }.compactMap { $0.path.first })
+        let unknownNested = roots.sorted().flatMap { root -> [String] in
+            guard showsRootDetails(root) else { return [] }
+            let known = resolveRoot(root)["properties"].objectValue ?? [:]
+            return (config[root].objectValue ?? [:]).keys.filter { known[$0] == nil }.sorted().map {
+                Self.pointer([root, $0])
+            }
+        }
+        let snapshot = TemplateModuleLayoutSnapshot(sections: sections, unknownNestedFields: unknownNested)
+        moduleLayoutCache[module] = snapshot
+        return snapshot
+    }
+
+    func fieldPresentation(path: [String], definition: JSONValue) -> TemplateFieldPresentation {
+        ensureRenderCacheCurrent()
+        if let cached = fieldPresentationCache[path], cached.sourceDefinition == definition {
+            return cached
+        }
+        let currentSchema = schema
+        let config = effective
+        let isSingbox = TemplateEditorGuidance.isSingbox(currentSchema)
+        let editingDef = currentSchema.editorDefinition(definition, path: path)
+        let val = editorValue(editingDef, path: path)
+        let resolvedSchema = currentSchema.resolve(editingDef, value: val)
+        let variants = currentSchema.variants(editingDef)
+        let scalarListDef = currentSchema.scalarListItemDefinition(editingDef)
+        let choices = resolvedSchema["enum"].arrayValue ?? resolvedSchema["x-enum-choices"].arrayValue
+        let enumOpts = (choices?.isEmpty == false)
+            ? TemplateEditorGuidance.enumPickerOptions(resolvedSchema, path: path, schema: currentSchema, value: config)
+            : nil
+        let required = path.isEmpty ? false : currentSchema.isRequired(path, value: config)
+        let guidance = path.isEmpty ? nil : TemplateEditorGuidance.help(path, schema: currentSchema, value: config)
+        let rawTitle = path.last ?? ""
+        let help = resolvedSchema["description"].stringValue ?? guidance ?? rawTitle
+        let explicit = config.at(path)
+        let isExplicit = explicit != nil
+        let hasPreview = !isSingbox
+            || explicit != nil
+            || resolvedSchema.objectValue?["default"] != nil
+            || TemplateEditorGuidance.defaultValue(path, schema: currentSchema, value: config) != nil
+        let supported = supportedPlatforms(path, value: val)
+        let refKind = TemplateSchema.referenceKind(resolvedSchema, path: path)
+        let presentation = TemplateFieldPresentation(
+            sourceDefinition: definition,
+            editingDefinition: editingDef,
+            value: val,
+            schema: resolvedSchema,
+            variants: variants,
+            scalarListItemDefinition: scalarListDef,
+            enumChoices: choices,
+            enumOptions: enumOpts,
+            isRequired: required,
+            guidance: guidance,
+            helpText: help,
+            hasPreviewValue: hasPreview,
+            platforms: supported,
+            allowed: !supported.isEmpty,
+            isExplicitlySet: isExplicit,
+            referenceKind: refKind,
+            isSingbox: isSingbox
+        )
+        fieldPresentationCache[path] = presentation
+        return presentation
+    }
+
+    private func rebuildCatalogCaches() {
+        let schemaRoot = catalog["schema"]
+        let nextSchema = TemplateSchema(root: schemaRoot)
+        cachedSchema = nextSchema
+        rootProperties = nextSchema.resolve(schemaRoot, value: effective)["properties"].objectValue ?? [:]
+        compiledPlatformRules = (catalog["platform_rules"].arrayValue ?? []).map { rule in
+            let pattern = Self.path(rule["path"].stringValue ?? "")
+            let requiredValue = rule.objectValue?["value"]
+            let allowed = Set(rule["platforms"].arrayValue?.compactMap(\.stringValue) ?? [])
+            return CompiledPlatformRule(pattern: pattern, requiredValue: requiredValue, allowed: allowed)
+        }
+        pathRulesCache.removeAll(keepingCapacity: true)
+        documentGeneration = UUID()
+        rebuildSearchableFields(schema: nextSchema)
+    }
+    private func rebuildSearchableFields(schema nextSchema: TemplateSchema) {
+        var fields: [TemplateSearchableField] = []
+        for key in rootProperties.keys.sorted() {
+            guard let def = rootProperties[key] else { continue }
+            let resolved = nextSchema.resolve(nextSchema.editorDefinition(def, path: [key]), value: .null)
+            let module = TemplateModule.destination(key)
+            if TemplateFieldLayout.expandedObjects.contains(key),
+               resolved["type"].stringValue == "object",
+               resolved["x-unverified"].boolValue != true,
+               let children = resolved["properties"].objectValue,
+               !children.isEmpty {
+                for childKey in children.keys.sorted() {
+                    guard let childDef = children[childKey] else { continue }
+                    let childResolved = nextSchema.resolve(nextSchema.editorDefinition(childDef, path: [key, childKey]), value: .null)
+                    let path = [key, childKey]
+                    let complex = ["object", "array"].contains(childResolved["type"].stringValue ?? "")
+                    let section = TemplateFieldLayout.section(path: path, complex: complex)
+                    let title = childResolved["title"].stringValue ?? childKey
+                    let desc = childResolved["description"].stringValue ?? ""
+                    let keywords = [
+                        key, childKey, "\(key).\(childKey)", title,
+                        section, L10n.text(section), module, L10n.text(module), desc
+                    ].filter { !$0.isEmpty }.joined(separator: " ").lowercased()
+                    fields.append(TemplateSearchableField(
+                        path: path,
+                        pointer: Self.pointer(path),
+                        title: title,
+                        module: module,
+                        section: section,
+                        keywords: keywords
+                    ))
+                }
+            } else {
+                let path = [key]
+                let complex = ["object", "array"].contains(resolved["type"].stringValue ?? "")
+                let section = TemplateFieldLayout.section(path: path, complex: complex)
+                let title = resolved["title"].stringValue ?? key
+                let desc = resolved["description"].stringValue ?? ""
+                let keywords = [
+                    key, title, section, L10n.text(section), module, L10n.text(module), desc
+                ].filter { !$0.isEmpty }.joined(separator: " ").lowercased()
+                fields.append(TemplateSearchableField(
+                    path: path,
+                    pointer: Self.pointer(path),
+                    title: title,
+                    module: module,
+                    section: section,
+                    keywords: keywords
+                ))
+            }
+        }
+        searchableFields = fields.sorted {
+            if $0.module != $1.module {
+                let lhs = TemplateModule.all.firstIndex(of: $0.module) ?? TemplateModule.all.count
+                let rhs = TemplateModule.all.firstIndex(of: $1.module) ?? TemplateModule.all.count
+                if lhs != rhs { return lhs < rhs }
+            }
+            return $0.pointer < $1.pointer
+        }
+    }
+    private func rebuildDiagnosticSummaries() {
+        var errors = 0
+        var warnings = 0
+        var byModule: [String: ModuleDiagnosticSummary] = [:]
+        var byPointer: [String: [JSONValue]] = [:]
+        for issue in diagnostics {
+            let severity = issue["severity"].stringValue ?? "warning"
+            let isError = severity == "error"
+            if isError { errors += 1 } else { warnings += 1 }
+            let rawPath = issue["path"].stringValue ?? ""
+            let normalizedPath: String
+            if rawPath == "/common" { normalizedPath = "" }
+            else if rawPath.hasPrefix("/common/") { normalizedPath = String(rawPath.dropFirst(7)) }
+            else { normalizedPath = rawPath }
+            let components = normalizedPath.isEmpty ? [] : Self.path(normalizedPath)
+            let module: String
+            if components.first == "injections" { module = "节点注入" }
+            else if let root = components.first, !root.isEmpty { module = TemplateModule.destination(root) }
+            else { module = "高级配置" }
+            var summary = byModule[module, default: ModuleDiagnosticSummary()]
+            if isError { summary.errors += 1 } else { summary.warnings += 1 }
+            byModule[module] = summary
+            if !normalizedPath.isEmpty {
+                byPointer[normalizedPath, default: []].append(issue)
+            }
+            if !rawPath.isEmpty, rawPath != normalizedPath {
+                byPointer[rawPath, default: []].append(issue)
+            }
+        }
+        errorCount = errors
+        warningCount = warnings
+        moduleDiagnostics = byModule
+        diagnosticsByPointer = byPointer
     }
     func referenceNames(_ kind: String) -> [String] {
         func choices(_ names: [String]) -> [String] {
@@ -490,7 +907,7 @@ final class SubscriptionTemplateStore {
         if failure is CancellationError { return }
         let message = failure.localizedDescription
         if let parsed = try? JSONDecoder().decode([JSONValue].self, from: Data(message.utf8)), parsed.allSatisfy({ $0["path"].stringValue != nil }) {
-            diagnostics = parsed; error = L10n.text("配置未通过校验，请查看诊断。")
+            diagnostics = parsed; hasValidated = true; error = L10n.text("配置未通过校验，请查看诊断。")
         } else { error = message }
     }
     func run(_ action: @escaping @MainActor () async throws -> Void) {

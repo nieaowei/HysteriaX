@@ -137,12 +137,20 @@ enum TemplateEditorGuidance {
         if Set(keys).isSubset(of: Set(TemplateFieldLayout.dialerFieldOrder + ["protect_path"])) {
             return TemplateFieldLayout.orderedObjectFields(keys)
         }
-        let required = Set(keys.filter { schema.isRequired(path + [$0], value: value) })
+        let parentDef = schema.definition(at: path, value: value)
+        let parentValue = value.at(path) ?? .null
+        let parentSchema = schema.resolve(schema.editorDefinition(parentDef, path: path), value: parentValue)
+        let required = Set(keys.filter { schema.isRequired($0, inParentPath: path, definition: parentDef, parent: parentSchema, parentValue: parentValue) })
+        var orderIndex: [String: Int] = [:]
+        orderIndex.reserveCapacity(order.count)
+        for (idx, item) in order.enumerated() where orderIndex[item] == nil {
+            orderIndex[item] = idx
+        }
         return keys.sorted {
             let identity = ["type", "tag", "enabled", "disabled"]
             if identity.contains($0) != identity.contains($1) { return identity.contains($0) }
             if required.contains($0) != required.contains($1) { return required.contains($0) }
-            let lhs = order.firstIndex(of: $0) ?? order.count, rhs = order.firstIndex(of: $1) ?? order.count
+            let lhs = orderIndex[$0] ?? order.count, rhs = orderIndex[$1] ?? order.count
             return lhs == rhs ? $0 < $1 : lhs < rhs
         }
     }

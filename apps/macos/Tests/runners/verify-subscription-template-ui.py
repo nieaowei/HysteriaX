@@ -84,7 +84,26 @@ def main():
                     fixture = work / "ClientFixture.json"
                     fixture.write_text(json.dumps({"base": base, "token": token, "template_id": template["id"], "user_id": user["id"], "subscription_token": subscription["token"]}))
                     source = ROOT / "apps/macos/Sources/HysteriaX"
-                    files = ["Support/Localization.swift", "Models/APIModels.swift", "Models/OpenAPIRequests.generated.swift", "Models/OpenAPIResponses.generated.swift", "Models/SubscriptionTemplateDocument.swift", "Models/MihomoTemplateRule.swift", "Models/TemplateReferenceIndex.swift", "Stores/SubscriptionTemplateStore.swift", "Services/APIClient.swift"]
+                    files = [
+                        "Support/Localization.swift",
+                        "Models/APIModels.swift",
+                        "Models/OpenAPIRequests.generated.swift",
+                        "Models/OpenAPIResponses.generated.swift",
+                        "Models/SubscriptionTemplateDocument.swift",
+                        "Models/TemplateFieldLayout.swift",
+                        "Models/TemplateEditorGuidance.swift",
+                        "Models/TemplateDocumentationOrder.swift",
+                        "Models/TemplateProtocolOptions.swift",
+                        "Models/TemplateDefaultCatalog.swift",
+                        "Models/TemplateHTTPClientLayout.swift",
+                        "Models/TemplateRequiredFields.swift",
+                        "Models/MihomoTemplateRule.swift",
+                        "Models/TemplateReferenceIndex.swift",
+                        "Stores/SubscriptionTemplateStore.swift",
+                        "Services/APIClient.swift",
+                        "Services/ManagementEvent.swift",
+                        "Services/ManagementWriteJournal.swift",
+                    ]
                     binary = work / "workbench-client-tests"
                     subprocess.run(["swiftc", "-swift-version", "6", "-parse-as-library", *[str(source / file) for file in files], str(ROOT / "apps/macos/Tests/subscription-template-workbench-live.swift"), "-o", str(binary)], check=True)
                     return subprocess.run([str(binary), str(fixture)]).returncode

@@ -10,19 +10,119 @@ struct MihomoTemplateRules: View {
     private var rules: [JSONValue] { store.effective.at(path)?.arrayValue ?? [] }
     private var kinds: [String] { store.catalog["schema"]["x-rule-types"].arrayValue?.compactMap(\.stringValue) ?? ["MATCH"] }
     @State private var editingIndex: Int?
+    @State private var filterText = ""
+
+    private var trimmedFilter: String {
+        filterText.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var visibleEntries: [(index: Int, source: String)] {
+        let all = rules.enumerated().map { (index: $0.offset, source: $0.element.stringValue ?? "") }
+        guard rules.count > 8, !trimmedFilter.isEmpty else { return all }
+        return all.filter { $0.source.localizedCaseInsensitiveContains(trimmedFilter) }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            List(selection: Binding<Int?>(get: { selectedIndex }, set: { if let value = $0 { selectedIndex = value } })) {
-                ForEach(rules.indices, id: \.self) { index in
-                    HStack {
-                        Text("\(index + 1) · \(rules[index].stringValue ?? "")").lineLimit(2)
-                        Spacer()
-                        Button(L10n.text("编辑"), systemImage: "pencil") { editingIndex = index; selectedIndex = index }
-                            .labelStyle(.iconOnly).buttonStyle(.borderless)
-                            .accessibilityIdentifier("templates.rule.edit.\(SubscriptionTemplateStore.pointer(path)).\(index)")
-                    }.tag(index)
+            if rules.count > 8 {
+                HStack(spacing: 6) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    TextField(L10n.text("筛选规则…"), text: $filterText)
+                        .textFieldStyle(.plain)
+                        .font(.callout)
+                    if !filterText.isEmpty {
+                        Button {
+                            filterText = ""
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                    }
                 }
-            }.frame(height: min(280, max(70, CGFloat(rules.count) * 40)))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
+                .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 6))
+            }
+
+            if rules.isEmpty {
+                Text(L10n.text("暂无规则，点击添加开始配置。"))
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, minHeight: 60)
+            } else if visibleEntries.isEmpty {
+                Text(L10n.text("没有匹配的规则"))
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, minHeight: 48)
+            } else {
+                let entries = visibleEntries
+                VStack(spacing: 0) {
+                    ForEach(entries, id: \.index) { entry in
+                        let index = entry.index
+                        let rule = MihomoTemplateRule(entry.source)
+                        HStack(spacing: 8) {
+                            Button { selectedIndex = index } label: {
+                                HStack(spacing: 8) {
+                                    Text(String(index + 1))
+                                        .monospacedDigit()
+                                        .foregroundStyle(.secondary)
+                                        .frame(width: 28, alignment: .trailing)
+                                    StatusBadge(rule.kind, tone: .neutral, size: .compact, showDot: false)
+                                    if rule.kind != "MATCH" && !rule.payload.isEmpty {
+                                        Text(rule.payload)
+                                            .font(.system(.callout, design: .monospaced))
+                                            .lineLimit(1)
+                                            .truncationMode(.middle)
+                                    }
+                                    Image(systemName: "arrow.right")
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                    StatusBadge(rule.target, tone: targetTone(rule.target), size: .compact, showDot: false)
+                                    ForEach(rule.options, id: \.self) { option in
+                                        Text(option)
+                                            .font(.caption2)
+                                            .foregroundStyle(.secondary)
+                                            .padding(.horizontal, 5)
+                                            .padding(.vertical, 1)
+                                            .background(.quaternary, in: Capsule())
+                                    }
+                                    Spacer(minLength: 0)
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityAddTraits(selectedIndex == index ? .isSelected : [])
+                            Button(L10n.text("编辑"), systemImage: "pencil") { editingIndex = index; selectedIndex = index }
+                                .labelStyle(.iconOnly)
+                                .buttonStyle(.borderless)
+                                .accessibilityIdentifier("templates.rule.edit.\(SubscriptionTemplateStore.pointer(path)).\(index)")
+                        }
+                        .padding(10)
+                        .background(selectedIndex == index ? Color.accentColor.opacity(0.12) : Color.clear, in: RoundedRectangle(cornerRadius: 8))
+                        .interactiveRowHover(cornerRadius: 8)
+                        .onTapGesture(count: 2) { selectedIndex = index; editingIndex = index }
+                        .contextMenu {
+                            Button(L10n.text("编辑")) { selectedIndex = index; editingIndex = index }
+                            Button(L10n.text("复制规则")) {
+                                if let next = store.duplicateItem(path: path, index: index) {
+                                    selectedIndex = next
+                                }
+                            }
+                            Button(L10n.text("上移")) { move(index, -1) }
+                                .disabled(index == 0 || !trimmedFilter.isEmpty)
+                            Button(L10n.text("下移")) { move(index, 1) }
+                                .disabled(index + 1 >= rules.count || !trimmedFilter.isEmpty)
+                            Divider()
+                            Button(L10n.text("删除规则"), role: .destructive) { deleteRule(at: index) }
+                        }
+                        if index != entries.last?.index { Divider().padding(.horizontal, 10) }
+                    }
+                }
+            }
+
             HStack {
                 Button(L10n.text("添加规则"), systemImage: "plus") {
                     let index = rules.count
@@ -30,32 +130,76 @@ struct MihomoTemplateRules: View {
                     selectedIndex = index; editingIndex = index
                 }
                 Spacer()
-                Button(L10n.text("上移"), systemImage: "arrow.up") { move(selectedIndex, -1) }.labelStyle(.iconOnly).disabled(selectedIndex == 0 || rules.isEmpty)
-                Button(L10n.text("下移"), systemImage: "arrow.down") { move(selectedIndex, 1) }.labelStyle(.iconOnly).disabled(selectedIndex + 1 >= rules.count)
+                Text(L10n.text("共 {0} 项", String(rules.count))).font(.caption).foregroundStyle(.secondary)
+                Button(L10n.text("复制规则"), systemImage: "doc.on.doc") {
+                    if let next = store.duplicateItem(path: path, index: selectedIndex) {
+                        selectedIndex = next
+                    }
+                }
+                .labelStyle(.iconOnly)
+                .help(L10n.text("复制规则"))
+                .disabled(!rules.indices.contains(selectedIndex))
+                Button(L10n.text("上移"), systemImage: "arrow.up") { move(selectedIndex, -1) }
+                    .labelStyle(.iconOnly)
+                    .disabled(selectedIndex == 0 || rules.isEmpty || !trimmedFilter.isEmpty)
+                Button(L10n.text("下移"), systemImage: "arrow.down") { move(selectedIndex, 1) }
+                    .labelStyle(.iconOnly)
+                    .disabled(selectedIndex + 1 >= rules.count || !trimmedFilter.isEmpty)
                 Button(L10n.text("删除规则"), systemImage: "trash", role: .destructive) {
-                    store.deleteItem(path: path, index: selectedIndex); selectedIndex = min(selectedIndex, max(0, rules.count - 1))
-                }.labelStyle(.iconOnly).disabled(rules.isEmpty)
+                    deleteRule(at: selectedIndex)
+                }
+                .labelStyle(.iconOnly)
+                .disabled(!rules.indices.contains(selectedIndex))
             }
         }
         .sheet(isPresented: Binding(get: { editingIndex != nil }, set: { if !$0 { editingIndex = nil } })) {
             if let index = editingIndex, rules.indices.contains(index) {
                 VStack(spacing: 0) {
-                    HStack { Text(L10n.text("编辑规则")).font(.title2.bold()); Spacer() }.padding(20)
+                    DetailHeaderBar {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(L10n.text("编辑规则")).font(.title2.bold())
+                                Text("#\(index + 1)").font(.caption.monospaced()).foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Button(L10n.text("撤销"), systemImage: "arrow.uturn.backward") { store.undo() }
+                                .labelStyle(.iconOnly)
+                                .help(L10n.text("撤销"))
+                                .disabled(store.undoStack.isEmpty)
+                            Button(L10n.text("重做"), systemImage: "arrow.uturn.forward") { store.redo() }
+                                .labelStyle(.iconOnly)
+                                .help(L10n.text("重做"))
+                                .disabled(store.redoStack.isEmpty)
+                        }
+                    }
                     Form { Section(L10n.text("规则")) { ruleFields(index) } }.formStyle(.grouped)
-                    HStack {
-                        Text(L10n.text("修改会应用到本地草稿")).font(.caption).foregroundStyle(.secondary)
-                        Spacer()
-                        Button(L10n.text("完成")) { editingIndex = nil }.keyboardShortcut(.cancelAction)
-                    }.padding(16)
+                    Divider()
+                    TemplateEditorFooter(store: store) { editingIndex = nil }.id(index)
                 }.frame(width: 800, height: 560).accessibilityIdentifier("templates.complexEditor")
             }
         }
         .onAppear { focus() }
         .onChange(of: store.focusGeneration) { _, _ in focus() }
-        .onChange(of: rules.count) { _, _ in
+        .onChange(of: rules.count) { _, count in
+            if count <= 8 && !filterText.isEmpty { filterText = "" }
             if let index = editingIndex, !rules.indices.contains(index) { editingIndex = nil }
         }
     }
+
+    private func targetTone(_ target: String) -> StatusTone {
+        switch target {
+        case "DIRECT", "PASS", "COMPATIBLE": .positive
+        case "REJECT", "REJECT-DROP": .danger
+        default: .active
+        }
+    }
+
+    private func deleteRule(at index: Int) {
+        guard rules.indices.contains(index) else { return }
+        store.deleteItem(path: path, index: index)
+        selectedIndex = min(index, max(0, rules.count - 1))
+    }
+
     @ViewBuilder private func ruleFields(_ index: Int) -> some View {
         let rule = MihomoTemplateRule(rules[index].stringValue ?? "")
         Picker(L10n.text("规则类型"), selection: binding(index, \.kind)) {

@@ -12,27 +12,69 @@ struct SubscriptionTemplateInjections: View {
         VStack(alignment: .leading, spacing: 12) {
             Text(L10n.text("仅选择当前用户已授权且符合订阅资格的节点。节点连接参数为只读动态内容。"))
                 .font(.caption).foregroundStyle(.secondary)
-            VStack(spacing: 0) {
-                ForEach(Array(rules.enumerated()), id: \.offset) { index, rule in
-                    HStack {
-                        Button { selectedIndex = index } label: {
-                            HStack {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text("\(index + 1) · \(rule["group"].stringValue ?? "")")
-                                    let summary = [rule["contains"].stringValue, rule["prefix"].stringValue].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
-                                    if !summary.isEmpty { Text(summary).font(.caption).foregroundStyle(.secondary) }
-                                }
-                                Spacer()
-                            }.contentShape(Rectangle())
+            if rules.isEmpty {
+                Text(L10n.text("暂无节点注入规则，点击下方按钮添加。"))
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, minHeight: 60)
+            } else {
+                VStack(spacing: 0) {
+                    ForEach(Array(rules.enumerated()), id: \.offset) { index, rule in
+                        let group = rule["group"].stringValue ?? ""
+                        let chips = conditionChips(rule)
+                        HStack {
+                            Button { selectedIndex = index } label: {
+                                HStack(alignment: .center, spacing: 8) {
+                                    Text(String(index + 1))
+                                        .monospacedDigit()
+                                        .foregroundStyle(.secondary)
+                                        .frame(width: 24, alignment: .trailing)
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        if group.isEmpty {
+                                            Text(L10n.text("未选择目标代理组"))
+                                                .foregroundStyle(.orange)
+                                        } else {
+                                            Text(group)
+                                                .fontWeight(.medium)
+                                        }
+                                        if !chips.isEmpty {
+                                            HStack(spacing: 6) {
+                                                ForEach(chips, id: \.self) { chip in
+                                                    Text(chip)
+                                                        .font(.caption2)
+                                                        .foregroundStyle(.secondary)
+                                                        .padding(.horizontal, 6)
+                                                        .padding(.vertical, 2)
+                                                        .background(.quaternary, in: Capsule())
+                                                }
+                                            }
+                                        }
+                                    }
+                                    Spacer()
+                                }.contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityAddTraits(selectedIndex == index ? .isSelected : [])
+                            .accessibilityIdentifier("templates.injection.row.\(index)")
+                            Button(L10n.text("编辑"), systemImage: "pencil") { selectedIndex = index; editingIndex = index }.labelStyle(.iconOnly).buttonStyle(.borderless)
                         }
-                        .buttonStyle(.plain)
-                        .accessibilityAddTraits(selectedIndex == index ? .isSelected : [])
-                        .accessibilityIdentifier("templates.injection.row.\(index)")
-                        Button(L10n.text("编辑"), systemImage: "pencil") { selectedIndex = index; editingIndex = index }.labelStyle(.iconOnly).buttonStyle(.borderless)
+                        .padding(10)
+                        .background(selectedIndex == index ? Color.accentColor.opacity(0.12) : Color.clear, in: RoundedRectangle(cornerRadius: 8))
+                        .interactiveRowHover(cornerRadius: 8)
+                        .onTapGesture(count: 2) { selectedIndex = index; editingIndex = index }
+                        .contextMenu {
+                            Button(L10n.text("编辑")) { selectedIndex = index; editingIndex = index }
+                            Button(L10n.text("复制注入规则")) {
+                                if let next = store.duplicateInjection(at: index) {
+                                    selectedIndex = next
+                                }
+                            }
+                            Button(L10n.text("上移")) { move(index, -1) }.disabled(index == 0)
+                            Button(L10n.text("下移")) { move(index, 1) }.disabled(index + 1 >= rules.count)
+                            Divider()
+                            Button(L10n.text("删除注入规则"), role: .destructive) { deleteRule(at: index) }
+                        }
+                        if index < rules.count - 1 { Divider().padding(.horizontal, 10) }
                     }
-                    .padding(10)
-                    .background(selectedIndex == index ? Color.primary.opacity(0.08) : Color.clear, in: RoundedRectangle(cornerRadius: 6))
-                    if index < rules.count - 1 { Divider().padding(.horizontal, 10) }
                 }
             }
             HStack {
@@ -42,19 +84,31 @@ struct SubscriptionTemplateInjections: View {
                     selectedIndex = index; editingIndex = index
                 }
                 Spacer()
+                Text(L10n.text("共 {0} 项", String(rules.count))).font(.caption).foregroundStyle(.secondary)
+                Button(L10n.text("复制注入规则"), systemImage: "doc.on.doc") {
+                    if let next = store.duplicateInjection(at: selectedIndex) {
+                        selectedIndex = next
+                    }
+                }
+                .labelStyle(.iconOnly)
+                .help(L10n.text("复制注入规则"))
+                .disabled(!rules.indices.contains(selectedIndex))
                 Button(L10n.text("上移"), systemImage: "arrow.up") { move(selectedIndex, -1) }.labelStyle(.iconOnly).disabled(rules.isEmpty || selectedIndex == 0)
                 Button(L10n.text("下移"), systemImage: "arrow.down") { move(selectedIndex, 1) }.labelStyle(.iconOnly).disabled(selectedIndex + 1 >= rules.count)
                 Button(L10n.text("删除注入规则"), systemImage: "trash", role: .destructive) {
-                    guard rules.indices.contains(selectedIndex) else { return }
-                    var next = rules; next.remove(at: selectedIndex)
-                    store.edit { $0["injections"] = .array(next) }; selectedIndex = max(0, min(selectedIndex, next.count - 1))
-                }.labelStyle(.iconOnly).disabled(rules.isEmpty)
+                    deleteRule(at: selectedIndex)
+                }.labelStyle(.iconOnly).disabled(!rules.indices.contains(selectedIndex))
             }
         }
         .sheet(isPresented: Binding(get: { editingIndex != nil }, set: { if !$0 { editingIndex = nil } })) {
             if let index = editingIndex, rules.indices.contains(index) {
                 VStack(spacing: 0) {
-                    HStack { Text(L10n.text("动态节点注入")).font(.title2.bold()); Spacer() }.padding(20)
+                    DetailHeaderBar {
+                        HStack {
+                            Text(L10n.text("动态节点注入")).font(.title2.bold())
+                            Spacer()
+                        }
+                    }
                     Form {
                         Section(L10n.text("基础信息")) {
                             Picker(L10n.text("目标代理组"), selection: Binding(get: { entry(index, "group").stringValue ?? "" }, set: { update(index, "group", .string($0)) })) {
@@ -80,6 +134,7 @@ struct SubscriptionTemplateInjections: View {
                             }
                         }
                     }.formStyle(.grouped)
+                    Divider()
                     TemplateEditorFooter(store: store) { editingIndex = nil }.id(index)
                 }.frame(width: 800, height: 640).accessibilityIdentifier("templates.complexEditor")
             }
@@ -89,6 +144,25 @@ struct SubscriptionTemplateInjections: View {
         .onChange(of: rules.count) { _, _ in
             if let index = editingIndex, !rules.indices.contains(index) { editingIndex = nil }
         }
+    }
+    private func conditionChips(_ rule: JSONValue) -> [String] {
+        var chips: [String] = []
+        let idsCount = rule["ids"].arrayValue?.count ?? 0
+        if idsCount > 0 { chips.append("ID ×\(idsCount)") }
+        if let contains = rule["contains"].stringValue, !contains.isEmpty { chips.append(L10n.text("包含: {0}", contains)) }
+        if let prefix = rule["prefix"].stringValue, !prefix.isEmpty { chips.append(L10n.text("前缀: {0}", prefix)) }
+        let excludeCount = rule["exclude"].arrayValue?.count ?? 0
+        if excludeCount > 0 { chips.append(L10n.text("排除 ×{0}", String(excludeCount))) }
+        if let preferred = rule["preferred_prefix"].stringValue, !preferred.isEmpty { chips.append(L10n.text("优选: {0}", preferred)) }
+        if rule["descending"].boolValue == true { chips.append(L10n.text("降序")) }
+        if rule["on_empty"].stringValue == "error" { chips.append(L10n.text("空集合报错")) }
+        return chips
+    }
+    private func deleteRule(at index: Int) {
+        guard rules.indices.contains(index) else { return }
+        var next = rules; next.remove(at: index)
+        store.edit { $0["injections"] = .array(next) }
+        selectedIndex = max(0, min(index, next.count - 1))
     }
     private func focus() {
         let target = SubscriptionTemplateStore.path(store.focusedPath)
