@@ -67,8 +67,10 @@ async fn query(
     }
     Ok(response)
 }
-fn resolvers() -> Vec<SocketAddr> {
-    let data = std::fs::read_to_string("/etc/resolv.conf").unwrap_or_default();
+async fn resolvers() -> Vec<SocketAddr> {
+    let data = tokio::fs::read_to_string("/etc/resolv.conf")
+        .await
+        .unwrap_or_default();
     let mut result: Vec<_> = data
         .lines()
         .filter_map(|line| {
@@ -89,7 +91,7 @@ fn resolvers() -> Vec<SocketAddr> {
     result
 }
 async fn recursive(name: &str, kind: RecordType) -> Result<Message> {
-    for resolver in resolvers() {
+    for resolver in resolvers().await {
         if let Ok(response) = query(resolver, name, kind, true).await {
             return Ok(response);
         }
@@ -186,7 +188,11 @@ async fn observe(source: &persistence::Record) -> Result<Value> {
     let mut authoritative = Vec::<Value>::new();
     if let Ok(ns) = recursive(&zone_name, RecordType::NS).await {
         for host in answers(&ns, RecordType::NS).into_iter().take(4) {
-            if let Ok(mut addresses) = tokio::net::lookup_host((host.as_str(), 53)).await
+            if let Ok(Ok(mut addresses)) = tokio::time::timeout(
+                std::time::Duration::from_secs(4),
+                tokio::net::lookup_host((host.as_str(), 53)),
+            )
+            .await
                 && let Some(address) = addresses.next()
             {
                 match query(address, &name, kind, false).await {

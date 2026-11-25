@@ -333,11 +333,12 @@ pub async fn usage(
     State(state): State<AppState>,
     Path(user_id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
+    let mut tx = crate::read_snapshot::begin(&state.pool).await?;
     let user = sqlx::query(
         "SELECT id, name, enabled, expires_at, usage_bytes, quota_bytes, quota_reset_at FROM users WHERE id = $1",
     )
     .bind(&user_id)
-    .fetch_optional(&mut *crate::read_snapshot::begin(&state.pool).await?)
+    .fetch_optional(&mut *tx)
     .await?
     .ok_or_else(|| ApiError::not_found("user"))?;
     let rows = sqlx::query(
@@ -351,7 +352,7 @@ pub async fn usage(
         FROM user_nodes n LEFT JOIN user_node_usage t ON t.node_id=n.node_id AND t.user_id=$1
         LEFT JOIN traffic_baselines b ON b.node_id=n.node_id AND b.user_id=$1 ORDER BY n.node_id",
     ).bind(&user_id)
-    .fetch_all(&mut *crate::read_snapshot::begin(&state.pool).await?)
+    .fetch_all(&mut *tx)
     .await?;
     let by_node: Vec<Value> = rows.iter().map(|row| json!({
         "node_id": row.get::<String, _>("node_id"), "tx_bytes": row.get::<Option<i64>, _>("tx").unwrap_or(0),
@@ -383,7 +384,7 @@ pub async fn usage(
         "fresh"
     };
     let gap_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM data_gaps g JOIN node_assignments a ON a.node_id = g.node_id WHERE a.user_id = $1 AND g.resolved_at IS NULL")
-        .bind(&user_id).fetch_one(&mut *crate::read_snapshot::begin(&state.pool).await?).await?;
+        .bind(&user_id).fetch_one(&mut *tx).await?;
     let is_restricted = !user.get::<bool, _>("enabled")
         || user
             .get::<Option<DateTime<Utc>>, _>("expires_at")
@@ -394,8 +395,9 @@ pub async fn usage(
     let pending_rows = sqlx::query("SELECT j.id,j.node_id,j.status,j.stage,j.updated_at FROM kick_requests r JOIN jobs j ON j.id=r.latest_job_id WHERE r.user_id=$2 AND r.state NOT IN ('completed','cancelled') AND j.kind='kick' AND (j.status IN ('queued','running') OR (j.status='failed' AND $1)) ORDER BY j.created_at")
         .bind(is_restricted)
         .bind(&user_id)
-        .fetch_all(&mut *crate::read_snapshot::begin(&state.pool).await?)
+        .fetch_all(&mut *tx)
         .await?;
+    tx.commit().await?;
     let pending_revocations: Vec<Value> = pending_rows
         .iter()
         .map(|row| {

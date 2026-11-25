@@ -81,45 +81,57 @@ async fn page_values_on(
     users: &[String],
 ) -> Result<Vec<Value>, ApiError> {
     let rows = sqlx::query("SELECT c.*,v.metadata FROM credentials c LEFT JOIN mtls_authorities a ON a.credential_id=c.id AND c.kind='ca_identity' JOIN credential_versions v ON v.credential_id=c.id AND v.version=coalesce(a.published_version,c.latest_version) WHERE c.id=ANY($1) ORDER BY lower(c.name) COLLATE \"C\",c.id").bind(managed).fetch_all(&mut *connection).await?;
-    let mut counts =
-        std::collections::BTreeMap::<String, std::collections::BTreeSet<String>>::new();
-    let references=sqlx::query("SELECT DISTINCT credential_id,node_id FROM credential_reference_edges WHERE credential_id=ANY($1) AND source IN ('desired','deployed') UNION SELECT ssh_credential_id,id FROM nodes WHERE ssh_credential_id=ANY($1)").bind(managed).fetch_all(&mut *connection).await?;
-    for row in references {
-        counts
-            .entry(row.get("credential_id"))
-            .or_default()
-            .insert(format!("node:{}", row.get::<String, _>("node_id")));
-    }
-    for connection in
-        sqlx::query("SELECT id,credential_id FROM dns_connections WHERE credential_id=ANY($1)")
-            .bind(managed)
-            .fetch_all(&mut *connection)
-            .await?
-    {
-        counts
-            .entry(connection.get("credential_id"))
-            .or_default()
-            .insert(format!(
-                "dns_connection:{}",
-                connection.get::<String, _>("id")
-            ));
-    }
-    let managed_nodes = sqlx::query("WITH contexts AS(SELECT ca_id,node_id FROM mtls_node_trust WHERE desired OR deployed UNION SELECT ca_id,node_id FROM mtls_live_activation_trust) SELECT ca_id AS credential_id,node_id FROM contexts WHERE ca_id=ANY($1) UNION SELECT i.credential_id,a.node_id FROM mtls_user_identities i JOIN node_assignments a ON a.user_id=i.user_id JOIN contexts c ON c.ca_id=i.ca_id AND c.node_id=a.node_id WHERE NOT i.archived AND i.credential_id=ANY($1) UNION SELECT p.credential_id,p.node_id FROM mtls_probe_versions p JOIN contexts c ON c.ca_id=p.ca_id AND c.node_id=p.node_id WHERE p.credential_id=ANY($1)").bind(managed).fetch_all(&mut *connection).await?;
-    for row in managed_nodes {
-        counts
-            .entry(row.get("credential_id"))
-            .or_default()
-            .insert(format!("node:{}", row.get::<String, _>("node_id")));
+    let mut counts = std::collections::HashMap::<String, i64>::new();
+    let total_refs = sqlx::query(
+        "WITH contexts AS (
+             SELECT ca_id, node_id FROM mtls_node_trust WHERE desired OR deployed
+             UNION
+             SELECT ca_id, node_id FROM mtls_live_activation_trust
+         ),
+         all_refs AS (
+             SELECT credential_id, 'node:' || node_id AS target
+             FROM credential_reference_edges
+             WHERE credential_id = ANY($1) AND source IN ('desired', 'deployed')
+             UNION
+             SELECT ssh_credential_id AS credential_id, 'node:' || id AS target
+             FROM nodes
+             WHERE ssh_credential_id = ANY($1)
+             UNION
+             SELECT credential_id, 'dns_connection:' || id AS target
+             FROM dns_connections
+             WHERE credential_id = ANY($1)
+             UNION
+             SELECT ca_id AS credential_id, 'node:' || node_id AS target
+             FROM contexts
+             WHERE ca_id = ANY($1)
+             UNION
+             SELECT i.credential_id, 'node:' || a.node_id AS target
+             FROM mtls_user_identities i
+             JOIN node_assignments a ON a.user_id = i.user_id
+             JOIN contexts c ON c.ca_id = i.ca_id AND c.node_id = a.node_id
+             WHERE NOT i.archived AND i.credential_id = ANY($1)
+             UNION
+             SELECT p.credential_id, 'node:' || p.node_id AS target
+             FROM mtls_probe_versions p
+             JOIN contexts c ON c.ca_id = p.ca_id AND c.node_id = p.node_id
+             WHERE p.credential_id = ANY($1)
+         )
+         SELECT credential_id, count(DISTINCT target)::bigint AS count
+         FROM all_refs
+         GROUP BY credential_id",
+    )
+    .bind(managed)
+    .fetch_all(&mut *connection)
+    .await?;
+    for row in total_refs {
+        counts.insert(row.get("credential_id"), row.get("count"));
     }
     let mut entries: Vec<Value> = rows
         .iter()
         .map(|row| {
             let mut entry = summary(row);
-            entry["reference_count"] = json!(
-                counts
-                    .get(&row.get::<String, _>("id"))
-                    .map_or(0, |set| set.len())
-            );
+            entry["reference_count"] =
+                json!(counts.get(&row.get::<String, _>("id")).copied().unwrap_or(0));
             entry
         })
         .collect();

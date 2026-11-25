@@ -200,9 +200,11 @@ pub async fn list(
     State(state): State<AppState>,
     AxumPath(node_id): AxumPath<String>,
 ) -> Result<Json<Vec<Value>>, ApiError> {
+    let mut tx = crate::read_snapshot::begin(&state.pool).await?;
     ensure_node(&state, &node_id).await?;
     let rows = sqlx::query("SELECT id, name, resource_kind, content_sha256, size_bytes, created_at FROM config_resources WHERE node_id = $1 ORDER BY lower(name) COLLATE \"C\", name COLLATE \"C\", id")
-        .bind(&node_id).fetch_all(&mut *crate::read_snapshot::begin(&state.pool).await?).await?;
+        .bind(&node_id).fetch_all(&mut *tx).await?;
+    tx.commit().await?;
     Ok(Json(rows.iter().map(|row| json!({
         "id": row.get::<String, _>("id"), "name": row.get::<String, _>("name"),
         "resource_kind": row.get::<String, _>("resource_kind"), "content_sha256": row.get::<String, _>("content_sha256"),

@@ -334,16 +334,17 @@ pub async fn get_binding(
     State(state): State<AppState>,
     Path(node): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
+    let mut tx = crate::read_snapshot::begin(&state.pool).await?;
     let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM nodes WHERE id=$1)")
         .bind(&node)
-        .fetch_one(&mut *crate::read_snapshot::begin(&state.pool).await?)
+        .fetch_one(&mut *tx)
         .await?;
     if !exists {
         return Err(ApiError::not_found("node"));
     }
-    Ok(Json(
-        json!({"binding":binding_summary(&state.pool, &node).await?}),
-    ))
+    let summary = binding_summary(&state.pool, &node).await?;
+    tx.commit().await?;
+    Ok(Json(json!({"binding": summary})))
 }
 
 fn validate_unbind(input: &Unbind) -> Result<(), ApiError> {

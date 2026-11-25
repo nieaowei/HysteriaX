@@ -109,6 +109,7 @@ pub async fn finish_captured_for_removal(pool: &PgPool, node: &str) -> Result<()
             Ok::<_,anyhow::Error>(())
         })
     }).await?;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     loop {
         let id:Option<String>=sqlx::query_scalar("SELECT sample_id FROM traffic_sample_batches WHERE node_id=$1 AND state='ready' ORDER BY sample_order LIMIT 1")
             .bind(node).fetch_optional(pool).await?;
@@ -116,6 +117,9 @@ pub async fn finish_captured_for_removal(pool: &PgPool, node: &str) -> Result<()
             return Ok(());
         };
         if !batches::drain(pool, &id).await? {
+            if tokio::time::Instant::now() >= deadline {
+                anyhow::bail!("timed out waiting for captured traffic batch {id} to finish");
+            }
             tokio::time::sleep(Duration::from_millis(25)).await;
         }
     }

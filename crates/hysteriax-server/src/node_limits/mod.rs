@@ -86,7 +86,7 @@ fn valid_interface(name: &str) -> bool {
 
 /// Month-end clamping and IANA timezone conversion, including DST midnight shifts.
 fn monthly_boundary(package: &Package, year: i32, month: u32) -> DateTime<Utc> {
-    let tz: Tz = package.timezone.parse().expect("validated timezone");
+    let tz: Tz = package.timezone.parse().unwrap_or(chrono_tz::UTC);
     let (ny, nm) = if month == 12 {
         (year + 1, 1)
     } else {
@@ -116,7 +116,8 @@ fn next_reset(package: &Package, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
     if package.cycle != "monthly" {
         return None;
     }
-    let local = now.with_timezone(&package.timezone.parse::<Tz>().expect("validated timezone"));
+    let tz: Tz = package.timezone.parse().unwrap_or(chrono_tz::UTC);
+    let local = now.with_timezone(&tz);
     let current = monthly_boundary(package, local.year(), local.month());
     if current > now {
         Some(current)
@@ -275,26 +276,31 @@ pub async fn restricted(pool: &PgPool, id: &str) -> Result<bool> {
     .is_empty())
 }
 pub async fn snapshot(pool: &PgPool, id: &str) -> Result<(Value, Value)> {
+    let mut tx = crate::read_snapshot::begin(pool).await?;
     let row = sqlx::query_as::<_, PackageReading>("SELECT config, usage_bytes, next_reset_at, interface, sampled_at, gap_reason FROM node_packages WHERE node_id = $1")
-        .bind(id).fetch_optional(&mut *crate::read_snapshot::begin(pool).await?).await?;
+        .bind(id).fetch_optional(&mut *tx).await?;
+    let now: DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
+        .fetch_one(&mut *tx)
+        .await?;
     if row.is_none() {
-        return snapshot_from_reading(None, vec![], 0, 0, Utc::now());
+        tx.commit().await?;
+        return snapshot_from_reading(None, vec![], 0, 0, now);
     }
-    let now = Utc::now();
-    let alerts = sqlx::query("SELECT id, kind, created_at FROM node_alerts WHERE node_id = $1 AND active ORDER BY created_at, id").bind(id).fetch_all(&mut *crate::read_snapshot::begin(pool).await?).await?;
+    let alerts = sqlx::query("SELECT id, kind, created_at FROM node_alerts WHERE node_id = $1 AND active ORDER BY created_at, id").bind(id).fetch_all(&mut *tx).await?;
     let alerts: Vec<Value> = alerts.iter().map(|r| json!({"id": r.get::<String,_>("id"), "kind": r.get::<String,_>("kind"), "created_at": r.get::<DateTime<Utc>,_>("created_at")})).collect();
     let failed: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM kick_requests WHERE node_id=$1 AND reasons ? 'node_limit' AND state IN ('waiting_recovery','needs_attention')",
     )
     .bind(id)
-    .fetch_one(&mut *crate::read_snapshot::begin(pool).await?)
+    .fetch_one(&mut *tx)
     .await?;
     let pending: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM kick_requests WHERE node_id=$1 AND reasons ? 'node_limit' AND state='active'",
     )
     .bind(id)
-    .fetch_one(&mut *crate::read_snapshot::begin(pool).await?)
+    .fetch_one(&mut *tx)
     .await?;
+    tx.commit().await?;
     snapshot_from_reading(row.as_ref(), alerts, failed, pending, now)
 }
 
@@ -345,12 +351,12 @@ pub(crate) async fn update_usage_on(
     sqlx::query(
         "UPDATE nodes SET desired_revision = desired_revision + 1, updated_at = $1 WHERE id = $2",
     )
-    .bind(Utc::now())
+    .bind(now)
     .bind(&id)
     .execute(&mut **tx)
     .await?;
     sqlx::query("INSERT INTO config_versions(id,node_id,revision,config_enc,content_sha256,created_at) SELECT $1,node_id,$2,config_enc,content_sha256,$3 FROM config_versions WHERE node_id=$4 AND revision=$5")
-        .bind(Uuid::new_v4().to_string()).bind(revision+1).bind(Utc::now()).bind(&id).bind(revision).execute(&mut **tx).await?;
+        .bind(Uuid::new_v4().to_string()).bind(revision+1).bind(now).bind(&id).bind(revision).execute(&mut **tx).await?;
     crate::credentials::reference_index::flush_node_on(tx, &secrets, &id).await?;
     audit(
         tx,

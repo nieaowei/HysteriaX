@@ -448,13 +448,17 @@ async fn probe_using(
         .stderr(std::process::Stdio::from(log_file))
         .kill_on_drop(true)
         .spawn()?;
-    let http = reqwest::Client::builder()
-        .no_proxy()
-        .timeout(Duration::from_secs(
-            crate::runtime_config::operation_timeout_seconds(3),
-        ))
-        .redirect(reqwest::redirect::Policy::none())
-        .build()?;
+    static PROBE_HTTP: std::sync::LazyLock<reqwest::Client> = std::sync::LazyLock::new(|| {
+        reqwest::Client::builder()
+            .no_proxy()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .expect("build proxy probe HTTP client")
+    });
+    let http = PROBE_HTTP.clone();
+    let request_timeout = Duration::from_secs(
+        crate::runtime_config::operation_timeout_seconds(3),
+    );
     let stats_secret = state
         .secrets
         .decrypt(&row.get::<String, _>("traffic_stats_secret_enc"))?;
@@ -469,6 +473,7 @@ async fn probe_using(
         crate::execution::check_current().await?;
         if let Ok(response) = http
             .get(&stats_url)
+            .timeout(request_timeout)
             .header("Authorization", &stats_secret)
             .send()
             .await
@@ -493,6 +498,7 @@ async fn probe_using(
     let timing = Instant::now();
     let response = http
         .get(&stats_url)
+        .timeout(request_timeout)
         .header("Authorization", &stats_secret)
         .send()
         .await?;
@@ -503,8 +509,13 @@ async fn probe_using(
         let url = format!("http://127.0.0.1:{lp}{}", target.path());
         crate::execution::check_current().await?;
         let external_timing = Instant::now();
-        let external_status =
-            if let Ok(response) = http.get(url).header("Host", host_header).send().await {
+        let external_status = if let Ok(response) = http
+            .get(url)
+            .timeout(request_timeout)
+            .header("Host", host_header)
+            .send()
+            .await
+        {
                 if response.status().is_success() {
                     "ok"
                 } else {
