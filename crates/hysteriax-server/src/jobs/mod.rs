@@ -21,11 +21,18 @@ pub async fn run(state: AppState) {
     let max_parallel =
         crate::runtime_config::background_worker_parallelism().min(DEFAULT_MAX_PARALLEL_NODES);
     tracing::info!(max_parallel, "background job worker started");
+    let mut shutdown = state.shutdown.subscribe();
     let mut tasks = JoinSet::new();
     let mut reconciliation = tokio::time::interval(Duration::from_secs(1));
     reconciliation.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
+        if *shutdown.borrow() {
+            break;
+        }
         while tasks.len() < max_parallel {
+            if *shutdown.borrow() {
+                break;
+            }
             match claim_next_for(&state.pool, Some(&state.instance_id)).await {
                 Ok(Some(job)) => {
                     let worker_state = state.clone();
@@ -38,8 +45,12 @@ pub async fn run(state: AppState) {
                 }
             }
         }
+        if *shutdown.borrow() {
+            break;
+        }
 
         tokio::select! {
+            _ = shutdown.changed() => break,
             joined = tasks.join_next(), if !tasks.is_empty() => {
                 if let Some(Err(error)) = joined {
                     tracing::error!(%error, "background job task panicked");
@@ -51,6 +62,11 @@ pub async fn run(state: AppState) {
                 }
             }
             _ = tokio::time::sleep(Duration::from_secs(1)) => {}
+        }
+    }
+    while let Some(joined) = tasks.join_next().await {
+        if let Err(error) = joined {
+            tracing::error!(%error, "background job task panicked during shutdown");
         }
     }
 }

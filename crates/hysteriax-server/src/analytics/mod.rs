@@ -8,12 +8,20 @@ pub use refresh::refresh;
 use refresh::{Queue, claim_on, refresh_queue_on};
 
 pub async fn run(state: AppState) {
+    let mut shutdown = state.shutdown.subscribe();
     let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
-        interval.tick().await;
-        if let Err(error) = refresh(&state.pool).await {
-            tracing::error!(%error, "analytics refresh failed");
+        if *shutdown.borrow() {
+            break;
+        }
+        tokio::select! {
+            _ = shutdown.changed() => break,
+            _ = interval.tick() => {
+                if let Err(error) = refresh(&state.pool).await {
+                    tracing::error!(%error, "analytics refresh failed");
+                }
+            }
         }
     }
 }

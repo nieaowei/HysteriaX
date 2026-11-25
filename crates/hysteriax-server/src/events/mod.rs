@@ -39,14 +39,24 @@ impl EventHub {
             changed: watch::channel(0).0,
         }
     }
-    pub fn subscribe(self: &Arc<Self>, pool: PgPool) -> watch::Receiver<u64> {
+    pub fn subscribe(
+        self: &Arc<Self>,
+        pool: PgPool,
+        mut shutdown: watch::Receiver<bool>,
+    ) -> watch::Receiver<u64> {
         let receiver = self.changed.subscribe();
         if !self.started.swap(true, Ordering::SeqCst) {
             let weak = Arc::downgrade(self);
             tokio::spawn(async move {
                 let mut timer = tokio::time::interval(std::time::Duration::from_secs(1));
                 loop {
-                    timer.tick().await;
+                    tokio::select! {
+                        _ = shutdown.changed() => break,
+                        _ = timer.tick() => {}
+                    }
+                    if *shutdown.borrow() {
+                        break;
+                    }
                     let Some(hub) = weak.upgrade() else {
                         break;
                     };
@@ -60,7 +70,7 @@ impl EventHub {
                     .await
                     {
                         Ok(position) => {
-                            let mut previous = hub.position.lock().unwrap();
+                            let mut previous = hub.position.lock().unwrap_or_else(|e| e.into_inner());
                             if previous.as_ref() != Some(&position) {
                                 *previous = Some(position);
                                 drop(previous);
@@ -78,7 +88,7 @@ impl EventHub {
         self.changed.send_modify(|version| *version += 1);
     }
     pub fn stats(&self) -> Value {
-        let position = self.position.lock().unwrap();
+        let position = self.position.lock().unwrap_or_else(|e| e.into_inner());
         serde_json::json!({
             "epoch": position.as_ref().map(|(epoch, _)| epoch),
             "watermark": position.as_ref().map(|(_, head)| *head),

@@ -202,7 +202,9 @@ fn stream(
     let output = stream! {
         let mut shutdown = state.shutdown.subscribe();
         let mut authorization = state.admin_tokens_changed.subscribe();
-        let mut updates = state.events.subscribe(state.pool.clone());
+        let mut updates = state
+            .events
+            .subscribe(state.pool.clone(), state.shutdown.subscribe());
         let mut first = Some(first);
         loop {
             if *shutdown.borrow() { break; }

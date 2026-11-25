@@ -279,14 +279,27 @@ pub async fn run(state: AppState) {
     if state.caches.redis.is_none() {
         return;
     }
+    let mut shutdown = state.shutdown.subscribe();
     loop {
-        if let Err(error) = listen(&state).await {
+        if *shutdown.borrow() {
+            break;
+        }
+        if let Err(error) = listen(&state, &mut shutdown).await {
             tracing::warn!(%error,"quota leaderboard listener reconnecting");
         }
-        tokio::time::sleep(Duration::from_secs(1)).await;
+        if *shutdown.borrow() {
+            break;
+        }
+        tokio::select! {
+            _ = shutdown.changed() => break,
+            _ = tokio::time::sleep(Duration::from_secs(1)) => {}
+        }
     }
 }
-async fn listen(state: &AppState) -> anyhow::Result<()> {
+async fn listen(
+    state: &AppState,
+    shutdown: &mut tokio::sync::watch::Receiver<bool>,
+) -> anyhow::Result<()> {
     let schema: String = sqlx::query_scalar("SELECT current_schema()")
         .fetch_one(&state.pool)
         .await?;
@@ -298,9 +311,13 @@ async fn listen(state: &AppState) -> anyhow::Result<()> {
     let debounce = tokio::time::sleep(Duration::from_millis(100));
     tokio::pin!(debounce);
     loop {
+        if *shutdown.borrow() {
+            return Ok(());
+        }
         tokio::select! {
             // A sustained notification stream cannot starve the bounded refresh.
             biased;
+            _ = shutdown.changed() => return Ok(()),
             _ = &mut debounce, if pending => {
                 pending = false;
                 state.quota_rank.refresh(&state.pool).await

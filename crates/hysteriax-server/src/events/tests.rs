@@ -73,8 +73,9 @@ async fn subscribers_observe_publication_and_epoch_changes() {
     let pool = crate::db::test_pool().await;
     fixture(&pool).await;
     let hub = Arc::new(EventHub::new());
-    let mut first = hub.subscribe(pool.clone());
-    let mut second = hub.subscribe(pool.clone());
+    let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+    let mut first = hub.subscribe(pool.clone(), shutdown_rx.clone());
+    let mut second = hub.subscribe(pool.clone(), shutdown_rx);
     async fn updated(receiver: &mut watch::Receiver<u64>) {
         tokio::time::timeout(std::time::Duration::from_secs(5), receiver.changed())
             .await

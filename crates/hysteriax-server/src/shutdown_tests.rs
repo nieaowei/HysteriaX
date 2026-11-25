@@ -110,3 +110,18 @@ async fn shutdown_closes_sse_and_bounds_unresponsive_requests() {
         .unwrap();
     request.abort();
 }
+
+#[tokio::test]
+async fn graceful_worker_drain_waits_for_clean_exit_and_aborts_on_deadline() {
+    let completed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let flag = completed.clone();
+    let finishing = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        flag.store(true, std::sync::atomic::Ordering::SeqCst);
+    });
+    let hanging = tokio::spawn(std::future::pending());
+    let mut workers = [("finishing", finishing), ("hanging", hanging)];
+    drain_graceful_workers(&mut workers, Duration::from_millis(80)).await;
+    assert!(completed.load(std::sync::atomic::Ordering::SeqCst));
+    assert!(workers.iter().all(|(_, task)| task.is_finished()));
+}

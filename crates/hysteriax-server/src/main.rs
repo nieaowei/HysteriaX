@@ -137,22 +137,17 @@ async fn main() -> Result<()> {
     // Also quiesce on an HTTP server error. Sampling owns destructive clear
     // responses: dropping its JoinSets here can lose counters already cleared.
     shutdown.send_replace(true);
-    let workers = [
-        analytics,
-        jobs,
-        limits,
-        quota_rank,
-        mtls,
-        sampling_expiry,
-        transaction_metrics,
-        maintenance_metrics,
+    let mut workers = [
+        ("analytics", analytics),
+        ("jobs", jobs),
+        ("limits", limits),
+        ("quota_rank", quota_rank),
+        ("mtls", mtls),
+        ("sampling_expiry", sampling_expiry),
+        ("transaction_metrics", transaction_metrics),
+        ("maintenance_metrics", maintenance_metrics),
     ];
-    for worker in &workers {
-        worker.abort();
-    }
-    for worker in workers {
-        let _ = worker.await;
-    }
+    drain_graceful_workers(&mut workers, Duration::from_secs(60)).await;
     // Keep instance heartbeats and per-execution renewal alive until the
     // sampling futures have persisted their responses and finalized ownership.
     let drained = drain_sampling_workers(
@@ -173,6 +168,36 @@ async fn main() -> Result<()> {
     result?;
     drained?;
     Ok(())
+}
+
+async fn drain_graceful_workers(
+    workers: &mut [(&str, tokio::task::JoinHandle<()>)],
+    timeout: Duration,
+) {
+    let mut completed = 0;
+    let result = tokio::time::timeout(timeout, async {
+        for (kind, worker) in workers.iter_mut() {
+            if let Err(error) = worker.await {
+                tracing::warn!(kind, %error, "background worker exited with error during shutdown");
+            }
+            completed += 1;
+        }
+    })
+    .await;
+    if result.is_err() {
+        let pending: Vec<_> = workers
+            .iter()
+            .filter(|(_, worker)| !worker.is_finished())
+            .map(|(kind, _)| *kind)
+            .collect();
+        tracing::warn!(?pending, "background worker drain deadline reached; aborting remaining workers");
+        for (_, worker) in workers.iter().skip(completed) {
+            worker.abort();
+        }
+        for (_, worker) in workers.iter_mut().skip(completed) {
+            let _ = worker.await;
+        }
+    }
 }
 
 async fn drain_sampling_workers(

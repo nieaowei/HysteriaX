@@ -370,14 +370,21 @@ pub(crate) async fn update_usage_on(
 }
 
 pub async fn run(state: AppState) {
+    let mut shutdown = state.shutdown.subscribe();
     loop {
+        if *shutdown.borrow() {
+            break;
+        }
         match maintenance::pass(&state.pool, &state.instance_id).await {
             Ok(processed) if processed > 0 => tokio::task::yield_now().await,
             result => {
                 if let Err(error) = result {
                     tracing::error!(%error,"node limit maintenance deferred");
                 }
-                tokio::time::sleep(Duration::from_secs(1)).await;
+                tokio::select! {
+                    _ = shutdown.changed() => break,
+                    _ = tokio::time::sleep(Duration::from_secs(1)) => {}
+                }
             }
         }
     }
