@@ -48,33 +48,84 @@ pub async fn ensure_cycle(pool: &PgPool, kind: &str) -> Result<Uuid> {
     }
     let kind = kind.to_owned();
     let id = Uuid::new_v4();
-    db::serializable_after_probe(pool,connection,move |tx| {
-        let kind=kind.clone();
+    drop(connection);
+    db::write(pool, move |tx| {
+        let kind = kind.clone();
         Box::pin(async move {
-            let seconds=match kind.as_str(){"traffic"|"network"=>crate::runtime_config::sampling_interval_seconds() as i64,"proxy"=>60_i64,_=>anyhow::bail!("unsupported sampling kind")};
-            let period:DateTime<Utc>=sqlx::query_scalar("SELECT to_timestamp(floor(extract(epoch FROM clock_timestamp())/$1)*$1)").bind(seconds as f64).fetch_one(&mut **tx).await?;
-            let deadline=period+chrono::Duration::seconds(seconds);
-            let created=sqlx::query("INSERT INTO sampling_cycles(id,kind,period_start,deadline_at,expected_nodes) VALUES($1,$2,$3,$4,0) ON CONFLICT(kind,period_start) DO NOTHING")
-                .bind(id).bind(&kind).bind(period).bind(deadline).execute(&mut **tx).await?.rows_affected()==1;
-            if !created {return Ok(sqlx::query_scalar("SELECT id FROM sampling_cycles WHERE kind=$1 AND period_start=$2").bind(&kind).bind(period).fetch_one(&mut **tx).await?);}
-            let ids:Vec<String>=if kind=="traffic" {
-                sqlx::query_scalar("SELECT id FROM nodes WHERE deployed_revision IS NOT NULL AND state NOT IN ('deleting','delete_failed') ORDER BY id FOR KEY SHARE").fetch_all(&mut **tx).await?
-            } else if kind=="proxy" {
-                sqlx::query_scalar("SELECT id FROM nodes WHERE deployed_revision IS NOT NULL AND state NOT IN ('deleting','delete_failed') AND mtls_state='ready' ORDER BY id FOR KEY SHARE").fetch_all(&mut **tx).await?
-            } else {
-                sqlx::query_scalar("SELECT n.id FROM nodes n JOIN node_packages p ON p.node_id=n.id WHERE (n.deployed_revision IS NOT NULL OR p.config->>'quota_bytes' IS NOT NULL) AND n.state NOT IN ('deleting','delete_failed') ORDER BY n.id FOR KEY SHARE OF n").fetch_all(&mut **tx).await?
+            let seconds = match kind.as_str() {
+                "traffic" | "network" => crate::runtime_config::sampling_interval_seconds() as i64,
+                "proxy" => 60_i64,
+                _ => anyhow::bail!("unsupported sampling kind"),
             };
-            let expected=ids.len() as i64;
-            sqlx::query("UPDATE sampling_cycles SET expected_nodes=$2 WHERE id=$1").bind(id).bind(expected).execute(&mut **tx).await?;
-            sqlx::query("INSERT INTO background_work(id,kind,cycle_id,node_id,available_at,deadline_at) SELECT $1::uuid::text||':'||node,$2,$1::uuid,node,$3,$4 FROM unnest($5::text[]) node")
-                .bind(id).bind(&kind).bind(period).bind(deadline).bind(&ids).execute(&mut **tx).await?;
-            if kind=="traffic" {
-                sqlx::query("INSERT INTO online_samples(cycle_id,node_id,sampled_at,status,connections,cycle_started_at,expected_nodes,pending) SELECT $1,node,$2,'failed','{}',$2,$3,true FROM unnest($4::text[]) node")
-                    .bind(id).bind(period).bind(expected).bind(&ids).execute(&mut **tx).await?;
+            let period: DateTime<Utc> = sqlx::query_scalar(
+                "SELECT to_timestamp(floor(extract(epoch FROM clock_timestamp())/$1)*$1)",
+            )
+            .bind(seconds as f64)
+            .fetch_one(&mut **tx)
+            .await?;
+            let deadline = period + chrono::Duration::seconds(seconds);
+            let created = sqlx::query(
+                "INSERT INTO sampling_cycles(id,kind,period_start,deadline_at,expected_nodes) VALUES($1,$2,$3,$4,0) ON CONFLICT(kind,period_start) DO NOTHING",
+            )
+            .bind(id)
+            .bind(&kind)
+            .bind(period)
+            .bind(deadline)
+            .execute(&mut **tx)
+            .await?
+            .rows_affected()
+                == 1;
+            if !created {
+                return Ok(sqlx::query_scalar(
+                    "SELECT id FROM sampling_cycles WHERE kind=$1 AND period_start=$2",
+                )
+                .bind(&kind)
+                .bind(period)
+                .fetch_one(&mut **tx)
+                .await?);
+            }
+            let ids: Vec<String> = if kind == "traffic" {
+                sqlx::query_scalar("SELECT id FROM nodes WHERE deployed_revision IS NOT NULL AND state NOT IN ('deleting','delete_failed') ORDER BY id")
+                    .fetch_all(&mut **tx)
+                    .await?
+            } else if kind == "proxy" {
+                sqlx::query_scalar("SELECT id FROM nodes WHERE deployed_revision IS NOT NULL AND state NOT IN ('deleting','delete_failed') AND mtls_state='ready' ORDER BY id")
+                    .fetch_all(&mut **tx)
+                    .await?
+            } else {
+                sqlx::query_scalar("SELECT n.id FROM nodes n JOIN node_packages p ON p.node_id=n.id WHERE (n.deployed_revision IS NOT NULL OR p.config->>'quota_bytes' IS NOT NULL) AND n.state NOT IN ('deleting','delete_failed') ORDER BY n.id")
+                    .fetch_all(&mut **tx)
+                    .await?
+            };
+            let expected = ids.len() as i64;
+            sqlx::query("UPDATE sampling_cycles SET expected_nodes=$2 WHERE id=$1")
+                .bind(id)
+                .bind(expected)
+                .execute(&mut **tx)
+                .await?;
+            for chunk in ids.chunks(1_000) {
+                sqlx::query("INSERT INTO background_work(id,kind,cycle_id,node_id,available_at,deadline_at) SELECT $1::uuid::text||':'||node,$2,$1::uuid,node,$3,$4 FROM unnest($5::text[]) node")
+                    .bind(id)
+                    .bind(&kind)
+                    .bind(period)
+                    .bind(deadline)
+                    .bind(chunk)
+                    .execute(&mut **tx)
+                    .await?;
+                if kind == "traffic" {
+                    sqlx::query("INSERT INTO online_samples(cycle_id,node_id,sampled_at,status,connections,cycle_started_at,expected_nodes,pending) SELECT $1,node,$2,'failed','{}',$2,$3,true FROM unnest($4::text[]) node")
+                        .bind(id)
+                        .bind(period)
+                        .bind(expected)
+                        .bind(chunk)
+                        .execute(&mut **tx)
+                        .await?;
+                }
             }
             Ok(id)
         })
-    }).await
+    })
+    .await
 }
 
 /// Recover read-only work only while its slot is current. Already captured

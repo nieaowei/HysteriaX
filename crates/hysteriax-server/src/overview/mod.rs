@@ -64,16 +64,26 @@ pub async fn record_online_on(
     if active.is_none() {
         return Ok(());
     }
-    let ids: BTreeSet<String> =
-        sqlx::query_scalar::<_, String>("SELECT user_id FROM node_assignments WHERE node_id=$1")
-            .bind(node)
-            .fetch_all(&mut *connection)
-            .await?
-            .into_iter()
-            .collect();
-    let parsed = body
-        .and_then(|body| serde_json::from_slice(body).ok())
-        .and_then(|value| real_connections(value, &ids));
+    let raw_value = body.and_then(|body| serde_json::from_slice::<Value>(body).ok());
+    let candidate_ids: Vec<String> = raw_value
+        .as_ref()
+        .and_then(Value::as_object)
+        .map(|map| map.keys().cloned().collect())
+        .unwrap_or_default();
+    let ids: BTreeSet<String> = if candidate_ids.is_empty() {
+        BTreeSet::new()
+    } else {
+        sqlx::query_scalar::<_, String>(
+            "SELECT user_id FROM node_assignments WHERE node_id=$1 AND user_id = ANY($2::text[])",
+        )
+        .bind(node)
+        .bind(&candidate_ids)
+        .fetch_all(&mut *connection)
+        .await?
+        .into_iter()
+        .collect()
+    };
+    let parsed = raw_value.and_then(|value| real_connections(value, &ids));
     let status = if parsed.is_some() { "ok" } else { "failed" };
     sqlx::query("INSERT INTO online_samples(cycle_id,node_id,sampled_at,status,connections,cycle_started_at,expected_nodes) VALUES($1,$2,clock_timestamp(),$3,$4,$5,$6) ON CONFLICT(cycle_id,node_id) DO UPDATE SET sampled_at=excluded.sampled_at,status=excluded.status,connections=excluded.connections,pending=false WHERE online_samples.pending")
         .bind(cycle).bind(node).bind(status).bind(json!(parsed.unwrap_or_default())).bind(cycle_started).bind(expected_nodes).execute(connection).await?;
@@ -114,7 +124,7 @@ fn issue(
 fn package_warning(kind: &str) -> &str {
     match kind {
         "expired" => "套餐已到期",
-        "expiry_warning" => "套餐即将到期",
+        "expiring" | "expiry_warning" => "套餐即将到期",
         "quota_exhausted" => "节点额度已耗尽",
         "traffic_warning" => "节点用量达到预警阈值",
         _ => kind,
@@ -450,6 +460,7 @@ pub async fn get(State(state): State<AppState>) -> Result<Json<Value>, ApiError>
         .filter_map(|v| v["entity_id"].as_str())
         .collect::<BTreeSet<_>>()
         .len();
+    issues.truncate(500);
     let quota_rank: Vec<Value> = quota_ids
         .iter()
         .map(|id| quota_candidates.remove(id).ok_or_else(ApiError::internal))
@@ -755,20 +766,29 @@ async fn history_at(
         }
     }
     // Gaps can overlap multiple buckets even when no record was written in the gap.
-    let gaps = if want_traffic && source == "users" {
-        sqlx::query("SELECT opened_at start,COALESCE(resolved_at,now()) finish FROM data_gaps WHERE opened_at <= $2 AND COALESCE(resolved_at,now()) >= $1 AND ($3::text IS NULL OR node_id=$3)").bind(start).bind(now).bind(&query.node_id).fetch_all(&mut *tx).await?
-    } else {
-        Vec::new()
-    };
-    for gap in gaps {
-        let begin: DateTime<Utc> = gap.get("start");
-        let finish: DateTime<Utc> = gap.get("finish");
-        for (at, v) in &mut buckets {
+    if want_traffic && source == "users" && !buckets.is_empty() {
+        let mut bucket_starts = Vec::with_capacity(buckets.len());
+        let mut bucket_ends = Vec::with_capacity(buckets.len());
+        for (at, v) in &buckets {
+            bucket_starts.push(*at);
             let end = v["end"]
                 .as_str()
                 .and_then(|s| s.parse::<DateTime<Utc>>().ok())
                 .unwrap_or(now);
-            if *at <= finish && end > begin {
+            bucket_ends.push(end);
+        }
+        let gapped: Vec<DateTime<Utc>> = sqlx::query_scalar(
+            "SELECT b.start_at FROM unnest($1::timestamptz[], $2::timestamptz[]) AS b(start_at, end_at) \
+             WHERE EXISTS (SELECT 1 FROM data_gaps g WHERE g.opened_at <= b.end_at AND COALESCE(g.resolved_at, $3) >= b.start_at AND ($4::text IS NULL OR g.node_id = $4))",
+        )
+        .bind(&bucket_starts)
+        .bind(&bucket_ends)
+        .bind(now)
+        .bind(&query.node_id)
+        .fetch_all(&mut *tx)
+        .await?;
+        for at in gapped {
+            if let Some(v) = buckets.get_mut(&at) {
                 v["incomplete"] = json!(true);
                 v["missing_reason"] = json!("采集缺口覆盖此时段");
             }

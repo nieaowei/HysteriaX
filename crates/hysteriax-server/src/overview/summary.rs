@@ -104,7 +104,9 @@ pub(super) async fn load(
     quota_rank: &crate::quota_rank::QuotaRank,
 ) -> Result<SummaryData, ApiError> {
     let mut tx = crate::read_snapshot::begin(pool).await?;
-    let now = Utc::now();
+    let now: DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
+        .fetch_one(&mut *tx)
+        .await?;
     let rows = sqlx::query("SELECT state, count(*)::bigint AS count FROM nodes GROUP BY state")
         .fetch_all(&mut *tx)
         .await?;
@@ -117,7 +119,8 @@ pub(super) async fn load(
     let users = sqlx::query_as::<_, UserWarning>(
         "SELECT id, name, expires_at, quota_bytes, usage_bytes, updated_at
          FROM users WHERE enabled AND (expires_at <= $1 OR usage_bytes >= quota_bytes)
-         ORDER BY lower(name) COLLATE \"C\", name COLLATE \"C\", id",
+         ORDER BY lower(name) COLLATE \"C\", name COLLATE \"C\", id
+         LIMIT 1000",
     )
     .bind(now + Duration::days(7))
     .fetch_all(&mut *tx)

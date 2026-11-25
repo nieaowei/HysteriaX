@@ -168,8 +168,14 @@ impl QuotaRank {
         if !redis.available() {
             return Self::database_ids(connection, now).await;
         }
-        let _guard = self.gate.lock().await;
         let (version, schema) = RankVersion::read(connection).await?;
+        if let Some(Some(members)) = redis
+            .command::<Option<Vec<Vec<u8>>>>(Self::command(redis, &schema, "read", &version, now))
+            .await
+        {
+            return Ok(Self::decode(members));
+        }
+        let _guard = self.gate.lock().await;
         if let Some(Some(members)) = redis
             .command::<Option<Vec<Vec<u8>>>>(Self::command(redis, &schema, "read", &version, now))
             .await
@@ -260,7 +266,10 @@ impl QuotaRank {
         sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
             .execute(&mut *tx)
             .await?;
-        self.ids_on(&mut tx, Utc::now()).await?;
+        let now: DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
+            .fetch_one(&mut *tx)
+            .await?;
+        self.ids_on(&mut tx, now).await?;
         tx.commit().await?;
         Ok(())
     }

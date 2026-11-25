@@ -138,6 +138,7 @@ where
     .await
 }
 
+#[allow(dead_code)]
 pub(crate) async fn serializable_after_probe<T, E, F>(
     pool: &PgPool,
     connection: sqlx::pool::PoolConnection<Postgres>,
