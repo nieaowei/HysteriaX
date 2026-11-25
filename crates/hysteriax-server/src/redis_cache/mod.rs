@@ -4,7 +4,7 @@ use redis::aio::{ConnectionManager, ConnectionManagerConfig};
 use serde::{Serialize, de::DeserializeOwned};
 use std::sync::{
     Arc, Mutex,
-    atomic::{AtomicU64, Ordering},
+    atomic::{AtomicBool, AtomicU64, Ordering},
 };
 use std::time::{Duration, Instant};
 use tokio::sync::OnceCell;
@@ -15,6 +15,7 @@ pub struct RedisCache {
     secrets: Arc<SecretBox>,
     prefix: String,
     retry_after: Mutex<Option<Instant>>,
+    probing: AtomicBool,
     errors: AtomicU64,
 }
 impl RedisCache {
@@ -25,18 +26,45 @@ impl RedisCache {
             secrets,
             prefix,
             retry_after: Mutex::new(None),
+            probing: AtomicBool::new(false),
             errors: AtomicU64::new(0),
         })
     }
     pub fn available(&self) -> bool {
         self.retry_after
             .lock()
-            .unwrap()
+            .unwrap_or_else(|e| e.into_inner())
             .is_none_or(|until| until <= Instant::now())
     }
-    fn failed(&self) {
+    fn acquire_probe_slot(&self) -> (bool, bool) {
+        let now = Instant::now();
+        let guard = self.retry_after.lock().unwrap_or_else(|e| e.into_inner());
+        match *guard {
+            None => (true, false),
+            Some(until) if until <= now => {
+                drop(guard);
+                let won = self
+                    .probing
+                    .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                    .is_ok();
+                (won, won)
+            }
+            Some(_) => (false, false),
+        }
+    }
+    fn succeeded(&self, was_probe: bool) {
+        if was_probe {
+            *self.retry_after.lock().unwrap_or_else(|e| e.into_inner()) = None;
+            self.probing.store(false, Ordering::Release);
+        }
+    }
+    fn failed(&self, was_probe: bool) {
         self.errors.fetch_add(1, Ordering::Relaxed);
-        *self.retry_after.lock().unwrap() = Some(Instant::now() + Duration::from_secs(2));
+        *self.retry_after.lock().unwrap_or_else(|e| e.into_inner()) =
+            Some(Instant::now() + Duration::from_secs(2));
+        if was_probe {
+            self.probing.store(false, Ordering::Release);
+        }
     }
     pub fn key(&self, kind: &str, logical: &str) -> String {
         format!(
@@ -47,7 +75,8 @@ impl RedisCache {
         )
     }
     pub(crate) async fn command<T: redis::FromRedisValue>(&self, cmd: redis::Cmd) -> Option<T> {
-        if !self.available() {
+        let (allowed, was_probe) = self.acquire_probe_slot();
+        if !allowed {
             return None;
         }
         let result = tokio::time::timeout(Duration::from_millis(150), async {
@@ -68,9 +97,12 @@ impl RedisCache {
         })
         .await;
         match result {
-            Ok(Ok(value)) => Some(value),
+            Ok(Ok(value)) => {
+                self.succeeded(was_probe);
+                Some(value)
+            }
             _ => {
-                self.failed();
+                self.failed(was_probe);
                 None
             }
         }

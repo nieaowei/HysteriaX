@@ -1,6 +1,6 @@
 use std::{env, sync::OnceLock};
 
-const DEFAULT_DB_POOL_MAX_CONNECTIONS: usize = 10;
+const DEFAULT_DB_POOL_MAX_CONNECTIONS: usize = 32;
 const MAX_DB_POOL_CONNECTIONS: usize = 100;
 const DEFAULT_DB_POOL_ACQUIRE_TIMEOUT_SECONDS: usize = 5;
 const MAX_DB_POOL_ACQUIRE_TIMEOUT_SECONDS: usize = 120;

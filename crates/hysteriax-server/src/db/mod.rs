@@ -69,15 +69,10 @@ pub fn pool_options_for_maintenance(maintenance: bool) -> PgPoolOptions {
         .after_connect(move |connection, _| {
             Box::pin(async move {
                 // Bound resource waits and make runtime source checks explicit.
-                sqlx::query("SELECT set_config('lock_timeout',$1,false)")
+                sqlx::query("SELECT set_config('lock_timeout',$1,false),set_config('statement_timeout',$2,false),set_config('idle_in_transaction_session_timeout',$3,false),set_config('hysteriax.reference_maintenance',$4,false)")
                     .bind(format!("{lock_timeout_seconds}s"))
-                    .execute(&mut *connection)
-                    .await?;
-                sqlx::query("SELECT set_config('statement_timeout',$1,false),set_config('idle_in_transaction_session_timeout',$2,false)")
                     .bind(if maintenance {"0".to_owned()} else {format!("{statement_timeout_seconds}s")})
                     .bind(if maintenance {"0".to_owned()} else {format!("{idle_transaction_timeout_seconds}s")})
-                    .execute(&mut *connection).await?;
-                sqlx::query("SELECT set_config('hysteriax.reference_maintenance',$1,false)")
                     .bind(if maintenance { "on" } else { "off" })
                     .execute(connection)
                     .await?;

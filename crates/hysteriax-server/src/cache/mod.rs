@@ -21,6 +21,7 @@ use tokio::sync::OnceCell;
 struct Stored<T> {
     value: Arc<T>,
     expires: Instant,
+    bytes: usize,
 }
 struct Slot<T> {
     cell: OnceCell<Stored<T>>,
@@ -143,7 +144,7 @@ impl<T: serde::Serialize + serde::de::DeserializeOwned> Cache<T> {
             }
         }
         let slot = {
-            let mut inner = self.inner.lock().unwrap();
+            let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(entry) = inner.entries.get(&key)
                 && let Some(stored) = entry.slot.cell.get()
             {
@@ -197,12 +198,13 @@ impl<T: serde::Serialize + serde::de::DeserializeOwned> Cache<T> {
             .cell
             .get_or_try_init(|| async {
                 let value = compute().await?;
+                let bytes = (self.weight)(&value).max(1);
                 let mut lifetime = deadline
                     .map(|at| at.saturating_duration_since(Instant::now()))
                     .unwrap_or(ttl)
                     .min(ttl);
                 if let Some((remote, _)) = &self.redis {
-                    if (self.weight)(&value) <= self.max_value_bytes && !lifetime.is_zero() {
+                    if bytes <= self.max_value_bytes && !lifetime.is_zero() {
                         remote
                             .put(remote_key.as_ref().unwrap(), &value, lifetime)
                             .await;
@@ -218,13 +220,14 @@ impl<T: serde::Serialize + serde::de::DeserializeOwned> Cache<T> {
                     expires: deadline
                         .map(|at| at.min(Instant::now() + lifetime))
                         .unwrap_or_else(|| Instant::now() + lifetime),
+                    bytes,
                 })
             })
             .await
         {
             Ok(value) => value,
             Err(error) => {
-                let mut inner = self.inner.lock().unwrap();
+                let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
                 if inner
                     .entries
                     .get(&key)
@@ -235,13 +238,13 @@ impl<T: serde::Serialize + serde::de::DeserializeOwned> Cache<T> {
                 return Err(error);
             }
         };
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         if inner
             .entries
             .get(&key)
             .is_some_and(|e| Arc::ptr_eq(&e.slot, &slot) && e.bytes == 0)
         {
-            let bytes = (self.weight)(&stored.value).max(1);
+            let bytes = stored.bytes;
             if bytes > self.max_value_bytes || bytes > self.max_bytes {
                 self.remove(&mut inner, &key);
             } else {
@@ -250,8 +253,12 @@ impl<T: serde::Serialize + serde::de::DeserializeOwned> Cache<T> {
                         break;
                     }
                 }
-                inner.entries.get_mut(&key).unwrap().bytes = bytes;
-                inner.bytes += bytes;
+                if inner.bytes + bytes > self.max_bytes {
+                    self.remove(&mut inner, &key);
+                } else {
+                    inner.entries.get_mut(&key).unwrap().bytes = bytes;
+                    inner.bytes += bytes;
+                }
             }
         }
         if self.redis.as_ref().is_some_and(|(r, _)| r.available())
@@ -262,7 +269,7 @@ impl<T: serde::Serialize + serde::de::DeserializeOwned> Cache<T> {
         Ok(stored.value.clone())
     }
     pub fn stats(&self) -> serde_json::Value {
-        let inner = self.inner.lock().unwrap();
+        let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         serde_json::json!({"entries":inner.entries.len(),"bytes":inner.bytes,
             "hits":self.counters.hits.load(Ordering::Relaxed),"misses":self.counters.misses.load(Ordering::Relaxed),
             "waits":self.counters.waits.load(Ordering::Relaxed),"evictions":self.counters.evictions.load(Ordering::Relaxed)})
@@ -359,8 +366,13 @@ impl RuntimeCaches {
         }
     }
     fn record(&self, route: String, computed: bool, elapsed: Duration, error: bool) {
-        let mut routes = self.routes.lock().unwrap();
-        let stat = routes.entry(route).or_default();
+        let mut routes = self.routes.lock().unwrap_or_else(|e| e.into_inner());
+        let key = if routes.len() >= 512 && !routes.contains_key(&route) {
+            "__other__".to_owned()
+        } else {
+            route
+        };
+        let stat = routes.entry(key).or_default();
         stat.requests += 1;
         stat.computed += u64::from(computed);
         stat.reused += u64::from(!computed);
@@ -370,7 +382,7 @@ impl RuntimeCaches {
         stat.max_us = stat.max_us.max(micros);
     }
     pub fn stats(&self) -> serde_json::Value {
-        serde_json::json!({"routes":*self.routes.lock().unwrap(),"backend":if self.redis.is_some() {"redis"} else {"memory"},"redis":self.redis.as_ref().map(|r|r.stats()),"responses":self.responses.stats(),"values":self.values.stats(),"previews":self.previews.stats()})
+        serde_json::json!({"routes":*self.routes.lock().unwrap_or_else(|e| e.into_inner()),"backend":if self.redis.is_some() {"redis"} else {"memory"},"redis":self.redis.as_ref().map(|r|r.stats()),"responses":self.responses.stats(),"values":self.values.stats(),"previews":self.previews.stats()})
     }
 }
 #[cfg(test)]
@@ -406,51 +418,63 @@ fn ttl(path: &str) -> Option<Duration> {
         5
     }))
 }
-pub async fn middleware(State(state): State<AppState>, request: Request, next: Next) -> Response {
-    if request.method() != Method::GET || ttl(request.uri().path()).is_none() {
-        return next.run(request).await;
-    }
-    let path = crate::cache_domains::management_path(request.uri().path());
-    let prepared = if path.starts_with("/credentials") {
-        crate::credentials::reference_index::begin_read_transaction(&state.pool, &state.secrets)
-            .await
-    } else if path == "/overview/history" {
+type ExpectedVersion<'a> = (&'a str, &'a [(String, String)], Duration);
+
+async fn run_in_read_snapshot(
+    state: &AppState,
+    request: Request,
+    next: Next,
+    expected_version: Option<ExpectedVersion<'_>>,
+) -> Result<(Response, bool), ApiError> {
+    let uri_path = request.uri().path().to_owned();
+    let path = crate::cache_domains::management_path(&uri_path).to_owned();
+    let overview_needs_cycles = if path == "/overview/history" {
         let query: std::collections::BTreeMap<_, _> =
             url::form_urlencoded::parse(request.uri().query().unwrap_or("").as_bytes()).collect();
         let source = query.get("source").map(|v| v.as_ref()).unwrap_or("users");
         let metrics = query.get("metrics").map(|v| v.as_ref()).unwrap_or("all");
-        crate::analytics::snapshot_transaction(
+        Some(metrics != "traffic" || source == "users")
+    } else {
+        None
+    };
+    let run_inner = |tx_cacheable: bool| async move {
+        let mut version_matches = true;
+        if let Some((expected, query, ttl)) = expected_version {
+            let (actual, _) =
+                crate::cache_domains::policy(state, &uri_path, query, ttl).await?;
+            version_matches = actual == expected;
+        }
+        let response = next.run(request).await;
+        let cacheable = tx_cacheable && crate::read_snapshot::cacheable() && version_matches;
+        Ok((response, cacheable))
+    };
+    if path.starts_with("/credentials") {
+        let tx =
+            crate::credentials::reference_index::begin_read_transaction(&state.pool, &state.secrets)
+                .await?;
+        crate::read_snapshot::scope_with(tx, run_inner(true)).await
+    } else if let Some(needs_cycles) = overview_needs_cycles {
+        let tx = crate::analytics::snapshot_transaction(
             &state.pool,
             chrono::Utc::now(),
-            metrics != "traffic" || source == "users",
+            needs_cycles,
         )
-        .await
+        .await?;
+        crate::read_snapshot::scope_read_only(tx, run_inner(true)).await
     } else {
-        crate::read_snapshot::transaction(&state.pool)
-            .await
-            .map_err(Into::into)
-    };
-    let tx = match prepared {
-        Ok(tx) => tx,
-        Err(error) => return error.into_response(),
-    };
-    match crate::read_snapshot::scope_with(tx, async {
-        Ok(cached_middleware(state, request, next).await)
-    })
-    .await
-    {
-        Ok(response) => response,
-        Err(error) => error.into_response(),
+        let tx = crate::read_snapshot::transaction(&state.pool).await?;
+        crate::read_snapshot::scope_read_only(tx, run_inner(true)).await
     }
 }
-async fn cached_middleware(state: AppState, request: Request, next: Next) -> Response {
+
+pub async fn middleware(State(state): State<AppState>, request: Request, next: Next) -> Response {
     if request.method() != Method::GET {
         return next.run(request).await;
     }
     let Some(ttl) = ttl(request.uri().path()) else {
         return next.run(request).await;
     };
-    let Some(actor) = request.extensions().get::<AdminActor>() else {
+    let Some(actor) = request.extensions().get::<AdminActor>().cloned() else {
         return ApiError::internal().into_response();
     };
     let controls = request
@@ -460,7 +484,10 @@ async fn cached_middleware(state: AppState, request: Request, next: Next) -> Res
         .unwrap_or("")
         .to_ascii_lowercase();
     if controls.split(',').any(|v| v.trim() == "no-store") {
-        return next.run(request).await;
+        return match run_in_read_snapshot(&state, request, next, None).await {
+            Ok((response, _)) => response,
+            Err(error) => error.into_response(),
+        };
     }
     let started = Instant::now();
     let computed = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -489,7 +516,14 @@ async fn cached_middleware(state: AppState, request: Request, next: Next) -> Res
         .responses
         .get(key, ttl, bypass, || async {
             computed.store(true, Ordering::Relaxed);
-            CachedResponse::capture(next.run(request).await).await
+            let (response, cacheable) =
+                run_in_read_snapshot(&state, request, next, Some((&version, &query, ttl)))
+                    .await
+                    .map_err(|error| Box::new(error.into_response()))?;
+            if !cacheable {
+                return Err(Box::new(response));
+            }
+            CachedResponse::capture(response).await
         })
         .await
     {

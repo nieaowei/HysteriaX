@@ -90,9 +90,29 @@ pub async fn scope_with<T>(
     )
     .fetch_one(&mut *tx)
     .await?;
+    scope_with_cacheable(
+        tx,
+        isolation == "repeatable read" && read_only == "on",
+        future,
+    )
+    .await
+}
+
+pub async fn scope_read_only<T>(
+    tx: Tx,
+    future: impl Future<Output = Result<T, ApiError>>,
+) -> Result<T, ApiError> {
+    scope_with_cacheable(tx, true, future).await
+}
+
+async fn scope_with_cacheable<T>(
+    tx: Tx,
+    cacheable: bool,
+    future: impl Future<Output = Result<T, ApiError>>,
+) -> Result<T, ApiError> {
     let snapshot = Snapshot {
         transaction: Arc::new(Mutex::new(Some(tx))),
-        cacheable: isolation == "repeatable read" && read_only == "on",
+        cacheable,
     };
     let result = CURRENT.scope(snapshot.clone(), future).await;
     let tx = snapshot
