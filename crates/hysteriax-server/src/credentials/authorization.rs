@@ -293,20 +293,76 @@ pub async fn reconcile_node(
     node: &str,
     removing: bool,
 ) -> Result<()> {
-    let pairs: Vec<Pair> = sqlx::query_as(
-        "SELECT user_id,node_id FROM node_assignments WHERE node_id=$1 ORDER BY user_id",
+    sqlx::query(
+        "WITH target_users AS MATERIALIZED (
+             SELECT user_id FROM node_assignments WHERE node_id = $1
+         ),
+         node_cas AS MATERIALIZED (
+             SELECT DISTINCT ca_id FROM (
+                 SELECT t.ca_id FROM mtls_node_trust t WHERE t.node_id = $1 AND (t.desired OR t.deployed)
+                 UNION
+                 SELECT ca_id FROM mtls_live_activation_trust WHERE node_id = $1
+             ) links
+         ),
+         updated AS (
+             UPDATE mtls_user_identities i
+             SET archived = NOT EXISTS (
+                     SELECT 1
+                     FROM node_assignments a
+                     WHERE a.user_id = i.user_id
+                       AND (NOT $2 OR a.node_id <> $1)
+                       AND (
+                           EXISTS (SELECT 1 FROM mtls_node_trust t WHERE t.node_id = a.node_id AND t.ca_id = i.ca_id AND (t.desired OR t.deployed))
+                           OR EXISTS (SELECT 1 FROM mtls_live_activation_trust l WHERE l.node_id = a.node_id AND l.ca_id = i.ca_id)
+                       )
+                 ),
+                 authorization_revision = i.authorization_revision + 1,
+                 revision = i.revision + 1,
+                 next_action_at = CASE
+                     WHEN NOT EXISTS (
+                         SELECT 1
+                         FROM node_assignments a
+                         WHERE a.user_id = i.user_id
+                           AND (NOT $2 OR a.node_id <> $1)
+                           AND (
+                               EXISTS (SELECT 1 FROM mtls_node_trust t WHERE t.node_id = a.node_id AND t.ca_id = i.ca_id AND (t.desired OR t.deployed))
+                               OR EXISTS (SELECT 1 FROM mtls_live_activation_trust l WHERE l.node_id = a.node_id AND l.ca_id = i.ca_id)
+                           )
+                     ) THEN NULL
+                     ELSE i.next_action_at
+                 END,
+                 updated_at = $3
+             WHERE i.user_id IN (SELECT user_id FROM target_users)
+               AND (
+                   ($2 AND i.ca_id IN (SELECT ca_id FROM node_cas))
+                   OR i.archived = EXISTS (
+                       SELECT 1
+                       FROM node_assignments a
+                       WHERE a.user_id = i.user_id
+                         AND (NOT $2 OR a.node_id <> $1)
+                         AND (
+                             EXISTS (SELECT 1 FROM mtls_node_trust t WHERE t.node_id = a.node_id AND t.ca_id = i.ca_id AND (t.desired OR t.deployed))
+                             OR EXISTS (SELECT 1 FROM mtls_live_activation_trust l WHERE l.node_id = a.node_id AND l.ca_id = i.ca_id)
+                         )
+                   )
+               )
+             RETURNING i.credential_id, i.archived
+         )
+         UPDATE credentials c
+         SET archived = u.archived,
+             revision = c.revision + 1,
+             updated_at = $3
+         FROM updated u
+         WHERE u.credential_id IS NOT NULL
+           AND c.id = u.credential_id
+           AND c.archived <> u.archived",
     )
     .bind(node)
-    .fetch_all(&mut **tx)
+    .bind(removing)
+    .bind(Utc::now())
+    .execute(&mut **tx)
     .await?;
-    let users: Vec<String> = pairs.iter().map(|pair| pair.0.clone()).collect();
-    reconcile_on(
-        tx,
-        &users,
-        if removing { &pairs } else { &[] },
-        removing.then_some(node),
-    )
-    .await
+    Ok(())
 }
 
 pub async fn assignment_refs_on(

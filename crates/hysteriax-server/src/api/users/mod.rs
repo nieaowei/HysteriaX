@@ -9,11 +9,7 @@ use serde_json::{Value, json};
 use sqlx::Row;
 use uuid::Uuid;
 
-use crate::{
-    api::{enqueue_job_with_payload_in_tx, now},
-    error::ApiError,
-    state::AppState,
-};
+use crate::{api::now, error::ApiError, state::AppState};
 
 #[derive(Deserialize)]
 pub struct CreateUser {
@@ -235,22 +231,13 @@ async fn patch_on(
         ));
     }
     if access_restricted {
-        let node_ids = sqlx::query_scalar::<_, String>(
-            "SELECT node_id FROM node_assignments WHERE user_id = $1 ORDER BY node_id",
+        let pairs: Vec<(String, String)> = sqlx::query_as(
+            "SELECT user_id, node_id FROM node_assignments WHERE user_id = $1 ORDER BY node_id",
         )
         .bind(&id)
         .fetch_all(&mut **tx)
         .await?;
-        for node_id in node_ids {
-            enqueue_job_with_payload_in_tx(
-                tx,
-                "kick",
-                Some(&node_id),
-                None,
-                json!({"user_id": id,"kick_reason":"access_restricted"}),
-            )
-            .await?;
-        }
+        crate::kick_requests::enqueue_pairs(tx, &pairs, "access_restricted").await?;
     }
     if enabled && !expired_now && !over_quota {
         crate::kick_requests::clear_reason(tx, None, Some(&id), "access_restricted").await?;
@@ -287,22 +274,13 @@ async fn delete_on(
         .bind(now())
         .execute(&mut **tx)
         .await?;
-    let node_ids = sqlx::query_scalar::<_, String>(
-        "SELECT node_id FROM node_assignments WHERE user_id = $1 ORDER BY node_id",
+    let pairs: Vec<(String, String)> = sqlx::query_as(
+        "SELECT user_id, node_id FROM node_assignments WHERE user_id = $1 ORDER BY node_id",
     )
     .bind(&id)
     .fetch_all(&mut **tx)
     .await?;
-    for node_id in node_ids {
-        enqueue_job_with_payload_in_tx(
-            tx,
-            "kick",
-            Some(&node_id),
-            None,
-            json!({"user_id": id,"kick_reason":"user_deleted"}),
-        )
-        .await?;
-    }
+    crate::kick_requests::enqueue_pairs(tx, &pairs, "user_deleted").await?;
     sqlx::query("SELECT id FROM credentials WHERE owner_user_id=$1 ORDER BY id FOR UPDATE")
         .bind(&id)
         .fetch_all(&mut **tx)
