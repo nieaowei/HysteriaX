@@ -1193,3 +1193,22 @@ fn installed_release_is_reused_only_after_both_digest_checks_and_atomically_stag
     assert!(linux.run("rm /opt/hysteriax/hysteria").status.success());
     assert_eq!(linux.run(&command).stdout, b"upload\n");
 }
+
+#[test]
+fn journal_fifo_drains_oversized_output_without_blocking() {
+    let script = include_str!("../journal.sh");
+    assert!(script.contains("(head -c \"$((cap+1))\" > \"$op/stdout\"; cat >/dev/null) < \"$op/stdout.fifo\""));
+    assert!(script.contains("(head -c \"$((cap+1))\" > \"$op/stderr\"; cat >/dev/null) < \"$op/stderr.fifo\""));
+    let dir = std::env::temp_dir().join(format!("hx-fifo-test-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let status = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(format!(
+            "set -eu; op={}; cap=64; mkfifo -m 600 \"$op/stdout.fifo\"; exec 6<>\"$op/stdout.fifo\"; (head -c \"$((cap+1))\" > \"$op/stdout\"; cat >/dev/null) < \"$op/stdout.fifo\" 6>&- & out_pid=$!; dd if=/dev/zero bs=1024 count=256 2>/dev/null | tr '\\0' 'x' > \"$op/stdout.fifo\"; exec 6>&-; wait \"$out_pid\"; test \"$(wc -c < \"$op/stdout\")\" -eq 65",
+            dir.display()
+        ))
+        .status()
+        .unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(status.success());
+}

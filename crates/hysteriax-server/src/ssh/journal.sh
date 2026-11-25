@@ -91,9 +91,9 @@ fi
 mkfifo -m 600 "$op/stdout.fifo" "$op/stderr.fifo"
 # Parent-held read/write ends keep reader opens bounded even on early failure.
 exec 6<>"$op/stdout.fifo" 7<>"$op/stderr.fifo"
-(head -c "$((cap+1))" < "$op/stdout.fifo" > "$op/stdout" 6>&- 7>&- 8>&-) &
+(head -c "$((cap+1))" > "$op/stdout"; cat >/dev/null) < "$op/stdout.fifo" 6>&- 7>&- 8>&- &
 out_pid=$!
-(head -c "$((cap+1))" < "$op/stderr.fifo" > "$op/stderr" 6>&- 7>&- 8>&-) &
+(head -c "$((cap+1))" > "$op/stderr"; cat >/dev/null) < "$op/stderr.fifo" 6>&- 7>&- 8>&- &
 err_pid=$!
 set +e
 # Uploads inherit the resource lock until their bounded stdin consumer exits.
