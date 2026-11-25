@@ -590,7 +590,7 @@ async fn deploy_with_probe(
         && let Some(expected_hash) = deployed_hash
     {
         let remote_hash_output = session
-            .execute_checked(&root_command(
+            .execute_read_only_checked(&root_command(
                 environment.privilege != "root",
                 "sha256sum /etc/hysteriax/config.yaml | awk '{print $1}'",
             ))
@@ -665,7 +665,7 @@ async fn deploy_with_probe(
     let recovery_previous = if operation.as_ref().is_some_and(|op| op.recovery)
         && !resuming_activation
     {
-        let actual=session.execute_checked(&root_command(environment.privilege!="root","if [ -f /etc/hysteriax/config.yaml ]; then sha256sum /etc/hysteriax/config.yaml | awk '{print $1}'; fi")).await?;
+        let actual=session.execute_read_only_checked(&root_command(environment.privilege!="root","if [ -f /etc/hysteriax/config.yaml ]; then sha256sum /etc/hysteriax/config.yaml | awk '{print $1}'; fi")).await?;
         let actual = actual.trim().to_owned();
         if row
             .get::<Option<String>, _>("deployed_content_sha256")
@@ -681,7 +681,7 @@ async fn deploy_with_probe(
             let expected = crate::credentials::rotations::recovery_marker(pool, &job.id)
                 .await?
                 .context("unknown remote state; inspect the node before recovery")?;
-            let marker=session.execute_checked(&root_command(environment.privilege!="root","if [ -f /opt/hysteriax/activation.json ]; then cat /opt/hysteriax/activation.json; fi")).await?;
+            let marker=session.execute_read_only_checked(&root_command(environment.privilege!="root","if [ -f /opt/hysteriax/activation.json ]; then cat /opt/hysteriax/activation.json; fi")).await?;
             anyhow::ensure!(
                 serde_json::from_str::<Value>(&marker).ok().as_ref() == Some(&expected)
                     && expected["config_sha256"].as_str() == Some(actual.as_str()),
@@ -840,13 +840,13 @@ async fn deploy_with_probe(
     let mut already_installed = false;
     if same_config_noop {
         let actual = session
-            .execute_checked(&root_command(
+            .execute_read_only_checked(&root_command(
                 environment.privilege != "root",
                 "sha256sum /etc/hysteriax/config.yaml | awk '{print $1}'",
             ))
             .await?;
         let binary = session
-            .execute_checked(&root_command(
+            .execute_read_only_checked(&root_command(
                 environment.privilege != "root",
                 "sha256sum /opt/hysteriax/hysteria | awk '{print $1}'",
             ))
@@ -865,9 +865,9 @@ async fn deploy_with_probe(
             )
             .await?;
         if !record.fresh && !noop {
-            let actual=session.execute_checked(&root_command(environment.privilege!="root","if [ -f /etc/hysteriax/config.yaml ]; then sha256sum /etc/hysteriax/config.yaml | awk '{print $1}'; fi")).await?;
+            let actual=session.execute_read_only_checked(&root_command(environment.privilege!="root","if [ -f /etc/hysteriax/config.yaml ]; then sha256sum /etc/hysteriax/config.yaml | awk '{print $1}'; fi")).await?;
             let actual = actual.trim();
-            let marker=session.execute_checked(&root_command(environment.privilege!="root","if [ -f /opt/hysteriax/activation.json ]; then cat /opt/hysteriax/activation.json; fi")).await?;
+            let marker=session.execute_read_only_checked(&root_command(environment.privilege!="root","if [ -f /opt/hysteriax/activation.json ]; then cat /opt/hysteriax/activation.json; fi")).await?;
             let marker = serde_json::from_str::<Value>(&marker).ok();
             if actual == record.target_digest
                 && marker.as_ref() == Some(&crate::credentials::activation::marker(record))
@@ -953,7 +953,7 @@ async fn deploy_with_probe(
         "systemctl show hysteriax.service --property=ActiveState --property=SubState --property=ExecMainStatus --property=NRestarts",
     );
     let health_check = wait_for_startup(startup_timeout, || async {
-        let status = session.execute_checked(&status_command).await?;
+        let status = session.execute_read_only_checked(&status_command).await?;
         if let Some(reason) = startup_service_failure(&status) {
             return Ok(StartupCheck::Failed(reason));
         }
@@ -1034,7 +1034,7 @@ async fn deploy_with_probe(
         let health_failure = health_failure
             .unwrap_or_else(|| "traffic and online endpoints did not become ready".to_owned());
         let diagnostics = session
-            .execute(&root_command(
+            .execute_read_only(&root_command(
                 environment.privilege != "root",
                 "systemctl status hysteriax.service --no-pager 2>&1; journalctl -u hysteriax.service -n 30 --no-pager 2>&1; if command -v ss >/dev/null 2>&1; then ss -lnutp; fi",
             ))
@@ -1057,7 +1057,7 @@ async fn deploy_with_probe(
             .collect();
         let health_detail = format!("{health_failure}; remote diagnostics: {diagnostics}");
         let has_previous = session
-            .execute_checked(
+            .execute_read_only_checked(
                 "if [ -f /opt/hysteriax/config.previous ]; then printf yes; else printf no; fi",
             )
             .await
@@ -1085,7 +1085,7 @@ async fn deploy_with_probe(
         }
         let _ = session.execute(&format!("rm -rf {remote_staging}")).await;
         if activation.is_some() {
-            let actual=session.execute_checked(&root_command(environment.privilege!="root","if [ -f /etc/hysteriax/config.yaml ]; then sha256sum /etc/hysteriax/config.yaml | awk '{print $1}'; fi")).await?;
+            let actual=session.execute_read_only_checked(&root_command(environment.privilege!="root","if [ -f /etc/hysteriax/config.yaml ]; then sha256sum /etc/hysteriax/config.yaml | awk '{print $1}'; fi")).await?;
             crate::credentials::activation::rolled_back(
                 pool,
                 &job.id,
@@ -1474,7 +1474,7 @@ chmod 0700 "$DIR"
         Ok(route_check) => Ok(route_check),
         Err(error) => {
             let diagnostics = session
-                .execute(&format!(
+                .execute_read_only(&format!(
                     "tail -n 30 {} 2>/dev/null || true",
                     shell_quote(&client_log_path)
                 ))
@@ -1647,7 +1647,7 @@ async fn free_remote_tcp_port(session: &SshSession, seed: &str) -> Result<u16> {
         let command = format!(
             "if grep -qi ':{port_hex} ' /proc/net/tcp /proc/net/tcp6 2>/dev/null; then printf busy; else printf free; fi"
         );
-        if session.execute_checked(&command).await?.trim() == "free" {
+        if session.execute_read_only_checked(&command).await?.trim() == "free" {
             return Ok(port);
         }
     }
@@ -1793,7 +1793,7 @@ async fn remote_guard(
         })
         .unwrap_or_default();
     let output = session
-        .execute_checked(
+        .execute_read_only_checked(
             &format!("set -eu; {probe_tools} {firewall_tools} {port_check} if [ -e /etc/systemd/system/hysteriax.service ] && [ ! -f /opt/hysteriax/.hysteriax-managed ]; then echo 'unmanaged systemd unit already exists' >&2; exit 41; fi; if [ -e /opt/hysteriax ] && [ ! -f /opt/hysteriax/.hysteriax-managed ]; then echo 'unmanaged directory already exists' >&2; exit 42; fi; if getent passwd hysteriax >/dev/null 2>&1 && [ ! -f /opt/hysteriax/.hysteriax-managed ]; then echo 'unmanaged hysteriax service account already exists' >&2; exit 43; fi; if command -v hysteria >/dev/null 2>&1 && [ ! -f /opt/hysteriax/.hysteriax-managed ]; then echo 'an existing Hysteria installation was found' >&2; exit 44; fi; df -Pk / | awk 'NR == 2 {{ if ($4 < 102400) exit 1 }}'"),
         )
         .await?;
