@@ -19,7 +19,7 @@ struct OverviewMonitoringView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
+        VStack(alignment: .leading, spacing: OverviewLayoutMetrics.cardSpacing) {
             if let overview = store.overview {
                 if section == .summary || section == .metrics {
                     OverviewColumnsLayout(wideColumns: 4, wideMinimum: 768) { metricCards(overview) }

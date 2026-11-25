@@ -24,9 +24,9 @@ struct OverviewTabPane<Content: View>: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 20) { content() }
+            VStack(alignment: .leading, spacing: OverviewLayoutMetrics.cardSpacing) { content() }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 28).padding(.top, 8).padding(.bottom, 24)
+                .padding(.horizontal, 28).padding(.top, 16).padding(.bottom, 24)
         }
         .accessibilityIdentifier("overview.scroll.\(tabID)")
         .scrollPosition($position)

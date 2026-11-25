@@ -14,10 +14,8 @@ struct OverviewView: View {
         @Bindable var quality = sceneState.quality
         return VStack(alignment: .leading, spacing: 0) {
             OverviewTabPane(state: sceneState.tab(activeTab), tabID: activeTab, scrollRequest: activeTab == "traffic" ? quotaScrollRequest : nil) {
-                VStack(alignment: .leading, spacing: 6) {
-                    statusBar
-                    tabContent(activeTab)
-                }
+                statusBar
+                tabContent(activeTab)
             }
             .id(activeTab)
         }
@@ -45,14 +43,17 @@ struct OverviewView: View {
         }
     }
 
+    @ViewBuilder
     private var statusBar: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            if !store.isConnected {
-                Text(store.lastUpdated == nil ? L10n.text("打开设置，填写管理服务地址和令牌。") : L10n.text("显示上次更新的缓存数据，恢复连接后刷新。"))
-                    .foregroundStyle(.orange)
-            }
-            if let error = store.overviewError { Text(error).foregroundStyle(.orange) }
-        }.font(.caption2)
+        if !store.isConnected || store.overviewError != nil {
+            VStack(alignment: .leading, spacing: 4) {
+                if !store.isConnected {
+                    Text(store.lastUpdated == nil ? L10n.text("打开设置，填写管理服务地址和令牌。") : L10n.text("显示上次更新的缓存数据，恢复连接后刷新。"))
+                        .foregroundStyle(.orange)
+                }
+                if let error = store.overviewError { Text(error).foregroundStyle(.orange) }
+            }.font(.caption2)
+        }
     }
 
     private func tabLabel(_ title: String, symbol: String, id: String) -> some View {
@@ -88,7 +89,7 @@ struct OverviewView: View {
     }
 
     private var summaryTasksColumn: some View {
-        VStack(alignment: .leading, spacing: 20) {
+        VStack(alignment: .leading, spacing: OverviewLayoutMetrics.cardSpacing) {
             OverviewMonitoringView(store: store, navigate: navigate, section: .issues, state: sceneState.summary)
             recentJobsSection
         }.frame(maxWidth: .infinity, alignment: .leading)
