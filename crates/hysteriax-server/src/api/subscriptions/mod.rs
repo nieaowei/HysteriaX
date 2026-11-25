@@ -372,7 +372,18 @@ async fn template_selection(
         .replace("{{PLATFORM_TABS}}", &platform_tabs)
         .replace("{{TEMPLATE_CARDS}}", &cards)
         .replace("{{NODE_SECTION}}", &node_section);
-    Ok(([(header::CONTENT_TYPE, "text/html; charset=utf-8")], html).into_response())
+    Ok((
+        [
+            (header::CONTENT_TYPE, "text/html; charset=utf-8"),
+            (header::X_FRAME_OPTIONS, "DENY"),
+            (
+                header::CONTENT_SECURITY_POLICY,
+                "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
+            ),
+        ],
+        html,
+    )
+        .into_response())
 }
 
 fn subscription_response(result: Result<Response, ApiError>, automatic: bool) -> Response {

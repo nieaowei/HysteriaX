@@ -152,17 +152,63 @@ async fn batch(
     })
 }
 
+static SSE_GLOBAL: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(128);
+static SSE_PER_ACTOR: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<String, usize>>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+
+struct SsePermit {
+    _global: tokio::sync::SemaphorePermit<'static>,
+    actor: String,
+}
+
+impl Drop for SsePermit {
+    fn drop(&mut self) {
+        let mut map = SSE_PER_ACTOR.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(count) = map.get_mut(&self.actor) {
+            *count = count.saturating_sub(1);
+            if *count == 0 {
+                map.remove(&self.actor);
+            }
+        }
+    }
+}
+
+fn acquire_sse_permit(actor: &str) -> Result<SsePermit, ApiError> {
+    let global = SSE_GLOBAL.try_acquire().map_err(|_| {
+        ApiError::new(
+            StatusCode::TOO_MANY_REQUESTS,
+            "too_many_streams",
+            "too many concurrent event streams",
+        )
+    })?;
+    let mut map = SSE_PER_ACTOR.lock().unwrap_or_else(|e| e.into_inner());
+    let entry = map.entry(actor.to_owned()).or_insert(0);
+    if *entry >= 16 {
+        return Err(ApiError::new(
+            StatusCode::TOO_MANY_REQUESTS,
+            "too_many_streams",
+            "too many concurrent event streams for this token",
+        ));
+    }
+    *entry += 1;
+    Ok(SsePermit {
+        _global: global,
+        actor: actor.to_owned(),
+    })
+}
+
 pub(super) async fn events(
     State(state): State<AppState>,
     Extension(actor): Extension<AdminActor>,
     Query(query): Query<StreamQuery>,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
+    let permit = acquire_sse_permit(&actor.id)?;
     let cursor = request_cursor(&query, &headers)?;
     let first = batch(&state, &cursor, &actor.id, query.job_id.as_deref()).await?;
     Ok((
         [(header::CACHE_CONTROL, "no-store")],
-        stream(state, actor.id, query.job_id, cursor, first),
+        stream(state, actor.id, query.job_id, cursor, first, permit),
     )
         .into_response())
 }
@@ -173,6 +219,7 @@ pub(super) async fn job_events(
     Query(query): Query<StreamQuery>,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
+    let permit = acquire_sse_permit(&actor.id)?;
     if query.job_id.as_deref().is_some_and(|job| job != id) {
         return Err(ApiError::bad_request("conflicting job filters"));
     }
@@ -187,7 +234,7 @@ pub(super) async fn job_events(
     let first = batch(&state, &cursor, &actor.id, Some(&id)).await?;
     Ok((
         [(header::CACHE_CONTROL, "no-store")],
-        stream(state, actor.id, Some(id), cursor, first),
+        stream(state, actor.id, Some(id), cursor, first, permit),
     )
         .into_response())
 }
@@ -198,8 +245,10 @@ fn stream(
     job: Option<String>,
     mut cursor: Cursor,
     first: Batch,
+    permit: SsePermit,
 ) -> Sse<impl futures_core::Stream<Item = Result<Event, Infallible>>> {
     let output = stream! {
+        let _permit = permit;
         let mut shutdown = state.shutdown.subscribe();
         let mut authorization = state.admin_tokens_changed.subscribe();
         let mut updates = state
@@ -243,7 +292,7 @@ fn stream(
                 _ = shutdown.wait_for(|stop| *stop) => break,
                 _ = authorization.changed() => {},
                 changed = updates.changed() => { if changed.is_err() { break; } },
-                _ = tokio::time::sleep(Duration::from_secs(1)) => {},
+                _ = tokio::time::sleep(Duration::from_secs(30)) => {},
             }
         }
     };

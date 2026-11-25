@@ -1,4 +1,4 @@
-mod redaction;
+pub(crate) mod redaction;
 mod secrets;
 mod tokens;
 

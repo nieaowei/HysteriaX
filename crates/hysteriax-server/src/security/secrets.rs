@@ -10,19 +10,26 @@ pub struct SecretBox(XChaCha20Poly1305, String, hmac::Hmac<sha2::Sha256>);
 
 impl SecretBox {
     pub fn from_base64(encoded: &str) -> Result<Self> {
-        let key = STANDARD_NO_PAD
+        let mut key = STANDARD_NO_PAD
             .decode(encoded)
             .context("decode HYSTERIAX_MASTER_KEY")?;
         if key.len() != 32 {
+            for byte in &mut key {
+                unsafe { std::ptr::write_volatile(byte, 0) };
+            }
+            std::sync::atomic::compiler_fence(std::sync::atomic::Ordering::SeqCst);
             bail!("HYSTERIAX_MASTER_KEY must decode to exactly 32 bytes");
         }
         use sha2::{Digest, Sha256};
         let fingerprint = hex::encode(Sha256::digest(&key));
-        Ok(Self(
-            XChaCha20Poly1305::new_from_slice(&key).expect("validated key length"),
-            fingerprint,
-            <hmac::Hmac<Sha256> as hmac::Mac>::new_from_slice(&key).expect("validated key length"),
-        ))
+        let aead = XChaCha20Poly1305::new_from_slice(&key).expect("validated key length");
+        let hmac =
+            <hmac::Hmac<Sha256> as hmac::Mac>::new_from_slice(&key).expect("validated key length");
+        for byte in &mut key {
+            unsafe { std::ptr::write_volatile(byte, 0) };
+        }
+        std::sync::atomic::compiler_fence(std::sync::atomic::Ordering::SeqCst);
+        Ok(Self(aead, fingerprint, hmac))
     }
 
     pub fn fingerprint(&self) -> &str {

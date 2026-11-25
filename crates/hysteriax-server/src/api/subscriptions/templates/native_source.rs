@@ -3,11 +3,41 @@ use crate::error::ApiError;
 use serde_json::Value;
 
 pub fn yaml(source: &str) -> Result<Value, ApiError> {
+    if source.len() > 512 * 1024 {
+        return Err(ApiError::bad_request(
+            "YAML template source exceeds 512 KiB limit",
+        ));
+    }
     let mut value: serde_yaml::Value =
         serde_yaml::from_str(source).map_err(|e| ApiError::bad_request(e.to_string()))?;
+    fn count_nodes(value: &serde_yaml::Value, count: &mut usize, limit: usize) -> bool {
+        *count += 1;
+        if *count > limit {
+            return false;
+        }
+        match value {
+            serde_yaml::Value::Sequence(items) => {
+                items.iter().all(|v| count_nodes(v, count, limit))
+            }
+            serde_yaml::Value::Mapping(map) => map
+                .iter()
+                .all(|(k, v)| count_nodes(k, count, limit) && count_nodes(v, count, limit)),
+            _ => true,
+        }
+    }
+    let mut pre_nodes = 0;
+    if !count_nodes(&value, &mut pre_nodes, 50_000) {
+        return Err(ApiError::bad_request("YAML document exceeds node limit"));
+    }
     value
         .apply_merge()
         .map_err(|e| ApiError::bad_request(e.to_string()))?;
+    let mut post_nodes = 0;
+    if !count_nodes(&value, &mut post_nodes, 100_000) {
+        return Err(ApiError::bad_request(
+            "YAML document exceeds expanded node limit",
+        ));
+    }
     fn tagged(value: &serde_yaml::Value) -> bool {
         match value {
             serde_yaml::Value::Tagged(_) => true,

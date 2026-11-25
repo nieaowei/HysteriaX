@@ -388,42 +388,40 @@ pub struct Preview {
 }
 
 fn redact(value: &mut Value) {
-    match value {
-        Value::Object(map) => {
-            for (key, value) in map {
-                if [
-                    "password",
-                    "private-key",
-                    "private_key",
-                    "token",
-                    "secret",
-                    "obfs-password",
-                    "certificate",
-                    "client_certificate",
-                    "client_key",
-                    "key",
-                    "users",
-                    "authentication",
-                    "headers",
-                    "api_key",
-                    "api-key",
-                    "authorization",
-                ]
-                .contains(&key.as_str())
-                {
-                    *value = json!("[REDACTED]");
-                } else {
-                    redact(value);
+    fn inner(value: &mut Value, parent: Option<&str>) {
+        match value {
+            Value::Object(map) => {
+                for (key, value) in map {
+                    if crate::security::redaction::is_sensitive_key(Some(key), parent)
+                        || matches!(
+                            key.to_ascii_lowercase().as_str(),
+                            "certificate" | "client_certificate" | "key" | "users" | "authentication" | "headers"
+                        )
+                    {
+                        *value = json!("[REDACTED]");
+                    } else {
+                        inner(value, Some(key));
+                    }
                 }
             }
-        }
-        Value::Array(items) => {
-            for value in items {
-                redact(value);
+            Value::Array(items) => {
+                for value in items {
+                    inner(value, parent);
+                }
             }
+            Value::String(text) => {
+                if let Ok(mut parsed) = url::Url::parse(text)
+                    && (!parsed.username().is_empty() || parsed.password().is_some())
+                {
+                    let _ = parsed.set_username("[REDACTED]");
+                    let _ = parsed.set_password(Some("[REDACTED]"));
+                    *text = parsed.to_string();
+                }
+            }
+            _ => (),
         }
-        _ => (),
     }
+    inner(value, None);
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]

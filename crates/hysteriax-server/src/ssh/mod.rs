@@ -13,7 +13,7 @@ use thiserror::Error;
 #[cfg(test)]
 use tokio::io::AsyncWriteExt;
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct SshNode {
     pub host: String,
     pub port: u16,
@@ -22,6 +22,23 @@ pub struct SshNode {
     pub secret: String,
     pub passphrase: Option<String>,
     pub host_fingerprint: Option<String>,
+}
+
+impl std::fmt::Debug for SshNode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SshNode")
+            .field("host", &self.host)
+            .field("port", &self.port)
+            .field("username", &self.username)
+            .field("auth_type", &self.auth_type)
+            .field("secret", &"[redacted]")
+            .field(
+                "passphrase",
+                &self.passphrase.as_ref().map(|_| "[redacted]"),
+            )
+            .field("host_fingerprint", &self.host_fingerprint)
+            .finish()
+    }
 }
 
 #[derive(Debug, Error)]
@@ -622,6 +639,14 @@ impl SshSession {
             if strict {
                 crate::execution::check_current().await?;
             }
+            ensure!(
+                !method.bytes().any(|b| matches!(b, b'\r' | b'\n' | b'\0'))
+                    && !path.bytes().any(|b| matches!(b, b'\r' | b'\n' | b'\0'))
+                    && !host.bytes().any(|b| matches!(b, b'\r' | b'\n' | b'\0'))
+                    && secret
+                        .is_none_or(|s| !s.bytes().any(|b| matches!(b, b'\r' | b'\n' | b'\0'))),
+                "invalid control character in loopback HTTP header"
+            );
             let authorization = secret
                 .map(|secret| format!("Authorization: {secret}\r\n"))
                 .unwrap_or_default();
@@ -779,7 +804,7 @@ fn decode_chunked(mut body: &[u8]) -> Result<Vec<u8>> {
         if size == 0 {
             return Ok(output);
         }
-        if body.len() < size + 2 {
+        if body.len().saturating_sub(2) < size {
             bail!("truncated chunked HTTP response")
         }
         output.extend_from_slice(&body[..size]);

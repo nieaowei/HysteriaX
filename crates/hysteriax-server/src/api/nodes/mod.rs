@@ -1423,6 +1423,36 @@ fn normalize_proxy_probe_url(value: Option<&str>) -> Result<Option<String>, ApiE
             "proxy_probe_url must be an HTTP URL without credentials, query, or fragment",
         ));
     }
+    let allow_private = cfg!(test)
+        || std::env::var("HYSTERIAX_ALLOW_PRIVATE_PROBE_URL").as_deref() == Ok("1");
+    if !allow_private && let Some(host) = url.host_str() {
+        let lower = host.trim_matches(['[', ']']).to_ascii_lowercase();
+        let is_local_name = lower == "localhost" || lower.ends_with(".localhost");
+        let is_non_public_ip = lower
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| match ip {
+                std::net::IpAddr::V4(v4) => {
+                    v4.is_loopback()
+                        || v4.is_private()
+                        || v4.is_link_local()
+                        || v4.is_unspecified()
+                        || v4.is_broadcast()
+                        || v4.is_multicast()
+                }
+                std::net::IpAddr::V6(v6) => {
+                    v6.is_loopback()
+                        || v6.is_unspecified()
+                        || v6.is_multicast()
+                        || (v6.segments()[0] & 0xfe00) == 0xfc00
+                        || (v6.segments()[0] & 0xffc0) == 0xfe80
+                }
+            });
+        if is_local_name || is_non_public_ip {
+            return Err(ApiError::bad_request(
+                "proxy_probe_url cannot target loopback, private, or link-local addresses",
+            ));
+        }
+    }
     Ok(Some(url.to_string()))
 }
 

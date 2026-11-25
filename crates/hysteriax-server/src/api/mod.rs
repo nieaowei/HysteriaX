@@ -273,7 +273,9 @@ pub fn router(state: AppState) -> Router {
         )
         .route(
             "/api/v2/nodes/{id}/resources",
-            get(resources::list).post(resources::create_handler),
+            get(resources::list)
+                .post(resources::create_handler)
+                .layer(DefaultBodyLimit::max(30 * 1024 * 1024)),
         )
         .route(
             "/api/v2/nodes/{id}/resources/{resource_id}",
@@ -298,7 +300,7 @@ pub fn router(state: AppState) -> Router {
             "/api/v2/users/{id}/quota/reset",
             post(users::reset_quota_handler),
         )
-        .layer(DefaultBodyLimit::max(30 * 1024 * 1024))
+        .layer(DefaultBodyLimit::max(2 * 1024 * 1024))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             crate::cache::middleware,
@@ -451,7 +453,10 @@ async fn readyz(State(state): State<AppState>) -> Result<Json<Value>, ApiError> 
 async fn openapi(headers: HeaderMap) -> Response {
     use sha2::Digest;
     const SPEC: &str = include_str!("../../../../openapi/openapi.yaml");
-    let etag = format!("\"{}\"", hex::encode(sha2::Sha256::digest(SPEC.as_bytes())));
+    static ETAG: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+        format!("\"{}\"", hex::encode(sha2::Sha256::digest(SPEC.as_bytes())))
+    });
+    let etag = ETAG.as_str();
     let matched = headers
         .get(header::IF_NONE_MATCH)
         .and_then(|v| v.to_str().ok())

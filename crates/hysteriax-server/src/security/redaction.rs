@@ -57,7 +57,7 @@ fn collect_config_secrets(
     }
 }
 
-fn is_sensitive_key(key: Option<&str>, parent_key: Option<&str>) -> bool {
+pub(crate) fn is_sensitive_key(key: Option<&str>, parent_key: Option<&str>) -> bool {
     let Some(key) = key else {
         return false;
     };
@@ -69,10 +69,15 @@ fn is_sensitive_key(key: Option<&str>, parent_key: Option<&str>) -> bool {
     normalized.ends_with("password")
         || normalized.ends_with("token")
         || normalized.ends_with("secret")
+        || normalized.ends_with("apikey")
+        || normalized.ends_with("clientkey")
+        || normalized.ends_with("passphrase")
         || normalized.contains("privatekey")
         || normalized.ends_with("credential")
         || normalized.ends_with("credentials")
         || normalized == "authorization"
+        || normalized == "cookie"
+        || normalized == "bearer"
         || (normalized == "username" && matches!(parent_key, Some("socks5" | "http")))
 }
 
