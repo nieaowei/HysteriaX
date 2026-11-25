@@ -55,7 +55,7 @@ struct CredentialEditorView: View {
                 case "dns": ACMEDNSFields(draft: $dns)
                 default: EmptyView()
                 }
-            }.formStyle(.grouped)
+            }.formStyle(.grouped).scrollContentBackground(.hidden)
             Text(L10n.text("SSH 授权、账户改密或第三方 Token 创建需先在远端完成。秘密保存后不再显示。")).font(.caption).foregroundStyle(.secondary)
             if let error { Text(error).foregroundStyle(.red).font(.callout) }
             HStack {

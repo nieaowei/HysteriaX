@@ -152,7 +152,7 @@ struct SubscriptionTemplateInjections: View {
                                 if !["direct", "error"].contains(onEmpty) { Text(TemplateSchema.pickerTitle(.string(onEmpty))).tag(onEmpty) }
                             }
                         }
-                    }.formStyle(.grouped)
+                    }.formStyle(.grouped).scrollContentBackground(.hidden)
                     Divider()
                     TemplateEditorFooter(store: store) { editingIndex = nil }.id(index)
                 }.frame(width: 800, height: 640).accessibilityIdentifier("templates.complexEditor")

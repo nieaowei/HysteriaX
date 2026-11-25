@@ -41,7 +41,7 @@ struct DNSConnectionsView: View {
                         }
                     }
                 }
-            }.formStyle(.grouped).disabled(saving || !store.isConnected)
+            }.formStyle(.grouped).scrollContentBackground(.hidden).disabled(saving || !store.isConnected)
             if let error { Text(error).foregroundStyle(.red).textSelection(.enabled) }
             if saving { ProgressView().controlSize(.small) }
         }.padding(24).frame(width: 700, height: 640)

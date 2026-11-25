@@ -187,7 +187,7 @@ struct MihomoTemplateRules: View {
                                 .disabled(store.redoStack.isEmpty)
                         }
                     }
-                    Form { Section(L10n.text("规则")) { ruleFields(index) } }.formStyle(.grouped)
+                    Form { Section(L10n.text("规则")) { ruleFields(index) } }.formStyle(.grouped).scrollContentBackground(.hidden)
                     Divider()
                     TemplateEditorFooter(store: store) { editingIndex = nil }.id(index)
                 }.frame(width: 800, height: 560).accessibilityIdentifier("templates.complexEditor")

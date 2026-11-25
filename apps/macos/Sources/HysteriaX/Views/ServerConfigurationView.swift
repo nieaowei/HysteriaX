@@ -75,6 +75,7 @@ struct ServerConfigurationView: View {
                     .disabled(isSaving)
                 }
                 .formStyle(.grouped)
+                .scrollContentBackground(.hidden)
             } else {
                 ContentUnavailableView(L10n.text("无法加载服务器配置"), systemImage: "server.rack", description: Text(message ?? L10n.text("请稍后重试。")))
             }

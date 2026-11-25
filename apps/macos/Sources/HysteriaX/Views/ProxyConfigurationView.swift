@@ -436,6 +436,7 @@ struct ProxyConfigurationView: View {
                     }
                 }
                 .formStyle(.grouped)
+                .scrollContentBackground(.hidden)
                 .configurationColumns(
                     preview: yamlPreviewPane(draftYAMLPreview(for: detail)),
                     errorMessage: errorMessage

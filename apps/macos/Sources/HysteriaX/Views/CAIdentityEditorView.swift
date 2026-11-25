@@ -74,7 +74,7 @@ struct CAIdentityEditorView: View {
                             .font(.caption).foregroundStyle(.secondary)
                     }
                 }
-            }.formStyle(.grouped)
+            }.formStyle(.grouped).scrollContentBackground(.hidden)
             if let error { Text(error).font(.callout).foregroundStyle(.red).textSelection(.enabled) }
             HStack {
                 Button(L10n.text("取消")) { dismiss() }.keyboardShortcut(.cancelAction)

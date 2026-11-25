@@ -22,7 +22,7 @@ struct DNSBindingEditorView: View {
                         LabeledContent(L10n.text("已发布地址"), value: published.publicHost)
                     }
                     if detail.dnsBinding != nil { Text(L10n.text("更换或解除绑定后保留原 DNS 记录，可在 DNS 记录页清理。")).font(.caption).foregroundStyle(.secondary) }
-                }.formStyle(.grouped).disabled(saving)
+                }.formStyle(.grouped).scrollContentBackground(.hidden).disabled(saving)
             } else { ProgressView(L10n.text("读取节点…")).frame(maxWidth: .infinity, maxHeight: .infinity) }
             if let error { Text(error).foregroundStyle(.red).textSelection(.enabled) }
             HStack {

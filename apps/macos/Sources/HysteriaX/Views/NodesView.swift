@@ -699,6 +699,7 @@ private struct NodeFormView: View {
                     }
                 }
                 .formStyle(.grouped)
+                .scrollContentBackground(.hidden)
                 if let errorMessage { Text(errorMessage).foregroundStyle(.red).font(.callout) }
                 HStack {
                     Button(L10n.text("取消")) { dismiss() }.keyboardShortcut(.cancelAction)

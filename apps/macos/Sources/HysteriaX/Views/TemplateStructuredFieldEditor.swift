@@ -134,7 +134,7 @@ struct TemplateStructuredFieldEditor: View {
                         SubscriptionTemplateFields(store: store, definition: definition, path: path, depth: depth, isEditorRoot: true)
                     }
                 }
-            }.formStyle(.grouped).disabled(store.busy || !store.allowed(path, value: value))
+            }.formStyle(.grouped).scrollContentBackground(.hidden).disabled(store.busy || !store.allowed(path, value: value))
             .task(id: store.focusGeneration) {
                 if SubscriptionTemplateStore.path(store.focusedPath).starts(with: path) {
                     DispatchQueue.main.async { reader.scrollTo(store.focusedPath, anchor: .center) }

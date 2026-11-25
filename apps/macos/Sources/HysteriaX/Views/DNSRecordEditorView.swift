@@ -32,7 +32,7 @@ struct DNSRecordEditorView: View {
                 if record?.boundNodeId != nil {
                     Text(L10n.text("此记录关联节点。修改解析目标会影响连接；域名、类型和代理状态需通过节点重新分配修改。")).font(.caption).foregroundStyle(.secondary)
                 }
-            }.formStyle(.grouped).disabled(loading || saving)
+            }.formStyle(.grouped).scrollContentBackground(.hidden).disabled(loading || saving)
             if let error { Text(error).foregroundStyle(.red).textSelection(.enabled) }
             HStack {
                 Button(L10n.text("取消")) { dismiss() }.keyboardShortcut(.cancelAction)
