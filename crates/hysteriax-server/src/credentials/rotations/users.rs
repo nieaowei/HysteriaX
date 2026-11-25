@@ -55,9 +55,23 @@ pub(super) async fn scheduled_pass(state: &AppState) -> Result<()> {
     if let Some(work) = maintenance::claim(&state.pool, ADMIT, &state.instance_id).await? {
         execute_admission(&state.pool, &work).await?;
     }
-    if let Some(work) = maintenance::claim(&state.pool, ISSUE, &state.instance_id).await? {
-        execute_issue(state, &work).await;
+    let mut tasks = tokio::task::JoinSet::new();
+    for _ in 0..16 {
+        if *state.shutdown.borrow() {
+            break;
+        }
+        let Some(work) = maintenance::claim(&state.pool, ISSUE, &state.instance_id).await? else {
+            break;
+        };
+        let app = state.clone();
+        tasks.spawn(async move {
+            execute_issue(&app, &work).await;
+        });
+        if tasks.len() >= 8 {
+            let _ = tasks.join_next().await;
+        }
     }
+    while tasks.join_next().await.is_some() {}
     Ok(())
 }
 fn admission_payload(rotation: &str, ca: &str, version: i64) -> Value {

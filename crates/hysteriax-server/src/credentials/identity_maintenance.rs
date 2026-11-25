@@ -63,17 +63,35 @@ pub async fn pass(state: &AppState) -> Result<()> {
         .transpose()?;
     }
     state.maintenance.refresh_hint().await?;
-    if let Some(work) = maintenance::claim(&state.pool, KIND, &state.instance_id).await? {
-        crate::execution::supervise(state.pool.clone(), work.leases.clone(), async {
-            if let Err(error) = renew_work(state, &work).await {
-                tracing::warn!(%error,"identity renewal deferred");
-                work.retry(&state.pool).await?;
-            }
-            Ok::<_, anyhow::Error>(())
-        })
-        .await
-        .into_result()?
-        .transpose()?;
+    let mut tasks = tokio::task::JoinSet::new();
+    for _ in 0..16 {
+        if *state.shutdown.borrow() {
+            break;
+        }
+        let Some(work) = maintenance::claim(&state.pool, KIND, &state.instance_id).await? else {
+            break;
+        };
+        let app = state.clone();
+        tasks.spawn(async move {
+            crate::execution::supervise(app.pool.clone(), work.leases.clone(), async {
+                if let Err(error) = renew_work(&app, &work).await {
+                    tracing::warn!(%error,"identity renewal deferred");
+                    work.retry(&app.pool).await?;
+                }
+                Ok::<_, anyhow::Error>(())
+            })
+            .await
+            .into_result()?
+            .transpose()
+        });
+        if tasks.len() >= 8
+            && let Some(res) = tasks.join_next().await
+        {
+            res??;
+        }
+    }
+    while let Some(res) = tasks.join_next().await {
+        res??;
     }
     Ok(())
 }

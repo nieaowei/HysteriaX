@@ -53,6 +53,7 @@ pub async fn initialize(pool: &PgPool) -> Result<()> {
     Ok(())
 }
 
+#[allow(dead_code)]
 pub async fn admit_on(tx: &mut Transaction<'static, Postgres>, user: &str) -> Result<()> {
     admit_many_on(tx, &[user.to_owned()]).await
 }
@@ -93,9 +94,7 @@ pub async fn scan_work(pool: &PgPool, work: &maintenance::Work) -> Result<()> {
                 .bind(USER_BATCH)
                 .fetch_all(&mut **tx)
                 .await?;
-            for user in &users {
-                admit_on(tx, user).await?;
-            }
+            admit_many_on(tx, &users).await?;
             work.finish_on(
                 tx,
                 false,
@@ -157,7 +156,10 @@ pub async fn dispatch_work(pool: &PgPool, work: &maintenance::Work) -> Result<()
 }
 
 pub async fn dispatch_pass(pool: &PgPool, owner: &str) -> Result<()> {
-    if let Some(work) = maintenance::claim(pool, KIND, owner).await? {
+    for _ in 0..8 {
+        let Some(work) = maintenance::claim(pool, KIND, owner).await? else {
+            break;
+        };
         crate::execution::supervise(pool.clone(), work.leases.clone(), async {
             if let Err(error) = dispatch_work(pool, &work).await {
                 tracing::warn!(%error,"access revocation page deferred");

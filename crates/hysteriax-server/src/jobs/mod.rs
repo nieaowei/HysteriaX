@@ -11,15 +11,13 @@ use serde_json::{Value, json};
 use sqlx::{PgPool, Row};
 use tokio::task::JoinSet;
 
-const DEFAULT_MAX_PARALLEL_NODES: usize = 4;
 const MAX_ATTEMPTS: i64 = 3;
 
 #[cfg(test)]
 mod node_cleanup_tests;
 
 pub async fn run(state: AppState) {
-    let max_parallel =
-        crate::runtime_config::background_worker_parallelism().min(DEFAULT_MAX_PARALLEL_NODES);
+    let max_parallel = crate::runtime_config::background_worker_parallelism();
     tracing::info!(max_parallel, "background job worker started");
     let mut shutdown = state.shutdown.subscribe();
     let mut tasks = JoinSet::new();

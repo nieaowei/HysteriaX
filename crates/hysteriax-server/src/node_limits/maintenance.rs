@@ -166,7 +166,12 @@ pub async fn pass(pool: &PgPool, owner: &str) -> Result<usize> {
         }
         processed = scanned;
     }
-    if let Some(work) = work_queue::claim(pool, KIND, owner).await? {
+    let mut dispatched = 0;
+    for _ in 0..8 {
+        let Some(work) = work_queue::claim(pool, KIND, owner).await? else {
+            break;
+        };
+        dispatched += 1;
         crate::execution::supervise(pool.clone(), work.leases.clone(), async {
             if let Err(error) = dispatch_work(pool, &work).await {
                 tracing::warn!(%error,"node restriction work deferred");
@@ -177,6 +182,9 @@ pub async fn pass(pool: &PgPool, owner: &str) -> Result<usize> {
         .await
         .into_result()?
         .transpose()?;
+    }
+    if dispatched >= 8 {
+        processed += dispatched;
     }
     Ok(processed)
 }

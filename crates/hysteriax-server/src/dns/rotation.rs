@@ -253,7 +253,7 @@ async fn verify(pool: &PgPool, provider: &Cloudflare, source: Source) -> Result<
                 .as_str()
                 .context("DNS credential zone ID missing")?;
             provider.zone(id).await?;
-            provider.records(id).await?;
+            provider.verify_records_access(id).await?;
         }
     }
     commit(pool, &source).await

@@ -111,7 +111,10 @@ async fn write_record(
     let remote_id = &source.remote;
     let desired = &payload["desired"];
     let result = if action == "record-create" {
-        let records = provider.records(zone).await?;
+        let name = desired["name"]
+            .as_str()
+            .context("DNS record name missing")?;
+        let records = provider.records_by_name(zone, name).await?;
         let marker = format!("HysteriaX operation:{operation}");
         if let Some(created) = records
             .iter()

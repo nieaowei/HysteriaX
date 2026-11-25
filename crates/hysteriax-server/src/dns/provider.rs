@@ -128,13 +128,14 @@ impl Cloudflare {
         Ok(data)
     }
     async fn paginated(&self, path: &str) -> Result<Vec<Value>> {
+        let sep = if path.contains('?') { '&' } else { '?' };
         let mut values = Vec::new();
         let mut page = 1;
         loop {
             let data = self
                 .request(
                     Method::GET,
-                    &format!("{path}?per_page=100&page={page}"),
+                    &format!("{path}{sep}per_page=100&page={page}"),
                     None,
                 )
                 .await?;
@@ -164,6 +165,20 @@ impl Cloudflare {
     }
     pub async fn records(&self, zone: &str) -> Result<Vec<Value>> {
         self.paginated(&format!("/zones/{zone}/dns_records")).await
+    }
+    pub async fn records_by_name(&self, zone: &str, name: &str) -> Result<Vec<Value>> {
+        let encoded: String = url::form_urlencoded::byte_serialize(name.as_bytes()).collect();
+        self.paginated(&format!("/zones/{zone}/dns_records?name={encoded}"))
+            .await
+    }
+    pub async fn verify_records_access(&self, zone: &str) -> Result<()> {
+        self.request(
+            Method::GET,
+            &format!("/zones/{zone}/dns_records?per_page=1"),
+            None,
+        )
+        .await?;
+        Ok(())
     }
     pub async fn record(&self, zone: &str, id: &str) -> Result<Option<Value>> {
         match self

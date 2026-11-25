@@ -389,6 +389,7 @@ pub async fn run_sampling(state: AppState, kind: &'static str) {
     timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut tasks = tokio::task::JoinSet::new();
     let mut shutdown = state.shutdown.subscribe();
+    let mut queue_empty = false;
     loop {
         tokio::select! {
             biased;
@@ -398,12 +399,42 @@ pub async fn run_sampling(state: AppState, kind: &'static str) {
             // starve the JoinSet and permanently consume every worker slot.
             Some(result)=tasks.join_next(),if !tasks.is_empty()=>{
                 if let Err(error)=result {tracing::error!(kind,%error,"sampling task failed");}
+                if !queue_empty && tasks.len() < max_parallel && !*state.shutdown.borrow() {
+                    let claiming = std::time::Instant::now();
+                    match claim(&state.pool, kind, &state.instance_id).await {
+                        Ok(Some(work)) => {
+                            let claim_ms = claiming.elapsed().as_millis() as u64;
+                            let app = state.clone();
+                            tasks.spawn(async move {
+                                execution::supervise(app.pool.clone(),work.leases.clone(),async {
+                                    let collecting=std::time::Instant::now();
+                                    let result=match kind {
+                                        "traffic"=>crate::traffic::sample_work(&app,&work).await,
+                                        "network"=>crate::node_limits::sample_work(&app,&work).await,
+                                        "proxy"=>crate::proxy_monitor::sample_work(&app,&work).await,
+                                        _=>unreachable!(),
+                                    };
+                                    let collection_ms=collecting.elapsed().as_millis() as u64;
+                                    let draining=result.as_ref().is_err_and(|error|error.is::<Draining>());
+                                    if let Err(error)=&result && !draining {tracing::warn!(kind,node_id=%work.node,work_id=%work.id,claim_ms,collection_ms,slot_expired=error.is::<SlotExpired>(),%error,"sampling work failed");}
+                                    let confirming=std::time::Instant::now();
+                                    let confirmation=if draining{finish_or_defer(&app.pool,&work,None).await}else{finish(&app.pool,&work,result.is_ok()).await};
+                                    if let Err(error)=confirmation {tracing::warn!(work_id=%work.id,claim_ms,collection_ms,confirmation_ms=confirming.elapsed().as_millis() as u64,%error,"sampling completion deferred");}
+                                    else {tracing::debug!(kind,node_id=%work.node,work_id=%work.id,claim_ms,collection_ms,confirmation_ms=confirming.elapsed().as_millis() as u64,success=result.is_ok(),"sampling work completed");}
+                                }).await;
+                            });
+                        }
+                        Ok(None) => { queue_empty = true; }
+                        Err(error) => { tracing::warn!(kind,%error,"sampling claim deferred"); }
+                    }
+                }
             }
             _=timer.tick()=>{
+                queue_empty = false;
                 if let Err(error)=ensure_cycle(&state.pool,kind).await {tracing::warn!(kind,%error,"sampling cycle deferred");continue;}
                 while tasks.len()<max_parallel && !*state.shutdown.borrow() {
                     let claiming=std::time::Instant::now();
-                    let work=match claim(&state.pool,kind,&state.instance_id).await {Ok(Some(work))=>work,Ok(None)=>break,Err(error)=>{tracing::warn!(kind,%error,"sampling claim deferred");break;}};
+                    let work=match claim(&state.pool,kind,&state.instance_id).await {Ok(Some(work))=>work,Ok(None)=>{queue_empty=true;break;},Err(error)=>{tracing::warn!(kind,%error,"sampling claim deferred");break;}};
                     let claim_ms=claiming.elapsed().as_millis() as u64;
                     let app=state.clone();
                     tasks.spawn(async move {

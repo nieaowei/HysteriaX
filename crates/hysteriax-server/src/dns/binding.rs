@@ -100,25 +100,27 @@ pub async fn prepare(
         )
         .await
         .map_err(|_| ApiError::bad_request("DNS connection could not be loaded"))?;
-        let remote = provider
-            .records(&zone.get::<String, _>("provider_zone_id"))
-            .await
-            .map_err(|_| {
-                ApiError::bad_request("could not check existing remote record names; retry")
-            })?;
+        let provider_zone_id = zone.get::<String, _>("provider_zone_id");
         let compact = node.replace('-', "");
         let mut available = None;
         for length in [8, 12, 16, 32] {
             let candidate = format!("{prefix}-{}.{}", &compact[..length], zone_name);
             let local:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM dns_records WHERE zone_id=$1 AND name=$2 AND deleted_at IS NULL) OR EXISTS(SELECT 1 FROM dns_bindings WHERE hostname=$2)")
                 .bind(&input.zone_id).bind(&candidate).fetch_one(&state.pool).await?;
-            if !local
-                && !remote
+            if !local {
+                let remote = provider
+                    .records_by_name(&provider_zone_id, &candidate)
+                    .await
+                    .map_err(|_| {
+                        ApiError::bad_request("could not check existing remote record names; retry")
+                    })?;
+                if !remote
                     .iter()
                     .any(|r| r["name"].as_str() == Some(&candidate))
-            {
-                available = Some(candidate);
-                break;
+                {
+                    available = Some(candidate);
+                    break;
+                }
             }
         }
         available.ok_or_else(|| ApiError::conflict("could not reserve an automatic domain"))?
