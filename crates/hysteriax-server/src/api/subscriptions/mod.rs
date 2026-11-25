@@ -495,6 +495,14 @@ async fn cached_template(
         token_digest(&boundaries.get::<Value, _>("valid_versions").to_string()),
         template.map(|t| (&t.0, t.1))
     );
+    if boundary.is_some_and(|at| at <= Utc::now()) {
+        let nodes = load_subscription_nodes_eligible(state, user_id, Some(&eligible)).await?;
+        return if let Some((id, _, format, document)) = template {
+            templates::response_from_nodes(id, document, format, &nodes, client)
+        } else {
+            formats::render_subscription(&nodes, format, client)
+        };
+    }
     let monotonic_now = std::time::Instant::now();
     let deadline =
         boundary.map(|at| monotonic_now + (at - Utc::now()).to_std().unwrap_or_default());
@@ -520,14 +528,6 @@ async fn cached_template(
             },
         )
         .await;
-    if boundary.is_some_and(|at| at <= Utc::now()) {
-        let nodes = load_subscription_nodes_eligible(state, user_id, Some(&eligible)).await?;
-        return if let Some((id, _, format, document)) = template {
-            templates::response_from_nodes(id, document, format, &nodes, client)
-        } else {
-            formats::render_subscription(&nodes, format, client)
-        };
-    }
     Ok(match response {
         Ok(value) => value.response(),
         Err(response) => *response,
@@ -592,6 +592,22 @@ async fn load_subscription_nodes_snapshot(
         &keys.into_iter().collect::<Vec<_>>(),
     )
     .await?;
+    let mut mtls_targets = Vec::new();
+    for row in &rows {
+        let node_id: &str = row.get("id");
+        if let Some(config) = configs.get(node_id)
+            && config["mtls"]["mode"] == "managed"
+        {
+            let ca = config["mtls"]["ca_credential_id"]
+                .as_str()
+                .ok_or_else(ApiError::internal)?;
+            mtls_targets.push((node_id.to_owned(), ca.to_owned()));
+        }
+    }
+    let mtls_identities =
+        crate::credentials::identities::for_nodes(&state.pool, &state.secrets, user_id, &mtls_targets)
+            .await?;
+    let mut seen_names = std::collections::HashSet::with_capacity(rows.len());
     let mut nodes = Vec::new();
     for row in rows {
         let node_id: String = row.get("id");
@@ -610,14 +626,7 @@ async fn load_subscription_nodes_snapshot(
             let ca = config["mtls"]["ca_credential_id"]
                 .as_str()
                 .ok_or_else(ApiError::internal)?;
-            let Some(material) = crate::credentials::identities::for_node(
-                &state.pool,
-                &state.secrets,
-                user_id,
-                &node_id,
-                ca,
-            )
-            .await?
+            let Some(material) = mtls_identities.get(&(node_id.clone(), ca.to_owned())).cloned()
             else {
                 continue;
             };
@@ -644,7 +653,7 @@ async fn load_subscription_nodes_snapshot(
         let listen = connection["listen_addr"]
             .as_str()
             .ok_or_else(ApiError::internal)?;
-        nodes.push(build_node(
+        let mut node = build_node(
             &name,
             &node_id,
             host,
@@ -658,7 +667,12 @@ async fn load_subscription_nodes_snapshot(
             ech_config,
             realm_opts,
             config,
-        ));
+        );
+        if !seen_names.insert(node.name.clone()) {
+            node.name = format!("{name}:{node_id}");
+            seen_names.insert(node.name.clone());
+        }
+        nodes.push(node);
     }
 
     Ok(nodes)
@@ -708,6 +722,28 @@ pub async fn hy2_auth(
     }
 
     let auth_hash = token_digest(&input.auth);
+    let mtls_ready = node.get::<String, _>("mtls_state") == "ready";
+    if mtls_ready
+        && !crate::node_limits::restricted(&state.pool, &node_id)
+            .await
+            .map_err(|_| ApiError::internal())?
+    {
+        let assignment = sqlx::query("SELECT u.id, u.enabled, u.expires_at, u.quota_bytes, u.usage_bytes FROM node_assignments a JOIN users u ON u.id = a.user_id JOIN user_credentials c ON c.user_id=u.id AND c.kind='connection' AND c.revoked_at IS NULL WHERE a.node_id = $1 AND c.secret_hash = $2 AND hysteriax_authorized(u.id,a.node_id)")
+            .bind(&node_id).bind(&auth_hash).fetch_optional(&state.pool).await?;
+        if let Some(assignment) = assignment {
+            let enabled: bool = assignment.get("enabled");
+            let expires_at: Option<chrono::DateTime<chrono::Utc>> = assignment.get("expires_at");
+            let quota: Option<i64> = assignment.get("quota_bytes");
+            let usage: i64 = assignment.get("usage_bytes");
+            if !enabled || is_expired(expires_at) || quota.is_some_and(|limit| usage >= limit) {
+                return Ok(Json(AuthResponse::denied()));
+            }
+            return Ok(Json(AuthResponse {
+                ok: true,
+                id: assignment.get("id"),
+            }));
+        }
+    }
     let probe_hash: Option<String> = sqlx::query_scalar(
         "SELECT p.token_hash FROM deployment_probe_tokens p JOIN jobs j ON j.id=p.job_id JOIN nodes n ON n.id=p.node_id JOIN resource_leases nl ON nl.resource_key='node:'||p.node_id AND nl.work_id=j.id AND nl.owner=p.owner AND nl.generation=p.node_generation AND nl.epoch=p.epoch AND NOT nl.blocked AND nl.expires_at>clock_timestamp() JOIN resource_leases jl ON jl.resource_key='job:'||j.id AND jl.work_id=j.id AND jl.owner=p.owner AND jl.generation=p.job_generation AND jl.epoch=p.epoch AND NOT jl.blocked AND jl.expires_at>clock_timestamp() WHERE p.node_id=$1 AND p.epoch=hysteriax_execution_epoch() AND p.expires_at>clock_timestamp() AND j.status='running' AND j.node_id=p.node_id AND j.kind IN ('deploy','sync','rollback') AND (n.mtls_state='ready' OR EXISTS(SELECT 1 FROM mtls_activations a WHERE a.id=n.mtls_activation_id AND a.generation=n.mtls_generation AND a.job_id=j.id AND a.phase IN ('activating','verified','recovery_required')))",
     )
@@ -723,7 +759,7 @@ pub async fn hy2_auth(
             id: crate::deployment::probe_tokens::identity(&node_id, &auth_hash),
         }));
     }
-    if node.get::<String, _>("mtls_state") != "ready" {
+    if !mtls_ready {
         return Ok(Json(AuthResponse::denied()));
     }
     let monitor_hash: Option<String> = sqlx::query_scalar(
@@ -741,28 +777,7 @@ pub async fn hy2_auth(
             id: crate::proxy_monitor::identity(&node_id, &auth_hash),
         }));
     }
-    if crate::node_limits::restricted(&state.pool, &node_id)
-        .await
-        .map_err(|_| ApiError::internal())?
-    {
-        return Ok(Json(AuthResponse::denied()));
-    }
-    let assignment = sqlx::query("SELECT u.id, u.enabled, u.expires_at, u.quota_bytes, u.usage_bytes FROM node_assignments a JOIN users u ON u.id = a.user_id JOIN user_credentials c ON c.user_id=u.id AND c.kind='connection' AND c.revoked_at IS NULL WHERE a.node_id = $1 AND c.secret_hash = $2 AND hysteriax_authorized(u.id,a.node_id)")
-        .bind(&node_id).bind(auth_hash).fetch_optional(&state.pool).await?;
-    let Some(assignment) = assignment else {
-        return Ok(Json(AuthResponse::denied()));
-    };
-    let enabled: bool = assignment.get("enabled");
-    let expires_at: Option<chrono::DateTime<chrono::Utc>> = assignment.get("expires_at");
-    let quota: Option<i64> = assignment.get("quota_bytes");
-    let usage: i64 = assignment.get("usage_bytes");
-    if !enabled || is_expired(expires_at) || quota.is_some_and(|limit| usage >= limit) {
-        return Ok(Json(AuthResponse::denied()));
-    }
-    Ok(Json(AuthResponse {
-        ok: true,
-        id: assignment.get("id"),
-    }))
+    Ok(Json(AuthResponse::denied()))
 }
 
 #[derive(Deserialize)]

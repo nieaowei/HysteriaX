@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use super::{
     ca::{Authority, Issued, Policy},
-    load,
+    load_many,
 };
 use crate::security::SecretBox;
 
@@ -295,6 +295,7 @@ pub async fn commit_user(
 /// Resolve only released, time-valid versions trusted by this node. Retained
 /// historical versions provide controlled rollback compatibility without issuing
 /// a second per-node identity or treating latest_version as publication state.
+#[allow(dead_code)]
 pub async fn for_node(
     pool: &PgPool,
     secrets: &SecretBox,
@@ -302,32 +303,88 @@ pub async fn for_node(
     node: &str,
     ca: &str,
 ) -> Result<Option<(String, String)>> {
+    let mut resolved = for_nodes(
+        pool,
+        secrets,
+        user,
+        &[(node.to_owned(), ca.to_owned())],
+    )
+    .await?;
+    Ok(resolved.remove(&(node.to_owned(), ca.to_owned())))
+}
+
+pub async fn for_nodes(
+    pool: &PgPool,
+    secrets: &SecretBox,
+    user: &str,
+    targets: &[(String, String)],
+) -> Result<std::collections::HashMap<(String, String), (String, String)>> {
+    let mut out = std::collections::HashMap::new();
+    if targets.is_empty() {
+        return Ok(out);
+    }
+    let node_ids: Vec<String> = targets.iter().map(|(n, _)| n.clone()).collect();
+    let ca_ids: Vec<String> = targets.iter().map(|(_, c)| c.clone()).collect();
     let mut connection = crate::read_snapshot::begin(pool).await?;
     let now: DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
         .fetch_one(&mut *connection)
         .await?;
-    let row = sqlx::query("SELECT v.credential_id,v.credential_version FROM mtls_user_identities i JOIN mtls_user_version_publication v ON v.identity_id=i.id JOIN mtls_node_trust t ON t.ca_id=v.ca_id AND t.ca_version=v.ca_version JOIN mtls_authorities a ON a.credential_id=i.ca_id WHERE i.user_id=$1 AND i.ca_id=$2 AND NOT i.archived AND t.node_id=$3 AND t.deployed AND v.released AND NOT v.discarded AND v.not_before<=$4 AND v.expires_at>$4 ORDER BY (v.ca_version=a.published_version) DESC,v.ca_version DESC,v.credential_version DESC LIMIT 1")
-        .bind(user).bind(ca).bind(node).bind(now).fetch_optional(&mut *connection).await?;
-    drop(connection);
-    let Some(row) = row else { return Ok(None) };
-    let (kind, owner, _, payload, _) = load(
-        pool,
-        secrets,
-        &row.get::<String, _>("credential_id"),
-        row.get("credential_version"),
+    let rows = sqlx::query(
+        "SELECT DISTINCT ON (target.node_id, target.ca_id) target.node_id, target.ca_id, v.credential_id, v.credential_version \
+         FROM unnest($2::text[], $3::text[]) AS target(node_id, ca_id) \
+         JOIN mtls_user_identities i ON i.user_id=$1 AND i.ca_id=target.ca_id AND NOT i.archived \
+         JOIN mtls_user_version_publication v ON v.identity_id=i.id \
+         JOIN mtls_node_trust t ON t.node_id=target.node_id AND t.ca_id=v.ca_id AND t.ca_version=v.ca_version AND t.deployed \
+         JOIN mtls_authorities a ON a.credential_id=i.ca_id \
+         WHERE v.released AND NOT v.discarded AND v.not_before<=$4 AND v.expires_at>$4 \
+         ORDER BY target.node_id, target.ca_id, (v.ca_version=a.published_version) DESC, v.ca_version DESC, v.credential_version DESC",
     )
+    .bind(user)
+    .bind(&node_ids)
+    .bind(&ca_ids)
+    .bind(now)
+    .fetch_all(&mut *connection)
     .await?;
-    ensure!(
-        kind == "tls_identity" && owner.as_deref() == Some(user),
-        "invalid managed identity owner"
-    );
-    let certificate = payload["certificate"]
-        .as_str()
-        .context("managed certificate missing")?
-        .into();
-    let private_key = payload["private_key"]
-        .as_str()
-        .context("managed key missing")?
-        .into();
-    Ok(Some((certificate, private_key)))
+    drop(connection);
+    if rows.is_empty() {
+        return Ok(out);
+    }
+    let mut unique_keys: Vec<(String, i64)> = rows
+        .iter()
+        .map(|row| {
+            (
+                row.get::<String, _>("credential_id"),
+                row.get::<i64, _>("credential_version"),
+            )
+        })
+        .collect();
+    unique_keys.sort();
+    unique_keys.dedup();
+    let loaded = load_many(pool, secrets, &unique_keys).await?;
+    let mut material_by_key = std::collections::HashMap::with_capacity(loaded.len());
+    for (key, (kind, owner, _, payload, _)) in loaded {
+        ensure!(
+            kind == "tls_identity" && owner.as_deref() == Some(user),
+            "invalid managed identity owner"
+        );
+        let certificate = payload["certificate"]
+            .as_str()
+            .context("managed certificate missing")?
+            .to_owned();
+        let private_key = payload["private_key"]
+            .as_str()
+            .context("managed key missing")?
+            .to_owned();
+        material_by_key.insert(key, (certificate, private_key));
+    }
+    for row in rows {
+        let node_id: String = row.get("node_id");
+        let ca_id: String = row.get("ca_id");
+        let cred_id: String = row.get("credential_id");
+        let cred_ver: i64 = row.get("credential_version");
+        if let Some(material) = material_by_key.get(&(cred_id, cred_ver)) {
+            out.insert((node_id, ca_id), material.clone());
+        }
+    }
+    Ok(out)
 }
