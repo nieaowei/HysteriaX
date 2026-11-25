@@ -367,6 +367,71 @@ pub async fn run_expiry(state: AppState) {
     }
 }
 
+fn spawn_sampling_work(
+    tasks: &mut tokio::task::JoinSet<()>,
+    state: &AppState,
+    kind: &'static str,
+    work: Work,
+    claim_ms: u64,
+) {
+    let app = state.clone();
+    tasks.spawn(async move {
+        execution::supervise(app.pool.clone(), work.leases.clone(), async {
+            let collecting = std::time::Instant::now();
+            let result = match kind {
+                "traffic" => crate::traffic::sample_work(&app, &work).await,
+                "network" => crate::node_limits::sample_work(&app, &work).await,
+                "proxy" => crate::proxy_monitor::sample_work(&app, &work).await,
+                _ => unreachable!(),
+            };
+            let collection_ms = collecting.elapsed().as_millis() as u64;
+            let draining = result.as_ref().is_err_and(|error| error.is::<Draining>());
+            if let Err(error) = &result
+                && !draining
+            {
+                tracing::warn!(
+                    kind,
+                    node_id = %work.node,
+                    work_id = %work.id,
+                    claim_ms,
+                    collection_ms,
+                    slot_expired = error.is::<SlotExpired>(),
+                    %error,
+                    "sampling work failed"
+                );
+            }
+            let confirming = std::time::Instant::now();
+            let confirmation = if draining {
+                finish_or_defer(&app.pool, &work, None).await
+            } else {
+                finish(&app.pool, &work, result.is_ok()).await
+            };
+            if let Err(error) = confirmation {
+                tracing::warn!(
+                    work_id = %work.id,
+                    claim_ms,
+                    collection_ms,
+                    confirmation_ms = confirming.elapsed().as_millis() as u64,
+                    %error,
+                    "sampling completion deferred"
+                );
+            } else {
+                tracing::debug!(
+                    kind,
+                    node_id = %work.node,
+                    work_id = %work.id,
+                    claim_ms,
+                    collection_ms,
+                    confirmation_ms = confirming.elapsed().as_millis() as u64,
+                    success = result.is_ok(),
+                    "sampling work completed"
+                );
+            }
+        })
+        .await;
+    });
+}
+
 pub async fn run_sampling(state: AppState, kind: &'static str) {
     let max_parallel = crate::runtime_config::background_worker_parallelism();
     let interval_seconds = match kind {
@@ -403,26 +468,13 @@ pub async fn run_sampling(state: AppState, kind: &'static str) {
                     let claiming = std::time::Instant::now();
                     match claim(&state.pool, kind, &state.instance_id).await {
                         Ok(Some(work)) => {
-                            let claim_ms = claiming.elapsed().as_millis() as u64;
-                            let app = state.clone();
-                            tasks.spawn(async move {
-                                execution::supervise(app.pool.clone(),work.leases.clone(),async {
-                                    let collecting=std::time::Instant::now();
-                                    let result=match kind {
-                                        "traffic"=>crate::traffic::sample_work(&app,&work).await,
-                                        "network"=>crate::node_limits::sample_work(&app,&work).await,
-                                        "proxy"=>crate::proxy_monitor::sample_work(&app,&work).await,
-                                        _=>unreachable!(),
-                                    };
-                                    let collection_ms=collecting.elapsed().as_millis() as u64;
-                                    let draining=result.as_ref().is_err_and(|error|error.is::<Draining>());
-                                    if let Err(error)=&result && !draining {tracing::warn!(kind,node_id=%work.node,work_id=%work.id,claim_ms,collection_ms,slot_expired=error.is::<SlotExpired>(),%error,"sampling work failed");}
-                                    let confirming=std::time::Instant::now();
-                                    let confirmation=if draining{finish_or_defer(&app.pool,&work,None).await}else{finish(&app.pool,&work,result.is_ok()).await};
-                                    if let Err(error)=confirmation {tracing::warn!(work_id=%work.id,claim_ms,collection_ms,confirmation_ms=confirming.elapsed().as_millis() as u64,%error,"sampling completion deferred");}
-                                    else {tracing::debug!(kind,node_id=%work.node,work_id=%work.id,claim_ms,collection_ms,confirmation_ms=confirming.elapsed().as_millis() as u64,success=result.is_ok(),"sampling work completed");}
-                                }).await;
-                            });
+                            spawn_sampling_work(
+                                &mut tasks,
+                                &state,
+                                kind,
+                                work,
+                                claiming.elapsed().as_millis() as u64,
+                            );
                         }
                         Ok(None) => { queue_empty = true; }
                         Err(error) => { tracing::warn!(kind,%error,"sampling claim deferred"); }
@@ -435,26 +487,13 @@ pub async fn run_sampling(state: AppState, kind: &'static str) {
                 while tasks.len()<max_parallel && !*state.shutdown.borrow() {
                     let claiming=std::time::Instant::now();
                     let work=match claim(&state.pool,kind,&state.instance_id).await {Ok(Some(work))=>work,Ok(None)=>{queue_empty=true;break;},Err(error)=>{tracing::warn!(kind,%error,"sampling claim deferred");break;}};
-                    let claim_ms=claiming.elapsed().as_millis() as u64;
-                    let app=state.clone();
-                    tasks.spawn(async move {
-                        execution::supervise(app.pool.clone(),work.leases.clone(),async {
-                            let collecting=std::time::Instant::now();
-                            let result=match kind {
-                                "traffic"=>crate::traffic::sample_work(&app,&work).await,
-                                "network"=>crate::node_limits::sample_work(&app,&work).await,
-                                "proxy"=>crate::proxy_monitor::sample_work(&app,&work).await,
-                                _=>unreachable!(),
-                            };
-                            let collection_ms=collecting.elapsed().as_millis() as u64;
-                            let draining=result.as_ref().is_err_and(|error|error.is::<Draining>());
-                            if let Err(error)=&result && !draining {tracing::warn!(kind,node_id=%work.node,work_id=%work.id,claim_ms,collection_ms,slot_expired=error.is::<SlotExpired>(),%error,"sampling work failed");}
-                            let confirming=std::time::Instant::now();
-                            let confirmation=if draining{finish_or_defer(&app.pool,&work,None).await}else{finish(&app.pool,&work,result.is_ok()).await};
-                            if let Err(error)=confirmation {tracing::warn!(work_id=%work.id,claim_ms,collection_ms,confirmation_ms=confirming.elapsed().as_millis() as u64,%error,"sampling completion deferred");}
-                            else {tracing::debug!(kind,node_id=%work.node,work_id=%work.id,claim_ms,collection_ms,confirmation_ms=confirming.elapsed().as_millis() as u64,success=result.is_ok(),"sampling work completed");}
-                        }).await;
-                    });
+                    spawn_sampling_work(
+                        &mut tasks,
+                        &state,
+                        kind,
+                        work,
+                        claiming.elapsed().as_millis() as u64,
+                    );
                 }
             }
         }

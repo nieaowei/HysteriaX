@@ -395,7 +395,12 @@ fn redact(value: &mut Value) {
                     if crate::security::redaction::is_sensitive_key(Some(key), parent)
                         || matches!(
                             key.to_ascii_lowercase().as_str(),
-                            "certificate" | "client_certificate" | "key" | "users" | "authentication" | "headers"
+                            "certificate"
+                                | "client_certificate"
+                                | "key"
+                                | "users"
+                                | "authentication"
+                                | "headers"
                         )
                     {
                         *value = json!("[REDACTED]");

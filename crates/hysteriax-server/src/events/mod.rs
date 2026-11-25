@@ -70,7 +70,8 @@ impl EventHub {
                     .await
                     {
                         Ok(position) => {
-                            let mut previous = hub.position.lock().unwrap_or_else(|e| e.into_inner());
+                            let mut previous =
+                                hub.position.lock().unwrap_or_else(|e| e.into_inner());
                             if previous.as_ref() != Some(&position) {
                                 *previous = Some(position);
                                 drop(previous);

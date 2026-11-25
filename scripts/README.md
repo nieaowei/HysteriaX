@@ -9,7 +9,7 @@
 | [build/](build/) | 本地构建、启动 macOS 应用和打包发布 | `build-macos.sh`、`build-node-acme.sh`、`release-macos.sh` |
 | [generate/](generate/) | API 模型、订阅字段及文档元数据生成、依赖许可更新 | `generate-swift-api-models.rb`、`generate-subscription-catalog.go` |
 | [ops/](ops/) | 初始化、服务启动、备份恢复及数据库角色配置 | `init-secrets.sh`、`run.sh`、`backup-restore.py`、`provision-postgres.sh` |
-| [migrations/](migrations/) | 针对特定历史版本的一次性迁移工具 | `migrate-lock-contention-test-db.py`、`migrate-sampling-retention-test-db.py`、`migrate-history-retention-test-db.py`、`migrate-database-bloat-retention-test-db.py` |
+| [migrations/](migrations/) | 针对特定历史版本的一次性迁移工具 | `migrate-lock-contention-test-db.py`、`migrate-sampling-retention-test-db.py`、`migrate-history-retention-test-db.py`、`migrate-database-bloat-retention-test-db.py`、`migrate-scale-indexes-test-db.py`、`migrate-drop-users-exhausted-index-test-db.py` |
 
 ```sh
 scripts/build/build-macos.sh

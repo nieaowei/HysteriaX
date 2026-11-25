@@ -1,6 +1,6 @@
 //! Public-endpoint probes run locally on the management host, never on the node.
 use crate::{deployment, security::token_digest, state::AppState};
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use serde_json::{Value, json};
 use sqlx::Row;
@@ -409,15 +409,13 @@ async fn probe_using(
         .transpose()?;
     let mut external_local = None;
     if let Some(target) = &target {
-        if target.scheme() != "http" {
-            bail!("unsupported probe target");
-        }
+        let remote = crate::api::nodes::resolve_probe_target_address(
+            target,
+            crate::api::nodes::probe_url_allows_private(),
+        )
+        .await?;
         let lp = free_port()?;
-        let remote_host = target.host_str().context("missing target host")?;
-        let remote_port = target
-            .port_or_known_default()
-            .context("missing target port")?;
-        forwards.push(json!({"listen":format!("127.0.0.1:{lp}"),"remote":address(remote_host,remote_port as i32)}));
+        forwards.push(json!({"listen":format!("127.0.0.1:{lp}"),"remote":remote}));
         external_local = Some(lp);
     }
     let mut client =
@@ -456,9 +454,7 @@ async fn probe_using(
             .expect("build proxy probe HTTP client")
     });
     let http = PROBE_HTTP.clone();
-    let request_timeout = Duration::from_secs(
-        crate::runtime_config::operation_timeout_seconds(3),
-    );
+    let request_timeout = Duration::from_secs(crate::runtime_config::operation_timeout_seconds(3));
     let stats_secret = state
         .secrets
         .decrypt(&row.get::<String, _>("traffic_stats_secret_enc"))?;
@@ -516,14 +512,14 @@ async fn probe_using(
             .send()
             .await
         {
-                if response.status().is_success() {
-                    "ok"
-                } else {
-                    "failed"
-                }
+            if response.status().is_success() {
+                "ok"
             } else {
                 "failed"
-            };
+            }
+        } else {
+            "failed"
+        };
         if external_status == "ok" {
             latency_ms = external_timing.elapsed().as_secs_f64() * 1000.0;
         }
@@ -562,3 +558,37 @@ mod tests;
 
 #[cfg(test)]
 mod temporary_material_tests;
+
+#[cfg(test)]
+mod probe_target_tests {
+    use crate::api::nodes::resolve_probe_target_address;
+
+    #[tokio::test]
+    async fn resolve_probe_target_enforces_private_address_policy() {
+        let public = url::Url::parse("http://1.1.1.1:8080/health").unwrap();
+        assert_eq!(
+            resolve_probe_target_address(&public, false).await.unwrap(),
+            "1.1.1.1:8080"
+        );
+
+        for blocked in [
+            "http://127.0.0.1:8080/health",
+            "http://10.0.0.5:8080/health",
+            "http://169.254.169.254/latest/meta-data",
+            "http://100.64.0.1/status",
+            "http://[::ffff:127.0.0.1]:8080/health",
+            "http://localhost:8080/health",
+            "http://sub.localhost/health",
+        ] {
+            let url = url::Url::parse(blocked).unwrap();
+            assert!(
+                resolve_probe_target_address(&url, false).await.is_err(),
+                "expected rejection for {blocked}"
+            );
+            assert!(
+                resolve_probe_target_address(&url, true).await.is_ok(),
+                "expected allow_private=true to permit {blocked}"
+            );
+        }
+    }
+}

@@ -36,35 +36,33 @@ impl RedisCache {
             .unwrap_or_else(|e| e.into_inner())
             .is_none_or(|until| until <= Instant::now())
     }
-    fn acquire_probe_slot(&self) -> (bool, bool) {
+    fn acquire_probe_slot(&self) -> ProbeSlot<'_> {
         let now = Instant::now();
         let guard = self.retry_after.lock().unwrap_or_else(|e| e.into_inner());
         match *guard {
-            None => (true, false),
+            None => ProbeSlot::Normal,
             Some(until) if until <= now => {
                 drop(guard);
-                let won = self
+                if self
                     .probing
                     .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-                    .is_ok();
-                (won, won)
+                    .is_ok()
+                {
+                    ProbeSlot::Probe(ProbeGuard {
+                        cache: self,
+                        active: true,
+                    })
+                } else {
+                    ProbeSlot::Rejected
+                }
             }
-            Some(_) => (false, false),
+            Some(_) => ProbeSlot::Rejected,
         }
     }
-    fn succeeded(&self, was_probe: bool) {
-        if was_probe {
-            *self.retry_after.lock().unwrap_or_else(|e| e.into_inner()) = None;
-            self.probing.store(false, Ordering::Release);
-        }
-    }
-    fn failed(&self, was_probe: bool) {
+    fn failed(&self) {
         self.errors.fetch_add(1, Ordering::Relaxed);
         *self.retry_after.lock().unwrap_or_else(|e| e.into_inner()) =
             Some(Instant::now() + Duration::from_secs(2));
-        if was_probe {
-            self.probing.store(false, Ordering::Release);
-        }
     }
     pub fn key(&self, kind: &str, logical: &str) -> String {
         format!(
@@ -75,8 +73,8 @@ impl RedisCache {
         )
     }
     pub(crate) async fn command<T: redis::FromRedisValue>(&self, cmd: redis::Cmd) -> Option<T> {
-        let (allowed, was_probe) = self.acquire_probe_slot();
-        if !allowed {
+        let slot = self.acquire_probe_slot();
+        if matches!(slot, ProbeSlot::Rejected) {
             return None;
         }
         let result = tokio::time::timeout(Duration::from_millis(150), async {
@@ -96,15 +94,21 @@ impl RedisCache {
             cmd.query_async::<T>(&mut connection.clone()).await
         })
         .await;
-        match result {
-            Ok(Ok(value)) => {
-                self.succeeded(was_probe);
+        match (result, slot) {
+            (Ok(Ok(value)), ProbeSlot::Probe(guard)) => {
+                guard.finish_success();
                 Some(value)
             }
-            _ => {
-                self.failed(was_probe);
+            (Ok(Ok(value)), ProbeSlot::Normal) => Some(value),
+            (_, ProbeSlot::Probe(guard)) => {
+                guard.finish_failure();
                 None
             }
+            (_, ProbeSlot::Normal) => {
+                self.failed();
+                None
+            }
+            (_, ProbeSlot::Rejected) => None,
         }
     }
     pub async fn get<T: DeserializeOwned>(&self, key: &str) -> Option<T> {
@@ -151,3 +155,45 @@ impl RedisCache {
 
 #[cfg(test)]
 mod tests;
+
+struct ProbeGuard<'a> {
+    cache: &'a RedisCache,
+    active: bool,
+}
+
+impl Drop for ProbeGuard<'_> {
+    fn drop(&mut self) {
+        if self.active {
+            self.cache.probing.store(false, Ordering::Release);
+        }
+    }
+}
+
+impl ProbeGuard<'_> {
+    fn finish_success(mut self) {
+        *self
+            .cache
+            .retry_after
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = None;
+        self.cache.probing.store(false, Ordering::Release);
+        self.active = false;
+    }
+
+    fn finish_failure(mut self) {
+        self.cache.errors.fetch_add(1, Ordering::Relaxed);
+        *self
+            .cache
+            .retry_after
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(Instant::now() + Duration::from_secs(2));
+        self.cache.probing.store(false, Ordering::Release);
+        self.active = false;
+    }
+}
+
+enum ProbeSlot<'a> {
+    Rejected,
+    Normal,
+    Probe(ProbeGuard<'a>),
+}

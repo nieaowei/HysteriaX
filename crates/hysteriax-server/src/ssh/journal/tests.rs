@@ -1197,8 +1197,12 @@ fn installed_release_is_reused_only_after_both_digest_checks_and_atomically_stag
 #[test]
 fn journal_fifo_drains_oversized_output_without_blocking() {
     let script = include_str!("../journal.sh");
-    assert!(script.contains("(head -c \"$((cap+1))\" > \"$op/stdout\"; cat >/dev/null) < \"$op/stdout.fifo\""));
-    assert!(script.contains("(head -c \"$((cap+1))\" > \"$op/stderr\"; cat >/dev/null) < \"$op/stderr.fifo\""));
+    assert!(script.contains(
+        "(head -c \"$((cap+1))\" > \"$op/stdout\"; cat >/dev/null) < \"$op/stdout.fifo\""
+    ));
+    assert!(script.contains(
+        "(head -c \"$((cap+1))\" > \"$op/stderr\"; cat >/dev/null) < \"$op/stderr.fifo\""
+    ));
     let dir = std::env::temp_dir().join(format!("hx-fifo-test-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&dir).unwrap();
     let status = std::process::Command::new("sh")

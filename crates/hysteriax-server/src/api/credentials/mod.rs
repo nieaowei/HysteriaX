@@ -130,8 +130,12 @@ async fn page_values_on(
         .iter()
         .map(|row| {
             let mut entry = summary(row);
-            entry["reference_count"] =
-                json!(counts.get(&row.get::<String, _>("id")).copied().unwrap_or(0));
+            entry["reference_count"] = json!(
+                counts
+                    .get(&row.get::<String, _>("id"))
+                    .copied()
+                    .unwrap_or(0)
+            );
             entry
         })
         .collect();

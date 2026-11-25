@@ -1247,15 +1247,19 @@ async fn safe_error(
     }
 
     if let Some(cred_id) = job.payload.get("credential_id").and_then(Value::as_str) {
-        let ver = job.payload.get("credential_version").and_then(Value::as_i64);
+        let ver = job
+            .payload
+            .get("credential_version")
+            .and_then(Value::as_i64);
         credential_targets.push((cred_id.to_owned(), ver));
     }
     if let Some(conn_id) = job.payload.get("connection_id").and_then(Value::as_str)
-        && let Ok(Some(cred_id)) =
-            sqlx::query_scalar::<_, String>("SELECT credential_id FROM dns_connections WHERE id = $1")
-                .bind(conn_id)
-                .fetch_optional(pool)
-                .await
+        && let Ok(Some(cred_id)) = sqlx::query_scalar::<_, String>(
+            "SELECT credential_id FROM dns_connections WHERE id = $1",
+        )
+        .bind(conn_id)
+        .fetch_optional(pool)
+        .await
     {
         credential_targets.push((cred_id, None));
     }

@@ -86,7 +86,10 @@ fn valid_interface(name: &str) -> bool {
 
 /// Month-end clamping and IANA timezone conversion, including DST midnight shifts.
 fn monthly_boundary(package: &Package, year: i32, month: u32) -> DateTime<Utc> {
-    let tz: Tz = package.timezone.parse().unwrap_or(chrono_tz::UTC);
+    let tz: Tz = package.timezone.parse().unwrap_or_else(|_| {
+        tracing::warn!(timezone = %package.timezone, "invalid package timezone; falling back to UTC");
+        chrono_tz::UTC
+    });
     let (ny, nm) = if month == 12 {
         (year + 1, 1)
     } else {
@@ -116,7 +119,10 @@ fn next_reset(package: &Package, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
     if package.cycle != "monthly" {
         return None;
     }
-    let tz: Tz = package.timezone.parse().unwrap_or(chrono_tz::UTC);
+    let tz: Tz = package.timezone.parse().unwrap_or_else(|_| {
+        tracing::warn!(timezone = %package.timezone, "invalid package timezone; falling back to UTC");
+        chrono_tz::UTC
+    });
     let local = now.with_timezone(&tz);
     let current = monthly_boundary(package, local.year(), local.month());
     if current > now {

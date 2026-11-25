@@ -1297,7 +1297,10 @@ async fn run_proxy_probe(
         client_identity,
     } = probe;
     let (server_address, realm_options) = deployment_probe_server_config(options, listen_addr)?;
-    let custom_target = target_url.map(parse_http_probe_target).transpose()?;
+    let custom_target = match target_url {
+        Some(url) => Some(parse_http_probe_target(url).await?),
+        None => None,
+    };
     let default_remote_target = format!("127.0.0.1:{traffic_stats_port}");
     let remote_target = custom_target
         .as_ref()
@@ -1571,17 +1574,13 @@ struct HttpProbeTarget {
     path: String,
 }
 
-fn parse_http_probe_target(value: &str) -> Result<HttpProbeTarget> {
+async fn parse_http_probe_target(value: &str) -> Result<HttpProbeTarget> {
     let url = Url::parse(value).context("proxy_probe_url is not a valid HTTP URL")?;
-    if url.scheme() != "http"
-        || url.host().is_none()
-        || !url.username().is_empty()
-        || url.password().is_some()
-        || url.query().is_some()
-        || url.fragment().is_some()
-    {
-        bail!("proxy_probe_url must be HTTP without credentials, query, or fragment");
-    }
+    let remote_address = crate::api::nodes::resolve_probe_target_address(
+        &url,
+        crate::api::nodes::probe_url_allows_private(),
+    )
+    .await?;
     let host = match url.host().context("proxy_probe_url is missing a host")? {
         Host::Domain(host) => host.to_owned(),
         Host::Ipv4(address) => address.to_string(),
@@ -1596,7 +1595,7 @@ fn parse_http_probe_target(value: &str) -> Result<HttpProbeTarget> {
         format!("{host}:{port}")
     };
     Ok(HttpProbeTarget {
-        remote_address: format!("{host}:{port}"),
+        remote_address,
         host_header,
         path: if url.path().is_empty() {
             "/".to_owned()

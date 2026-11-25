@@ -1687,7 +1687,9 @@ struct ClientSummary: Codable, Sendable {
     let userExpiring: Int
     let userDepleted: Int
     let notificationNodes: [NodeSummary]
+    let notificationNodesNextCursor: String?
     let notificationCredentials: [CredentialSummary]
+    let notificationCredentialsNextCursor: String?
 
     enum CodingKeys: String, CodingKey {
         case nodeCount = "node_count"
@@ -1697,7 +1699,29 @@ struct ClientSummary: Codable, Sendable {
         case userExpiring = "user_expiring"
         case userDepleted = "user_depleted"
         case notificationNodes = "notification_nodes"
+        case notificationNodesNextCursor = "notification_nodes_next_cursor"
         case notificationCredentials = "notification_credentials"
+        case notificationCredentialsNextCursor = "notification_credentials_next_cursor"
+    }
+}
+
+struct ClientSummaryNotificationNodesPage: Codable, Sendable {
+    let items: [NodeSummary]
+    let nextCursor: String?
+
+    enum CodingKeys: String, CodingKey {
+        case items
+        case nextCursor = "next_cursor"
+    }
+}
+
+struct ClientSummaryNotificationCredentialsPage: Codable, Sendable {
+    let items: [CredentialSummary]
+    let nextCursor: String?
+
+    enum CodingKeys: String, CodingKey {
+        case items
+        case nextCursor = "next_cursor"
     }
 }
 

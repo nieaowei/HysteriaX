@@ -1398,6 +1398,97 @@ async fn validate_ssh_credential(
     Ok(())
 }
 
+pub(crate) fn is_non_public_ipv4(v4: std::net::Ipv4Addr) -> bool {
+    let octets = v4.octets();
+    v4.is_loopback()
+        || v4.is_private()
+        || v4.is_link_local()
+        || v4.is_unspecified()
+        || v4.is_broadcast()
+        || v4.is_multicast()
+        || v4.is_documentation()
+        || octets[0] == 0
+        || (octets[0] == 100 && (octets[1] & 0xc0) == 64)
+}
+
+pub(crate) fn is_non_public_ip(ip: std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(v4) => is_non_public_ipv4(v4),
+        std::net::IpAddr::V6(v6) => {
+            v6.to_ipv4_mapped().is_some_and(is_non_public_ipv4)
+                || v6.is_loopback()
+                || v6.is_unspecified()
+                || v6.is_multicast()
+                || (v6.segments()[0] & 0xfe00) == 0xfc00
+                || (v6.segments()[0] & 0xffc0) == 0xfe80
+        }
+    }
+}
+
+pub(crate) fn probe_url_allows_private() -> bool {
+    cfg!(test) || std::env::var("HYSTERIAX_ALLOW_PRIVATE_PROBE_URL").as_deref() == Ok("1")
+}
+
+pub(crate) async fn resolve_probe_target_address(
+    url: &Url,
+    allow_private: bool,
+) -> anyhow::Result<String> {
+    anyhow::ensure!(
+        url.scheme() == "http"
+            && url.host().is_some()
+            && url.username().is_empty()
+            && url.password().is_none()
+            && url.query().is_none()
+            && url.fragment().is_none(),
+        "proxy_probe_url must be HTTP without credentials, query, or fragment"
+    );
+    let port = url
+        .port_or_known_default()
+        .ok_or_else(|| anyhow::anyhow!("proxy_probe_url is missing a port"))?;
+    let host = match url
+        .host()
+        .ok_or_else(|| anyhow::anyhow!("proxy_probe_url is missing a host"))?
+    {
+        url::Host::Domain(host) => host.to_owned(),
+        url::Host::Ipv4(addr) => addr.to_string(),
+        url::Host::Ipv6(addr) => format!("[{addr}]"),
+    };
+    if allow_private {
+        return Ok(format!("{host}:{port}"));
+    }
+    let lower = host.trim_matches(['[', ']']).to_ascii_lowercase();
+    anyhow::ensure!(
+        lower != "localhost" && !lower.ends_with(".localhost"),
+        "proxy_probe_url cannot target localhost"
+    );
+    if let Ok(ip) = lower.parse::<std::net::IpAddr>() {
+        anyhow::ensure!(
+            !is_non_public_ip(ip),
+            "proxy_probe_url cannot target loopback, private, or link-local addresses"
+        );
+        return Ok(match ip {
+            std::net::IpAddr::V4(v4) => format!("{v4}:{port}"),
+            std::net::IpAddr::V6(v6) => format!("[{v6}]:{port}"),
+        });
+    }
+    let resolved: Vec<std::net::SocketAddr> = tokio::time::timeout(
+        std::time::Duration::from_secs(4),
+        tokio::net::lookup_host((lower.as_str(), port)),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("timed out resolving proxy_probe_url host"))??
+    .collect();
+    let first = resolved
+        .first()
+        .copied()
+        .ok_or_else(|| anyhow::anyhow!("proxy_probe_url host resolved to no addresses"))?;
+    anyhow::ensure!(
+        resolved.iter().all(|addr| !is_non_public_ip(addr.ip())),
+        "proxy_probe_url cannot target loopback, private, or link-local addresses"
+    );
+    Ok(first.to_string())
+}
+
 fn normalize_proxy_probe_url(value: Option<&str>) -> Result<Option<String>, ApiError> {
     let Some(value) = value.map(str::trim) else {
         return Ok(None);
@@ -1423,31 +1514,15 @@ fn normalize_proxy_probe_url(value: Option<&str>) -> Result<Option<String>, ApiE
             "proxy_probe_url must be an HTTP URL without credentials, query, or fragment",
         ));
     }
-    let allow_private = cfg!(test)
-        || std::env::var("HYSTERIAX_ALLOW_PRIVATE_PROBE_URL").as_deref() == Ok("1");
+    let allow_private =
+        cfg!(test) || std::env::var("HYSTERIAX_ALLOW_PRIVATE_PROBE_URL").as_deref() == Ok("1");
     if !allow_private && let Some(host) = url.host_str() {
         let lower = host.trim_matches(['[', ']']).to_ascii_lowercase();
         let is_local_name = lower == "localhost" || lower.ends_with(".localhost");
-        let is_non_public_ip = lower
+        let is_non_public = lower
             .parse::<std::net::IpAddr>()
-            .is_ok_and(|ip| match ip {
-                std::net::IpAddr::V4(v4) => {
-                    v4.is_loopback()
-                        || v4.is_private()
-                        || v4.is_link_local()
-                        || v4.is_unspecified()
-                        || v4.is_broadcast()
-                        || v4.is_multicast()
-                }
-                std::net::IpAddr::V6(v6) => {
-                    v6.is_loopback()
-                        || v6.is_unspecified()
-                        || v6.is_multicast()
-                        || (v6.segments()[0] & 0xfe00) == 0xfc00
-                        || (v6.segments()[0] & 0xffc0) == 0xfe80
-                }
-            });
-        if is_local_name || is_non_public_ip {
+            .is_ok_and(is_non_public_ip);
+        if is_local_name || is_non_public {
             return Err(ApiError::bad_request(
                 "proxy_probe_url cannot target loopback, private, or link-local addresses",
             ));
@@ -1583,3 +1658,33 @@ pub(crate) use test_support::*;
 
 #[cfg(test)]
 use crate::db;
+
+#[cfg(test)]
+mod ssrf_tests {
+    use super::is_non_public_ip;
+
+    #[test]
+    fn non_public_ip_blocks_ipv4_mapped_cgnat_and_zero_net() {
+        for addr in [
+            "127.0.0.1",
+            "10.0.0.1",
+            "169.254.169.254",
+            "0.1.2.3",
+            "100.64.0.1",
+            "100.127.255.254",
+            "::1",
+            "::ffff:127.0.0.1",
+            "::ffff:169.254.169.254",
+            "::ffff:100.64.0.1",
+            "fc00::1",
+            "fe80::1",
+        ] {
+            let ip: std::net::IpAddr = addr.parse().unwrap();
+            assert!(is_non_public_ip(ip), "expected non-public: {addr}");
+        }
+        for addr in ["1.1.1.1", "8.8.8.8", "100.128.0.1", "2606:4700:4700::1111"] {
+            let ip: std::net::IpAddr = addr.parse().unwrap();
+            assert!(!is_non_public_ip(ip), "expected public: {addr}");
+        }
+    }
+}

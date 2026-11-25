@@ -138,30 +138,6 @@ where
     .await
 }
 
-#[allow(dead_code)]
-pub(crate) async fn serializable_after_probe<T, E, F>(
-    pool: &PgPool,
-    connection: sqlx::pool::PoolConnection<Postgres>,
-    operation: F,
-) -> Result<T, E>
-where
-    E: RetryableTransactionError,
-    F: for<'connection> FnMut(
-        &'connection mut Transaction<'static, Postgres>,
-    ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = Result<T, E>> + Send + 'connection>,
-    >,
-{
-    transaction(
-        pool,
-        "serializable",
-        "BEGIN ISOLATION LEVEL SERIALIZABLE",
-        Some(connection),
-        operation,
-    )
-    .await
-}
-
 /// READ COMMITTED work protected by explicit, consistently ordered row locks.
 /// Same side-effect prohibition and retry budget as `serializable`.
 pub async fn write<T, E, F>(pool: &PgPool, operation: F) -> Result<T, E>

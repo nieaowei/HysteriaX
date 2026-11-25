@@ -52,6 +52,14 @@ pub fn router(state: AppState) -> Router {
     let admin = Router::new()
         .route("/api/v2/version", get(api_version))
         .route("/api/v2/client/summary", get(client_summary::get))
+        .route(
+            "/api/v2/client/summary/notification-nodes",
+            get(client_summary::notification_nodes),
+        )
+        .route(
+            "/api/v2/client/summary/notification-credentials",
+            get(client_summary::notification_credentials),
+        )
         .route("/api/v2/overview", get(crate::overview::get))
         .route("/api/v2/overview/nodes", get(crate::overview::list_nodes))
         .route("/api/v2/overview/history", get(crate::overview::history))

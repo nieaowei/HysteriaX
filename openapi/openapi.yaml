@@ -784,6 +784,48 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ClientSummary' }
+  /client/summary/notification-nodes:
+    get:
+      operationId: listClientSummaryNotificationNodes
+      x-swift-include-optional-query: true
+      summary: List paginated node notification candidates after the summary cursor
+      parameters:
+        - name: cursor
+          in: query
+          required: false
+          schema: { type: string }
+        - name: page_size
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 500 }
+      responses:
+        '200':
+          description: Page of node notification candidates
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ClientSummaryNotificationNodesPage' }
+        '400': { $ref: '#/components/responses/Error' }
+  /client/summary/notification-credentials:
+    get:
+      operationId: listClientSummaryNotificationCredentials
+      x-swift-include-optional-query: true
+      summary: List paginated credential notification candidates after the summary cursor
+      parameters:
+        - name: cursor
+          in: query
+          required: false
+          schema: { type: string }
+        - name: page_size
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 500 }
+      responses:
+        '200':
+          description: Page of credential notification candidates
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ClientSummaryNotificationCredentialsPage' }
+        '400': { $ref: '#/components/responses/Error' }
   /cache:
     get:
       operationId: getCacheStatistics
@@ -2602,9 +2644,35 @@ components:
         notification_nodes:
           type: array
           items: { $ref: '#/components/schemas/NodeSummary' }
+        notification_nodes_next_cursor:
+          type: string
+          nullable: true
         notification_credentials:
           type: array
           items: { $ref: '#/components/schemas/CredentialSummary' }
+        notification_credentials_next_cursor:
+          type: string
+          nullable: true
+    ClientSummaryNotificationNodesPage:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/NodeSummary' }
+        next_cursor:
+          type: string
+          nullable: true
+    ClientSummaryNotificationCredentialsPage:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/CredentialSummary' }
+        next_cursor:
+          type: string
+          nullable: true
     Revision:
       type: object
       required: [expected_revision]

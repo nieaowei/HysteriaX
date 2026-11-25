@@ -147,20 +147,20 @@ async fn main() -> Result<()> {
         ("transaction_metrics", transaction_metrics),
         ("maintenance_metrics", maintenance_metrics),
     ];
-    drain_graceful_workers(&mut workers, Duration::from_secs(60)).await;
-    // Keep instance heartbeats and per-execution renewal alive until the
-    // sampling futures have persisted their responses and finalized ownership.
-    let drained = drain_sampling_workers(
-        &mut [
-            ("traffic", traffic),
-            ("network", network),
-            ("proxy", probes),
-            ("sampling retention", sampling_retention),
-            ("history retention", history_retention),
-        ],
-        Duration::from_secs(120),
-    )
-    .await;
+    let mut sampling_workers = [
+        ("traffic", traffic),
+        ("network", network),
+        ("proxy", probes),
+        ("sampling retention", sampling_retention),
+        ("history retention", history_retention),
+    ];
+    // Drain general workers and sampling workers concurrently so total shutdown
+    // fits within the container stop_grace_period while keeping heartbeats alive
+    // until sampling has persisted its responses.
+    let (_, drained) = tokio::join!(
+        drain_graceful_workers(&mut workers, Duration::from_secs(60)),
+        drain_sampling_workers(&mut sampling_workers, Duration::from_secs(120)),
+    );
     for worker in [&heartbeat, &publisher] {
         worker.abort();
     }
@@ -190,7 +190,10 @@ async fn drain_graceful_workers(
             .filter(|(_, worker)| !worker.is_finished())
             .map(|(kind, _)| *kind)
             .collect();
-        tracing::warn!(?pending, "background worker drain deadline reached; aborting remaining workers");
+        tracing::warn!(
+            ?pending,
+            "background worker drain deadline reached; aborting remaining workers"
+        );
         for (_, worker) in workers.iter().skip(completed) {
             worker.abort();
         }

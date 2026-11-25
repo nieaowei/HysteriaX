@@ -342,7 +342,10 @@ pub async fn get_binding(
     if !exists {
         return Err(ApiError::not_found("node"));
     }
-    let summary = binding_summary(&state.pool, &node).await?;
+    let summary = bindings_on(&mut tx, std::slice::from_ref(&node))
+        .await?
+        .remove(&node)
+        .unwrap_or(Value::Null);
     tx.commit().await?;
     Ok(Json(json!({"binding": summary})))
 }

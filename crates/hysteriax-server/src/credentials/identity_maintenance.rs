@@ -64,12 +64,18 @@ pub async fn pass(state: &AppState) -> Result<()> {
     }
     state.maintenance.refresh_hint().await?;
     let mut tasks = tokio::task::JoinSet::new();
+    let mut first_error: Option<anyhow::Error> = None;
     for _ in 0..16 {
         if *state.shutdown.borrow() {
             break;
         }
-        let Some(work) = maintenance::claim(&state.pool, KIND, &state.instance_id).await? else {
-            break;
+        let work = match maintenance::claim(&state.pool, KIND, &state.instance_id).await {
+            Ok(Some(work)) => work,
+            Ok(None) => break,
+            Err(error) => {
+                first_error.get_or_insert(error);
+                break;
+            }
         };
         let app = state.clone();
         tasks.spawn(async move {
@@ -87,11 +93,30 @@ pub async fn pass(state: &AppState) -> Result<()> {
         if tasks.len() >= 8
             && let Some(res) = tasks.join_next().await
         {
-            res??;
+            match res {
+                Ok(Ok(_)) => {}
+                Ok(Err(error)) => {
+                    first_error.get_or_insert(error);
+                }
+                Err(error) => {
+                    first_error.get_or_insert_with(|| error.into());
+                }
+            }
         }
     }
     while let Some(res) = tasks.join_next().await {
-        res??;
+        match res {
+            Ok(Ok(_)) => {}
+            Ok(Err(error)) => {
+                first_error.get_or_insert(error);
+            }
+            Err(error) => {
+                first_error.get_or_insert_with(|| error.into());
+            }
+        }
+    }
+    if let Some(error) = first_error {
+        return Err(error);
     }
     Ok(())
 }

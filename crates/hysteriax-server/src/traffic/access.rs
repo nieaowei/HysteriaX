@@ -53,7 +53,7 @@ pub async fn initialize(pool: &PgPool) -> Result<()> {
     Ok(())
 }
 
-#[allow(dead_code)]
+#[cfg(test)]
 pub async fn admit_on(tx: &mut Transaction<'static, Postgres>, user: &str) -> Result<()> {
     admit_many_on(tx, &[user.to_owned()]).await
 }

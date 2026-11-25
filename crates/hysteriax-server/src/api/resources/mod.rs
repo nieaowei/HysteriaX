@@ -201,7 +201,7 @@ pub async fn list(
     AxumPath(node_id): AxumPath<String>,
 ) -> Result<Json<Vec<Value>>, ApiError> {
     let mut tx = crate::read_snapshot::begin(&state.pool).await?;
-    ensure_node(&state, &node_id).await?;
+    ensure_node_on(&mut tx, &node_id).await?;
     let rows = sqlx::query("SELECT id, name, resource_kind, content_sha256, size_bytes, created_at FROM config_resources WHERE node_id = $1 ORDER BY lower(name) COLLATE \"C\", name COLLATE \"C\", id")
         .bind(&node_id).fetch_all(&mut *tx).await?;
     tx.commit().await?;
@@ -228,10 +228,13 @@ async fn editable_node_on(connection: &mut sqlx::PgConnection, node: &str) -> Re
     Ok(())
 }
 
-async fn ensure_node(state: &AppState, node_id: &str) -> Result<(), ApiError> {
+async fn ensure_node_on(
+    connection: &mut sqlx::PgConnection,
+    node_id: &str,
+) -> Result<(), ApiError> {
     let exists: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM nodes WHERE id = $1")
         .bind(node_id)
-        .fetch_one(&mut *crate::read_snapshot::begin(&state.pool).await?)
+        .fetch_one(connection)
         .await?;
     if exists == 0 {
         return Err(ApiError::not_found("node"));

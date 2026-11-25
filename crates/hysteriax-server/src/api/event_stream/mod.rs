@@ -153,8 +153,9 @@ async fn batch(
 }
 
 static SSE_GLOBAL: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(128);
-static SSE_PER_ACTOR: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<String, usize>>> =
-    std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+static SSE_PER_ACTOR: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<String, usize>>,
+> = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
 
 struct SsePermit {
     _global: tokio::sync::SemaphorePermit<'static>,

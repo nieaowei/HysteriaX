@@ -627,9 +627,13 @@ async fn load_subscription_nodes_snapshot(
             mtls_targets.push((node_id.to_owned(), ca.to_owned()));
         }
     }
-    let mtls_identities =
-        crate::credentials::identities::for_nodes(&state.pool, &state.secrets, user_id, &mtls_targets)
-            .await?;
+    let mtls_identities = crate::credentials::identities::for_nodes(
+        &state.pool,
+        &state.secrets,
+        user_id,
+        &mtls_targets,
+    )
+    .await?;
     let mut seen_names = std::collections::HashSet::with_capacity(rows.len());
     let mut nodes = Vec::new();
     for row in rows {
@@ -649,7 +653,9 @@ async fn load_subscription_nodes_snapshot(
             let ca = config["mtls"]["ca_credential_id"]
                 .as_str()
                 .ok_or_else(ApiError::internal)?;
-            let Some(material) = mtls_identities.get(&(node_id.clone(), ca.to_owned())).cloned()
+            let Some(material) = mtls_identities
+                .get(&(node_id.clone(), ca.to_owned()))
+                .cloned()
             else {
                 continue;
             };

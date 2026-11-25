@@ -1095,6 +1095,12 @@ enum APIEndpoints {
         APIOperation(method: "POST", path: "api/v2/users/\(id)/managed-certificates/reissue", queryParameters: [:])
     }
     static let getClientSummary: APIOperation<NoRequest, ClientSummary> = APIOperation<NoRequest, ClientSummary>(method: "GET", path: "api/v2/client/summary", queryParameters: [:])
+    static func listClientSummaryNotificationNodes(cursor: String? = nil, pageSize: Int? = nil) -> APIOperation<NoRequest, ClientSummaryNotificationNodesPage> {
+        APIOperation(method: "GET", path: "api/v2/client/summary/notification-nodes", queryParameters: ["cursor": cursor.map { String($0) }, "page_size": pageSize.map { String($0) }].compactMapValues { $0 })
+    }
+    static func listClientSummaryNotificationCredentials(cursor: String? = nil, pageSize: Int? = nil) -> APIOperation<NoRequest, ClientSummaryNotificationCredentialsPage> {
+        APIOperation(method: "GET", path: "api/v2/client/summary/notification-credentials", queryParameters: ["cursor": cursor.map { String($0) }, "page_size": pageSize.map { String($0) }].compactMapValues { $0 })
+    }
     static let getCacheStatistics: APIOperation<NoRequest, [String: JSONValue]> = APIOperation<NoRequest, [String: JSONValue]>(method: "GET", path: "api/v2/cache", queryParameters: [:])
     static func listCredentials(page: Int? = nil, pageSize: Int? = nil, category: String? = nil, kind: String? = nil, includeInternal: Bool? = nil, q: String? = nil, sort: String? = nil, order: String? = nil) -> APIOperation<NoRequest, CredentialsPage> {
         APIOperation(method: "GET", path: "api/v2/credentials", queryParameters: ["page": page.map { String($0) }, "page_size": pageSize.map { String($0) }, "category": category.map { String($0) }, "kind": kind.map { String($0) }, "include_internal": includeInternal.map { String($0) }, "q": q.map { String($0) }, "sort": sort.map { String($0) }, "order": order.map { String($0) }].compactMapValues { $0 })

@@ -779,7 +779,7 @@ async fn history_at(
         }
         let gapped: Vec<DateTime<Utc>> = sqlx::query_scalar(
             "SELECT b.start_at FROM unnest($1::timestamptz[], $2::timestamptz[]) AS b(start_at, end_at) \
-             WHERE EXISTS (SELECT 1 FROM data_gaps g WHERE g.opened_at <= b.end_at AND COALESCE(g.resolved_at, $3) >= b.start_at AND ($4::text IS NULL OR g.node_id = $4))",
+             WHERE EXISTS (SELECT 1 FROM data_gaps g WHERE g.opened_at < b.end_at AND COALESCE(g.resolved_at, $3) >= b.start_at AND ($4::text IS NULL OR g.node_id = $4))",
         )
         .bind(&bucket_starts)
         .bind(&bucket_ends)

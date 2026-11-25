@@ -440,8 +440,7 @@ async fn run_in_read_snapshot(
     let run_inner = |tx_cacheable: bool| async move {
         let mut version_matches = true;
         if let Some((expected, query, ttl)) = expected_version {
-            let (actual, _) =
-                crate::cache_domains::policy(state, &uri_path, query, ttl).await?;
+            let (actual, _) = crate::cache_domains::policy(state, &uri_path, query, ttl).await?;
             version_matches = actual == expected;
         }
         let response = next.run(request).await;
@@ -449,17 +448,16 @@ async fn run_in_read_snapshot(
         Ok((response, cacheable))
     };
     if path.starts_with("/credentials") {
-        let tx =
-            crate::credentials::reference_index::begin_read_transaction(&state.pool, &state.secrets)
-                .await?;
-        crate::read_snapshot::scope_with(tx, run_inner(true)).await
-    } else if let Some(needs_cycles) = overview_needs_cycles {
-        let tx = crate::analytics::snapshot_transaction(
+        let tx = crate::credentials::reference_index::begin_read_transaction(
             &state.pool,
-            chrono::Utc::now(),
-            needs_cycles,
+            &state.secrets,
         )
         .await?;
+        crate::read_snapshot::scope_with(tx, run_inner(true)).await
+    } else if let Some(needs_cycles) = overview_needs_cycles {
+        let tx =
+            crate::analytics::snapshot_transaction(&state.pool, chrono::Utc::now(), needs_cycles)
+                .await?;
         crate::read_snapshot::scope_read_only(tx, run_inner(true)).await
     } else {
         let tx = crate::read_snapshot::transaction(&state.pool).await?;

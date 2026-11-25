@@ -99,7 +99,7 @@ def main():
     if not args.confirm_stopped_test_db:
         raise SystemExit("pass --confirm-stopped-test-db after stopping all API instances")
 
-    binary = Path(args.binary)
+    binary = Path(args.binary).resolve()
     if not binary.is_file():
         raise SystemExit(f"binary not found: {binary}")
 

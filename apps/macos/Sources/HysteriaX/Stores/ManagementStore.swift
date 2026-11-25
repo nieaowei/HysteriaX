@@ -326,7 +326,7 @@ final class ManagementStore {
                 // These reads are independent. Keeping them in the same refresh
                 // flight avoids making the 15-second heartbeat wait for the
                 // summary request before starting monitoring.
-                async let loadedSummary: ClientSummary = api.get(APIEndpoints.getClientSummary)
+                async let loadedSummary: ClientSummary = fetchCompleteClientSummary(using: api)
                 async let loadedMonitoring = fetchServerMonitoring(using: api)
                 let summary = try await loadedSummary
                 let monitoring = await loadedMonitoring
@@ -840,6 +840,60 @@ final class ManagementStore {
         await refresh()
     }
 
+    private func fetchCompleteClientSummary(using client: APIClient, bypassCache: Bool = false) async throws -> ClientSummary {
+        let first = try await client.get(APIEndpoints.getClientSummary, bypassCache: bypassCache)
+        var nodes = first.notificationNodes
+        var seenNodes = Set(nodes.map(\.id))
+        var nodeCursor = first.notificationNodesNextCursor
+        var nodePages = 0
+        while let cursor = nodeCursor, !cursor.isEmpty, nodePages < 100 {
+            nodePages += 1
+            do {
+                let page: ClientSummaryNotificationNodesPage = try await client.get(
+                    APIEndpoints.listClientSummaryNotificationNodes(cursor: cursor, pageSize: 500),
+                    bypassCache: bypassCache
+                )
+                for item in page.items where seenNodes.insert(item.id).inserted {
+                    nodes.append(item)
+                }
+                nodeCursor = page.nextCursor == cursor ? nil : page.nextCursor
+            } catch {
+                break
+            }
+        }
+        var credentials = first.notificationCredentials
+        var seenCredentials = Set(credentials.map(\.id))
+        var credentialCursor = first.notificationCredentialsNextCursor
+        var credentialPages = 0
+        while let cursor = credentialCursor, !cursor.isEmpty, credentialPages < 100 {
+            credentialPages += 1
+            do {
+                let page: ClientSummaryNotificationCredentialsPage = try await client.get(
+                    APIEndpoints.listClientSummaryNotificationCredentials(cursor: cursor, pageSize: 500),
+                    bypassCache: bypassCache
+                )
+                for item in page.items where seenCredentials.insert(item.id).inserted {
+                    credentials.append(item)
+                }
+                credentialCursor = page.nextCursor == cursor ? nil : page.nextCursor
+            } catch {
+                break
+            }
+        }
+        return ClientSummary(
+            nodeCount: first.nodeCount,
+            userTotal: first.userTotal,
+            userEnabled: first.userEnabled,
+            userExpired: first.userExpired,
+            userExpiring: first.userExpiring,
+            userDepleted: first.userDepleted,
+            notificationNodes: nodes,
+            notificationNodesNextCursor: nodeCursor,
+            notificationCredentials: credentials,
+            notificationCredentialsNextCursor: credentialCursor
+        )
+    }
+
     private func loadData(using client: APIClient, bypassCache: Bool = false) async throws {
         let generation = serviceGeneration
         async let loadedMonitoring = fetchServerMonitoring(using: client)
@@ -849,7 +903,7 @@ final class ManagementStore {
         async let loadedJobs: JobsPage = client.get(APIEndpoints.listJobs(pageSize: 200), bypassCache: bypassCache)
         async let loadedAudit: AuditPage = client.get(APIEndpoints.listAuditRecords(pageSize: 200), bypassCache: bypassCache)
         async let loadedAdminTokens: [AdminTokenSummary] = client.get(APIEndpoints.listAdminTokens, bypassCache: bypassCache)
-        async let loadedClientSummary: ClientSummary = client.get(APIEndpoints.getClientSummary, bypassCache: bypassCache)
+        async let loadedClientSummary: ClientSummary = fetchCompleteClientSummary(using: client, bypassCache: bypassCache)
         let tokens = try await loadedAdminTokens
         let monitoring = await loadedMonitoring
         let summary = try await loadedClientSummary

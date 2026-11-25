@@ -168,16 +168,45 @@ impl Execution {
         operation: &str,
         evidence: &Value,
     ) -> Result<(), sqlx::Error> {
-        self.guard(connection).await?;
-        let changed=sqlx::query("UPDATE execution_operations SET state='verified',evidence=$5,updated_at=clock_timestamp() WHERE operation_id=$1 AND resource_key=$2 AND owner=$3 AND generation=$4 AND work_id=$6 AND epoch=$7 AND state='dispatching'")
+        self.guard(&mut *connection).await?;
+        let changed = sqlx::query("UPDATE execution_operations SET state='verified',evidence=$5,updated_at=clock_timestamp() WHERE operation_id=$1 AND resource_key=$2 AND owner=$3 AND generation=$4 AND work_id=$6 AND epoch=$7 AND state='dispatching'")
             .bind(operation).bind(&self.resource).bind(&self.owner).bind(self.generation).bind(evidence).bind(&self.work).bind(&self.epoch)
-            .execute(connection).await?;
+            .execute(&mut *connection).await?;
         if changed.rows_affected() != 1 {
-            return Err(sqlx::Error::Protocol(
-                "operation no longer belongs to this execution".into(),
-            ));
+            let already_verified: bool = sqlx::query_scalar(
+                "SELECT EXISTS(SELECT 1 FROM execution_operations WHERE operation_id=$1 AND resource_key=$2 AND owner=$3 AND generation=$4 AND work_id=$6 AND epoch=$7 AND state='verified' AND evidence=$5)",
+            )
+            .bind(operation)
+            .bind(&self.resource)
+            .bind(&self.owner)
+            .bind(self.generation)
+            .bind(evidence)
+            .bind(&self.work)
+            .bind(&self.epoch)
+            .fetch_one(connection)
+            .await?;
+            if !already_verified {
+                return Err(sqlx::Error::Protocol(
+                    "operation no longer belongs to this execution".into(),
+                ));
+            }
         }
         Ok(())
+    }
+}
+
+pub(super) fn is_transient_db_error(error: &sqlx::Error) -> bool {
+    match error {
+        sqlx::Error::Io(_) | sqlx::Error::Tls(_) | sqlx::Error::PoolTimedOut => true,
+        sqlx::Error::Database(db) => db.code().is_some_and(|code| {
+            code.starts_with("08")
+                || code.starts_with("53")
+                || matches!(
+                    code.as_ref(),
+                    "40001" | "40P01" | "55P03" | "57014" | "57P01" | "57P02" | "57P03"
+                )
+        }),
+        _ => false,
     }
 }
 

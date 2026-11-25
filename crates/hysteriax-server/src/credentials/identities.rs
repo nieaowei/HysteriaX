@@ -295,7 +295,7 @@ pub async fn commit_user(
 /// Resolve only released, time-valid versions trusted by this node. Retained
 /// historical versions provide controlled rollback compatibility without issuing
 /// a second per-node identity or treating latest_version as publication state.
-#[allow(dead_code)]
+#[cfg(test)]
 pub async fn for_node(
     pool: &PgPool,
     secrets: &SecretBox,
@@ -303,13 +303,7 @@ pub async fn for_node(
     node: &str,
     ca: &str,
 ) -> Result<Option<(String, String)>> {
-    let mut resolved = for_nodes(
-        pool,
-        secrets,
-        user,
-        &[(node.to_owned(), ca.to_owned())],
-    )
-    .await?;
+    let mut resolved = for_nodes(pool, secrets, user, &[(node.to_owned(), ca.to_owned())]).await?;
     Ok(resolved.remove(&(node.to_owned(), ca.to_owned())))
 }
 

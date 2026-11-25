@@ -147,3 +147,20 @@ async fn unavailable_redis_falls_back_without_delaying_every_request() {
     assert!(!backend.available());
     assert_eq!(cache.stats()["hits"], 2);
 }
+
+#[tokio::test]
+async fn cancelled_probe_releases_probing_slot() {
+    use std::future::Future;
+    let backend =
+        RedisCache::new("redis://127.0.0.1:9", "cancelled-probe".into(), secrets()).unwrap();
+    *backend.retry_after.lock().unwrap() = Some(Instant::now() - Duration::from_secs(1));
+    {
+        let mut fut =
+            Box::pin(backend.command::<Option<String>>(redis::cmd("GET").arg("k").to_owned()));
+        let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+        let _ = fut.as_mut().poll(&mut cx);
+        assert!(backend.probing.load(Ordering::Acquire));
+    }
+    assert!(!backend.probing.load(Ordering::Acquire));
+    assert!(matches!(backend.acquire_probe_slot(), ProbeSlot::Probe(_)));
+}

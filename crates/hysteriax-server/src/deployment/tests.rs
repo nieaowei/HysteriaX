@@ -145,18 +145,30 @@ fn rejects_downloaded_asset_with_wrong_pinned_digest() {
     assert!(error.to_string().contains("SHA-256 did not match"));
 }
 
-#[test]
-fn parses_http_probe_targets_for_tcp_forwarding() {
-    let target = parse_http_probe_target("http://status.example.test/health").unwrap();
+#[tokio::test]
+async fn parses_http_probe_targets_for_tcp_forwarding() {
+    let target = parse_http_probe_target("http://status.example.test/health")
+        .await
+        .unwrap();
     assert_eq!(target.remote_address, "status.example.test:80");
     assert_eq!(target.host_header, "status.example.test");
     assert_eq!(target.path, "/health");
 
-    let ipv6 = parse_http_probe_target("http://[::1]:8080/ready").unwrap();
+    let ipv6 = parse_http_probe_target("http://[::1]:8080/ready")
+        .await
+        .unwrap();
     assert_eq!(ipv6.remote_address, "[::1]:8080");
     assert_eq!(ipv6.host_header, "[::1]:8080");
-    assert!(parse_http_probe_target("https://status.example.test/health").is_err());
-    assert!(parse_http_probe_target("http://status.example.test/health?token=secret").is_err());
+    assert!(
+        parse_http_probe_target("https://status.example.test/health")
+            .await
+            .is_err()
+    );
+    assert!(
+        parse_http_probe_target("http://status.example.test/health?token=secret")
+            .await
+            .is_err()
+    );
 }
 
 #[tokio::test]
