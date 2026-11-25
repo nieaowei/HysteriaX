@@ -292,7 +292,7 @@ fn stream(
                 _ = shutdown.wait_for(|stop| *stop) => break,
                 _ = authorization.changed() => {},
                 changed = updates.changed() => { if changed.is_err() { break; } },
-                _ = tokio::time::sleep(Duration::from_secs(30)) => {},
+                _ = tokio::time::sleep(Duration::from_secs(5)) => {},
             }
         }
     };
