@@ -47,4 +47,15 @@ enum OverviewDisplay {
     }
     static func bytes(_ value: Int64) -> String { TrafficUnits.display(value) }
     static func milliseconds(_ value: Double?) -> String { value.map { String(format: "%.0f ms", $0) } ?? "—" }
+    static func metricNumber(_ value: Double?) -> String {
+        guard let value else { return "—" }
+        if abs(value.rounded() - value) < 0.05 {
+            return String(format: "%.0f", value)
+        }
+        return String(format: "%.1f", value)
+    }
+    static func percentage(_ value: Double?) -> String {
+        guard let value else { return "—" }
+        return String(format: "%.1f%%", value)
+    }
 }

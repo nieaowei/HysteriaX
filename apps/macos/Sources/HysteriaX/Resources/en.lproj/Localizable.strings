@@ -2314,3 +2314,10 @@
 "已复制服务地址" = "Copied service address";
 "服务运行" = "Service uptime";
 "主机运行" = "Host uptime";
+"合计" = "Total";
+"覆盖节点" = "Covered Nodes";
+"数据不完整" = "Incomplete Data";
+"无有效样本" = "No Valid Samples";
+"成功率" = "Success Rate";
+"成功探测" = "Successful Probes";
+"无有效探测" = "No Valid Probes";
