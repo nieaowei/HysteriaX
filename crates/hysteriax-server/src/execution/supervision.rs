@@ -57,6 +57,21 @@ pub async fn supervise<T>(
     supervise_scope(scope, Box::pin(work)).await
 }
 
+fn is_transient_db_error(error: &sqlx::Error) -> bool {
+    match error {
+        sqlx::Error::Io(_) | sqlx::Error::Tls(_) | sqlx::Error::PoolTimedOut => true,
+        sqlx::Error::Database(db) => db.code().is_some_and(|code| {
+            code.starts_with("08")
+                || code.starts_with("53")
+                || matches!(
+                    code.as_ref(),
+                    "40001" | "40P01" | "55P03" | "57014" | "57P01" | "57P02" | "57P03"
+                )
+        }),
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 tokio::task_local! {pub(super) static RENEW_INTERVAL: Duration;}
 async fn renew(scope: Scope) -> String {
@@ -66,16 +81,24 @@ async fn renew(scope: Scope) -> String {
         .unwrap_or(Duration::from_secs(RENEW_SECONDS));
     #[cfg(not(test))]
     let interval = Duration::from_secs(RENEW_SECONDS);
+    let max_transient_window = Duration::from_secs((RENEW_SECONDS * 3).max(30));
+    let mut transient_since: Option<tokio::time::Instant> = None;
     loop {
         let mut contended = false;
+        let mut had_transient = false;
         for lease in &scope.leases {
             match lease.renew(&scope.pool).await {
                 Ok(true) => {}
-                Err(error)
-                    if error.as_database_error().and_then(|e| e.code()).as_deref()
-                        == Some("55P03") =>
-                {
-                    contended = true
+                Err(error) if is_transient_db_error(&error) => {
+                    let started = *transient_since.get_or_insert_with(tokio::time::Instant::now);
+                    if started.elapsed() >= max_transient_window {
+                        return format!(
+                            "execution renewal lost: resource={} owner={} generation={} epoch={} result=Err({error:?})",
+                            lease.resource, lease.owner, lease.generation, lease.epoch
+                        );
+                    }
+                    contended = true;
+                    had_transient = true;
                 }
                 result => {
                     return format!(
@@ -85,7 +108,17 @@ async fn renew(scope: Scope) -> String {
                 }
             }
         }
+        if !had_transient {
+            transient_since = None;
+        }
         if let Err(error) = observe_current(&scope).await {
+            if is_transient_db_error(&error) {
+                let started = *transient_since.get_or_insert_with(tokio::time::Instant::now);
+                if started.elapsed() < max_transient_window {
+                    tokio::time::sleep(Duration::from_millis(250)).await;
+                    continue;
+                }
+            }
             return format!("execution cancelled or ownership expired: {error}");
         }
         tokio::time::sleep(if contended {

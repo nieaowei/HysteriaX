@@ -120,15 +120,47 @@ pub(crate) async fn with_context<T, F: std::future::Future<Output = anyhow::Resu
     };
     let output = request(Some(context)).await?;
     let evidence = evidence(&output);
-    crate::db::write(&scope.pool, |tx| {
-        let (lease, operation, evidence) = (lease.clone(), operation.clone(), evidence.clone());
-        Box::pin(async move {
-            lease.verified(tx, &operation, &evidence).await?;
-            Ok::<_, anyhow::Error>(())
+    let mut attempt = 0_u32;
+    loop {
+        match crate::db::write(&scope.pool, |tx| {
+            let (lease, operation, evidence) = (lease.clone(), operation.clone(), evidence.clone());
+            Box::pin(async move {
+                lease.verified(tx, &operation, &evidence).await?;
+                Ok::<_, anyhow::Error>(())
+            })
         })
-    })
-    .await?;
+        .await
+        {
+            Ok(()) => break,
+            Err(error) if attempt < 5 && is_transient_anyhow_db_error(&error) => {
+                attempt += 1;
+                tracing::warn!(%error, attempt, %operation, "transient DB error verifying remote step; retrying");
+                tokio::time::sleep(std::time::Duration::from_millis(200 * u64::from(attempt))).await;
+            }
+            Err(error) => return Err(error),
+        }
+    }
     Ok(output)
+}
+
+fn is_transient_anyhow_db_error(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        let Some(db_err) = cause.downcast_ref::<sqlx::Error>() else {
+            return false;
+        };
+        match db_err {
+            sqlx::Error::Io(_) | sqlx::Error::Tls(_) | sqlx::Error::PoolTimedOut => true,
+            sqlx::Error::Database(db) => db.code().is_some_and(|code| {
+                code.starts_with("08")
+                    || code.starts_with("53")
+                    || matches!(
+                        code.as_ref(),
+                        "40001" | "40P01" | "55P03" | "57014" | "57P01" | "57P02" | "57P03"
+                    )
+            }),
+            _ => false,
+        }
+    })
 }
 
 #[cfg(test)]
