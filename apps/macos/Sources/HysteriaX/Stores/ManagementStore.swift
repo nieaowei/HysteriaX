@@ -33,17 +33,35 @@ final class ManagementStore {
     var requestedSection: String?
     var requestedJobID: String?
 
-    var dnsConnections: [DNSConnection] = []
-    var dnsZones: [DNSZone] = []
-    var dnsRecords: [DNSRecord] = []
+    var dnsConnections: [DNSConnection] = [] {
+        didSet { dnsConnectionsByID = Dictionary(dnsConnections.map { ($0.id, $0) }, uniquingKeysWith: { _, latest in latest }) }
+    }
+    var dnsZones: [DNSZone] = [] {
+        didSet { dnsZonesByID = Dictionary(dnsZones.map { ($0.id, $0) }, uniquingKeysWith: { _, latest in latest }) }
+    }
+    var dnsRecords: [DNSRecord] = [] {
+        didSet { dnsRecordsByID = Dictionary(dnsRecords.map { ($0.id, $0) }, uniquingKeysWith: { _, latest in latest }) }
+    }
     var dnsUpdatedAt: Date?
     var dnsError: String?
     var dnsIsLoading = false
     var dnsRequestGeneration = UUID()
     var requestedDNSRecordID: String?
-    var credentials: [CredentialSummary] = []
-    var nodes: [NodeSummary] = []
-    var users: [UserSummary] = []
+    var credentials: [CredentialSummary] = [] {
+        didSet { credentialsByID = Dictionary(credentials.map { ($0.id, $0) }, uniquingKeysWith: { _, latest in latest }) }
+    }
+    var nodes: [NodeSummary] = [] {
+        didSet { nodesByID = Dictionary(nodes.map { ($0.id, $0) }, uniquingKeysWith: { _, latest in latest }) }
+    }
+    var users: [UserSummary] = [] {
+        didSet { usersByID = Dictionary(users.map { ($0.id, $0) }, uniquingKeysWith: { _, latest in latest }) }
+    }
+    @ObservationIgnored private var dnsConnectionsByID: [String: DNSConnection] = [:]
+    @ObservationIgnored private var dnsZonesByID: [String: DNSZone] = [:]
+    @ObservationIgnored private var dnsRecordsByID: [String: DNSRecord] = [:]
+    @ObservationIgnored private var credentialsByID: [String: CredentialSummary] = [:]
+    @ObservationIgnored private var nodesByID: [String: NodeSummary] = [:]
+    @ObservationIgnored private var usersByID: [String: UserSummary] = [:]
     var authorizationGroups: [AuthorizationGroupSummary] = []
     var authorizationGroupsError: String?
     var isLoadingAuthorizationGroups = false
@@ -906,8 +924,39 @@ final class ManagementStore {
         for directory in directories { await prepareDirectory(directory) }
     }
 
-    func prepareNode(_ id: String?) async {
+    func node(for id: String) -> NodeSummary? {
+        _ = nodes.isEmpty
+        return nodesByID[id]
+    }
+
+    func user(for id: String) -> UserSummary? {
+        _ = users.isEmpty
+        return usersByID[id]
+    }
+
+    func credential(for id: String) -> CredentialSummary? {
+        _ = credentials.isEmpty
+        return credentialsByID[id]
+    }
+
+    func dnsZone(for id: String) -> DNSZone? {
+        _ = dnsZones.isEmpty
+        return dnsZonesByID[id]
+    }
+
+    func dnsConnection(for id: String) -> DNSConnection? {
+        _ = dnsConnections.isEmpty
+        return dnsConnectionsByID[id]
+    }
+
+    func dnsRecord(for id: String) -> DNSRecord? {
+        _ = dnsRecords.isEmpty
+        return dnsRecordsByID[id]
+    }
+
+    func prepareNode(_ id: String?, force: Bool = false) async {
         guard let id else { return }
+        if !force, node(for: id) != nil { return }
         do {
             let generation = serviceGeneration
             let detail = try await nodeDetail(id)
@@ -1021,13 +1070,17 @@ final class ManagementStore {
 }
 
 extension ManagementStore {
+    private static func encodedCacheKey(_ parts: [String]) -> String {
+        parts.map { "\($0.utf8.count):\($0)" }.joined(separator: "|")
+    }
+
     func listPageKey(_ fields: [String]) -> String {
-        String(data: try! JSONEncoder().encode([listCacheSession.uuidString, serviceAddress, L10n.locale.identifier] + fields), encoding: .utf8)!
+        Self.encodedCacheKey([listCacheSession.uuidString, serviceAddress, L10n.locale.identifier] + fields)
     }
 
     private func listCacheKey<Value>(_ key: String, as: Value.Type) -> String {
         // Encode fields independently so delimiters in a search cannot alias another query.
-        String(data: try! JSONEncoder().encode([serviceAddress, L10n.locale.identifier, String(reflecting: Value.self), key]), encoding: .utf8)!
+        Self.encodedCacheKey([serviceAddress, L10n.locale.identifier, String(reflecting: Value.self), key])
     }
 
     func cachedListPage<Value: Decodable>(_ key: String, as: Value.Type) -> Value? {
@@ -1038,7 +1091,7 @@ extension ManagementStore {
         _ operation: APIOperation<NoRequest, Value>, cacheKey: String?, ttl: TimeInterval, revalidate: Bool = false
     ) async throws -> Value {
         let client = try requireConnectedAPI()
-        let requestKey = String(data: try JSONEncoder().encode([operation.path] + operation.queryParameters.sorted(by: { $0.key < $1.key }).flatMap { [$0.key, $0.value] }), encoding: .utf8)!
+        let requestKey = Self.encodedCacheKey([operation.path] + operation.queryParameters.sorted(by: { $0.key < $1.key }).flatMap { [$0.key, $0.value] })
         return try await listPageCache.load(listCacheKey(cacheKey ?? requestKey, as: Value.self), ttl: ttl, revalidate: revalidate) { bypassCache in
             try await client.get(operation, bypassCache: bypassCache)
         }

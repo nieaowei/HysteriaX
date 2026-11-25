@@ -61,9 +61,6 @@ private struct UserDirectoryView: View {
     @State private var showingDeleteConfirmation = false
     @State private var alertTitle = ""
     @State private var alertMessage: String?
-    @State private var selectedUsage: UserUsageResponse?
-    @State private var usageErrorMessage: String?
-    @State private var usageLoadingUserID: String?
 
     @State private var pageResponse: UsersPage?
     @State private var loadedPageKey: String?
@@ -80,7 +77,7 @@ private struct UserDirectoryView: View {
     private var pageCount: Int { max(1, (totalUsers + pageState.userPageSize - 1) / pageState.userPageSize) }
     private var currentPage: Int { store.isConnected ? pageState.userPage : min(pageState.userPage, pageCount) }
     private var selectedUser: UserSummary? {
-        store.users.first { $0.id == pageState.selectedUserID } ?? visibleUsers.first { $0.id == pageState.selectedUserID }
+        pageState.selectedUserID.flatMap { store.user(for: $0) } ?? visibleUsers.first { $0.id == pageState.selectedUserID }
     }
 
     private var snapshotUsers: [UserSummary] {
@@ -155,10 +152,24 @@ private struct UserDirectoryView: View {
             }
         } detail: {
             if let user = selectedUser {
-                userDetailPane(user)
-                    .id(user.id)
-                    .accessibilityElement(children: .contain)
-                    .accessibilityIdentifier("users.detail")
+                UserDetailPane(
+                    store: store,
+                    user: user,
+                    onOpenAuthorizationGroup: onOpenAuthorizationGroup,
+                    onManageGroups: { membershipUser = user },
+                    onManageCertificates: { certificateUser = user },
+                    onOpenSubscription: { subscriptionUser = user },
+                    onCopySubscription: { format in copyCurrentSubscription(user, format: format) },
+                    onEdit: { showingEditUser = true },
+                    onRotateCredentials: { rotateCredentials(user) },
+                    onResetQuota: { resetQuota(user) },
+                    onToggleEnabled: { setEnabled(!user.enabled, for: user) },
+                    onDelete: { showingDeleteConfirmation = true },
+                    onClose: { pageState.selectedUserID = nil }
+                )
+                .id(user.id)
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("users.detail")
             }
         }
         .toolbar {
@@ -179,23 +190,6 @@ private struct UserDirectoryView: View {
         }
         .task(id: pageRequestKey) { await loadPage() }
         .onDisappear { loadedPageKey = nil }
-        .onChange(of: pageState.selectedUserID) { _, _ in
-            selectedUsage = nil
-            usageErrorMessage = nil
-            usageLoadingUserID = nil
-        }
-        .task(id: "\(store.serviceAddress)|\(pageState.selectedUserID ?? "")|\(store.isConnected)") {
-            guard store.isConnected, let selectedUserID = pageState.selectedUserID else {
-                selectedUsage = nil
-                usageErrorMessage = nil
-                usageLoadingUserID = nil
-                return
-            }
-            while !Task.isCancelled {
-                await loadUsage(selectedUserID)
-                try? await Task.sleep(for: .seconds(15))
-            }
-        }
         .sheet(isPresented: $showingAddUser, onDismiss: openCreatedUserGroups) {
             UserFormView(store: store) { userID in
                 pageState.selectedUserID = userID
@@ -258,243 +252,11 @@ private struct UserDirectoryView: View {
         guard let userID = pendingCreatedUserID else { return }
         pendingCreatedUserID = nil
         Task { @MainActor in
-            var user = store.users.first { $0.id == userID }
+            var user = store.user(for: userID)
             if user == nil { user = try? await store.userSummary(userID) }
             guard let user else { return }
             membershipUser = user
         }
-    }
-
-    private func userDetailPane(_ user: UserSummary) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            DetailHeaderBar {
-                VStack(alignment: .leading, spacing: 14) {
-                    DetailHeaderLayout {
-                        userDetailTitle(user)
-                        userDetailActions(user)
-                    }
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), alignment: .leading)], alignment: .leading, spacing: 12) {
-                        userMetric(L10n.text("已用流量"), value: formatBytes(user.usageBytes))
-                        userMetric(L10n.text("流量额度"), value: user.quotaBytes.map(formatBytes) ?? L10n.text("不限"))
-                        userMetric(L10n.text("到期时间"), value: user.expiresAt.map { DateDisplayText.local($0) } ?? L10n.text("不限"))
-                        userMetric(L10n.text("有效节点"), value: L10n.text("{0} 个", String(describing: (user.assignments.count))))
-                    }
-                }
-            }
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    OverviewColumnsLayout(wideColumns: 2, wideMinimum: 576, narrowColumns: 1) {
-                        userQuota(user)
-                        VStack(alignment: .leading, spacing: 16) {
-                            userAuthorizationGroups(user)
-                            userAssignments(user)
-                        }
-                    }
-                    if store.isConnected, let usage = selectedUsage, usage.userId == user.id,
-                       let pending = usage.pendingRevocations, !pending.isEmpty {
-                        GroupBox {
-                            VStack(alignment: .leading, spacing: 10) {
-                                ForEach(pending, id: \.jobId) { item in
-                                    HStack(alignment: .top, spacing: 12) {
-                                        VStack(alignment: .leading, spacing: 4) {
-                                            Text(nodeDisplayName(item.nodeID)).font(.callout.weight(.medium))
-                                            Text(pendingRevocationLabel(item))
-                                                .font(.caption)
-                                                .foregroundStyle(item.status == "failed" ? Color.red : Color.orange)
-                                        }
-                                        Spacer(minLength: 8)
-                                        Text(DateDisplayText.local(item.updatedAt)).font(.caption).foregroundStyle(.secondary)
-                                    }
-                                }
-                            }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.vertical, 4)
-                        } label: {
-                            Label(L10n.text("待撤权任务（{0}）", String(describing: (pending.count))), systemImage: "hourglass")
-                        }
-                    }
-                    DisclosureGroup(L10n.text("用户记录")) {
-                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 200), alignment: .leading)], alignment: .leading, spacing: 12) {
-                            userMetric(L10n.text("用户 ID"), value: user.id, copyable: true)
-                            userMetric(L10n.text("创建时间"), value: DateDisplayText.local(user.createdAt))
-                            userMetric(L10n.text("更新时间"), value: DateDisplayText.local(user.updatedAt))
-                        }
-                        .padding(.top, 8)
-                    }
-                }
-                .padding(16)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-        }
-        .task(id: "\(user.id):\(store.dataRefreshToken)") {
-            for assignment in user.assignments { await store.prepareNode(assignment.nodeID) }
-        }
-    }
-
-    private func userDetailTitle(_ user: UserSummary) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(alignment: .firstTextBaseline, spacing: 10) {
-                Text(user.name).font(.headline).lineLimit(2).textSelection(.enabled)
-                StatusBadge(
-                    user.enabled ? L10n.text("启用") : L10n.text("已停用"),
-                    tone: user.enabled ? .positive : .neutral
-                )
-            }
-            Text(L10n.text("{0} 个节点", String(describing: (user.assignments.count))))
-                .font(.caption).foregroundStyle(.secondary)
-                .accessibilityLabel(L10n.text("{0} · {1} 个节点", String(describing: (user.name)), String(describing: (user.assignments.count))))
-                .accessibilityIdentifier("user.selected.summary")
-        }
-    }
-
-    private func userDetailActions(_ user: UserSummary) -> some View {
-        HStack(spacing: 8) {
-            HStack(spacing: 8) {
-                Button(L10n.text("管理授权组…"), systemImage: "person.3") { membershipUser = user }
-                    .accessibilityIdentifier("users.manageAuthorizationGroups")
-
-                Button(L10n.text("托管证书…"), systemImage: "checkmark.shield") { certificateUser = user }
-                    .accessibilityIdentifier("users.managedCertificates")
-                Menu(L10n.text("订阅")) {
-                    Button(L10n.text("选择模板与目标平台…")) { subscriptionUser = user }
-                        .accessibilityIdentifier("users.subscription.copy")
-                    ForEach([SubscriptionFileFormat.uri, .base64], id: \.rawValue) { format in
-                        Button(format.title) { copyCurrentSubscription(user, format: format) }
-                    }
-                }
-                .accessibilityLabel(L10n.text("订阅"))
-                .accessibilityIdentifier("users.subscriptionMenu")
-                Menu(L10n.text("用户")) {
-                    Button(L10n.text("编辑用户…")) { showingEditUser = true }
-                        .accessibilityLabel(L10n.text("编辑用户"))
-                        .accessibilityIdentifier("users.actions.edit")
-                    Button(L10n.text("轮换连接与订阅凭据")) { rotateCredentials(user) }
-                        .accessibilityLabel(L10n.text("轮换连接与订阅凭据"))
-                        .accessibilityIdentifier("users.actions.rotateCredentials")
-                    Button(L10n.text("重置额度")) { resetQuota(user) }
-                        .accessibilityLabel(L10n.text("重置额度"))
-                        .accessibilityIdentifier("users.actions.resetQuota")
-                    Button(user.enabled ? L10n.text("停用") : L10n.text("启用")) { setEnabled(!user.enabled, for: user) }
-                        .accessibilityLabel(user.enabled ? L10n.text("停用") : L10n.text("启用"))
-                        .accessibilityIdentifier("users.actions.toggleEnabled")
-                    Divider()
-                    Button(L10n.text("删除用户…"), role: .destructive) { showingDeleteConfirmation = true }
-                        .foregroundStyle(.red)
-                        .accessibilityLabel(L10n.text("删除用户"))
-                        .accessibilityIdentifier("users.actions.delete")
-                }
-                .accessibilityLabel(L10n.text("用户操作"))
-                .accessibilityIdentifier("users.actionsMenu")
-            }
-            .disabled(!store.isConnected)
-            Divider().frame(height: 16)
-            DetailCloseButton { pageState.selectedUserID = nil }
-        }
-        .fixedSize()
-    }
-
-    private func userQuota(_ user: UserSummary) -> some View {
-        GroupBox {
-            VStack(alignment: .leading, spacing: 14) {
-                QuotaProgressView(usageBytes: user.usageBytes, quotaBytes: user.quotaBytes)
-                userMetric(L10n.text("额度周期开始"), value: DateDisplayText.local(user.quotaResetAt))
-                Divider()
-                usageStatus(for: user)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.vertical, 4)
-        } label: {
-            Label(L10n.text("额度与采样"), systemImage: "chart.bar")
-        }
-    }
-
-    private func userAssignments(_ user: UserSummary) -> some View {
-        GroupBox {
-            VStack(alignment: .leading, spacing: 0) {
-                if user.assignments.isEmpty {
-                    Text(L10n.text("尚未获得节点访问权限")).foregroundStyle(.secondary).padding(.vertical, 8)
-                }
-                ForEach(Array(user.assignments.enumerated()), id: \.element.nodeID) { index, assignment in
-                    if index > 0 { Divider() }
-                    HStack(alignment: .top, spacing: 12) {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(nodeDisplayName(assignment.nodeID)).font(.callout.weight(.medium))
-                            Text((assignment.managedIdentityIds ?? []).isEmpty ? L10n.text("连接密码") : L10n.text("托管 mTLS"))
-                                .font(.caption).foregroundStyle(.secondary)
-                            if let groups = assignment.sourceGroups, !groups.isEmpty {
-                                HStack(spacing: 6) {
-                                    Text(L10n.text("来源组"))
-                                        .font(.caption).foregroundStyle(.secondary)
-                                    ForEach(groups, id: \.id) { group in
-                                        Button(group.name) { onOpenAuthorizationGroup(group.id) }
-                                            .buttonStyle(.link)
-                                            .font(.caption)
-                                            .accessibilityIdentifier("users.assignment.sourceGroup.\(group.id)")
-                                    }
-                                }
-                            }
-                            Text(L10n.text("分配于 {0}", String(describing: (DateDisplayText.local(assignment.createdAt)))))
-                                .font(.caption).foregroundStyle(.secondary)
-                        }
-                        Spacer(minLength: 8)
-                    }
-                    .padding(.vertical, 8)
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-        } label: {
-            Label(L10n.text("有效节点（{0}）", String(describing: (user.assignments.count))), systemImage: "server.rack")
-        }
-    }
-
-    private func userAuthorizationGroups(_ user: UserSummary) -> some View {
-        GroupBox {
-            let groups = user.authorizationGroups ?? []
-            VStack(alignment: .leading, spacing: 8) {
-                if groups.isEmpty {
-                    Text(L10n.text("用户尚未加入授权组。"))
-                        .foregroundStyle(.secondary)
-                } else {
-                    ForEach(groups, id: \.id) { group in
-                        Button {
-                            onOpenAuthorizationGroup(group.id)
-                        } label: {
-                            HStack(spacing: 8) {
-                                Image(systemName: "person.3")
-                                Text(group.name)
-                                Spacer()
-                                Image(systemName: "arrow.up.right")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityIdentifier("users.authorizationGroup.\(group.id)")
-                    }
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.vertical, 4)
-        } label: {
-            Label(L10n.text("所属授权组（{0}）", String(describing: (user.authorizationGroups?.count ?? 0))), systemImage: "person.3")
-        }
-    }
-
-    private func userMetric(_ title: String, value: String, copyable: Bool = false) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title).font(.caption).foregroundStyle(.secondary)
-            HStack(spacing: 4) {
-                Text(value).font(.callout).textSelection(.enabled)
-                if copyable {
-                    CopyActionButton(value: value, toast: store.toast)
-                }
-            }
-        }
-    }
-
-    private func formatBytes(_ bytes: Int64) -> String {
-        TrafficUnits.display(bytes)
     }
 
     private func copyCurrentSubscription(_ user: UserSummary, format: SubscriptionFileFormat? = nil) {
@@ -578,8 +340,287 @@ private struct UserDirectoryView: View {
         }
     }
 
+    private func copy(_ value: String, message: String, tone: StatusTone = .positive, duration: Duration = .seconds(3.5)) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(value, forType: .string)
+        store.toast.show(
+            L10n.text("已复制到剪贴板"),
+            detail: message,
+            tone: tone,
+            symbol: "doc.on.doc",
+            duration: duration
+        )
+    }
+
+    private func showError(_ error: Error) {
+        alertTitle = L10n.text("操作失败")
+        alertMessage = error.localizedDescription
+    }
+}
+
+private struct UserDetailPane: View {
+    @Bindable var store: ManagementStore
+    let user: UserSummary
+    var onOpenAuthorizationGroup: (String) -> Void
+    var onManageGroups: () -> Void
+    var onManageCertificates: () -> Void
+    var onOpenSubscription: () -> Void
+    var onCopySubscription: (SubscriptionFileFormat) -> Void
+    var onEdit: () -> Void
+    var onRotateCredentials: () -> Void
+    var onResetQuota: () -> Void
+    var onToggleEnabled: () -> Void
+    var onDelete: () -> Void
+    var onClose: () -> Void
+
+    @State private var selectedUsage: UserUsageResponse?
+    @State private var usageErrorMessage: String?
+    @State private var usageLoadingUserID: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            DetailHeaderBar {
+                VStack(alignment: .leading, spacing: 14) {
+                    DetailHeaderLayout {
+                        userDetailTitle
+                        userDetailActions
+                    }
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), alignment: .leading)], alignment: .leading, spacing: 12) {
+                        userMetric(L10n.text("已用流量"), value: TrafficUnits.display(user.usageBytes))
+                        userMetric(L10n.text("流量额度"), value: user.quotaBytes.map(TrafficUnits.display) ?? L10n.text("不限"))
+                        userMetric(L10n.text("到期时间"), value: user.expiresAt.map { DateDisplayText.local($0) } ?? L10n.text("不限"))
+                        userMetric(L10n.text("有效节点"), value: L10n.text("{0} 个", String(describing: (user.assignments.count))))
+                    }
+                }
+            }
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    OverviewColumnsLayout(wideColumns: 2, wideMinimum: 576, narrowColumns: 1) {
+                        userQuota
+                        VStack(alignment: .leading, spacing: 16) {
+                            userAuthorizationGroups
+                            userAssignments
+                        }
+                    }
+                    if store.isConnected, let usage = selectedUsage, usage.userId == user.id,
+                       let pending = usage.pendingRevocations, !pending.isEmpty {
+                        GroupBox {
+                            VStack(alignment: .leading, spacing: 10) {
+                                ForEach(pending, id: \.jobId) { item in
+                                    HStack(alignment: .top, spacing: 12) {
+                                        VStack(alignment: .leading, spacing: 4) {
+                                            Text(nodeDisplayName(item.nodeID)).font(.callout.weight(.medium))
+                                            Text(pendingRevocationLabel(item))
+                                                .font(.caption)
+                                                .foregroundStyle(item.status == "failed" ? Color.red : Color.orange)
+                                        }
+                                        Spacer(minLength: 8)
+                                        Text(DateDisplayText.local(item.updatedAt)).font(.caption).foregroundStyle(.secondary)
+                                    }
+                                }
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.vertical, 4)
+                        } label: {
+                            Label(L10n.text("待撤权任务（{0}）", String(describing: (pending.count))), systemImage: "hourglass")
+                        }
+                    }
+                    DisclosureGroup(L10n.text("用户记录")) {
+                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 200), alignment: .leading)], alignment: .leading, spacing: 12) {
+                            userMetric(L10n.text("用户 ID"), value: user.id, copyable: true)
+                            userMetric(L10n.text("创建时间"), value: DateDisplayText.local(user.createdAt))
+                            userMetric(L10n.text("更新时间"), value: DateDisplayText.local(user.updatedAt))
+                        }
+                        .padding(.top, 8)
+                    }
+                }
+                .padding(16)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .task(id: "\(user.id):\(store.dataRefreshToken)") {
+            for assignment in user.assignments where store.node(for: assignment.nodeID) == nil {
+                await store.prepareNode(assignment.nodeID)
+            }
+        }
+        .task(id: "\(store.serviceAddress)|\(user.id)|\(store.isConnected)") {
+            guard store.isConnected else {
+                selectedUsage = nil
+                usageErrorMessage = nil
+                usageLoadingUserID = nil
+                return
+            }
+            while !Task.isCancelled {
+                await loadUsage(user.id)
+                try? await Task.sleep(for: .seconds(15))
+            }
+        }
+    }
+
+    private var userDetailTitle: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                Text(user.name).font(.headline).lineLimit(2).textSelection(.enabled)
+                StatusBadge(
+                    user.enabled ? L10n.text("启用") : L10n.text("已停用"),
+                    tone: user.enabled ? .positive : .neutral
+                )
+            }
+            Text(L10n.text("{0} 个节点", String(describing: (user.assignments.count))))
+                .font(.caption).foregroundStyle(.secondary)
+                .accessibilityLabel(L10n.text("{0} · {1} 个节点", String(describing: (user.name)), String(describing: (user.assignments.count))))
+                .accessibilityIdentifier("user.selected.summary")
+        }
+    }
+
+    private var userDetailActions: some View {
+        HStack(spacing: 8) {
+            HStack(spacing: 8) {
+                Button(L10n.text("管理授权组…"), systemImage: "person.3", action: onManageGroups)
+                    .accessibilityIdentifier("users.manageAuthorizationGroups")
+
+                Button(L10n.text("托管证书…"), systemImage: "checkmark.shield", action: onManageCertificates)
+                    .accessibilityIdentifier("users.managedCertificates")
+                Menu(L10n.text("订阅")) {
+                    Button(L10n.text("选择模板与目标平台…"), action: onOpenSubscription)
+                        .accessibilityIdentifier("users.subscription.copy")
+                    ForEach([SubscriptionFileFormat.uri, .base64], id: \.rawValue) { format in
+                        Button(format.title) { onCopySubscription(format) }
+                    }
+                }
+                .accessibilityLabel(L10n.text("订阅"))
+                .accessibilityIdentifier("users.subscriptionMenu")
+                Menu(L10n.text("用户")) {
+                    Button(L10n.text("编辑用户…"), action: onEdit)
+                        .accessibilityLabel(L10n.text("编辑用户"))
+                        .accessibilityIdentifier("users.actions.edit")
+                    Button(L10n.text("轮换连接与订阅凭据"), action: onRotateCredentials)
+                        .accessibilityLabel(L10n.text("轮换连接与订阅凭据"))
+                        .accessibilityIdentifier("users.actions.rotateCredentials")
+                    Button(L10n.text("重置额度"), action: onResetQuota)
+                        .accessibilityLabel(L10n.text("重置额度"))
+                        .accessibilityIdentifier("users.actions.resetQuota")
+                    Button(user.enabled ? L10n.text("停用") : L10n.text("启用"), action: onToggleEnabled)
+                        .accessibilityLabel(user.enabled ? L10n.text("停用") : L10n.text("启用"))
+                        .accessibilityIdentifier("users.actions.toggleEnabled")
+                    Divider()
+                    Button(L10n.text("删除用户…"), role: .destructive, action: onDelete)
+                        .foregroundStyle(.red)
+                        .accessibilityLabel(L10n.text("删除用户"))
+                        .accessibilityIdentifier("users.actions.delete")
+                }
+                .accessibilityLabel(L10n.text("用户操作"))
+                .accessibilityIdentifier("users.actionsMenu")
+            }
+            .disabled(!store.isConnected)
+            Divider().frame(height: 16)
+            DetailCloseButton(action: onClose)
+        }
+        .fixedSize()
+    }
+
+    private var userQuota: some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 14) {
+                QuotaProgressView(usageBytes: user.usageBytes, quotaBytes: user.quotaBytes)
+                userMetric(L10n.text("额度周期开始"), value: DateDisplayText.local(user.quotaResetAt))
+                Divider()
+                usageStatus
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 4)
+        } label: {
+            Label(L10n.text("额度与采样"), systemImage: "chart.bar")
+        }
+    }
+
+    private var userAssignments: some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 0) {
+                if user.assignments.isEmpty {
+                    Text(L10n.text("尚未获得节点访问权限")).foregroundStyle(.secondary).padding(.vertical, 8)
+                }
+                ForEach(Array(user.assignments.enumerated()), id: \.element.nodeID) { index, assignment in
+                    if index > 0 { Divider() }
+                    HStack(alignment: .top, spacing: 12) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(nodeDisplayName(assignment.nodeID)).font(.callout.weight(.medium))
+                            Text((assignment.managedIdentityIds ?? []).isEmpty ? L10n.text("连接密码") : L10n.text("托管 mTLS"))
+                                .font(.caption).foregroundStyle(.secondary)
+                            if let groups = assignment.sourceGroups, !groups.isEmpty {
+                                HStack(spacing: 6) {
+                                    Text(L10n.text("来源组"))
+                                        .font(.caption).foregroundStyle(.secondary)
+                                    ForEach(groups, id: \.id) { group in
+                                        Button(group.name) { onOpenAuthorizationGroup(group.id) }
+                                            .buttonStyle(.link)
+                                            .font(.caption)
+                                            .accessibilityIdentifier("users.assignment.sourceGroup.\(group.id)")
+                                    }
+                                }
+                            }
+                            Text(L10n.text("分配于 {0}", String(describing: (DateDisplayText.local(assignment.createdAt)))))
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                        Spacer(minLength: 8)
+                    }
+                    .padding(.vertical, 8)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        } label: {
+            Label(L10n.text("有效节点（{0}）", String(describing: (user.assignments.count))), systemImage: "server.rack")
+        }
+    }
+
+    private var userAuthorizationGroups: some View {
+        GroupBox {
+            let groups = user.authorizationGroups ?? []
+            VStack(alignment: .leading, spacing: 8) {
+                if groups.isEmpty {
+                    Text(L10n.text("用户尚未加入授权组。"))
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(groups, id: \.id) { group in
+                        Button {
+                            onOpenAuthorizationGroup(group.id)
+                        } label: {
+                            HStack(spacing: 8) {
+                                Image(systemName: "person.3")
+                                Text(group.name)
+                                Spacer()
+                                Image(systemName: "arrow.up.right")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier("users.authorizationGroup.\(group.id)")
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 4)
+        } label: {
+            Label(L10n.text("所属授权组（{0}）", String(describing: (user.authorizationGroups?.count ?? 0))), systemImage: "person.3")
+        }
+    }
+
+    private func userMetric(_ title: String, value: String, copyable: Bool = false) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title).font(.caption).foregroundStyle(.secondary)
+            HStack(spacing: 4) {
+                Text(value).font(.callout).textSelection(.enabled)
+                if copyable {
+                    CopyActionButton(value: value, toast: store.toast)
+                }
+            }
+        }
+    }
+
     @ViewBuilder
-    private func usageStatus(for user: UserSummary) -> some View {
+    private var usageStatus: some View {
         if !store.isConnected {
             Text(L10n.text("离线时无法刷新采样和待撤权状态。"))
                 .font(.caption)
@@ -635,11 +676,11 @@ private struct UserDirectoryView: View {
         usageErrorMessage = nil
         do {
             let response = try await store.userUsage(userID)
-            guard !Task.isCancelled, pageState.selectedUserID == userID, store.serviceAddress == service else { return }
+            guard !Task.isCancelled, user.id == userID, store.serviceAddress == service else { return }
             selectedUsage = response
             usageLoadingUserID = nil
         } catch {
-            guard !Task.isCancelled, pageState.selectedUserID == userID, store.serviceAddress == service else { return }
+            guard !Task.isCancelled, user.id == userID, store.serviceAddress == service else { return }
             usageErrorMessage = error.localizedDescription
             usageLoadingUserID = nil
         }
@@ -672,24 +713,7 @@ private struct UserDirectoryView: View {
     }
 
     private func nodeDisplayName(_ nodeID: String) -> String {
-        store.nodes.first(where: { $0.id == nodeID })?.name ?? String(nodeID.prefix(8))
-    }
-
-    private func copy(_ value: String, message: String, tone: StatusTone = .positive, duration: Duration = .seconds(3.5)) {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(value, forType: .string)
-        store.toast.show(
-            L10n.text("已复制到剪贴板"),
-            detail: message,
-            tone: tone,
-            symbol: "doc.on.doc",
-            duration: duration
-        )
-    }
-
-    private func showError(_ error: Error) {
-        alertTitle = L10n.text("操作失败")
-        alertMessage = error.localizedDescription
+        store.node(for: nodeID)?.name ?? String(nodeID.prefix(8))
     }
 }
 

@@ -45,7 +45,7 @@ struct DNSRecordsView: View {
         return Array(snapshotRecords.dropFirst((currentPage - 1) * pageSize).prefix(pageSize))
     }
     private var selected: DNSRecord? {
-        let cached = store.dnsRecords.first { $0.id == selection }
+        let cached = selection.flatMap { store.dnsRecord(for: $0) }
         let paged = currentPageResponse?.items.first { $0.id == selection }
         guard let cached else { return paged }
         if let paged, paged.revision > cached.revision || (paged.revision == cached.revision && (DateDisplayText.parse(paged.updatedAt) ?? .distantPast) > (DateDisplayText.parse(cached.updatedAt) ?? .distantPast)) { return paged }
@@ -158,7 +158,7 @@ struct DNSRecordsView: View {
                 .help(record.content)
             }.width(min: 100, ideal: 240, max: .infinity)
             TableColumn(L10n.text("节点")) { record in
-                let name = record.boundNodeId.flatMap { id in store.nodes.first { $0.id == id }?.name } ?? "—"
+                let name = record.boundNodeId.flatMap { store.node(for: $0)?.name } ?? "—"
                 Text(name).lineLimit(1).help(name)
             }.width(min: 60, ideal: 76)
             TableColumn(L10n.text("状态")) { record in
@@ -239,12 +239,12 @@ struct DNSRecordsView: View {
         }.onChange(of: connectionID) { _, _ in zoneID = "" }
     }
     private func detail(_ record: DNSRecord) -> some View {
-        let zone = store.dnsZones.first { $0.id == record.zoneId }
-        let connection = store.dnsConnections.first { $0.id == zone?.connectionId }
+        let zone = store.dnsZone(for: record.zoneId)
+        let connection = zone.flatMap { store.dnsConnection(for: $0.connectionId) }
         let failedJob = store.jobs.first { $0.resourceId == record.id && $0.status == "failed" && $0.retryJobId == nil }
         return DNSRecordDetailView(
             record: record, zone: zone, connection: connection,
-            node: store.nodes.first { $0.id == record.boundNodeId }, failedJob: failedJob,
+            node: record.boundNodeId.flatMap { store.node(for: $0) }, failedJob: failedJob,
             isConnected: store.isConnected, busy: busy,
             onEdit: { editing = record },
             onCheck: {

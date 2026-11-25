@@ -7,11 +7,13 @@ final class DateDisplayParser: @unchecked Sendable {
     private let fractional = ISO8601DateFormatter()
     private let standard = ISO8601DateFormatter()
     private let cache = NSCache<NSString, NSDate>()
+    private let formattedCache = NSCache<NSString, NSString>()
 
     private init() {
         fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         standard.formatOptions = [.withInternetDateTime]
         cache.countLimit = 2048
+        formattedCache.countLimit = 4096
     }
 
     func parse(_ value: String?) -> Date? {
@@ -22,6 +24,33 @@ final class DateDisplayParser: @unchecked Sendable {
         guard let date = fractional.date(from: value) ?? standard.date(from: value) else { return nil }
         cache.setObject(date as NSDate, forKey: value as NSString)
         return date
+    }
+
+    func local(_ value: String?, language: String, timeZoneIdentifier: String) -> String {
+        guard let value else { return "—" }
+        let cacheKey = "\(language)|\(timeZoneIdentifier)|\(value)" as NSString
+        lock.lock()
+        if let cached = formattedCache.object(forKey: cacheKey) {
+            lock.unlock()
+            return cached as String
+        }
+        let parsedDate: Date?
+        if let cachedDate = cache.object(forKey: value as NSString) {
+            parsedDate = cachedDate as Date
+        } else if let date = fractional.date(from: value) ?? standard.date(from: value) {
+            cache.setObject(date as NSDate, forKey: value as NSString)
+            parsedDate = date
+        } else {
+            parsedDate = nil
+        }
+        lock.unlock()
+
+        guard let date = parsedDate else { return value }
+        let formatted = date.formatted(Date.FormatStyle(date: .abbreviated, time: .shortened).locale(Locale(identifier: language)))
+        lock.lock()
+        formattedCache.setObject(formatted as NSString, forKey: cacheKey)
+        lock.unlock()
+        return formatted
     }
 }
 

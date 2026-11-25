@@ -10,14 +10,20 @@ func isRequestCancellation(_ error: Error) -> Bool {
 @MainActor
 @Observable
 final class ListPageCache {
+    private struct CacheTypeMismatchError: Error {}
+    private struct Payload: Sendable {
+        let value: any Sendable
+        let byteCount: Int
+    }
     private struct Entry {
-        let data: Data
+        let value: any Sendable
+        let byteCount: Int
         var expiresAt: Date
         var accessedAt: Date
     }
     private struct Flight {
         let id: UUID
-        let task: Task<Data, Error>
+        let task: Task<Payload, Error>
     }
     @ObservationIgnored private var entries: [String: Entry] = [:]
     @ObservationIgnored private var flights: [String: Flight] = [:]
@@ -35,8 +41,7 @@ final class ListPageCache {
 
     func peek<Value: Decodable>(_ key: String, as: Value.Type) -> Value? {
         _ = revision
-        guard let entry = entries[key] else { return nil }
-        return try? JSONDecoder().decode(Value.self, from: entry.data)
+        return entries[key]?.value as? Value
     }
 
     /// Keep stale results visible while preventing an old flight from refilling them.
@@ -61,7 +66,7 @@ final class ListPageCache {
         _ key: String, ttl: TimeInterval, revalidate: Bool = false,
         fetch: @escaping @MainActor @Sendable (Bool) async throws -> Value
     ) async throws -> Value {
-        if !revalidate, let entry = entries[key], entry.expiresAt > now(), let value = peek(key, as: Value.self) {
+        if !revalidate, let entry = entries[key], entry.expiresAt > now(), let value = entry.value as? Value {
             entries[key]?.accessedAt = now()
             return value
         }
@@ -70,17 +75,21 @@ final class ListPageCache {
         if let existing = flights[key] { flight = existing }
         else {
             let bypassCache = (revalidate && entries[key] != nil) || entries[key]?.expiresAt == .distantPast
-            flight = Flight(id: UUID(), task: Task { try JSONEncoder().encode(try await fetch(bypassCache)) })
+            flight = Flight(id: UUID(), task: Task {
+                let value = try await fetch(bypassCache)
+                let byteCount = try JSONEncoder().encode(value).count
+                return Payload(value: value, byteCount: byteCount)
+            })
             flights[key] = flight
         }
         do {
-            let data = try await flight.task.value
+            let payload = try await flight.task.value
             guard generation == capturedGeneration, !flight.task.isCancelled else { throw CancellationError() }
             if flights[key]?.id == flight.id {
                 flights.removeValue(forKey: key)
-                if data.count <= min(maxBytes, 2 * 1024 * 1024) {
-                    entries[key] = Entry(data: data, expiresAt: now().addingTimeInterval(ttl), accessedAt: now())
-                    while entries.count > maxEntries || entries.values.reduce(0, { $0 + $1.data.count }) > maxBytes {
+                if payload.byteCount <= min(maxBytes, 2 * 1024 * 1024) {
+                    entries[key] = Entry(value: payload.value, byteCount: payload.byteCount, expiresAt: now().addingTimeInterval(ttl), accessedAt: now())
+                    while entries.count > maxEntries || entries.values.reduce(0, { $0 + $1.byteCount }) > maxBytes {
                         guard let oldest = entries.min(by: { $0.value.accessedAt < $1.value.accessedAt })?.key else { break }
                         entries.removeValue(forKey: oldest)
                     }
@@ -88,7 +97,8 @@ final class ListPageCache {
                 }
             }
             try Task.checkCancellation()
-            return try JSONDecoder().decode(Value.self, from: data)
+            guard let typed = payload.value as? Value else { throw CacheTypeMismatchError() }
+            return typed
         } catch {
             if flights[key]?.id == flight.id { flights.removeValue(forKey: key) }
             throw error

@@ -4,9 +4,8 @@ enum DateDisplayText {
     static func parse(_ value: String?) -> Date? { DateDisplayParser.shared.parse(value) }
 
     static func local(_ value: String?) -> String {
-        guard let value else { return "—" }
-        guard let date = parse(value) else { return value }
-        return L10n.date(date, date: .abbreviated, time: .shortened)
+        let language = L10n.language
+        return DateDisplayParser.shared.local(value, language: language, timeZoneIdentifier: TimeZone.autoupdatingCurrent.identifier)
     }
 }
 
@@ -24,9 +23,7 @@ struct JobsView: View {
     @State private var selectedJobID: String?
     @State private var searchText = ""
     @State private var sortOrder = [KeyPathComparator(\JobSummary.createdAt, order: .reverse)]
-    @State private var selectedJobDetail: JobDetailResponse?
-    @State private var isLoadingJobDetail = false
-    @State private var confirmedFingerprintJobID: String?
+    @State private var fallbackSelectedJob: JobSummary?
     @State private var actionError: String?
 
     @State private var page = 1
@@ -68,15 +65,12 @@ struct JobsView: View {
     }
 
     private var selectedJob: JobSummary? {
-        visibleJobs.first(where: { $0.id == selectedJobID }) ?? (selectedJobDetail?.job.id == selectedJobID ? selectedJobDetail?.job : nil)
+        visibleJobs.first(where: { $0.id == selectedJobID }) ?? (fallbackSelectedJob?.id == selectedJobID ? fallbackSelectedJob : nil)
     }
 
-    private var detailRequestKey: String {
-        guard let selectedJobID else { return "none" }
-        let job = visibleJobs.first { $0.id == selectedJobID } ?? store.jobs.first { $0.id == selectedJobID }
-        let status = job?.status ?? "detail"
-        let finishedAt = job?.finishedAt ?? ""
-        return "\(store.serviceAddress):\(selectedJobID):\(status):\(finishedAt):\(store.isConnected)"
+    private var fallbackRequestKey: String {
+        guard let selectedJobID, visibleJobs.first(where: { $0.id == selectedJobID }) == nil, store.isConnected else { return "none" }
+        return "\(store.serviceAddress):\(selectedJobID):\(store.isConnected)"
     }
 
     var body: some View {
@@ -131,25 +125,36 @@ struct JobsView: View {
             }
         } detail: {
             if let job = selectedJob {
-                jobDetailPane(job)
-                    .id(job.id)
-                    .accessibilityIdentifier("jobs.detail")
+                JobDetailPane(
+                    store: store,
+                    job: job,
+                    onSelectJob: { selectedJobID = $0 },
+                    onActionError: { actionError = $0 },
+                    onClose: { selectedJobID = nil; fallbackSelectedJob = nil }
+                )
+                .id(job.id)
+                .accessibilityIdentifier("jobs.detail")
             }
         }
         .searchable(text: $searchText, prompt: L10n.text("搜索任务"))
         .onChange(of: searchText) { _, _ in resetPage() }
         .onChange(of: sortOrder) { _, _ in resetPage() }
         .onChange(of: pageSize) { _, _ in resetPage() }
-        .onChange(of: page) { _, _ in selectedJobID = nil; selectedJobDetail = nil }
+        .onChange(of: page) { _, _ in selectedJobID = nil; fallbackSelectedJob = nil }
+        .onChange(of: selectedJobID) { _, newValue in
+            if newValue == nil || visibleJobs.contains(where: { $0.id == newValue }) {
+                fallbackSelectedJob = nil
+            }
+        }
         .onChange(of: store.serviceAddress) { _, _ in
             resetPage()
             pageResponse = nil
             loadedPageKey = nil
-            selectedJobDetail = nil
+            fallbackSelectedJob = nil
         }
         .task(id: pageRequestKey) { await loadPage() }
         .onDisappear { loadedPageKey = nil }
-        .task(id: detailRequestKey) { await loadSelectedJobDetail() }
+        .task(id: fallbackRequestKey) { await loadFallbackJobIfNeeded() }
         .alert(L10n.text("任务操作失败"), isPresented: Binding(get: { actionError != nil }, set: { if !$0 { actionError = nil } })) {
             Button(L10n.text("好"), role: .cancel) { actionError = nil }
         } message: { Text(JobDisplayText.errorMessage(actionError ?? "")) }
@@ -158,7 +163,7 @@ struct JobsView: View {
     private func resetPage() {
         page = 1
         selectedJobID = nil
-        selectedJobDetail = nil
+        fallbackSelectedJob = nil
     }
 
     private func loadPage() async {
@@ -181,19 +186,50 @@ struct JobsView: View {
         }
     }
 
-    private func jobDetailPane(_ job: JobSummary) -> some View {
+    private func loadFallbackJobIfNeeded() async {
+        let requestKey = fallbackRequestKey
+        guard let selectedJobID, visibleJobs.first(where: { $0.id == selectedJobID }) == nil, store.isConnected else {
+            return
+        }
+        do {
+            let detail = try await store.jobDetail(selectedJobID)
+            guard !Task.isCancelled, requestKey == fallbackRequestKey else { return }
+            fallbackSelectedJob = detail.job
+        } catch {
+            guard !Task.isCancelled, !isRequestCancellation(error), requestKey == fallbackRequestKey else { return }
+            actionError = error.localizedDescription
+        }
+    }
+}
+
+private struct JobDetailPane: View {
+    @Bindable var store: ManagementStore
+    let job: JobSummary
+    var onSelectJob: (String) -> Void
+    var onActionError: (String) -> Void
+    var onClose: () -> Void
+
+    @State private var selectedJobDetail: JobDetailResponse?
+    @State private var isLoadingJobDetail = false
+    @State private var confirmedFingerprintJobID: String?
+
+    private var detailRequestKey: String {
+        "\(store.serviceAddress):\(job.id):\(job.status):\(job.finishedAt ?? ""):\(store.isConnected)"
+    }
+
+    var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             DetailHeaderBar {
                 VStack(alignment: .leading, spacing: 14) {
                     DetailHeaderLayout {
-                        jobTitle(job)
-                        jobActions(job)
+                        jobTitle
+                        jobActions
                     }
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), alignment: .leading)], alignment: .leading, spacing: 12) {
                         jobMetric(L10n.text("当前阶段"), value: JobDisplayText.stage(job.result?.stage ?? job.stage))
                         jobMetric(L10n.text("尝试次数"), value: String(job.attempts))
                         jobMetric(L10n.text("创建时间"), value: DateDisplayText.local(job.createdAt))
-                        jobMetric(L10n.text("开始时间"), value: DateDisplayText.local(currentDetail(job)?.startedAt))
+                        jobMetric(L10n.text("开始时间"), value: DateDisplayText.local(currentDetail?.startedAt))
                     }
                 }
             }
@@ -219,12 +255,12 @@ struct JobsView: View {
                         JobExecutionRechecksView(store: store, jobID: job.id)
                             .id("\(store.serviceAddress):\(job.id)")
                     }
-                    fingerprintResult(job)
+                    fingerprintResult
                     if job.retryOfJobId != nil {
                         Label(L10n.text("此任务为关联重试，成功后会移除原失败提醒。"), systemImage: "arrow.triangle.2.circlepath")
                             .font(.caption).foregroundStyle(.secondary)
                     }
-                    executionRecords(job)
+                    executionRecords
                     DisclosureGroup(L10n.text("任务标识")) {
                         VStack(alignment: .leading, spacing: 10) {
                             jobMetric(L10n.text("任务 ID"), value: job.id, copyable: true)
@@ -238,9 +274,10 @@ struct JobsView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
+        .task(id: detailRequestKey) { await loadSelectedJobDetail() }
     }
 
-    private func jobTitle(_ job: JobSummary) -> some View {
+    private var jobTitle: some View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
             VStack(alignment: .leading, spacing: 4) {
                 Text(JobDisplayText.kind(job.kind)).font(.headline)
@@ -251,18 +288,19 @@ struct JobsView: View {
         }
     }
 
-    private func hasJobActions(_ job: JobSummary) -> Bool {
+    private func hasJobActions(node: NodeSummary?) -> Bool {
         if job.retryJobId != nil { return true }
         if job.kind.hasPrefix("dns-"), job.kind != "dns-credential-apply", job.status == "failed", job.retryJobId == nil { return true }
         if job.kind == "authorization-change", job.status == "failed", job.retryJobId == nil { return true }
-        if retryAction(for: job) != nil, store.nodes.contains(where: { $0.id == job.nodeID }) { return true }
+        if retryAction(for: job) != nil, node != nil { return true }
         return false
     }
 
-    private func jobActions(_ job: JobSummary) -> some View {
-        HStack(spacing: 8) {
+    private var jobActions: some View {
+        let node = job.nodeID.flatMap { store.node(for: $0) }
+        return HStack(spacing: 8) {
             if let retryID = job.retryJobId {
-                Button(L10n.text("查看重试任务")) { selectedJobID = retryID }
+                Button(L10n.text("查看重试任务")) { onSelectJob(retryID) }
                     .accessibilityIdentifier("jobs.retryLink.\(job.id)")
             }
             if job.kind.hasPrefix("dns-"), job.kind != "dns-credential-apply", job.status == "failed", job.retryJobId == nil {
@@ -271,7 +309,7 @@ struct JobsView: View {
                         do {
                             try await store.retryDNSJob(job)
                             store.toast.show(L10n.text("已提交重试任务"), tone: .active)
-                        } catch { actionError = error.localizedDescription }
+                        } catch { onActionError(error.localizedDescription) }
                     }
                 }.disabled(!store.isConnected)
             }
@@ -279,30 +317,33 @@ struct JobsView: View {
                 Button(L10n.text("重试授权任务")) {
                     Task {
                         do {
-                            selectedJobID = try await store.retryAuthorizationJob(job)
+                            onSelectJob(try await store.retryAuthorizationJob(job))
                             store.toast.show(L10n.text("已提交重试任务"), tone: .active)
-                        } catch { actionError = error.localizedDescription }
+                        } catch { onActionError(error.localizedDescription) }
                     }
                 }.disabled(!store.isConnected)
             }
-            if let action = retryAction(for: job),
-               let node = store.nodes.first(where: { $0.id == job.nodeID }) {
+            if let action = retryAction(for: job), let node {
                 Button(L10n.text("重试：{0}", String(describing: (retryLabel(action))))) { retry(job, on: node, action: action) }
                     .buttonStyle(.borderedProminent)
                     .accessibilityIdentifier("jobs.retry.\(job.id)")
                     .disabled(!store.isConnected || !NodeTaskFeedback.allowsAction(action, node: node) || (action != "ssh-test" && ["needs_fingerprint", "fingerprint_changed"].contains(node.state)))
                     .help(L10n.text("创建关联重试，成功后自动移除失败提醒"))
             }
-            if hasJobActions(job) {
+            if hasJobActions(node: node) {
                 Divider().frame(height: 16)
             }
-            DetailCloseButton { selectedJobID = nil; selectedJobDetail = nil }
+            DetailCloseButton(action: onClose)
         }
         .fixedSize()
-        .task(id: "\(store.dataRefreshToken):\(job.nodeID ?? "")") { await store.prepareNode(job.nodeID) }
+        .task(id: "\(store.dataRefreshToken):\(job.nodeID ?? "")") {
+            if let nodeID = job.nodeID, store.node(for: nodeID) == nil {
+                await store.prepareNode(nodeID)
+            }
+        }
     }
 
-    @ViewBuilder private func fingerprintResult(_ job: JobSummary) -> some View {
+    @ViewBuilder private var fingerprintResult: some View {
         if let change = SSHHostFingerprintChange(job: job) {
             SSHHostFingerprintChangeView(store: store, job: job, change: change)
                 .id("\(store.serviceAddress):\(job.id)")
@@ -318,14 +359,14 @@ struct JobsView: View {
                         .font(.callout).foregroundStyle(.secondary)
                     if confirmedFingerprintJobID != job.id,
                        let nodeID = job.nodeID,
-                       let node = store.nodes.first(where: { $0.id == nodeID }),
+                       let node = store.node(for: nodeID),
                        node.state == "needs_fingerprint" {
                         Button(L10n.text("信任并保存此指纹")) {
                             Task {
                                 do {
                                     try await store.confirmHostFingerprint(nodeID: nodeID, fingerprint: fingerprint)
                                     confirmedFingerprintJobID = job.id
-                                } catch { actionError = error.localizedDescription }
+                                } catch { onActionError(error.localizedDescription) }
                             }
                         }
                         .disabled(!store.isConnected)
@@ -337,9 +378,9 @@ struct JobsView: View {
         }
     }
 
-    private func executionRecords(_ job: JobSummary) -> some View {
+    private var executionRecords: some View {
         GroupBox {
-            if let detail = currentDetail(job), !detail.logs.isEmpty {
+            if let detail = currentDetail, !detail.logs.isEmpty {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     ForEach(detail.logs.indices.reversed(), id: \.self) { index in
                         let entry = detail.logs[index]
@@ -386,7 +427,7 @@ struct JobsView: View {
         }
     }
 
-    private func currentDetail(_ job: JobSummary) -> JobDetailResponse? {
+    private var currentDetail: JobDetailResponse? {
         selectedJobDetail?.job.id == job.id ? selectedJobDetail : nil
     }
 
@@ -404,7 +445,7 @@ struct JobsView: View {
 
     private func loadSelectedJobDetail() async {
         let requestKey = detailRequestKey
-        guard let selectedJobID, store.isConnected else {
+        guard store.isConnected else {
             selectedJobDetail = nil
             isLoadingJobDetail = false
             return
@@ -412,12 +453,12 @@ struct JobsView: View {
         isLoadingJobDetail = true
         defer { if requestKey == detailRequestKey { isLoadingJobDetail = false } }
         do {
-            let detail = try await store.jobDetail(selectedJobID)
+            let detail = try await store.jobDetail(job.id)
             guard !Task.isCancelled, requestKey == detailRequestKey else { return }
             selectedJobDetail = detail
         } catch {
             guard !Task.isCancelled, requestKey == detailRequestKey else { return }
-            actionError = error.localizedDescription
+            onActionError(error.localizedDescription)
         }
     }
 
@@ -445,9 +486,9 @@ struct JobsView: View {
         Task {
             do {
                 try await store.retryJob(job, on: node)
-                selectedJobID = nil
+                onClose()
                 store.toast.show(L10n.text("已提交重试任务"), detail: node.name, tone: .active)
-            } catch { actionError = error.localizedDescription }
+            } catch { onActionError(error.localizedDescription) }
         }
     }
 

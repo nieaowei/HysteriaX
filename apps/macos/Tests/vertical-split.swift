@@ -40,14 +40,20 @@ struct CheckView: View {
         func splits(_ view: NSView) -> [NSSplitView] {
             (view as? NSSplitView).map { [$0] } ?? view.subviews.flatMap(splits)
         }
+        func tables(_ view: NSView) -> [NSTableView] {
+            (view as? NSTableView).map { [$0] } ?? view.subviews.flatMap(tables)
+        }
         func measure(_ label: String) -> [CGFloat] {
             let result = splits(host).first!.arrangedSubviews.map { $0.frame.height }
             print("\(label): \(result)"); fflush(stdout)
             return result
         }
         settle()
+        let initialTable = tables(host).first.map(ObjectIdentifier.init)
+        precondition(initialTable != nil, "Expected initial NSTableView")
         selection.hasDetail = true
         settle()
+        precondition(tables(host).first.map(ObjectIdentifier.init) == initialTable, "Opening detail recreated NSTableView")
         let first = measure("First")
         precondition(first.count == 2 && abs(first[0] - first[1]) < 2, "Expected initial 1:1 split")
         selection.record = 1
@@ -75,5 +81,11 @@ struct CheckView: View {
         let taller = measure("After growing height")
         precondition(taller.count == 2 && taller.allSatisfy { $0 >= 180 }, "Resize violated pane minimums")
         precondition(abs(taller[0] - taller[1]) > 2, "Height resize reset user divider to 1:1")
+        selection.hasDetail = false
+        settle()
+        precondition(tables(host).first.map(ObjectIdentifier.init) == initialTable, "Closing detail recreated NSTableView")
+        selection.hasDetail = true
+        settle()
+        precondition(tables(host).first.map(ObjectIdentifier.init) == initialTable, "Reopening detail recreated NSTableView")
     }
 }

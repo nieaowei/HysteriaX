@@ -9,13 +9,13 @@ struct CredentialsView: View {
     @State private var type = ""
     @State private var category = CredentialCategory.operations
     @State private var showInternalProbes = false
-    @State private var detail: CredentialDetail?
     @State private var creating = false
     @State private var creatingCA = false
     @State private var publishingCA: CredentialDetail?
     @State private var editingCAPolicy: CredentialDetail?
     @State private var replacing: CredentialDetail?
     @State private var editing: CredentialDetail?
+    @State private var deletingDetail: CredentialDetail?
     @State private var error: String?
     @State private var deleting = false
 
@@ -43,7 +43,6 @@ struct CredentialsView: View {
     private var totalEntries: Int { store.isConnected ? (currentPageResponse?.total ?? 0) : snapshotEntries.count }
     private var pageCount: Int { max(1, (totalEntries + pageSize - 1) / pageSize) }
     private var currentPage: Int { store.isConnected ? page : min(page, pageCount) }
-    private var detailRequestKey: String { "\(store.serviceAddress)|\(selection ?? "")|\(store.dataRefreshToken)|\(store.isConnected)" }
 
     private var categoryEntries: [CredentialSummary] {
         store.credentials.filter { category.contains($0) }
@@ -130,14 +129,14 @@ struct CredentialsView: View {
         .sheet(item: $editingCAPolicy) { CAIdentityEditorView(store: store, detail: $0, operation: .policy) }
         .sheet(item: $replacing) { CredentialEditorView(store: store, replacing: $0) }
         .sheet(item: $editing) { CredentialMetadataEditor(store: store, detail: $0) }
-        .task(id: detailRequestKey) { await load() }
         .confirmationDialog(L10n.text("删除未被引用的凭据？"), isPresented: $deleting) {
             Button(L10n.text("删除"), role: .destructive) {
-                if let detail {
+                if let detail = deletingDetail {
                     Task {
                         do {
                             try await store.deleteCredential(detail)
                             selection = nil
+                            deletingDetail = nil
                             store.toast.show(L10n.text("凭据已删除"), detail: detail.name, tone: .neutral)
                         } catch { self.error = error.localizedDescription }
                     }
@@ -201,9 +200,20 @@ struct CredentialsView: View {
                 }
             } detail: {
                 if let selected {
-                    credentialDetailPane(selected)
-                        .id(selected.id)
-                        .accessibilityIdentifier("credentials.detail")
+                    CredentialDetailPane(
+                        store: store,
+                        entry: selected,
+                        onJump: onJump,
+                        onPublishCA: { publishingCA = $0 },
+                        onEditCAPolicy: { editingCAPolicy = $0 },
+                        onReplace: { replacing = $0 },
+                        onEdit: { editing = $0 },
+                        onDelete: { deletingDetail = $0; deleting = true },
+                        onError: { error = $0 },
+                        onClose: { clearSelection() }
+                    )
+                    .id(selected.id)
+                    .accessibilityIdentifier("credentials.detail")
                 }
             }
             if let error { Text(error).foregroundStyle(.red).padding(12) }
@@ -244,16 +254,35 @@ struct CredentialsView: View {
 
     private func clearSelection() {
         selection = nil
-        detail = nil
+        deletingDetail = nil
         error = nil
     }
+}
 
-    private func credentialDetailPane(_ entry: CredentialSummary) -> some View {
+private struct CredentialDetailPane: View {
+    @Bindable var store: ManagementStore
+    let entry: CredentialSummary
+    var onJump: (String, String) -> Void
+    var onPublishCA: (CredentialDetail) -> Void
+    var onEditCAPolicy: (CredentialDetail) -> Void
+    var onReplace: (CredentialDetail) -> Void
+    var onEdit: (CredentialDetail) -> Void
+    var onDelete: (CredentialDetail) -> Void
+    var onError: (String) -> Void
+    var onClose: () -> Void
+
+    @State private var detail: CredentialDetail?
+
+    private var detailRequestKey: String {
+        "\(store.serviceAddress)|\(entry.id)|\(store.dataRefreshToken)|\(store.isConnected)"
+    }
+
+    var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             DetailHeaderBar {
                 VStack(alignment: .leading, spacing: 14) {
                     DetailHeaderLayout {
-                        detailTitle(entry)
+                        detailTitle
                         detailActions
                     }
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), alignment: .leading)], alignment: .leading, spacing: 12) {
@@ -272,7 +301,7 @@ struct CredentialsView: View {
                             }
                         }
                         if let userID = entry.ownerUserId {
-                            detailMetric(L10n.text("所属用户"), value: store.users.first { $0.id == userID }?.name ?? userID)
+                            detailMetric(L10n.text("所属用户"), value: store.user(for: userID)?.name ?? userID)
                         }
                     }
                 }
@@ -287,7 +316,7 @@ struct CredentialsView: View {
                                         try await store.retryCredentialBatch(id)
                                         await load()
                                         store.toast.show(L10n.text("已提交重试任务"), tone: .active)
-                                    } catch { self.error = error.localizedDescription }
+                                    } catch { onError(error.localizedDescription) }
                                 }
                             })
                         } else {
@@ -298,46 +327,38 @@ struct CredentialsView: View {
                             }
                         }
                     } else {
-                        businessDetail(entry)
+                        businessDetail
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(16)
             }
         }
+        .task(id: detailRequestKey) { await load() }
     }
 
-    private func detailTitle(_ entry: CredentialSummary) -> some View {
+    private var detailTitle: some View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
             Text(entry.name).font(.headline).lineLimit(2).textSelection(.enabled)
             StatusBadge(entry.statusTitle, tone: credentialStatusTone(entry.status))
         }
     }
 
-    private func credentialStatusTone(_ status: String) -> StatusTone {
-        switch status {
-        case "active": .positive
-        case "expiring": .warning
-        case "expired", "quota_exhausted": .danger
-        default: .neutral
-        }
-    }
-
     private var detailActions: some View {
         HStack(spacing: 8) {
-            if let detail, detail.id == selected?.id {
+            if let detail, detail.id == entry.id {
                 HStack(spacing: 8) {
                     Button(L10n.text("发布新版本")) {
-                        if detail.kind == "ca_identity" { publishingCA = detail } else { replacing = detail }
+                        if detail.kind == "ca_identity" { onPublishCA(detail) } else { onReplace(detail) }
                     }
                         .disabled(detail.archived || detail.metadata["managed"]?.boolValue == true || detail.ownerUserId != nil)
                     if detail.ca != nil {
-                        Button(L10n.text("客户端证书策略")) { editingCAPolicy = detail }
+                        Button(L10n.text("客户端证书策略")) { onEditCAPolicy(detail) }
                             .disabled(detail.archived).accessibilityIdentifier("ca.policy")
                     }
-                    Button(L10n.text("编辑信息")) { editing = detail }
+                    Button(L10n.text("编辑信息")) { onEdit(detail) }
                         .disabled(detail.metadata["managed"]?.boolValue == true || detail.ownerUserId != nil)
-                    Button(L10n.text("删除凭据"), role: .destructive) { deleting = true }
+                    Button(L10n.text("删除凭据"), role: .destructive) { onDelete(detail) }
                         .foregroundStyle(.red)
                         .disabled(!detail.references.isEmpty)
                         .accessibilityIdentifier("credential.delete")
@@ -345,7 +366,7 @@ struct CredentialsView: View {
                 .disabled(!store.isConnected)
                 Divider().frame(height: 16)
             }
-            DetailCloseButton { clearSelection() }
+            DetailCloseButton(action: onClose)
         }
         .fixedSize()
     }
@@ -357,7 +378,7 @@ struct CredentialsView: View {
         }
     }
 
-    @ViewBuilder private func businessDetail(_ entry: CredentialSummary) -> some View {
+    @ViewBuilder private var businessDetail: some View {
         if entry.kind == "user_credential" {
             Text(L10n.text("该用户的全部授权节点共用一个连接密码，授权组变更不会轮换密码。"))
                 .font(.callout).foregroundStyle(.secondary)
@@ -389,7 +410,7 @@ struct CredentialsView: View {
                             do {
                                 try await store.revokeAdminToken(token)
                                 store.toast.show(L10n.text("已撤销管理员 Token"), detail: token.label, tone: .warning)
-                            } catch { self.error = error.localizedDescription }
+                            } catch { onError(error.localizedDescription) }
                         }
                     }
                         .disabled(!store.isConnected || token.revokedAt != nil || id == store.currentAdminTokenID)
@@ -402,16 +423,25 @@ struct CredentialsView: View {
 
     private func load() async {
         let requestKey = detailRequestKey
-        guard let selected, selected.isManaged, store.isConnected else { detail = nil; return }
-        if detail?.id != selected.id { detail = nil }
+        guard entry.isManaged, store.isConnected else { detail = nil; return }
+        if detail?.id != entry.id { detail = nil }
         do {
-            let loaded = try await store.credentialDetail(selected.id)
-            guard selection == loaded.id, !Task.isCancelled, requestKey == detailRequestKey else { return }
-            detail = loaded; error = nil
+            let loaded = try await store.credentialDetail(entry.id)
+            guard entry.id == loaded.id, !Task.isCancelled, requestKey == detailRequestKey else { return }
+            detail = loaded
         } catch {
-            guard selection == selected.id, !Task.isCancelled, requestKey == detailRequestKey else { return }
-            self.error = error.localizedDescription
+            guard !Task.isCancelled, requestKey == detailRequestKey else { return }
+            onError(error.localizedDescription)
         }
+    }
+}
+
+private func credentialStatusTone(_ status: String) -> StatusTone {
+    switch status {
+    case "active": .positive
+    case "expiring": .warning
+    case "expired", "quota_exhausted": .danger
+    default: .neutral
     }
 }
 

@@ -6,41 +6,33 @@ struct AuthorizationGroupsView: View {
     var onOpenUser: (String) -> Void
     var onOpenNode: (String) -> Void = { _ in }
 
-    @State private var detailTab = "members"
     @State private var groupListWidth: CGFloat = 200
     @State private var resizingListStart: CGFloat?
     @State private var deletionTarget: AuthorizationGroupSummary?
 
     @State private var response: AuthorizationGroupsPage?
-    @State private var detail: AuthorizationGroupSummary?
     @State private var loadedKey: String?
     @State private var error: String?
-    @State private var detailError: String?
-    @State private var pendingJob: JobSummary?
-    @State private var isRetryingPendingJob = false
     @State private var loading = false
     @State private var retry = UUID()
 
     private var key: String { store.listPageKey([pageState.groupSearchText, pageState.groupSort, String(pageState.groupPage)]) }
     private var requestKey: String { "\(key)|\(store.isConnected)|\(store.dataRefreshToken)|\(retry)" }
-    private var detailKey: String { "\(store.serviceAddress)|\(pageState.selectedGroupID ?? "")|\(store.isConnected)|\(store.dataRefreshToken)|\(retry)" }
     private var visibleGroups: [AuthorizationGroupSummary] {
         if !store.isConnected { return Array(store.authorizationGroups.prefix(50)) }
         return loadedKey == key ? response?.items ?? [] : []
     }
     private var selectedGroup: AuthorizationGroupSummary? {
-        if let detail, detail.id == pageState.selectedGroupID { return detail }
-        return visibleGroups.first { $0.id == pageState.selectedGroupID }
+        visibleGroups.first { $0.id == pageState.selectedGroupID }
     }
 
     var body: some View {
         directoryContent
             .onChange(of: pageState.groupSort) { _, _ in pageState.groupPage = 1 }
             .onChange(of: store.serviceAddress) { _, _ in
-                response = nil; detail = nil; loadedKey = nil; pageState.selectedGroupID = nil; pageState.groupPage = 1
+                response = nil; loadedKey = nil; pageState.selectedGroupID = nil; pageState.groupPage = 1
             }
             .task(id: requestKey) { await loadPage() }
-            .task(id: detailKey) { await loadDetail() }
     }
 
     private func loadPage() async {
@@ -56,31 +48,6 @@ struct AuthorizationGroupsView: View {
         } catch {
             guard !Task.isCancelled, !isRequestCancellation(error), request == requestKey else { return }
             self.error = error.localizedDescription
-        }
-    }
-
-    private func loadDetail() async {
-        let request = detailKey
-        detailError = nil
-        guard store.isConnected, let id = pageState.selectedGroupID else {
-            detail = nil
-            pendingJob = nil
-            return
-        }
-        if pendingJob?.resourceId != id { pendingJob = nil }
-        do {
-            async let loadedDetail = store.authorizationGroupDetail(id)
-            async let loadedPending = store.pendingAuthorizationJob(forResourceID: id)
-            let value = try await loadedDetail
-            let pending = await loadedPending
-            guard !Task.isCancelled, request == detailKey else { return }
-            detail = value
-            pendingJob = pending
-        } catch {
-            guard !Task.isCancelled, !isRequestCancellation(error), request == detailKey else { return }
-            detail = nil
-            pendingJob = nil
-            detailError = error.localizedDescription
         }
     }
 
@@ -128,7 +95,6 @@ struct AuthorizationGroupsView: View {
             }
         }
         .searchable(text: $pageState.groupSearchText, placement: .toolbar, prompt: L10n.text("搜索授权组"))
-        .onChange(of: pageState.selectedGroupID) { _, _ in detailTab = "members" }
         .onChange(of: pageState.groupSearchText) { _, _ in pageState.selectedGroupID = nil; pageState.groupPage = 1 }
         .sheet(item: $pageState.groupEditorTarget) { target in
             AuthorizationGroupEditorView(store: store, group: target.group, intent: target.intent, memberMode: target.memberMode, removedUserIDs: target.removedUserIDs) { id in
@@ -144,13 +110,18 @@ struct AuthorizationGroupsView: View {
 
     @ViewBuilder
     private var selectedDetail: some View {
-        if let selectedGroup {
-            groupDetail(selectedGroup)
-                .id(selectedGroup.id)
-                .accessibilityElement(children: .contain)
-                .accessibilityIdentifier("authorizationGroups.detail")
-        } else if let detailError {
-            VStack { Text(detailError).foregroundStyle(.red); Button(L10n.text("重试")) { retry = UUID() } }
+        if let groupID = pageState.selectedGroupID {
+            AuthorizationGroupDetailPane(
+                store: store,
+                pageState: pageState,
+                groupID: groupID,
+                initialGroup: selectedGroup,
+                onOpenUser: onOpenUser,
+                onOpenNode: onOpenNode,
+                onDelete: { deletionTarget = $0 },
+                onRefreshList: { retry = UUID() }
+            )
+            .id(groupID)
         } else {
             ContentUnavailableView(L10n.text("选择授权组"), systemImage: "person.3", description: Text(L10n.text("在左侧选择授权组，查看成员和节点。")))
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -205,6 +176,75 @@ struct AuthorizationGroupsView: View {
             Divider()
             AuthorizationPagination(page: $pageState.groupPage, pages: max(1, ((response?.total ?? 0) + 49) / 50), total: response?.total ?? 0, disabled: loading || !store.isConnected, identifier: "authorizationGroups")
                 .padding(8)
+        }
+    }
+
+}
+
+private struct AuthorizationGroupDetailPane: View {
+    @Bindable var store: ManagementStore
+    @Bindable var pageState: AuthorizationPageState
+    let groupID: String
+    let initialGroup: AuthorizationGroupSummary?
+    var onOpenUser: (String) -> Void
+    var onOpenNode: (String) -> Void
+    var onDelete: (AuthorizationGroupSummary) -> Void
+    var onRefreshList: () -> Void
+
+    @State private var detailTab = "members"
+    @State private var detail: AuthorizationGroupSummary?
+    @State private var detailError: String?
+    @State private var pendingJob: JobSummary?
+    @State private var isRetryingPendingJob = false
+    @State private var retry = UUID()
+
+    private var detailKey: String {
+        "\(store.serviceAddress)|\(groupID)|\(store.isConnected)|\(store.dataRefreshToken)|\(retry)"
+    }
+
+    private var displayedGroup: AuthorizationGroupSummary? {
+        if let detail, detail.id == groupID { return detail }
+        return initialGroup
+    }
+
+    var body: some View {
+        Group {
+            if let group = displayedGroup {
+                groupDetail(group)
+                    .accessibilityElement(children: .contain)
+                    .accessibilityIdentifier("authorizationGroups.detail")
+            } else if let detailError {
+                VStack { Text(detailError).foregroundStyle(.red); Button(L10n.text("重试")) { retry = UUID(); onRefreshList() } }
+            } else {
+                ProgressView()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .task(id: detailKey) { await loadDetail() }
+    }
+
+    private func loadDetail() async {
+        let request = detailKey
+        detailError = nil
+        guard store.isConnected else {
+            detail = nil
+            pendingJob = nil
+            return
+        }
+        if pendingJob?.resourceId != groupID { pendingJob = nil }
+        do {
+            async let loadedDetail = store.authorizationGroupDetail(groupID)
+            async let loadedPending = store.pendingAuthorizationJob(forResourceID: groupID)
+            let value = try await loadedDetail
+            let pending = await loadedPending
+            guard !Task.isCancelled, request == detailKey else { return }
+            detail = value
+            pendingJob = pending
+        } catch {
+            guard !Task.isCancelled, !isRequestCancellation(error), request == detailKey else { return }
+            detail = nil
+            pendingJob = nil
+            detailError = error.localizedDescription
         }
     }
 
@@ -268,7 +308,7 @@ struct AuthorizationGroupsView: View {
                 pageState.groupEditorTarget = AuthorizationGroupEditorTarget(group: group, intent: .nodes)
             }
             .accessibilityIdentifier("authorizationGroups.manageNodes")
-            Button(L10n.text("删除授权组"), role: .destructive) { deletionTarget = group }
+            Button(L10n.text("删除授权组"), role: .destructive) { onDelete(group) }
                 .foregroundStyle(.red)
                 .accessibilityIdentifier("authorizationGroups.delete")
         }
@@ -329,6 +369,7 @@ struct AuthorizationGroupsView: View {
                 _ = try await store.retryAuthorizationJob(job)
                 store.toast.show(L10n.text("已提交重试任务"), tone: .active)
                 retry = UUID()
+                onRefreshList()
                 await store.refresh()
             } catch {
                 store.toast.show(
@@ -346,5 +387,4 @@ struct AuthorizationGroupsView: View {
             Text(value).font(.callout).textSelection(.enabled)
         }
     }
-
 }

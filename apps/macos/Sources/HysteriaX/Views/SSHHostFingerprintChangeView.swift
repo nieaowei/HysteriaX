@@ -10,14 +10,14 @@ struct SSHHostFingerprintChangeView: View {
     @State private var saved = false
     @State private var errorMessage: String?
 
-    private var node: NodeSummary? { store.nodes.first { $0.id == job.nodeID } }
+    private var node: NodeSummary? { job.nodeID.flatMap { store.node(for: $0) } }
     private var canConfirm: Bool {
         guard let node, job.retryJobId == nil else { return false }
         return change.canConfirm(state: node.state, savedFingerprint: node.ssh?.hostFingerprint)
     }
 
     var body: some View {
-        fingerprintContent.task(id: store.dataRefreshToken) { await store.prepareNode(job.nodeID) }
+        fingerprintContent.task(id: store.dataRefreshToken) { await store.prepareNode(job.nodeID, force: true) }
     }
     private var fingerprintContent: some View {
         GroupBox(L10n.text("SSH 主机指纹已更换")) {
