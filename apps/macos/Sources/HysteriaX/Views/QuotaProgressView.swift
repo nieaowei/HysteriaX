@@ -50,18 +50,29 @@ struct GradientUsageProgressStyle: ProgressViewStyle {
             ZStack(alignment: .leading) {
                 Capsule().fill(.quaternary)
                 if fraction > 0 {
+                    let fillWidth = min(geometry.size.width, max(geometry.size.width * fraction, 5))
                     Capsule()
                         .fill(LinearGradient(
-                            colors: fraction >= 0.9 ? [.orange, .red] : [.blue, .cyan],
+                            colors: gradientColors(for: fraction),
                             startPoint: .leading,
                             endPoint: .trailing
                         ))
-                        .frame(width: geometry.size.width * fraction)
+                        .frame(width: fillWidth)
                 }
             }
-            .frame(height: 4)
+            .frame(height: 5)
             .clipShape(Capsule())
         }
-        .frame(height: 4)
+        .frame(height: 5)
+    }
+
+    private func gradientColors(for fraction: Double) -> [Color] {
+        if fraction >= 0.90 {
+            return [.orange, .red, .pink]
+        }
+        if fraction >= 0.75 {
+            return [.mint, .yellow, .orange]
+        }
+        return [.indigo, .blue, .mint]
     }
 }

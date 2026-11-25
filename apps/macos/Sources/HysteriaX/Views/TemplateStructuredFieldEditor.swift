@@ -253,6 +253,7 @@ struct TemplateMapFields: View {
     let depth: Int
     @State private var newKey = ""
     @State private var editingKey: String?
+    @State private var rowClickTracker = RowDoubleClickTracker<String>()
     private var entryDefinition: JSONValue {
         if path.first == "dns", path.last == "predefined" {
             return .object(["type": .string("array"), "items": .object(["type": .string("string")])])
@@ -279,8 +280,12 @@ struct TemplateMapFields: View {
                                 .contentShape(Rectangle())
                                 .background(selectedKey == key ? Color.accentColor.opacity(0.12) : Color.clear, in: RoundedRectangle(cornerRadius: 8))
                                 .interactiveRowHover(cornerRadius: 8)
-                                .onTapGesture { selectedKey = key }
-                                .onTapGesture(count: 2) { open(key) }
+                                .onTapGesture {
+                                    selectedKey = key
+                                    if rowClickTracker.handleClick(on: key) {
+                                        open(key)
+                                    }
+                                }
                                 .contextMenu {
                                     Button(L10n.text("编辑")) { open(key) }
                                     Divider()

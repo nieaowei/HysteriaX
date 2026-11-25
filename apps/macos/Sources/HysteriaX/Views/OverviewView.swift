@@ -147,7 +147,8 @@ struct OverviewView: View {
 
     private var serverMonitoringSection: some View {
         OverviewServerCard(monitoring: store.serverMonitoring, serviceAddress: store.serviceAddress,
-                           isConnected: store.isConnected, isLoading: store.isLoading, error: store.serverMonitoringError)
+                           isConnected: store.isConnected, isLoading: store.isLoading, error: store.serverMonitoringError,
+                           toast: store.toast)
     }
 
 }

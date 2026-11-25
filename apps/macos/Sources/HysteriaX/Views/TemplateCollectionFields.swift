@@ -8,6 +8,7 @@ struct TemplateCollectionFields: View {
     var isSingleObject = false
     @State private var editing: Item?
     @State private var filterText = ""
+    @State private var rowClickTracker = RowDoubleClickTracker<Int>()
     private struct Item: Identifiable { let index: Int; var id: Int { index } }
     private var items: [JSONValue] {
         if isSingleObject {
@@ -75,8 +76,13 @@ struct TemplateCollectionFields: View {
                     ForEach(entries, id: \.index) { entry in
                         let index = entry.index
                         let value = entry.value
-                        HStack {
-                            Button { selected = index } label: {
+                        HStack(spacing: 0) {
+                            Button {
+                                selected = index
+                                if rowClickTracker.handleClick(on: index) {
+                                    open(index)
+                                }
+                            } label: {
                                 HStack {
                                     Text(String(index + 1)).monospacedDigit().foregroundStyle(.secondary).frame(width: 28)
                                     VStack(alignment: .leading, spacing: 3) {
@@ -84,17 +90,28 @@ struct TemplateCollectionFields: View {
                                         Text(summary(value)).font(.caption).foregroundStyle(.secondary).lineLimit(2)
                                     }
                                     Spacer()
-                                }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.vertical, 10)
+                                .padding(.leading, 10)
+                                .padding(.trailing, 8)
+                                .contentShape(Rectangle())
                             }.buttonStyle(.plain)
                                 .accessibilityIdentifier("templates.item.select.\(SubscriptionTemplateStore.pointer(path)).\(index)")
                             Button(L10n.text("编辑"), systemImage: "pencil") { open(index) }
                                 .labelStyle(.iconOnly).buttonStyle(.borderless)
+                                .padding(.trailing, 10)
                                 .accessibilityIdentifier("templates.item.edit.\(SubscriptionTemplateStore.pointer(path)).\(index)")
                         }
-                        .padding(10)
+                        .contentShape(Rectangle())
                         .background(selected == index ? Color.accentColor.opacity(0.12) : Color.clear, in: RoundedRectangle(cornerRadius: 8))
                         .interactiveRowHover(cornerRadius: 8)
-                        .onTapGesture(count: 2) { open(index) }
+                        .onTapGesture {
+                            selected = index
+                            if rowClickTracker.handleClick(on: index) {
+                                open(index)
+                            }
+                        }
                         .contextMenu {
                             Button(L10n.text("编辑")) { open(index) }
                             if !isSingleObject {

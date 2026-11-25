@@ -105,5 +105,29 @@ struct TemplateStructuredFieldEditor: View {
         precondition(store.undoStack.count == undoCount + 1 && window.sheets.isEmpty)
         store.undo(); settle(); precondition(store.document == original)
         print("Native cascade preview presentation, cancel, confirmation, atomic removal and undo: passed")
+
+        let tracker = RowDoubleClickTracker<Int>()
+        let singleClick = NSEvent.mouseEvent(
+            with: .leftMouseUp, location: .zero, modifierFlags: [], timestamp: 0,
+            windowNumber: 0, context: nil, eventNumber: 0, clickCount: 1, pressure: 0
+        )
+        let doubleClick = NSEvent.mouseEvent(
+            with: .leftMouseUp, location: .zero, modifierFlags: [], timestamp: 0,
+            windowNumber: 0, context: nil, eventNumber: 0, clickCount: 2, pressure: 0
+        )
+        let keyEvent = NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+            windowNumber: 0, context: nil, characters: " ", charactersIgnoringModifiers: " ",
+            isARepeat: false, keyCode: 49
+        )
+        precondition(!tracker.handleClick(on: 0, now: 1.0, doubleClickInterval: 0.5, currentEvent: singleClick))
+        precondition(tracker.handleClick(on: 0, now: 1.2, doubleClickInterval: 0.5, currentEvent: doubleClick))
+        precondition(!tracker.handleClick(on: 0, now: 1.3, doubleClickInterval: 0.5, currentEvent: doubleClick), "Double click must reset state")
+        precondition(!tracker.handleClick(on: 1, now: 1.4, doubleClickInterval: 0.5, currentEvent: doubleClick), "Clicking another row must not trigger double click")
+        precondition(!tracker.handleClick(on: 1, now: 2.1, doubleClickInterval: 0.5, currentEvent: doubleClick), "Expired interval must not trigger double click")
+        precondition(!tracker.handleClick(on: 1, now: 2.2, doubleClickInterval: 0.5, currentEvent: keyEvent), "Non-mouse event must return false safely")
+        precondition(!tracker.handleClick(on: 2, now: 3.0, doubleClickInterval: 0.5, currentEvent: nil))
+        precondition(tracker.handleClick(on: 2, now: 3.2, doubleClickInterval: 0.5, currentEvent: nil))
+        print("RowDoubleClickTracker tests: passed")
     }
 }

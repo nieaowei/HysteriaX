@@ -2311,3 +2311,6 @@
 "已恢复上次同步源码" = "Restored last synced source";
 "恢复上次同步" = "Restore Synced";
 "已复制源码" = "Source copied";
+"已复制服务地址" = "Copied service address";
+"服务运行" = "Service uptime";
+"主机运行" = "Host uptime";

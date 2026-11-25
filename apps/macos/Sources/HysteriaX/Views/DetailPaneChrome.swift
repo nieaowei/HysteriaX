@@ -96,3 +96,41 @@ struct CopyActionButton: View {
         .accessibilityLabel(L10n.text("复制"))
     }
 }
+
+@MainActor
+final class RowDoubleClickTracker<ID: Equatable> {
+    private var lastID: ID?
+    private var lastTimestamp: TimeInterval = 0
+
+    /// Records a single click on `id` and returns `true` if this click completes a double-click on the same row.
+    func handleClick(
+        on id: ID,
+        now: TimeInterval = ProcessInfo.processInfo.systemUptime,
+        doubleClickInterval: TimeInterval = NSEvent.doubleClickInterval,
+        currentEvent: NSEvent? = NSApp?.currentEvent
+    ) -> Bool {
+        if let event = currentEvent {
+            guard event.type == .leftMouseUp || event.type == .leftMouseDown else {
+                lastID = nil
+                lastTimestamp = 0
+                return false
+            }
+            if event.clickCount >= 2, lastID == id, now - lastTimestamp <= doubleClickInterval {
+                lastID = nil
+                lastTimestamp = 0
+                return true
+            }
+            lastID = id
+            lastTimestamp = now
+            return false
+        }
+        if lastID == id, now - lastTimestamp <= doubleClickInterval {
+            lastID = nil
+            lastTimestamp = 0
+            return true
+        }
+        lastID = id
+        lastTimestamp = now
+        return false
+    }
+}

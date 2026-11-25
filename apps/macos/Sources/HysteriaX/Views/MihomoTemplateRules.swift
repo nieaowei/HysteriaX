@@ -11,6 +11,7 @@ struct MihomoTemplateRules: View {
     private var kinds: [String] { store.catalog["schema"]["x-rule-types"].arrayValue?.compactMap(\.stringValue) ?? ["MATCH"] }
     @State private var editingIndex: Int?
     @State private var filterText = ""
+    @State private var rowClickTracker = RowDoubleClickTracker<Int>()
 
     private var trimmedFilter: String {
         filterText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -62,8 +63,13 @@ struct MihomoTemplateRules: View {
                     ForEach(entries, id: \.index) { entry in
                         let index = entry.index
                         let rule = MihomoTemplateRule(entry.source)
-                        HStack(spacing: 8) {
-                            Button { selectedIndex = index } label: {
+                        HStack(spacing: 0) {
+                            Button {
+                                selectedIndex = index
+                                if rowClickTracker.handleClick(on: index) {
+                                    editingIndex = index
+                                }
+                            } label: {
                                 HStack(spacing: 8) {
                                     Text(String(index + 1))
                                         .monospacedDigit()
@@ -91,6 +97,9 @@ struct MihomoTemplateRules: View {
                                     Spacer(minLength: 0)
                                 }
                                 .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.vertical, 10)
+                                .padding(.leading, 10)
+                                .padding(.trailing, 8)
                                 .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
@@ -98,12 +107,18 @@ struct MihomoTemplateRules: View {
                             Button(L10n.text("编辑"), systemImage: "pencil") { editingIndex = index; selectedIndex = index }
                                 .labelStyle(.iconOnly)
                                 .buttonStyle(.borderless)
+                                .padding(.trailing, 10)
                                 .accessibilityIdentifier("templates.rule.edit.\(SubscriptionTemplateStore.pointer(path)).\(index)")
                         }
-                        .padding(10)
+                        .contentShape(Rectangle())
                         .background(selectedIndex == index ? Color.accentColor.opacity(0.12) : Color.clear, in: RoundedRectangle(cornerRadius: 8))
                         .interactiveRowHover(cornerRadius: 8)
-                        .onTapGesture(count: 2) { selectedIndex = index; editingIndex = index }
+                        .onTapGesture {
+                            selectedIndex = index
+                            if rowClickTracker.handleClick(on: index) {
+                                editingIndex = index
+                            }
+                        }
                         .contextMenu {
                             Button(L10n.text("编辑")) { selectedIndex = index; editingIndex = index }
                             Button(L10n.text("复制规则")) {

@@ -3,6 +3,7 @@ import SwiftUI
 struct SubscriptionTemplateInjections: View {
     @Bindable var store: SubscriptionTemplateStore
     @State private var editingIndex: Int?
+    @State private var rowClickTracker = RowDoubleClickTracker<Int>()
     private var selectedIndex: Int {
         get { store.injectionSelection }
         nonmutating set { store.injectionSelection = newValue }
@@ -21,8 +22,13 @@ struct SubscriptionTemplateInjections: View {
                     ForEach(Array(rules.enumerated()), id: \.offset) { index, rule in
                         let group = rule["group"].stringValue ?? ""
                         let chips = conditionChips(rule)
-                        HStack {
-                            Button { selectedIndex = index } label: {
+                        HStack(spacing: 0) {
+                            Button {
+                                selectedIndex = index
+                                if rowClickTracker.handleClick(on: index) {
+                                    editingIndex = index
+                                }
+                            } label: {
                                 HStack(alignment: .center, spacing: 8) {
                                     Text(String(index + 1))
                                         .monospacedDigit()
@@ -50,17 +56,30 @@ struct SubscriptionTemplateInjections: View {
                                         }
                                     }
                                     Spacer()
-                                }.contentShape(Rectangle())
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.vertical, 10)
+                                .padding(.leading, 10)
+                                .padding(.trailing, 8)
+                                .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
                             .accessibilityAddTraits(selectedIndex == index ? .isSelected : [])
                             .accessibilityIdentifier("templates.injection.row.\(index)")
-                            Button(L10n.text("编辑"), systemImage: "pencil") { selectedIndex = index; editingIndex = index }.labelStyle(.iconOnly).buttonStyle(.borderless)
+                            Button(L10n.text("编辑"), systemImage: "pencil") { selectedIndex = index; editingIndex = index }
+                                .labelStyle(.iconOnly)
+                                .buttonStyle(.borderless)
+                                .padding(.trailing, 10)
                         }
-                        .padding(10)
+                        .contentShape(Rectangle())
                         .background(selectedIndex == index ? Color.accentColor.opacity(0.12) : Color.clear, in: RoundedRectangle(cornerRadius: 8))
                         .interactiveRowHover(cornerRadius: 8)
-                        .onTapGesture(count: 2) { selectedIndex = index; editingIndex = index }
+                        .onTapGesture {
+                            selectedIndex = index
+                            if rowClickTracker.handleClick(on: index) {
+                                editingIndex = index
+                            }
+                        }
                         .contextMenu {
                             Button(L10n.text("编辑")) { selectedIndex = index; editingIndex = index }
                             Button(L10n.text("复制注入规则")) {
