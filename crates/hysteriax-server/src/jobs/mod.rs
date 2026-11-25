@@ -1168,50 +1168,109 @@ async fn safe_error(
         .collect::<Vec<_>>()
         .join(": ");
     let mut secret_values = Vec::new();
-    if let Some(node_id) = &job.node_id
-        && let Ok(Some(row)) = sqlx::query("SELECT node_token_enc, traffic_stats_secret_enc, desired_config_enc FROM nodes WHERE id = $1")
-            .bind(node_id).fetch_optional(pool).await {
-                for field in ["node_token_enc", "traffic_stats_secret_enc"] {
-                    if let Ok(Some(encrypted)) = row.try_get::<Option<String>, _>(field)
-                        && let Ok(secret) = secrets.decrypt(&encrypted)
-                    {
-                        secret_values.push(secret);
-                    }
-                }
-                if let Ok(config_json) = secrets.decrypt(&row.get::<String, _>("desired_config_enc"))
-                    && let Ok(config) = serde_json::from_str::<Value>(&config_json)
-                {
-                    redact_config_secrets(&mut message, &config);
-                }
-                if let Some(revision) = job.target_revision
-                    && let Ok(Some(config_enc)) = sqlx::query_scalar::<_, String>(
-                        "SELECT config_enc FROM config_versions WHERE node_id = $1 AND revision = $2",
-                    )
-                    .bind(node_id)
-                    .bind(revision)
-                    .fetch_optional(pool)
-                    .await
-                    && let Ok(snapshot) = secrets.decrypt(&config_enc)
-                    && let Ok(snapshot) = serde_json::from_str::<Value>(&snapshot)
-                {
-                    redact_config_secrets(&mut message, &snapshot);
-                }
+    let mut credential_targets: Vec<(String, Option<i64>)> = Vec::new();
 
-                if let Ok(assignments) = sqlx::query(
-                    "SELECT c.secret_enc AS credential_enc FROM user_credentials c JOIN node_assignments a ON a.user_id=c.user_id WHERE c.kind='connection' AND c.revoked_at IS NULL AND a.node_id = $1",
-                ).bind(node_id).fetch_all(pool).await {
-                    for assignment in assignments {
-                        if let Ok(Some(encrypted))=assignment.try_get::<Option<String>,_>("credential_enc")
-                            && let Ok(secret)=secrets.decrypt(&encrypted) {secret_values.push(secret);}
-                    }
+    if let Some(node_id) = &job.node_id {
+        let Ok(row) = sqlx::query(
+            "SELECT node_token_enc, traffic_stats_secret_enc, desired_config_enc, ssh_credential_id, ssh_credential_version FROM nodes WHERE id = $1",
+        )
+        .bind(node_id)
+        .fetch_optional(pool)
+        .await
+        else {
+            return "Job failed; credential redaction could not be completed".into();
+        };
+        if let Some(row) = row {
+            for field in ["node_token_enc", "traffic_stats_secret_enc"] {
+                if let Ok(Some(encrypted)) = row.try_get::<Option<String>, _>(field)
+                    && let Ok(secret) = secrets.decrypt(&encrypted)
+                {
+                    secret_values.push(secret);
                 }
-
-    }
-    if let Ok(versions) =
-        sqlx::query_scalar::<_, String>("SELECT payload_enc FROM credential_versions")
-            .fetch_all(pool)
+            }
+            if let Ok(config_json) = secrets.decrypt(&row.get::<String, _>("desired_config_enc"))
+                && let Ok(config) = serde_json::from_str::<Value>(&config_json)
+            {
+                redact_config_secrets(&mut message, &config);
+            }
+            if let Ok(Some(ssh_id)) = row.try_get::<Option<String>, _>("ssh_credential_id") {
+                let ssh_ver = row
+                    .try_get::<Option<i64>, _>("ssh_credential_version")
+                    .ok()
+                    .flatten();
+                credential_targets.push((ssh_id, ssh_ver));
+            }
+        }
+        if let Some(revision) = job.target_revision
+            && let Ok(Some(config_enc)) = sqlx::query_scalar::<_, String>(
+                "SELECT config_enc FROM config_versions WHERE node_id = $1 AND revision = $2",
+            )
+            .bind(node_id)
+            .bind(revision)
+            .fetch_optional(pool)
             .await
+            && let Ok(snapshot) = secrets.decrypt(&config_enc)
+            && let Ok(snapshot) = serde_json::from_str::<Value>(&snapshot)
+        {
+            redact_config_secrets(&mut message, &snapshot);
+        }
+        let Ok(refs) = sqlx::query_as::<_, (String, i64)>(
+            "SELECT credential_id, version FROM credential_reference_edges WHERE node_id = $1
+             UNION
+             SELECT probe_credential_id, probe_credential_version FROM mtls_activations WHERE node_id = $1 AND probe_credential_id IS NOT NULL AND probe_credential_version IS NOT NULL
+             UNION
+             SELECT credential_id, credential_version FROM mtls_active_probes WHERE node_id = $1",
+        )
+        .bind(node_id)
+        .fetch_all(pool)
+        .await
+        else {
+            return "Job failed; credential redaction could not be completed".into();
+        };
+        for (cred_id, version) in refs {
+            credential_targets.push((cred_id, Some(version)));
+        }
+    }
+
+    if let Some(cred_id) = job.payload.get("credential_id").and_then(Value::as_str) {
+        let ver = job.payload.get("credential_version").and_then(Value::as_i64);
+        credential_targets.push((cred_id.to_owned(), ver));
+    }
+    if let Some(conn_id) = job.payload.get("connection_id").and_then(Value::as_str)
+        && let Ok(Some(cred_id)) =
+            sqlx::query_scalar::<_, String>("SELECT credential_id FROM dns_connections WHERE id = $1")
+                .bind(conn_id)
+                .fetch_optional(pool)
+                .await
     {
+        credential_targets.push((cred_id, None));
+    }
+
+    credential_targets.sort();
+    credential_targets.dedup();
+    for (cred_id, version) in credential_targets {
+        let rows = match version {
+            Some(ver) => {
+                sqlx::query_scalar::<_, String>(
+                    "SELECT payload_enc FROM credential_versions WHERE credential_id = $1 AND version = $2",
+                )
+                .bind(&cred_id)
+                .bind(ver)
+                .fetch_all(pool)
+                .await
+            }
+            None => {
+                sqlx::query_scalar::<_, String>(
+                    "SELECT payload_enc FROM credential_versions WHERE credential_id = $1 ORDER BY version DESC LIMIT 2",
+                )
+                .bind(&cred_id)
+                .fetch_all(pool)
+                .await
+            }
+        };
+        let Ok(versions) = rows else {
+            return "Job failed; credential redaction could not be completed".into();
+        };
         for cipher in versions {
             if let Ok(plain) = secrets.decrypt(&cipher)
                 && let Ok(payload) = serde_json::from_str::<Value>(&plain)
@@ -1219,9 +1278,8 @@ async fn safe_error(
                 collect_credential_secrets(&payload, &mut secret_values);
             }
         }
-    } else {
-        return "Job failed; credential redaction could not be completed".into();
     }
+
     redact_secret_values(&mut message, secret_values);
     message
         .chars()

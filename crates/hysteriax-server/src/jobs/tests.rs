@@ -562,7 +562,7 @@ async fn failed_recovery_event_keeps_the_job_running() {
 }
 
 #[tokio::test]
-async fn job_errors_redact_saved_config_and_assigned_user_secrets() {
+async fn job_errors_redact_saved_config_and_scoped_node_credentials() {
     let pool = test_pool().await;
     let secrets = SecretBox::from_base64("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA").unwrap();
     let values = [
@@ -575,7 +575,6 @@ async fn job_errors_redact_saved_config_and_assigned_user_secrets() {
         "socks-user",
         "socks-password",
         "provider-token",
-        "hy2-user-password",
         "client-certificate",
         "client-private-key",
     ];
@@ -588,43 +587,41 @@ async fn job_errors_redact_saved_config_and_assigned_user_secrets() {
         }
     });
     let encrypted = |value: &str| secrets.encrypt(value).unwrap();
-    sqlx::query("WITH fixture_ssh AS (INSERT INTO credentials(id,name,kind,created_at,updated_at) VALUES('fixture-ssh','Fixture SSH','ssh_password',now(),now()) ON CONFLICT DO NOTHING), fixture_ssh_version AS (INSERT INTO credential_versions(credential_id,version,payload_enc,created_at) VALUES('fixture-ssh',1,'unused',now()) ON CONFLICT DO NOTHING) INSERT INTO nodes(id,name,ssh_host,ssh_port,ssh_username,public_host,public_port,listen_addr,node_token_hash,node_token_enc,traffic_stats_secret_enc,desired_config_enc,created_at,updated_at,ssh_credential_id,ssh_credential_version) VALUES ('redaction-node','Node','node.example.test',22,'root','node.example.test',443,':443','node-hash',$1,$2,$3,'2026-01-01T00:00:00Z','2026-01-01T00:00:00Z','fixture-ssh',1)")
+    let ssh_payload = encrypted(&json!({"secret": values[0], "passphrase": values[1]}).to_string());
+    sqlx::query("WITH fixture_ssh AS (INSERT INTO credentials(id,name,kind,created_at,updated_at) VALUES('fixture-ssh','Fixture SSH','ssh_private_key',now(),now()) ON CONFLICT DO NOTHING), fixture_ssh_version AS (INSERT INTO credential_versions(credential_id,version,payload_enc,created_at) VALUES('fixture-ssh',1,$4,now()) ON CONFLICT DO NOTHING) INSERT INTO nodes(id,name,ssh_host,ssh_port,ssh_username,public_host,public_port,listen_addr,node_token_hash,node_token_enc,traffic_stats_secret_enc,desired_config_enc,created_at,updated_at,ssh_credential_id,ssh_credential_version) VALUES ('redaction-node','Node','node.example.test',22,'root','node.example.test',443,':443','node-hash',$1,$2,$3,'2026-01-01T00:00:00Z','2026-01-01T00:00:00Z','fixture-ssh',1)")
             .bind(encrypted(values[2]))
             .bind(encrypted(values[3]))
             .bind(encrypted(&config.to_string()))
+            .bind(ssh_payload)
             .execute(&pool)
             .await
             .unwrap();
-    sqlx::query("INSERT INTO users (id, name, created_at, updated_at) VALUES ('redaction-user', 'User', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')")
-            .execute(&pool)
-            .await
-            .unwrap();
-    sqlx::query("WITH assignment_fixture(user_id,node_id,credential_hash,credential_enc,created_at) AS MATERIALIZED (VALUES ('redaction-user', 'redaction-node', 'credential-hash', $1, '2026-01-01T00:00:00Z'::timestamptz)), password_fixture AS (INSERT INTO user_credentials(id,user_id,kind,secret_hash,secret_enc,created_at) SELECT 'connection:'||user_id,user_id,'connection',credential_hash,credential_enc,now() FROM (SELECT DISTINCT ON(user_id) user_id,credential_hash,credential_enc FROM assignment_fixture ORDER BY user_id) c ON CONFLICT(user_id,kind) WHERE revoked_at IS NULL DO UPDATE SET secret_hash=EXCLUDED.secret_hash,secret_enc=EXCLUDED.secret_enc), fixture_groups AS (INSERT INTO authorization_groups(id,name,created_at,updated_at) SELECT 'fixture-'||md5(user_id||chr(31)||node_id),'Fixture authorization',now(),now() FROM assignment_fixture ON CONFLICT(id) DO UPDATE SET name=EXCLUDED.name RETURNING id), fixture_members AS (INSERT INTO authorization_group_users(group_id,user_id,created_at) SELECT g.id,a.user_id,now() FROM assignment_fixture a JOIN fixture_groups g ON g.id='fixture-'||md5(a.user_id||chr(31)||a.node_id) ON CONFLICT DO NOTHING), fixture_nodes AS (INSERT INTO authorization_group_nodes(group_id,node_id,created_at) SELECT g.id,a.node_id,now() FROM assignment_fixture a JOIN fixture_groups g ON g.id='fixture-'||md5(a.user_id||chr(31)||a.node_id) ON CONFLICT DO NOTHING) INSERT INTO node_assignments(user_id,node_id,created_at) SELECT user_id,node_id,created_at FROM assignment_fixture")
-            .bind(encrypted(values[9]))
-            .execute(&pool)
-            .await
-            .unwrap();
-
     let mut tx = pool.begin().await.unwrap();
-    crate::credentials::insert(
+    let referenced = crate::credentials::insert(
         &mut tx,
         &secrets,
-        "SSH redaction fixture",
-        "ssh_private_key",
+        "Referenced probe fixture",
+        "tls_identity",
         None,
-        &json!({"secret":values[0],"passphrase":values[1]}),
+        &json!({"certificate":values[9],"private_key":values[10]}),
         &json!({}),
         &json!({}),
     )
     .await
     .unwrap();
+    sqlx::query("INSERT INTO credential_reference_edges(kind,source_id,node_id,source,field,credential_id,version) VALUES('node','redaction-node','redaction-node','desired','mtls.ca',$1,1)")
+        .bind(&referenced)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    // Unrelated credential on another user/node must not be loaded by safe_error.
     crate::credentials::insert(
         &mut tx,
         &secrets,
-        "mTLS redaction fixture",
+        "Unrelated credential",
         "tls_identity",
-        Some("redaction-user"),
-        &json!({"certificate":values[10],"private_key":values[11]}),
+        None,
+        &json!({"certificate":"unrelated-cert-secret","private_key":"unrelated-key-secret"}),
         &json!({}),
         &json!({}),
     )
@@ -640,7 +637,7 @@ async fn job_errors_redact_saved_config_and_assigned_user_secrets() {
         payload: json!({}),
         attempts: 1,
     };
-    let error_message = values.join(" | ");
+    let error_message = format!("{} | unrelated-cert-secret", values.join(" | "));
     let error = anyhow::anyhow!(error_message);
 
     let safe = safe_error(&pool, &secrets, &job, &error).await;
@@ -648,5 +645,6 @@ async fn job_errors_redact_saved_config_and_assigned_user_secrets() {
     for value in values {
         assert!(!safe.contains(value), "job error leaked a secret: {value}");
     }
+    assert!(safe.contains("unrelated-cert-secret"));
     assert!(safe.contains("[redacted]"));
 }
