@@ -28,8 +28,8 @@ pub(super) fn response_from_nodes(
     nodes: &[SubscriptionNode],
     client: &ClientInfo,
 ) -> Result<Response, ApiError> {
-    let output = render::render(format, document, nodes, client)?;
-    let source = document::serialize(format, &output["config"])?;
+    let (config, filtered_count) = render::render_for_delivery(format, document, nodes, client)?;
+    let source = document::serialize(format, &config)?;
     let mut response = Response::new(Body::from(source));
     response.headers_mut().insert(
         header::CONTENT_TYPE,
@@ -45,13 +45,7 @@ pub(super) fn response_from_nodes(
     );
     response.headers_mut().insert(
         "x-hysteriax-filtered-nodes",
-        HeaderValue::from_str(
-            &output["filtered_nodes"]
-                .as_array()
-                .map_or(0, Vec::len)
-                .to_string(),
-        )
-        .unwrap(),
+        HeaderValue::from_str(&filtered_count.to_string()).unwrap(),
     );
     Ok(response)
 }

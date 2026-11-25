@@ -51,7 +51,22 @@ fn field_metadata(value: &mut Value, version: &str) {
         }
     }
 }
+static CATALOG_MIHOMO: std::sync::LazyLock<Value> =
+    std::sync::LazyLock::new(|| build_catalog("mihomo"));
+static CATALOG_SINGBOX: std::sync::LazyLock<Value> =
+    std::sync::LazyLock::new(|| build_catalog("singbox"));
+
 pub fn catalog(format: &str) -> Value {
+    if format == "mihomo" {
+        CATALOG_MIHOMO.clone()
+    } else if format == "singbox" {
+        CATALOG_SINGBOX.clone()
+    } else {
+        build_catalog(format)
+    }
+}
+
+fn build_catalog(format: &str) -> Value {
     let mut editable = schema(format).clone();
     field_metadata(
         &mut editable,

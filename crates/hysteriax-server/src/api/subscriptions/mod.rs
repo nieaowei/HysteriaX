@@ -497,11 +497,17 @@ async fn cached_template(
     );
     if boundary.is_some_and(|at| at <= Utc::now()) {
         let nodes = load_subscription_nodes_eligible(state, user_id, Some(&eligible)).await?;
-        return if let Some((id, _, format, document)) = template {
-            templates::response_from_nodes(id, document, format, &nodes, client)
-        } else {
-            formats::render_subscription(&nodes, format, client)
-        };
+        let template = template.cloned();
+        let client = *client;
+        return tokio::task::spawn_blocking(move || {
+            if let Some((id, _, format, document)) = template {
+                templates::response_from_nodes(&id, &document, &format, &nodes, &client)
+            } else {
+                formats::render_subscription(&nodes, format, &client)
+            }
+        })
+        .await
+        .map_err(|_| ApiError::internal())?;
     }
     let monotonic_now = std::time::Instant::now();
     let deadline =
@@ -518,11 +524,17 @@ async fn cached_template(
                 let nodes = load_subscription_nodes_eligible(state, user_id, Some(&eligible))
                     .await
                     .map_err(IntoResponse::into_response)?;
-                let response = if let Some((id, _, format, document)) = template {
-                    templates::response_from_nodes(id, document, format, &nodes, client)
-                } else {
-                    formats::render_subscription(&nodes, format, client)
-                }
+                let template = template.cloned();
+                let client = *client;
+                let response = tokio::task::spawn_blocking(move || {
+                    if let Some((id, _, format, document)) = template {
+                        templates::response_from_nodes(&id, &document, &format, &nodes, &client)
+                    } else {
+                        formats::render_subscription(&nodes, format, &client)
+                    }
+                })
+                .await
+                .map_err(|_| ApiError::internal().into_response())?
                 .map_err(IntoResponse::into_response)?;
                 crate::cache::CachedResponse::capture(response).await
             },

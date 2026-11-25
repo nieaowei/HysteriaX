@@ -29,6 +29,28 @@ pub(super) fn render(
     nodes: &[SubscriptionNode],
     client: &ClientInfo,
 ) -> Result<Value, ApiError> {
+    render_impl(format, document, nodes, client, false)
+}
+
+pub(super) fn render_for_delivery(
+    format: &str,
+    document: &Document,
+    nodes: &[SubscriptionNode],
+    client: &ClientInfo,
+) -> Result<(Value, usize), ApiError> {
+    let output = render_impl(format, document, nodes, client, true)?;
+    let filtered_count = output["filtered_nodes"].as_u64().unwrap_or(0) as usize;
+    let config = output.get("config").cloned().unwrap_or(Value::Null);
+    Ok((config, filtered_count))
+}
+
+fn render_impl(
+    format: &str,
+    document: &Document,
+    nodes: &[SubscriptionNode],
+    client: &ClientInfo,
+    delivery_only: bool,
+) -> Result<Value, ApiError> {
     let platform = match client.platform {
         super::super::formats::Platform::Linux => "linux",
         super::super::formats::Platform::Macos => "macos",
@@ -56,9 +78,13 @@ pub(super) fn render(
     }
     let mut compatible = Vec::new();
     let mut filtered = Vec::new();
+    let mut filtered_count = 0_usize;
     for node in nodes {
         if let Some(reason) = node.incompatible(kind, client) {
-            filtered.push(json!({"id":node.id,"reason":reason}));
+            filtered_count += 1;
+            if !delivery_only {
+                filtered.push(json!({"id":node.id,"reason":reason}));
+            }
         } else {
             compatible.push(node);
         }
@@ -149,7 +175,11 @@ pub(super) fn render(
                 .or_else(|| names.first().cloned())
                 .unwrap_or(json!(direct));
         }
-        selections.push(json!({"group":rule.group,"selected_ids":selected.iter().map(|n|&n.id).collect::<Vec<_>>(),"excluded_ids":compatible.iter().filter(|n|!selected.iter().any(|s|s.id==n.id)).map(|n|&n.id).collect::<Vec<_>>(),"excluded":compatible.iter().filter_map(|node|{let reasons=selection_reasons(rule,node);if reasons.is_empty(){None}else{Some(json!({"id":node.id,"reasons":reasons}))}}).collect::<Vec<_>>()}));
+        if !delivery_only {
+            let selected_ids: std::collections::HashSet<&str> =
+                selected.iter().map(|s| s.id.as_str()).collect();
+            selections.push(json!({"group":rule.group,"selected_ids":selected.iter().map(|n|&n.id).collect::<Vec<_>>(),"excluded_ids":compatible.iter().filter(|n|!selected_ids.contains(n.id.as_str())).map(|n|&n.id).collect::<Vec<_>>(),"excluded":compatible.iter().filter_map(|node|{let reasons=selection_reasons(rule,node);if reasons.is_empty(){None}else{Some(json!({"id":node.id,"reasons":reasons}))}}).collect::<Vec<_>>()}));
+        }
     }
     if format == "mihomo" {
         config["proxies"] = json!(compatible.iter().map(|n| n.to_mihomo()).collect::<Vec<_>>());
@@ -163,10 +193,15 @@ pub(super) fn render(
         groups.extend(compatible.iter().map(|node| node.singbox()));
     }
     let mut final_diagnostics = references(format, &config, platform, &[], true);
-    final_diagnostics.extend(platform_diagnostics(format, &config, platform));
-    final_diagnostics.extend(super::catalog::validate(format, &config, platform));
-    final_diagnostics.extend(super::catalog::references(format, &config, platform));
+    if !delivery_only {
+        final_diagnostics.extend(platform_diagnostics(format, &config, platform));
+        final_diagnostics.extend(super::catalog::validate(format, &config, platform));
+        final_diagnostics.extend(super::catalog::references(format, &config, platform));
+    }
     ensure_valid(&final_diagnostics)?;
+    if delivery_only {
+        return Ok(json!({"config": config, "filtered_nodes": filtered_count}));
+    }
     diagnostics.extend(final_diagnostics);
     let mut unique = std::collections::BTreeSet::new();
     diagnostics.retain(|d| {
