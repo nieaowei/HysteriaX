@@ -153,6 +153,7 @@ async fn batch(
 }
 
 static SSE_GLOBAL: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(128);
+const FALLBACK_POLL_INTERVAL: Duration = Duration::from_secs(5);
 static SSE_PER_ACTOR: std::sync::LazyLock<
     std::sync::Mutex<std::collections::HashMap<String, usize>>,
 > = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
@@ -293,7 +294,7 @@ fn stream(
                 _ = shutdown.wait_for(|stop| *stop) => break,
                 _ = authorization.changed() => {},
                 changed = updates.changed() => { if changed.is_err() { break; } },
-                _ = tokio::time::sleep(Duration::from_secs(5)) => {},
+                _ = tokio::time::sleep(FALLBACK_POLL_INTERVAL) => {},
             }
         }
     };
