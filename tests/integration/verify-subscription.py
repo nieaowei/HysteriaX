@@ -21,7 +21,7 @@ import urllib.error
 import urllib.request
 
 from postgres_test import PostgresTestSchema
-from credential_test_fixtures import request_group, mark_fixture_nodes_deployed
+from credential_test_fixtures import grant_group, mark_fixture_nodes_deployed
 from subscription_formats_test import run as verify_formats
 
 
@@ -214,9 +214,16 @@ def main():
             if status != 201:
                 raise RuntimeError("could not create user fixture")
             user_id = json.loads(body)["id"]
-            for authorized_node in (node_id,realm_node_id):
-                status,_=request_group(raw_request,base,admin,[user_id],[authorized_node])
-                if status!=202:raise RuntimeError("group authorization of parser fixture failed")
+
+            def group_request(path, method="GET", payload=None, statuses=(200,)):
+                status, body = raw_request(base, path, admin, method, payload)
+                if status not in statuses:
+                    raise RuntimeError(f"{method} {path}: HTTP {status}")
+                return json.loads(body)
+
+            # The subscription requires a published certificate as well as an assignment.
+            for authorized_node in (node_id, realm_node_id):
+                grant_group(group_request, user_id, [authorized_node])
             status, body = request(
                 base,
                 f"/api/v2/users/{user_id}/credentials/rotate",
