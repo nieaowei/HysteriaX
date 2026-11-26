@@ -132,10 +132,12 @@ def main():
                 [str(SERVER)], cwd=ROOT, env=environment, stdout=api_log, stderr=api_log
             )
             wait_ready(base, process)
-            deadline = time.time() + 10
+            # The restarted worker honors the persisted recovery schedule, which
+            # can be up to 30 seconds away after the first process's empty poll.
+            deadline = time.monotonic() + 45
             recovered_event = None
             job = None
-            while time.time() < deadline:
+            while time.monotonic() < deadline:
                 with database.connect() as connection:
                     row = connection.execute(
                         "SELECT status, stage, attempts FROM jobs WHERE id = %s", (job_id,)
@@ -154,7 +156,7 @@ def main():
                 time.sleep(0.2)
 
             if recovered_event is None:
-                raise RuntimeError("restart did not persist a job.recovered event")
+                raise RuntimeError(f"restart did not persist a job.recovered event: {job}")
             if recovered_event.get("status") != "queued" or recovered_event.get("stage") != "recovered":
                 raise RuntimeError(f"recovery event payload is invalid: {recovered_event}")
             with database.connect() as connection:

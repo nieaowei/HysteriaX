@@ -376,9 +376,11 @@ async fn large_record_removal_is_queued_idempotent_and_completes_without_ssh() {
             .unwrap(),
         10
     );
-    tokio::time::timeout(Duration::from_secs(30), worker)
+    // This deadline detects a stuck job. The writer probes above enforce the
+    // latency bound while the worker drains the history and analytics backlog.
+    tokio::time::timeout(Duration::from_secs(120), worker)
         .await
-        .unwrap()
+        .expect("cleanup must finish draining the node's history")
         .unwrap();
     assert_eq!(
         sqlx::query_scalar::<_, i64>("SELECT count(*) FROM nodes WHERE id='n1'")

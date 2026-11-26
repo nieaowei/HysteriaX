@@ -286,11 +286,17 @@ async fn many_resource_guards_use_two_statements_and_reject_stale_members() {
         let mut tx = pool.begin().await.unwrap();
         let statements = Statements::default();
         recorded(&statements, work.guard_on(&mut tx)).await.unwrap();
+        let sql = statements.snapshot();
+        // A pool task on this test's runtime may finish a previously queued rollback.
         assert_eq!(
-            statements.snapshot().len(),
+            sql.iter()
+                .filter(|statement| {
+                    statement.trim()
+                        != "SET client_min_messages='error'; ROLLBACK; RESET client_min_messages"
+                })
+                .count(),
             2,
-            "{:?}",
-            statements.snapshot()
+            "{sql:?}"
         );
         tx.rollback().await.unwrap();
         let mut stale = work.clone();

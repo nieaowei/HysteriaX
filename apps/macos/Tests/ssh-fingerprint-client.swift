@@ -59,7 +59,20 @@ final class FingerprintTransport: URLProtocol, @unchecked Sendable {
             if let retryID { job["retry_job_id"] = retryID }
             func json(_ value: Any, _ status: Int = 200) -> (Int, Data) { (status, try! JSONSerialization.data(withJSONObject: value)) }
             if path.hasSuffix("version") {
-                return json(["api_version": "2.0.0", "management_protocol":2, "directory_version":"b3:test", "service_version": "test", "hysteria_version": "test", "mihomo_version": "test", "features": ["job_retry_links"]])
+                return json(["api_version": "2.0.0", "management_protocol":2, "directory_version":"b3:test", "service_version": "test", "hysteria_version": "test", "mihomo_version": "test", "features": [
+                    "client_summary", "ssh_dns_sync", "overview_monitoring", "node_record_removal",
+                    "job_retry_links", "node_packages", "dns_management", "joint_user_credentials"
+                ]])
+            }
+            if path == "/api/v2/client/summary" {
+                return json(["node_count": 1, "user_total": 0, "user_enabled": 0, "user_expired": 0,
+                             "user_expiring": 0, "user_depleted": 0, "notification_nodes": [], "notification_credentials": []])
+            }
+            if path == "/api/v2/overview" {
+                return json(["generated_at": "2026-10-05T00:00:00Z", "node_count": 1, "node_states": [state: 1],
+                             "attention_nodes": 0, "risk_nodes": 0, "queued_jobs": 0, "running_jobs": 0,
+                             "failed_jobs_24h": 0, "eligible_nodes": 0, "covered_nodes": 0, "issues": [],
+                             "healthy_nodes": 0, "quota_rank": []])
             }
             if path.hasSuffix("/execution-operations") {
                 executionFilters = Dictionary(uniqueKeysWithValues: URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!.queryItems!.map { ($0.name, $0.value!) })
@@ -81,7 +94,7 @@ final class FingerprintTransport: URLProtocol, @unchecked Sendable {
                 fingerprint = body["ssh_host_fingerprint"] as! String
                 revision += 1; state = "ready"
                 node["revision"] = revision
-                return json(["id": "node-1", "name": "Fingerprint test", "state": "fingerprint_changed", "revision": revision, "sync_job_queued": false])
+                return json(["id": "node-1", "name": "Fingerprint test", "state": state, "revision": revision, "sync_job_queued": false])
             }
             if path.hasSuffix("/confirm-fingerprint") {
                 let body = try! JSONSerialization.jsonObject(with: Self.body(request)) as! [String: Any]
@@ -100,7 +113,7 @@ final class FingerprintTransport: URLProtocol, @unchecked Sendable {
             if path.hasSuffix("/nodes") { return json(["items": [node], "total": 1, "page": 1, "page_size": 200]) }
             if path.hasSuffix("/jobs") { return json(["items": [job], "total": 1, "page": 1, "page_size": 200]) }
             if path.hasSuffix("/audit") { return json(["items": [], "total": 0, "page": 1, "page_size": 200]) }
-            if ["/api/v2/users", "/api/v2/credentials", "/api/v2/dns/records"].contains(path) { return json(["items": [], "total": 0, "page": 1, "page_size": 200]) }
+            if ["/api/v2/users", "/api/v2/credentials", "/api/v2/dns/records", "/api/v2/authorization-groups"].contains(path) { return json(["items": [], "total": 0, "page": 1, "page_size": 200]) }
             return json([])
         }
 
@@ -153,8 +166,8 @@ struct SSHFingerprintClientChecks {
             UserDefaults.standard.removeObject(forKey: "displaySnapshot.\(store.serviceAddress)")
             defaults.removePersistentDomain(forName: "com.hysteriax.fingerprint-tests")
         }
-        await store.refresh()
-        precondition(store.isConnected)
+        let connected = await store.refresh()
+        precondition(connected && store.isConnected, store.errorMessage ?? "Fingerprint fixture refresh failed")
         let job = store.jobs[0]
         let change = SSHHostFingerprintChange(job: job)!
         precondition(change.expected == oldFingerprint && change.observed == newFingerprint)

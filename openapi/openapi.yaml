@@ -2645,14 +2645,12 @@ components:
           type: array
           items: { $ref: '#/components/schemas/NodeSummary' }
         notification_nodes_next_cursor:
-          type: string
-          nullable: true
+          type: [string, 'null']
         notification_credentials:
           type: array
           items: { $ref: '#/components/schemas/CredentialSummary' }
         notification_credentials_next_cursor:
-          type: string
-          nullable: true
+          type: [string, 'null']
     ClientSummaryNotificationNodesPage:
       type: object
       required: [items]
@@ -2661,8 +2659,7 @@ components:
           type: array
           items: { $ref: '#/components/schemas/NodeSummary' }
         next_cursor:
-          type: string
-          nullable: true
+          type: [string, 'null']
     ClientSummaryNotificationCredentialsPage:
       type: object
       required: [items]
@@ -2671,8 +2668,7 @@ components:
           type: array
           items: { $ref: '#/components/schemas/CredentialSummary' }
         next_cursor:
-          type: string
-          nullable: true
+          type: [string, 'null']
     Revision:
       type: object
       required: [expected_revision]

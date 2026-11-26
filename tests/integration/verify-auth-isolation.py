@@ -319,29 +319,18 @@ def main():
                 if usage["data_freshness"]["status"] != "not_collected":
                     raise RuntimeError("un-deployed test node should report traffic as not collected")
                 pending_job_id = str(uuid.uuid4())
-                future_time = "2099-01-01T00:00:00Z"
                 with database.connect() as connection:
-                    # Certificate updates may already have a pending kick for this
-                    # pair. Reuse it to exercise the one-active-kick invariant.
-                    existing = connection.execute(
-                        "SELECT id FROM jobs WHERE kind='kick' AND node_id=%s AND payload_json->>'user_id'=%s AND status IN ('queued','running')",
-                        (node2, user2),
-                    ).fetchone()
-                    if existing:
-                        pending_job_id = existing[0]
-                        connection.execute("UPDATE jobs SET status='queued',stage='retry_wait',available_at=%s WHERE id=%s", (datetime.fromisoformat(future_time.replace("Z", "+00:00")), pending_job_id))
-                    else:
-                        connection.execute(
-                        "INSERT INTO jobs (id, kind, node_id, target_revision, payload_json, status, stage, available_at, created_at, updated_at) "
-                        "VALUES (%s, 'kick', %s, NULL, %s, 'queued', 'retry_wait', %s, %s, %s)",
-                        (
-                            pending_job_id,
-                            node2,
-                            Jsonb({"user_id": user2}),
-                            datetime.fromisoformat(future_time.replace("Z", "+00:00")),
-                            datetime.fromisoformat(future_time.replace("Z", "+00:00")),
-                            datetime.fromisoformat(future_time.replace("Z", "+00:00")),
-                        ),
+                    # The node-wide job is queued for a later retry. Its request
+                    # records which user's connections still need revocation.
+                    connection.execute(
+                        "INSERT INTO jobs (id, kind, node_id, payload_json, status, stage, available_at, created_at, updated_at) "
+                        "VALUES (%s, 'kick', %s, %s, 'queued', 'retry_wait', clock_timestamp() + interval '1 hour', now(), now())",
+                        (pending_job_id, node2, Jsonb({"scope": "node"})),
+                    )
+                    connection.execute(
+                        "INSERT INTO kick_requests (node_id, user_id, reasons, state, latest_job_id, execution_generation) "
+                        "VALUES (%s, %s, %s, 'active', %s, 1)",
+                        (node2, user2, Jsonb({"credentials_revoked": True}), pending_job_id),
                     )
                 usage = expect(f"/api/v2/users/{user2}/usage")
                 pending = next(
