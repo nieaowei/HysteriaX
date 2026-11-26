@@ -1,23 +1,33 @@
 import Foundation
 
 final class OverviewTransport: URLProtocol, @unchecked Sendable {
+    enum DeferredResponse { case version, history }
+
     final class Responses: @unchecked Sendable {
         let lock = NSLock()
         var mode = "advanced"
         private var versionRequests = 0
-        private var holdVersions = false
-        private var heldVersions: [@Sendable () -> Void] = []
+        private var suspendedResponses: Set<DeferredResponse> = []
+        private var heldResponses: [DeferredResponse: [@Sendable () -> Void]] = [:]
         func versionCount() -> Int { lock.lock(); defer { lock.unlock() }; return versionRequests }
-        func heldVersionCount() -> Int { lock.lock(); defer { lock.unlock() }; return heldVersions.count }
-        func setHoldVersions(_ hold: Bool) { lock.lock(); defer { lock.unlock() }; holdVersions = hold }
-        func holdVersion(_ deliver: @escaping @Sendable () -> Void) -> Bool {
+        func heldCount(_ response: DeferredResponse) -> Int {
             lock.lock(); defer { lock.unlock() }
-            guard holdVersions else { return false }
-            heldVersions.append(deliver)
+            return heldResponses[response]?.count ?? 0
+        }
+        func setHold(_ response: DeferredResponse, _ hold: Bool) {
+            lock.lock(); defer { lock.unlock() }
+            if hold { suspendedResponses.insert(response) } else { suspendedResponses.remove(response) }
+        }
+        func hold(_ response: DeferredResponse, _ deliver: @escaping @Sendable () -> Void) -> Bool {
+            lock.lock(); defer { lock.unlock() }
+            guard suspendedResponses.contains(response) else { return false }
+            heldResponses[response, default: []].append(deliver)
             return true
         }
-        func releaseVersion() {
-            lock.lock(); let deliver = heldVersions.removeFirst(); lock.unlock()
+        func release(_ response: DeferredResponse) {
+            lock.lock()
+            let deliver = heldResponses[response]!.removeFirst()
+            lock.unlock()
             deliver()
         }
         var overview = Data()
@@ -149,8 +159,10 @@ final class OverviewTransport: URLProtocol, @unchecked Sendable {
             client?.urlProtocol(self, didLoad: body)
             client?.urlProtocolDidFinishLoading(self)
         }
-        if request.url!.path.hasSuffix("version"), Self.responses.holdVersion(deliver) { return }
-        if request.url!.path.hasSuffix("overview/history") { DispatchQueue.global().asyncAfter(deadline: .now() + 0.2, execute: deliver) } else { deliver() }
+        let path = request.url!.path
+        if path.hasSuffix("version"), Self.responses.hold(.version, deliver) { return }
+        if path.hasSuffix("overview/history"), Self.responses.hold(.history, deliver) { return }
+        deliver()
     }
     private let stateLock = NSLock()
     private var cancelled = false
@@ -166,12 +178,13 @@ struct OverviewSilentNotifications: NodeNotificationTransport {
 
 @main
 struct OverviewNetworkChecks {
-    @MainActor static func waitForHeldVersion() async throws {
-        let deadline = Date().addingTimeInterval(5)
-        while OverviewTransport.responses.heldVersionCount() == 0, Date() < deadline {
+    @MainActor static func waitForHeldResponse(_ response: OverviewTransport.DeferredResponse) async throws {
+        let clock = ContinuousClock()
+        let deadline = clock.now + .seconds(5)
+        while OverviewTransport.responses.heldCount(response) == 0, clock.now < deadline {
             try await Task.sleep(for: .milliseconds(5))
         }
-        precondition(OverviewTransport.responses.heldVersionCount() == 1)
+        precondition(OverviewTransport.responses.heldCount(response) == 1, "Expected one held \(response) response")
     }
 
     @MainActor static func main() async throws {
@@ -199,7 +212,7 @@ struct OverviewNetworkChecks {
         precondition(OverviewTransport.responses.recordedDirectoryCount() == 0, "bootstrap must not traverse directories")
         // A committed creation must return its one-time token even while the
         // following refresh is blocked on the network.
-        OverviewTransport.responses.setHoldVersions(true)
+        OverviewTransport.responses.setHold(.version, true)
         var creationCompleted = false
         let creation = Task {
             let receipt = try await store.createNode(NodeCreateRequest(
@@ -210,12 +223,12 @@ struct OverviewNetworkChecks {
             precondition(receipt.nodeAuthToken == "test-created-token")
             creationCompleted = true
         }
-        try await waitForHeldVersion()
+        try await waitForHeldResponse(.version)
         for _ in 0..<20 { await Task.yield() }
         let returnedBeforeRefresh = creationCompleted
         let cachedCreatedNode = store.nodes.contains { $0.id == "created-node" && $0.state == "new" }
-        OverviewTransport.responses.setHoldVersions(false)
-        OverviewTransport.responses.releaseVersion()
+        OverviewTransport.responses.setHold(.version, false)
+        OverviewTransport.responses.release(.version)
         try await creation.value
         await store.refresh(forceDirectories: false)
         precondition(returnedBeforeRefresh, "creation must not await the background refresh")
@@ -223,10 +236,10 @@ struct OverviewNetworkChecks {
         // Freeze each version response to deterministically exercise overlapping
         // refresh triggers without relying on network timing.
         let versionsBefore = OverviewTransport.responses.versionCount()
-        OverviewTransport.responses.setHoldVersions(true)
+        OverviewTransport.responses.setHold(.version, true)
         var refreshWaitersCompleted = 0
         let ordinary = Task { await store.refresh(forceDirectories: false); refreshWaitersCompleted += 1 }
-        try await waitForHeldVersion()
+        try await waitForHeldResponse(.version)
         let joining = Task { await store.refresh(forceDirectories: false); refreshWaitersCompleted += 1 }
         let forceA = Task { await store.refresh(); refreshWaitersCompleted += 1 }
         let forceB = Task { await store.refresh(); refreshWaitersCompleted += 1 }
@@ -234,18 +247,18 @@ struct OverviewNetworkChecks {
         ordinary.cancel() // Cancelling a consumer must not cancel the shared round.
         precondition(store.isLoading && refreshWaitersCompleted == 0)
         precondition(OverviewTransport.responses.versionCount() == versionsBefore + 1)
-        OverviewTransport.responses.releaseVersion()
-        try await waitForHeldVersion()
+        OverviewTransport.responses.release(.version)
+        try await waitForHeldResponse(.version)
         precondition(OverviewTransport.responses.versionCount() == versionsBefore + 2)
         precondition(store.isLoading && refreshWaitersCompleted == 0)
         let forceC = Task { await store.refresh(); refreshWaitersCompleted += 1 }
         let forceD = Task { await store.refresh(); refreshWaitersCompleted += 1 }
         for _ in 0..<20 { await Task.yield() }
-        OverviewTransport.responses.releaseVersion()
-        try await waitForHeldVersion()
+        OverviewTransport.responses.release(.version)
+        try await waitForHeldResponse(.version)
         precondition(OverviewTransport.responses.versionCount() == versionsBefore + 3)
-        OverviewTransport.responses.setHoldVersions(false)
-        OverviewTransport.responses.releaseVersion()
+        OverviewTransport.responses.setHold(.version, false)
+        OverviewTransport.responses.release(.version)
         await ordinary.value; await joining.value; await forceA.value; await forceB.value; await forceC.value; await forceD.value
         precondition(refreshWaitersCompleted == 6 && !store.isLoading && store.isConnected)
         precondition(OverviewTransport.responses.versionCount() == versionsBefore + 3)
@@ -367,29 +380,33 @@ struct OverviewNetworkChecks {
         precondition(store.isConnected && store.overview?.nodeCount == 1 && store.overviewError != nil)
         _ = try await store.overviewHistory(range: "7d", nodeID: nil, source: "users")
         precondition(store.cachedOverviewHistory(range: "7d", nodeID: nil, source: "users") != nil)
+        OverviewTransport.responses.setHold(.history, true)
         let cancelled = Task { try await store.overviewHistory(range: "30d", nodeID: nil, source: "users") }
-        try await Task.sleep(for: .milliseconds(30))
+        try await waitForHeldResponse(.history)
         cancelled.cancel()
         do { _ = try await cancelled.value; preconditionFailure("Cancelled history should not be applied") } catch {}
+        OverviewTransport.responses.release(.history)
         precondition(store.cachedOverviewHistory(range: "30d", nodeID: nil, source: "users") == nil)
         let oldSession = store.listCacheSession
         let oldService = store.serviceAddress
         let switching = Task { try await store.overviewHistory(range: "30d", nodeID: nil, source: "users") }
-        OverviewTransport.responses.setHoldVersions(true)
+        try await waitForHeldResponse(.history)
+        OverviewTransport.responses.setHold(.version, true)
         let oldRefresh = Task { await store.refresh(forceDirectories: false) }
-        try await waitForHeldVersion()
+        try await waitForHeldResponse(.version)
         precondition(store.isLoading)
-        OverviewTransport.responses.setHoldVersions(false)
-        try await Task.sleep(for: .milliseconds(30))
+        OverviewTransport.responses.setHold(.version, false)
         // A new event subscription requires a complete initial state.
         OverviewTransport.responses.setMode("advanced")
         try await store.connect(serviceAddress: "https://overview-other-fixture.invalid", token: "test-only", session: session)
-        OverviewTransport.responses.releaseVersion()
+        OverviewTransport.responses.release(.version)
+        OverviewTransport.responses.setHold(.history, false)
+        OverviewTransport.responses.release(.history)
         _ = await oldRefresh.value
         precondition(!store.isLoading && store.isConnected, "old refresh cleanup must not alter the new session")
         precondition(store.listCacheSession != oldSession)
         precondition(store.cachedListPage(sharedKey, as: JobsPage.self) == nil)
-        do { _ = try await switching.value; preconditionFailure("Previous-service history should not be applied") } catch {}
+        do { _ = try await switching.value; preconditionFailure("Previous-service history should not be applied") } catch is CancellationError {}
         precondition(store.cachedOverviewHistory(range: "30d", nodeID: nil, source: "users") == nil)
         UserDefaults.standard.removeObject(forKey: "displaySnapshot.\(oldService)")
         UserDefaults.standard.removeObject(forKey: "overviewHistory.\(oldService)")
