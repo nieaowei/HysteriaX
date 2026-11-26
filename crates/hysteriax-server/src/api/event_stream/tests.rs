@@ -412,6 +412,15 @@ async fn a_revoked_administrator_cannot_continue_a_live_stream_even_without_a_lo
     let state = fixture().await;
     append(&state, "a", "first").await;
     publish(&state).await;
+    // Observe the initial publication position before opening the stream so it
+    // cannot wake the stream after the direct database revocation below.
+    let mut updates = state
+        .events
+        .subscribe(state.pool.clone(), state.shutdown.subscribe());
+    tokio::time::timeout(Duration::from_secs(5), updates.changed())
+        .await
+        .expect("the event hub must observe the initial publication position")
+        .unwrap();
     let (base, server) = serve(state.clone()).await;
     let mut response = client()
         .get(format!("{base}/events"))
@@ -425,12 +434,12 @@ async fn a_revoked_administrator_cannot_continue_a_live_stream_even_without_a_lo
         .execute(&state.pool)
         .await
         .unwrap();
-    tokio::time::timeout(Duration::from_secs(3), async {
+    tokio::time::timeout(FALLBACK_POLL_INTERVAL + Duration::from_secs(3), async {
         while let Some(chunk) = response.chunk().await.unwrap() {
             assert!(chunk.is_empty());
         }
     })
     .await
-    .unwrap();
+    .expect("the fallback poll must close the revoked administrator's stream");
     server.abort();
 }

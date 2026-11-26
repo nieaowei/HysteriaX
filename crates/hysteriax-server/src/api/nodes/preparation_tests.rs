@@ -79,8 +79,9 @@ async fn creation_retries_reuse_the_prepared_identifiers_secrets_and_snapshot() 
         token_digest(&prepared.token)
     );
     assert_eq!(
-        node.get::<chrono::DateTime<chrono::Utc>, _>("created_at"),
-        prepared.timestamp
+        node.get::<chrono::DateTime<chrono::Utc>, _>("created_at")
+            .timestamp_micros(),
+        prepared.timestamp.timestamp_micros()
     );
     let history = sqlx::query("SELECT * FROM config_versions WHERE node_id=$1")
         .bind(&prepared.id)
